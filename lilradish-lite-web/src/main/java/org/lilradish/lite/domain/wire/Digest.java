@@ -17,6 +17,11 @@ public final class Digest {
     private Digest() {}
 
     public static String sha256Hex(String value) {
+        return HexFormat.of().formatHex(sha256(value));
+    }
+
+    /** The same fingerprint as {@link #sha256Hex}, for a value that carries it as bytes rather than as text. */
+    public static byte[] sha256(String value) {
         requireNonNull(value, "Digest value must not be null");
         requirePaired(value);
         MessageDigest digest;
@@ -25,7 +30,7 @@ public final class Digest {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is mandatory in every JRE", impossible);
         }
-        return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        return digest.digest(value.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

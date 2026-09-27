@@ -34,13 +34,7 @@ import org.libprunus.core.log.runtime.LogLevel;
 @ToStringProfile(
         includePackages = {"org.lilradish.lite"},
         includeClassSuffixes = {
-            "Attempt",
-            "Approval",
-            "Judgement",
-            "Rejection",
             "Confidence",
-            "Reference",
-            "Candidate",
             "Fields",
             "Id",
             "Principal",
@@ -49,10 +43,27 @@ import org.libprunus.core.log.runtime.LogLevel;
             "Group",
             "Estate",
             "Standing",
-            "Rerun",
-            "Override",
-            "Replacement",
-            "Text"
+            "Record",
+            "Snapshot",
+            "Inputs",
+            "SentText",
+            "CameBack",
+            "Errored",
+            "TurnAway",
+            "ForeignProse",
+            "KeptAnswer",
+            "Produced",
+            "Fits",
+            "Misfit",
+            "Refused",
+            "CodeCall",
+            "CodeStepName",
+            "Gave",
+            "Given",
+            "FieldName",
+            "Fault",
+            "Said",
+            "Reads"
         })
 @MaxMessageLength(512)
 public final class AppLoggingConvention {

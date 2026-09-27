@@ -1,6 +1,6 @@
 /**
- * What the system records about its own running: how an incident is graded, and the window a
- * consumption ceiling is measured over.
+ * What the system records about its own running: the {@link Correlation} every line a request logs is
+ * traced by.
  */
 @NullMarked
 package org.lilradish.lite.domain.observability;

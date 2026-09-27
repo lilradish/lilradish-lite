@@ -7,8 +7,9 @@ import java.lang.annotation.Target;
 
 /**
  * Declares that being identified is the whole of what a handler asks. Written out rather than left
- * to the absence of {@link ActRequired}, so that a handler nobody gated and a handler somebody
- * decided needs no gate do not look alike.
+ * to the absence of {@link ActRequired}, {@link GroupPermissionRequired} and {@link
+ * GroupMembershipRequired}, so that a handler nobody gated and a handler somebody decided needs no gate
+ * do not look alike.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)

@@ -16,13 +16,13 @@ import java.util.Set;
  * reached through one of these, which is why a holding of them is keyed by {@link Scope.Group} and
  * the estate cannot be written as that key.
  *
- * <p>These bundles are data whose only writer is a migration — changing a role is a release — and
- * the table holding them is not written yet, so until it is they sit here. What the store keeps is
- * only which role somebody holds.
+ * <p>What each role bundles is held here and not in the store, which keeps only which role somebody
+ * holds — so changing a bundle is a release rather than a migration.
  *
  * <p>{@code OVERSEER} restates what {@code OPERATOR} carries rather than building on it, because a
- * constant cannot read another constant's bundle while it is being constructed. What states the
- * inclusion as a rule is the spec, which derives each bundle from the one below it.
+ * constant cannot read another constant's bundle while it is being constructed. What makes the
+ * inclusion visible is the spec, which derives each bundle from the one below it; the chain is
+ * today's table, not a rule of it.
  *
  * <p>That the table is a chain under inclusion is also what makes {@link #permissionsOf} indifferent
  * to how it is written: no holding exists that tells a union of bundles apart from the widest one's.
@@ -30,34 +30,39 @@ import java.util.Set;
  * has to be read again. What it answers with is freshly built and handed to the one type that folds
  * a holding, which wraps it and hands out only the wrapper, so no caller holds what it could widen.
  *
- * <p>Whether one person may both raise a change and pass it is declared per step, on the gate that
- * step must pass, and compared on the accountable subject at the moment the decision is made. This
- * table says nothing about it, and a role carrying both an authority over a step and an authority
- * over an entry is not a defect.
+ * <p>A role may carry both writing and approving an entry: that nobody approves an entry they wrote is
+ * a rule between people whatever they hold, and nothing in this table can express it.
+ *
+ * <p>The published spelling is written out rather than folded from the constant name, for the reason
+ * {@link EstateAct} gives.
  */
 public enum GroupRole {
     OPERATOR(
+            "operator",
             GroupPermission.READ_MEMBERSHIP,
             GroupPermission.START_RUN,
+            GroupPermission.ANSWER_STEP,
             GroupPermission.READ_OWN_RUNS,
             GroupPermission.AUTHOR_ENTRY,
-            GroupPermission.DISMISS_WORK),
+            GroupPermission.READ_INFERENCE_CONTENT),
     OVERSEER(
+            "overseer",
             GroupPermission.READ_MEMBERSHIP,
             GroupPermission.START_RUN,
+            GroupPermission.ANSWER_STEP,
             GroupPermission.READ_OWN_RUNS,
             GroupPermission.AUTHOR_ENTRY,
-            GroupPermission.DISMISS_WORK,
+            GroupPermission.READ_INFERENCE_CONTENT,
             GroupPermission.READ_ALL_RUNS,
             GroupPermission.REVIEW_AT_GATE,
             GroupPermission.APPROVE_ENTRY,
-            GroupPermission.REVOKE_ENTRY,
-            GroupPermission.DECLARE_TOKEN_CEILING,
-            GroupPermission.RAISE_RUN_ALLOWANCE),
+            GroupPermission.REVOKE_ENTRY),
 
-    /* Every permission a role may carry rather than a list of them: one added to the vocabulary
-     * reaches every owner of every group without anybody deciding it a second time. */
-    OWNER(GroupPermission.values());
+    /* Every permission the vocabulary holds: a permission added later is placed in each role by a
+     * decision, and this line is where the owner's is read off. */
+    OWNER("owner", GroupPermission.values());
+
+    private final String published;
 
     /* Held as an EnumSet and answered as a view over it: the union below is a bit-mask operation
      * only while both sides are one, and the view a caller is handed is not. */
@@ -65,11 +70,16 @@ public enum GroupRole {
 
     private final Set<GroupPermission> permissions;
 
-    GroupRole(GroupPermission... permissions) {
+    GroupRole(String published, GroupPermission... permissions) {
+        this.published = published;
         EnumSet<GroupPermission> granted = EnumSet.noneOf(GroupPermission.class);
         Collections.addAll(granted, permissions);
         this.bundled = granted;
         this.permissions = Collections.unmodifiableSet(granted);
+    }
+
+    public String published() {
+        return published;
     }
 
     /**
@@ -92,5 +102,17 @@ public enum GroupRole {
             granted.addAll(role.bundled);
         }
         return granted;
+    }
+
+    /** Every role bundling the permission, and none where no role does. */
+    public static Set<GroupRole> reaching(GroupPermission permission) {
+        requireNonNull(permission, "GroupRole permission must not be null");
+        EnumSet<GroupRole> roles = EnumSet.noneOf(GroupRole.class);
+        for (GroupRole role : values()) {
+            if (role.bundled.contains(permission)) {
+                roles.add(role);
+            }
+        }
+        return Collections.unmodifiableSet(roles);
     }
 }

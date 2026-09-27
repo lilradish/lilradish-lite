@@ -1,0 +1,14 @@
+# Under config/: this file is on the test classpath too, whose root must carry no application-dev.yaml.
+# Prices and the characters per unit are quoted: unquoted, a decimal passes through a double on its way in.
+lilradish:
+  deployed:
+    models:
+      - name: sample_model
+        modes: [research]
+        sent-per-call-limit: 200000
+        characters-per-unit: "4"
+        came-back-per-call-limit: 8192
+        prices-per-million:
+          - currency: USD
+            sent-per-million: "3"
+            came-back-per-million: "15"

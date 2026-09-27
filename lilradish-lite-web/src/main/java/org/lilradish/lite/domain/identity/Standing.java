@@ -57,7 +57,7 @@ final class Standing {
 
     /**
      * The roles are carried across unnarrowed: a delegation is exercised in its owner's name, so
-     * whatever a retrieval would match to a role of theirs it would match for it too.
+     * whatever is matched to a role of theirs is matched for it too.
      */
     Standing narrowedTo(Set<GroupPermission> declaredPermissions) {
         requireNonNull(declaredPermissions, "Standing declaredPermissions must not be null");

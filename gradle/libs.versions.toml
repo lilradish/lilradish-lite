@@ -1,0 +1,39 @@
+[versions]
+springBoot = "4.1.1"
+nodeGradle = "7.1.0"
+libprunus = "0.4.0-SNAPSHOT"
+embeddedPostgres = "2.2.2"
+# Pinned to the production server's version exactly. A suite that proves a constraint bites on a
+# newer engine than the one deployed has proved it about a different engine.
+embeddedPostgresBinaries = "18.4.0"
+
+[libraries]
+spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter" }
+spring-boot-starter-webmvc = { module = "org.springframework.boot:spring-boot-starter-webmvc" }
+spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc" }
+spring-boot-starter-flyway = { module = "org.springframework.boot:spring-boot-starter-flyway" }
+spring-boot-starter-webmvc-test = { module = "org.springframework.boot:spring-boot-starter-webmvc-test" }
+# Versionless on purpose: the Spock BOM governs the first and the Spring Boot BOM the second, so
+# neither can drift from the spock-core the libprunus plugin pins or the mockito the starter brings.
+spock-spring = { module = "org.spockframework:spock-spring" }
+mockito-core = { module = "org.mockito:mockito-core" }
+libprunus-bom = { module = "org.libprunus:libprunus-bom", version.ref = "libprunus" }
+libprunus-spring = { module = "org.libprunus:libprunus-spring", version.ref = "libprunus" }
+libprunus-flyway = { module = "org.libprunus:libprunus-flyway", version.ref = "libprunus" }
+# DB-SPECIFIC: Flyway module names are irregular — flyway-mysql (MySQL + MariaDB),
+# flyway-sqlserver, flyway-database-oracle; H2 is built into flyway-core.
+flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql" }
+# DB-SPECIFIC: JDBC driver — com.mysql:mysql-connector-j, org.mariadb.jdbc:mariadb-java-client,
+# com.microsoft.sqlserver:mssql-jdbc, com.oracle.database.jdbc:ojdbc11.
+postgresql = { module = "org.postgresql:postgresql" }
+# DB-SPECIFIC: a real server started from a downloaded binary, because a constraint tested against
+# anything but the engine that will enforce it has been tested against something else. Testcontainers
+# would be the usual answer and needs a container runtime, which this machine has none of.
+embedded-postgres = { module = "io.zonky.test:embedded-postgres", version.ref = "embeddedPostgres" }
+embedded-postgres-binaries-bom = { module = "io.zonky.test.postgres:embedded-postgres-binaries-bom", version.ref = "embeddedPostgresBinaries" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
+node-gradle = { id = "com.github.node-gradle.node", version.ref = "nodeGradle" }
+libprunus-core-plugin = { id = "org.libprunus.libprunus-core-plugin", version.ref = "libprunus" }

@@ -5,18 +5,18 @@ import static java.util.Objects.requireNonNull;
 import org.lilradish.lite.domain.text.Legibility;
 
 /**
- * What a group is called, which is the only thing about it a person ever sees. Work is filed under a
- * {@link GroupId}, so correcting a name unfiles nothing — but two groups a reader cannot tell apart
- * are two groups work is filed into by guess, and the store keeps this unique for that reason.
+ * What a group is called. Work is filed under a {@link GroupId}, so correcting a name unfiles nothing —
+ * but two groups a reader cannot tell apart are two groups work is filed into by guess, and the store
+ * keeps names unique whatever case either was typed in for that reason.
  *
- * <p>What is tightened is legibility, argued once in {@link Legibility} and not repeated here. A name
- * is refused rather than tidied: this constructor runs both when a person types a name and when a row
- * is rebuilt out of the store, so tidying here would fold two stored rows into one value. Tidying
- * what somebody typed belongs at the entry point that took it.
+ * <p>Held to the rule a person's name is held to, argued in {@link Legibility}: one well-formed line,
+ * U+0020 the only space and never at an end or doubled, and something in it that shows. A format
+ * character is kept, some scripts needing one to join or part their letters, so a name may carry a
+ * bidirectional control and is shown isolated wherever it is shown.
  *
- * <p>Case is carried as given and never folded, matching a store whose uniqueness is exact. Folding
- * would make one group out of two that a deployment says are two, and that is the direction that
- * cannot be undone: the two can be told apart again only by whoever still remembers there were two.
+ * <p>A name is refused rather than tidied: this constructor runs both when a person types a name and
+ * when a row is rebuilt out of the store, so tidying here would fold two stored rows into one value.
+ * Case is carried as given; that two names differing only by case are one name is the store's to say.
  */
 public record GroupName(String value) {
 
@@ -25,9 +25,10 @@ public record GroupName(String value) {
 
     public GroupName {
         requireNonNull(value, "GroupName must not be null");
-        Legibility.requireVisibleAndWellFormed(value, "GroupName");
+        Legibility.requireOneWellFormedLine(value, "GroupName");
         Legibility.requireNotEmpty(value, "GroupName");
         Legibility.requireSpaceDecidesNothing(value, "GroupName");
+        Legibility.requireSomethingVisible(value, "GroupName");
         Legibility.requireWithinMaximumLength(value, MAXIMUM_LENGTH, "GroupName");
     }
 }

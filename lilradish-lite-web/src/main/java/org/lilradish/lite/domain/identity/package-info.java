@@ -1,8 +1,4 @@
-/**
- * Who a caller is, where they stand, and what they may do there. A delegation may narrow what its
- * owner holds and never widen it, so what one is declared with reads as a subset rather than as a
- * grant.
- */
+/** Who a caller is, where they stand, and what they may do there. */
 @NullMarked
 package org.lilradish.lite.domain.identity;
 

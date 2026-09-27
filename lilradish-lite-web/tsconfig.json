@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    // For a case table a spec on the server's side reads too, which is why it is JSON.
+    "resolveJsonModule": true,
+    "noEmit": true,
+    // Declares the side-effect imports Vite resolves (CSS and friends). Listing it
+    // explicitly also stops every other installed @types package from being
+    // included ambiently, which is what would drag Node's globals back in.
+    "types": ["vite/client"]
+  },
+  // vite.config.ts is deliberately outside the checked set: Vite's own type
+  // definitions reference Node globals, and pulling @types/node in to satisfy them
+  // would put Buffer and process in scope for browser code too. The config is
+  // loaded and executed by every `vite build`, which is what guards it instead.
+  "include": ["src/main/frontend"]
+}

@@ -1,0 +1,4 @@
+{
+  "takes": { "first": "given", "below": "given" },
+  "gives": { "first": "given", "below": "given" }
+}

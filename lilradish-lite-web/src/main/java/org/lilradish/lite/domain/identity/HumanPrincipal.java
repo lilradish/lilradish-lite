@@ -78,6 +78,10 @@ public final class HumanPrincipal implements ScopedPrincipal {
             for (GroupRole role : declared) {
                 held.add(requireNonNull(role, "HumanPrincipal roles must not hold a null role"));
             }
+            // A key here is membership, and somebody holding nothing in a group is not one of its members.
+            if (held.isEmpty()) {
+                throw new IllegalArgumentException("HumanPrincipal rolesByGroup must not hold a group with no role");
+            }
             folded.put(group, Standing.of(held));
         }
         // Read off the roles rather than off the acts folded from them: a role bundling nothing
@@ -130,8 +134,8 @@ public final class HumanPrincipal implements ScopedPrincipal {
     }
 
     /**
-     * A group this person does not stand in answers as one they stand in holding nothing; whether
-     * they are there at all is the other axis, and {@link #scopes()} alone answers it.
+     * A group this person is not a member of answers as holding nothing; {@link #scopes()} alone says
+     * whether they are one.
      */
     Standing standingIn(Scope.Group group) {
         requireNonNull(group, "HumanPrincipal group must not be null");

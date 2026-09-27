@@ -1,0 +1,19 @@
+# Under config/ so it loads beside the application's own application.yaml rather than hiding it.
+# Prices and the characters per unit are quoted: unquoted, a decimal passes through a double on its way in.
+lilradish:
+  deployed:
+    models:
+      - name: sample_model
+        modes: [research]
+        sent-per-call-limit: 200000
+        characters-per-unit: "4"
+        came-back-per-call-limit: 8192
+        prices-per-million:
+          - currency: USD
+            sent-per-million: "3"
+            came-back-per-million: "15"
+# A spec starting the whole application starts it on a copy of a database the real baseline was applied to, which
+# holds no migration Flyway could find on this classpath: left on, it would refuse every one already applied.
+spring:
+  flyway:
+    enabled: false

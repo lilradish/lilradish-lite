@@ -10,9 +10,10 @@ import org.lilradish.lite.domain.identity.EstateAct;
  * The act a handler asks of whoever calls it, declared beside the address it answers. What enforces
  * it is {@link ActAdmission}, so no handler carries an authorisation branch of its own.
  *
- * <p>Every handler under this application's prefix carries this or {@link NoActRequired}, and the
- * two are separate annotations rather than one with a standing-in value: a handler that asks nothing
- * beyond being identified is a decision somebody took, and a default would let it be one nobody did.
+ * <p>Every handler under this application's prefix carries exactly one of this, {@link
+ * GroupPermissionRequired}, {@link GroupMembershipRequired} and {@link NoActRequired}, and they are
+ * separate annotations rather than one with a standing-in value: a handler that asks nothing beyond being
+ * identified is a decision somebody took, and a default would let it be one nobody did.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)

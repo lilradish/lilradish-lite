@@ -1,31 +1,83 @@
 package org.lilradish.lite.domain.inference;
 
+import org.libprunus.core.log.annotation.DoNotLog;
+import org.lilradish.lite.domain.model.CameBackMeasure;
+import org.lilradish.lite.domain.model.DeployedModel;
+import org.lilradish.lite.domain.model.SentText;
+
 /**
- * How a model call ended, as it is recorded against that call. Seven of these are accounting alone;
- * {@link #RATE_LIMITED} is the one a policy reads, because a quota must not spend the step's retry
- * budget.
+ * How one call to a model ended. A call that is never heard from again is not one of these: nothing is
+ * left to return it.
  */
-public enum CallOutcome {
-    OK,
+public sealed interface CallOutcome {
 
-    /** The model answered, but not in the shape the step declared. */
-    SCHEMA_MISMATCH,
+    /**
+     * The model answered, every count in the model's own units. A sent count below one, a negative
+     * came-back count, or only one of the two, is taken as none given, and both are measured here.
+     * The answer has not been checked against what the store can hold, and may not be storable.
+     *
+     * @param answer as it came back, and possibly empty
+     * @param countedByModel false where the model said nothing of what it counted, both counts then
+     *     being this system's measure
+     * @param cutOff the model stopped at the most it may give back
+     */
+    record CameBack(@DoNotLog String answer, long sentCount, long cameBackCount, boolean countedByModel, boolean cutOff)
+            implements CallOutcome {
 
-    /** Records that the failure was counted against the endpoint's health. */
-    BREAKER_OPEN,
+        public CameBack {
+            if (answer == null) {
+                throw new NullPointerException("CameBack answer must not be null");
+            }
+            if (sentCount < 1) {
+                throw new IllegalArgumentException("CameBack sent count must be at least one: " + sentCount);
+            }
+            if (cameBackCount < 0) {
+                throw new IllegalArgumentException("CameBack came-back count must not be negative: " + cameBackCount);
+            }
+        }
 
-    /** Records that a stream stopped early, which is counted against the endpoint the same way. */
-    INCOMPLETE_STREAM,
+        /** Both counts this system's own measure, of what was sent and of what came back. */
+        public static CameBack measuredHere(DeployedModel model, SentText sent, String answer, boolean cutOff) {
+            return new CameBack(
+                    answer,
+                    model.unitsOf(sent.characters()),
+                    model.unitsOf(CameBackMeasure.characters(answer)),
+                    false,
+                    cutOff);
+        }
+    }
 
-    /** The endpoint is well and asking for a pause: neither its health nor the retry budget moves. */
-    RATE_LIMITED,
+    /**
+     * The call went wrong once taken up, or was not answered in time.
+     *
+     * @param detail what went wrong, as the other side put it
+     */
+    record Errored(@DoNotLog String detail) implements CallOutcome {
 
-    /** This system's refusal — the call was never made, so nothing counts against the endpoint. */
-    REFUSED_EGRESS,
+        public Errored {
+            if (detail == null) {
+                throw new NullPointerException("Errored detail must not be null");
+            }
+            if (detail.isEmpty()) {
+                throw new IllegalArgumentException("Errored must say what went wrong");
+            }
+        }
+    }
 
-    /** A ceiling this system holds was already spent, so the call was never made either. */
-    BUDGET_EXHAUSTED,
+    /**
+     * Never taken up.
+     *
+     * @param last the turnaway that ended the call
+     */
+    record TurnedAway(TurnAway last) implements CallOutcome {
 
-    /** The request did not stand: no model could have answered it, so none was asked. */
-    ROUTING_ERROR
+        public TurnedAway {
+            if (last == null) {
+                throw new NullPointerException("TurnedAway last must not be null");
+            }
+        }
+    }
+
+    /** Ended after a turnaway already passed on as progress, with nothing sent after it. */
+    record NotResent() implements CallOutcome {}
 }

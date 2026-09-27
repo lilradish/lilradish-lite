@@ -1,0 +1,9 @@
+{
+  "stop": "start_run",
+  "open_again": "start_run",
+  "rename": "start_run",
+  "change_ceiling": "start_run",
+  "approve_raise": "approve_entry",
+  "refuse_raise": "approve_entry",
+  "withdraw_raise": "start_run"
+}

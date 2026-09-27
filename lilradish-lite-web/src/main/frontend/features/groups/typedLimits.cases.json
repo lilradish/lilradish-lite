@@ -1,0 +1,19 @@
+{
+  "key": [
+    { "typed": "HR", "accepted": true },
+    { "typed": "triage", "accepted": true },
+    { "typed": "TrIaGe", "accepted": true },
+    { "typed": "Q", "times": 16, "accepted": true },
+    { "typed": "", "accepted": false },
+    { "typed": "Q", "accepted": false },
+    { "typed": "Q", "times": 17, "accepted": false },
+    { "typed": "TRIAGE42", "accepted": false },
+    { "typed": "TRI AGE", "accepted": false },
+    { "typed": " TRIAGE", "accepted": false },
+    { "typed": "TRIAGE\n", "accepted": false },
+    { "typed": "tr\u0131", "accepted": false },
+    { "typed": "tr\u017f", "accepted": false },
+    { "typed": "\u00c4B", "accepted": false },
+    { "typed": "\uff21\uff22", "accepted": false }
+  ]
+}

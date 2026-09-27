@@ -13,24 +13,24 @@ import java.util.Set;
  * holds against that person. What no group role has is where the first one comes from —
  * nothing inside this system grants it, and a deployment arrives already holding one.
  *
- * <p>The two bundles are disjoint, and that is the ruling rather than a shape they happen to have
- * so far: the authority to shape the estate is not the standing that reads what the estate measures,
- * and neither adds up to the other. Somebody who does both holds two roles, which is a fact the
- * store can record and a single role could not.
- *
  * <p>Unlike {@link GroupRole}, these bundles form no chain, so folding two of them is not the same
  * as reading the wider one: {@link #actsOf} decides something here rather than restating a bundle.
  *
  * <p>What each role bundles is held here and not in the store, which keeps only which role somebody
  * holds — so changing a bundle is a release rather than a migration.
+ *
+ * <p>The published spelling is written out rather than folded from the constant name, for the reason
+ * {@link EstateAct} gives.
  */
 public enum EstateRole {
 
-    /** The authority over the estate's shape: who this system knows, and how they are grouped. */
-    STEWARD(EstateAct.READ_POOL, EstateAct.READ_GROUPS),
+    /** Who is in the pool, which estate roles they hold, and which groups exist. */
+    STEWARD("steward", EstateAct.KEEP_POOL, EstateAct.GRANT_ESTATE_ROLE, EstateAct.KEEP_GROUP_REGISTER),
 
-    /** The standing that reads what the estate reports of itself, and changes none of it. */
-    WATCHER(EstateAct.READ_SOUNDNESS, EstateAct.READ_MEASUREMENTS);
+    /** The standing that reads what the estate measures of itself and checks its soundness, and grants nothing. */
+    WATCHER("watcher", EstateAct.CHECK_SOUNDNESS, EstateAct.READ_MEASUREMENTS);
+
+    private final String published;
 
     /* Held as an EnumSet and answered as a view over it: the union below is a bit-mask operation
      * only while both sides are one, and the view a caller is handed is not. */
@@ -38,11 +38,16 @@ public enum EstateRole {
 
     private final Set<EstateAct> acts;
 
-    EstateRole(EstateAct... granted) {
+    EstateRole(String published, EstateAct... granted) {
+        this.published = published;
         EnumSet<EstateAct> bundle = EnumSet.noneOf(EstateAct.class);
         Collections.addAll(bundle, granted);
         this.bundled = bundle;
         this.acts = Collections.unmodifiableSet(bundle);
+    }
+
+    public String published() {
+        return published;
     }
 
     public Set<EstateAct> acts() {
@@ -62,5 +67,17 @@ public enum EstateRole {
             granted.addAll(role.bundled);
         }
         return Collections.unmodifiableSet(granted);
+    }
+
+    /** Every role bundling the act, and none where no role does. */
+    public static Set<EstateRole> reaching(EstateAct act) {
+        requireNonNull(act, "EstateRole act must not be null");
+        EnumSet<EstateRole> roles = EnumSet.noneOf(EstateRole.class);
+        for (EstateRole role : values()) {
+            if (role.bundled.contains(act)) {
+                roles.add(role);
+            }
+        }
+        return Collections.unmodifiableSet(roles);
     }
 }

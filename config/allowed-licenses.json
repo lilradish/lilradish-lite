@@ -1,0 +1,18 @@
+{
+  "allowedLicenses": [
+    { "moduleLicense": "Apache License, Version 2\\.0" },
+    { "moduleLicense": "MIT License" },
+    { "moduleLicense": "The 3-Clause BSD License" },
+    { "moduleLicense": "The 2-Clause BSD License" },
+    { "moduleLicense": "PUBLIC DOMAIN" },
+
+    { "moduleName": "org\\.libprunus:libprunus-bom" },
+    { "moduleName": "org\\.libprunus:libprunus-core" },
+    { "moduleName": "org\\.libprunus:libprunus-spring" },
+    { "moduleName": "org\\.libprunus:libprunus-flyway" },
+
+    { "moduleName": "ch\\.qos\\.logback:logback-classic", "moduleLicense": "Eclipse Public License - v 2\\.0" },
+    { "moduleName": "ch\\.qos\\.logback:logback-core", "moduleLicense": "Eclipse Public License - v 2\\.0" },
+    { "moduleName": "jakarta\\.annotation:jakarta\\.annotation-api", "moduleLicense": "Eclipse Public License - v 2\\.0" }
+  ]
+}

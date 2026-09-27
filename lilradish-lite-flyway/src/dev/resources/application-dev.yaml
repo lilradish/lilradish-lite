@@ -1,0 +1,7 @@
+# Lists replace rather than append, so the baseline is named again. A database this has seeded must keep
+# this location: its fixture would otherwise be an applied migration nothing resolves, and validate refuses.
+spring:
+  flyway:
+    locations:
+      - classpath:db/migration/common
+      - classpath:db/migration/dev

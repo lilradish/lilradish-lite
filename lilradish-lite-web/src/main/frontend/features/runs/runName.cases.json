@@ -1,0 +1,19 @@
+{
+  "name": [
+    { "typed": "Claim from Ada", "accepted": true },
+    { "typed": "Two  spaces", "accepted": true },
+    { "typed": " Leading", "accepted": true },
+    { "typed": "Trailing ", "accepted": true },
+    { "typed": "n", "times": 128, "accepted": true },
+    { "typed": "\ud83d\ude00", "times": 128, "accepted": true },
+    { "typed": "\u202eClaim", "accepted": true },
+    { "typed": "", "accepted": false },
+    { "typed": "   ", "accepted": false },
+    { "typed": "\u200b", "accepted": false },
+    { "typed": "n", "times": 129, "accepted": false },
+    { "typed": "\ud83d\ude00", "times": 129, "accepted": false },
+    { "typed": "Claim\nfrom Ada", "accepted": false },
+    { "typed": "Claim\u2028from Ada", "accepted": false },
+    { "typed": "Claim\u0085from Ada", "accepted": false }
+  ]
+}

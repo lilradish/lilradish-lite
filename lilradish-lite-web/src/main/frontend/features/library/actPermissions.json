@@ -1,0 +1,15 @@
+{
+  "entry": {
+    "start_draft": "author_entry",
+    "rename": "author_entry",
+    "stop": "revoke_entry",
+    "let_go": "revoke_entry"
+  },
+  "version": {
+    "write": "author_entry",
+    "submit": "author_entry",
+    "withdraw": "author_entry",
+    "approve": "approve_entry",
+    "retire": "revoke_entry"
+  }
+}

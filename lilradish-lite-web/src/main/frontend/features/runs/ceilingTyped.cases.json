@@ -1,0 +1,21 @@
+{
+  "ceiling": [
+    { "typed": "1", "accepted": true },
+    { "typed": "5000", "accepted": true },
+    { "typed": "9007199254740991", "accepted": true },
+    { "typed": "0", "accepted": false },
+    { "typed": "007", "accepted": false },
+    { "typed": "-5", "accepted": false },
+    { "typed": "+5", "accepted": false },
+    { "typed": "5.0", "accepted": false },
+    { "typed": "5e3", "accepted": false },
+    { "typed": " 5", "accepted": false },
+    { "typed": "5 ", "accepted": false },
+    { "typed": "1,000", "accepted": false },
+    { "typed": "\u0665", "accepted": false },
+    { "typed": "\uff15", "accepted": false },
+    { "typed": "9007199254740992", "accepted": false },
+    { "typed": "9999999999999999", "accepted": false },
+    { "typed": "12345678901234567", "accepted": false }
+  ]
+}

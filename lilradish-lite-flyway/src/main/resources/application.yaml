@@ -1,0 +1,20 @@
+# Connection comes only from the environment: SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD.
+# So does the operation: PRUNUS_FLYWAY_COMMAND = migrate | validate | info | repair | baseline.
+# DB-SPECIFIC: URL scheme and default port differ per database (jdbc:postgresql://<host>:5432/<db>).
+spring:
+  application:
+    name: lilradish-lite-flyway
+  flyway:
+    # Named rather than left to the default: the default location is scanned recursively, so
+    # classpath:db/migration would take the development fixture along with the baseline.
+    locations:
+      - classpath:db/migration/common
+    validate-migration-naming: true
+    # An absent location fails the run instead of quietly reporting zero migrations.
+    fail-on-missing-locations: true
+    # Bounds only the wait for a lock — while DDL waits, every query on that table queues behind it.
+    # DB-SPECIFIC: PostgreSQL syntax; other databases reject it on connect — replace or remove.
+    init-sqls:
+      - "SET lock_timeout = '2s'"
+    # DB-SPECIFIC: CREATE INDEX CONCURRENTLY needs spring.flyway.postgresql.transactional-lock=false.
+    # DB-SPECIFIC: where DDL commits implicitly, a failed migration needs cleanup plus REPAIR.

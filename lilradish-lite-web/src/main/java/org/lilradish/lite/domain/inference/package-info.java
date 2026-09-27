@@ -1,6 +1,7 @@
 /**
- * One call to a model provider: why it was made, how it ended, what it cost, and the pause a
- * provider can ask for instead of answering. Which provider answered is not part of any of it.
+ * One call to a model: what it asks and why, what is sent and the most that could be, each time the
+ * model would not take it, how it ended, what came back read against what was asked, and how sure the
+ * model was of it. Which provider or library makes the call is not part of any of it.
  */
 @NullMarked
 package org.lilradish.lite.domain.inference;

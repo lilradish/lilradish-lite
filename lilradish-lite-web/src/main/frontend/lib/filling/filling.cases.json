@@ -1,0 +1,312 @@
+{
+  "fields": [
+    { "name": "complaint", "kind": "text", "longest": 10, "mustBeGiven": true },
+    { "name": "amount", "kind": "number", "mustBeGiven": false },
+    { "name": "tags", "kind": "text", "longest": 6, "most": 2, "mustBeGiven": true },
+    {
+      "name": "contact",
+      "kind": "fields",
+      "mustBeGiven": false,
+      "fields": [
+        { "name": "email", "kind": "text", "longest": 20, "mustBeGiven": true },
+        { "name": "phones", "kind": "text", "longest": 12, "most": 2, "mustBeGiven": false }
+      ]
+    },
+    {
+      "name": "address",
+      "kind": "fields",
+      "mustBeGiven": true,
+      "fields": [{ "name": "street", "kind": "text", "longest": 20, "mustBeGiven": false }]
+    },
+    {
+      "name": "items",
+      "kind": "fields",
+      "most": 2,
+      "mustBeGiven": false,
+      "fields": [
+        { "name": "name", "kind": "text", "longest": 10, "mustBeGiven": true },
+        { "name": "count", "kind": "number", "mustBeGiven": false }
+      ]
+    },
+    { "name": "notes", "kind": "text", "longest": 20, "most": 2, "mustBeGiven": false }
+  ],
+  "cases": [
+    {
+      "case": "as little as fits: fields that may be left empty holding nothing are no value, and many that may hold none hold none",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [],
+      "kept": {
+        "complaint": "Broken",
+        "amount": null,
+        "tags": ["kettle"],
+        "contact": null,
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      }
+    },
+    {
+      "case": "everything given, each value kept as it was written",
+      "sent": {
+        "complaint": " Broken\n",
+        "amount": "12.5",
+        "tags": ["kettle", "lid"],
+        "contact": { "email": "ada@example.org", "phones": ["0123"] },
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "kettle", "count": "2" }],
+        "notes": ["first", "second"]
+      },
+      "problems": [],
+      "kept": {
+        "complaint": " Broken\n",
+        "amount": "12.5",
+        "tags": ["kettle", "lid"],
+        "contact": { "email": "ada@example.org", "phones": ["0123"] },
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "kettle", "count": "2" }],
+        "notes": ["first", "second"]
+      }
+    },
+    {
+      "case": "fields that may be left empty holding only text of nothing that shows are no value, what is missing within them dropped",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": " \t\u200b", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [],
+      "kept": {
+        "complaint": "Broken",
+        "amount": null,
+        "tags": ["kettle"],
+        "contact": null,
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      }
+    },
+    {
+      "case": "a number of nothing that shows is no value, as text of nothing that shows is, at any level",
+      "sent": {
+        "complaint": "Broken",
+        "amount": " ",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "kettle", "count": " \t" }],
+        "notes": []
+      },
+      "problems": [],
+      "kept": {
+        "complaint": "Broken",
+        "amount": null,
+        "tags": ["kettle"],
+        "contact": null,
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "kettle", "count": null }],
+        "notes": []
+      }
+    },
+    {
+      "case": "a number with spacing around it is not written as a number: nothing is trimmed",
+      "sent": {
+        "complaint": "Broken",
+        "amount": " 12 ",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["amount"], "reason": "malformed" }]
+    },
+    {
+      "case": "fields that may be left empty and hold anything name what must be given within them",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": ["0123"] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["contact", "email"], "reason": "missing" }]
+    },
+    {
+      "case": "one value that must be given, at the first level, of text of nothing that shows",
+      "sent": {
+        "complaint": "   ",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["complaint"], "reason": "missing" }]
+    },
+    {
+      "case": "many that must be given holding none, missing at the field",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": [],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["tags"], "reason": "missing" }]
+    },
+    {
+      "case": "fields that must be given holding nothing, missing at the fields and nothing within them",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["address"], "reason": "missing" }]
+    },
+    {
+      "case": "an empty one of many that must be given is missing at its place",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle", ""],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["tags", 1], "reason": "missing" }]
+    },
+    {
+      "case": "an empty one of many that may hold none is missing at its place all the same",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": ["\u200b", "x"]
+      },
+      "problems": [{ "path": ["notes", 0], "reason": "missing" }]
+    },
+    {
+      "case": "one of many fields holding nothing is missing at its place, and nothing within it",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "", "count": "" }],
+        "notes": []
+      },
+      "problems": [{ "path": ["items", 0], "reason": "missing" }]
+    },
+    {
+      "case": "one of many fields holding only a value that does not fit is fields, naming what it lacks and that value",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [{ "name": "", "count": "1e3" }],
+        "notes": []
+      },
+      "problems": [
+        { "path": ["items", 0, "name"], "reason": "missing" },
+        { "path": ["items", 0, "count"], "reason": "malformed" }
+      ]
+    },
+    {
+      "case": "many holding more than its most, named once at the field and none of them read",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["longer than six", "", "x"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["tags"], "reason": "too_many" }]
+    },
+    {
+      "case": "many within fields holding more than its most, named once where it stands",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "ada@example.org", "phones": ["1", "", "\u202e"] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": []
+      },
+      "problems": [{ "path": ["contact", "phones"], "reason": "too_many" }]
+    },
+    {
+      "case": "text refused for what it holds, one of many, never dropped as holding nothing",
+      "sent": {
+        "complaint": "Broken",
+        "amount": "",
+        "tags": ["kettle"],
+        "contact": { "email": "", "phones": [] },
+        "address": { "street": "1 Main" },
+        "items": [],
+        "notes": ["\u2066", "a\r\nb"]
+      },
+      "problems": [
+        { "path": ["notes", 0], "reason": "direction_control" },
+        { "path": ["notes", 1], "reason": "crlf" }
+      ]
+    },
+    {
+      "case": "every place that does not fit in declared order, depth first, a field before what it holds",
+      "sent": {
+        "complaint": "   ",
+        "amount": "-0",
+        "tags": ["longer than six", ""],
+        "contact": { "email": "", "phones": ["0123456789012"] },
+        "address": { "street": "" },
+        "items": [
+          { "name": "", "count": "x" },
+          { "name": "", "count": "" }
+        ],
+        "notes": []
+      },
+      "problems": [
+        { "path": ["complaint"], "reason": "missing" },
+        { "path": ["amount"], "reason": "malformed" },
+        { "path": ["tags", 0], "reason": "too_long" },
+        { "path": ["tags", 1], "reason": "missing" },
+        { "path": ["contact", "email"], "reason": "missing" },
+        { "path": ["contact", "phones", 0], "reason": "too_long" },
+        { "path": ["address"], "reason": "missing" },
+        { "path": ["items", 0, "name"], "reason": "missing" },
+        { "path": ["items", 0, "count"], "reason": "malformed" },
+        { "path": ["items", 1], "reason": "missing" }
+      ]
+    }
+  ]
+}

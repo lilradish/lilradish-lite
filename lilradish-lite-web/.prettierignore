@@ -1,0 +1,6 @@
+# Build output and dependencies (Prettier does not read .gitignore).
+build/
+node_modules/
+package-lock.json
+.gradle/
+.node/

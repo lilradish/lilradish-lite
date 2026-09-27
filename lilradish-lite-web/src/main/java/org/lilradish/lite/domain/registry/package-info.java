@@ -1,7 +1,4 @@
-/**
- * Versioned entries and the references into them. An entry's content is read under the schema
- * version it was written with, so nothing here reinterprets a record made years earlier.
- */
+/** Versioned entries, what may be done to them, and the references into them. */
 @NullMarked
 package org.lilradish.lite.domain.registry;
 

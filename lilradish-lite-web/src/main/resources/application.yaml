@@ -1,0 +1,48 @@
+# Connection comes only from the environment; nothing here defaults one.
+# DB-SPECIFIC: the URL alone puts the baseline's schema on the search path; no statement names one.
+spring:
+  application:
+    name: lilradish-lite-web
+  datasource:
+    hikari:
+      data-source-properties:
+        # The server's detail carries row contents into logs; do not set it on the URL, whose value would win.
+        logServerErrorDetail: "false"
+  # Each reads a whole body before the door or the gate has decided anything, and no address here
+  # takes a form or a multipart body: whoever takes a body reads it itself, bounded.
+  mvc:
+    formcontent:
+      filter:
+        enabled: false
+  servlet:
+    multipart:
+      enabled: false
+  web:
+    error:
+      # The page the container reports a failure with would otherwise hand back the address as sent.
+      include-path: never
+    resources:
+      # ClientRouteFallback is the only static handling. Left on, the framework's is replaced at the same
+      # pattern, and whatever is set for it under spring.web.resources is read by nothing.
+      add-mappings: false
+server:
+  port: 8080
+  tomcat:
+    # Cost: a client still uploading a large body may see the connection reset instead of the 400 or 503.
+    max-swallow-size: 64KB
+lilradish:
+  code-steps:
+    # The longest a code step this release holds runs for; a shutdown in order waits that long for one under way.
+    # A deployment holding one that calls out sets its own bound.
+    longest-run: 1m
+logging:
+  pattern:
+    # Under the keys RequestTrace puts them in; a line logged outside a request shows them empty.
+    correlation: "[%X{correlationId} %X{userId}] "
+  level:
+    # The paths its warnings quote are the caller's, escaped for controls alone; what else it warns
+    # of is a resource location, and ours are fixed.
+    org.springframework.web.servlet.resource.ResourceHandlerUtils: error
+    # Warns once per request whose Accept header it cannot parse, identified or not; what else it
+    # logs is one line at startup naming the welcome page.
+    org.springframework.boot.webmvc.autoconfigure.WelcomePageHandlerMapping: error
