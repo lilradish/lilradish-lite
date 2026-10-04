@@ -24,16 +24,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Every change to a group's membership as the store makes it, on a real server running the real
- * baseline and under real transactions: whether a change lands whole or not at all, what it records
- * and against whom, and what two changes arriving at once leave behind exist nowhere but in a database.
- *
- * <p>Each feature has a database of its own, copied from one the baseline was applied to, because what
- * is under test commits. Where changes race, the database defaults to repeatable read, so only a change
- * naming Read Committed reads what it waited on; which change waits first is arranged by holding what
- * they need until each is seen waiting for it.
- */
+/** Changes must use Read Committed and read membership again after waiting for its lock. */
 class MembershipChangesIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -44,28 +35,28 @@ class MembershipChangesIntegrationSpec extends Specification {
 
     static final String TRIAGE = "00000003-0000-4000-8000-000000000d02"
 
-    /** The one member of the payroll group who may change its membership, and the one making changes. */
+
     static final String ADA = "00000002-0000-4000-8000-000000000d01"
 
     static final UserId ADA_USER = new UserId("000d01")
 
-    /** An operator in the payroll group. */
+
     static final String GRACE = "00000002-0000-4000-8000-000000000d02"
 
     static final UserId GRACE_USER = new UserId("000d02")
 
-    /** In the pool and in no group but triage, whose owner she is. */
+
     static final String OLIVE = "00000002-0000-4000-8000-000000000d03"
 
     static final UserId OLIVE_USER = new UserId("000d03")
 
-    /** In the pool, whose one role in the payroll group was taken. */
+
     static final String LINUS = "00000002-0000-4000-8000-000000000d04"
 
-    /** Somebody whose stay in the pool ended. */
+
     static final String GONE = "00000002-0000-4000-8000-000000000d05"
 
-    /** Somebody whose last role in the payroll group was taken, and who left the pool after. */
+
     static final String TAKEN_AND_GONE = "00000002-0000-4000-8000-000000000d06"
 
     static final List<String> WRITTEN_TO = ["subjects", "pool_members", "groups", "group_members"]
@@ -90,19 +81,21 @@ class MembershipChangesIntegrationSpec extends Specification {
     ExecutorService racing = Executors.newFixedThreadPool(3)
 
     def setupSpec() {
+        // DB-SPECIFIC: PostgreSQL CREATE DATABASE.
         administer("create database baseline_applied")
         Baseline.appliedTo(server, "baseline_applied")
     }
 
     def setup() {
         def name = "memberships_" + (++databasesMade)
+        // DB-SPECIFIC: PostgreSQL CREATE DATABASE TEMPLATE.
         administer("create database ${name} template baseline_applied")
         database = Baseline.appliedTo(server, name)
         session = JdbcClient.create(database)
         changes = new MembershipChanges(session, transactions(), new Members(session), new PoolStays(session),
                 new GroupRoles(session))
-        pooled(ADA, "000d01", "Ada Lovelace")
-        pooled(GRACE, "000d02", "Grace Hopper")
+        pooled(ADA, "000d01", "Ari Mockvale")
+        pooled(GRACE, "000d02", "Greno Nockal")
         pooled(OLIVE, "000d03", "Olive Out")
         pooled(LINUS, "000d04", "Linus Left")
         pooled(GONE, "000d05", "Gone Away")
@@ -116,7 +109,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         closed(PAYROLL, LINUS, "role_taken")
     }
 
-    /** Recorded as the caller's act, one row per role, each open. */
+
     def "brings somebody in the pool into the group holding exactly the roles given, as the caller's act"() {
         when:
         def brought = changes.bringIn(groupId(PAYROLL), subjectId(OLIVE), roles, ADA_USER)
@@ -136,7 +129,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         roles << [EnumSet.of(GroupRole.OPERATOR), EnumSet.of(GroupRole.OPERATOR, GroupRole.OWNER), EnumSet.allOf(GroupRole)]
     }
 
-    /** Whoever they were before, somebody holding nothing here is brought in as anybody else is. */
+
     def "brings back somebody whose membership ended, the rows of their earlier one left as they were"() {
         given:
         def earlier = digestOf(EARLIER_OF_LINUS)
@@ -152,7 +145,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         digestOf(EARLIER_OF_LINUS) == earlier
     }
 
-    /** An identifier nobody holds, somebody whose stay ended, the seeder: none is in the pool. */
+
     def "refuses to bring in anybody not in the pool, writing nothing"() {
         given:
         def before = contents()
@@ -228,10 +221,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         contents() == before
     }
 
-    /**
-     * Nobody had to be searched for: a role given is how somebody whose last one was just taken comes
-     * back, whatever came before it, a removal from the group among it.
-     */
+
     def "giving a role to somebody whose last role here was taken makes them a member again"() {
         given:
         if (removedEarlier) {
@@ -252,10 +242,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         OLIVE  | true
     }
 
-    /**
-     * Taken out of the group, never in it, or out of the pool: bringing in is the way for all of them, and
-     * all are answered alike, so the group learns nothing of whether they are in the pool.
-     */
+    /** Responses for unseen identities must be indistinguishable. */
     def "refuses to give a role to anybody neither a member nor one whose last role was taken, writing nothing"() {
         given:
         formerly(PAYROLL, OLIVE, "overseer", "role_taken", 2)
@@ -281,7 +268,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         named << [OLIVE, TAKEN_AND_GONE, GONE, "00000009-0000-4000-8000-000000000009", SEEDER]
     }
 
-    /** Somebody never in the group at all is somebody to bring in, however they stand elsewhere. */
+
     def "refuses to give a role to somebody in the pool who was never in the group"() {
         given:
         def before = contents()
@@ -297,7 +284,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         contents() == before
     }
 
-    /** Taken is closed, never deleted, and named as a role taken rather than as somebody removed. */
+
     def "takes a role from a member, closing its row as a role taken by the caller, and leaving the rest"() {
         given:
         member(PAYROLL, GRACE, "overseer")
@@ -313,7 +300,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         openHoldings(PAYROLL, GRACE) == ["overseer ${FIRST_STEWARD}" as String]
     }
 
-    /** No longer a member, and still somebody the group can give a role to, so they are answered holding nothing. */
+
     def "taking a member's last role ends their membership, and they are answered holding nothing"() {
         when:
         def taken = changes.take(groupId(PAYROLL), subjectId(GRACE), GroupRole.OPERATOR, ADA_USER)
@@ -342,7 +329,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         contents() == before
     }
 
-    /** Somebody in the pool holding nothing here, somebody out of it, and somebody who never was. */
+
     def "taking a role from anybody holding none here is refused as no member, writing nothing"() {
         given:
         def before = contents()
@@ -361,7 +348,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         named << [LINUS, OLIVE, GONE, "00000009-0000-4000-8000-000000000009"]
     }
 
-    /** The one member who may change the membership, taking it from themselves or having it taken. */
+
     def "the last role that lets anybody change the membership is not taken, from its holder or by them"() {
         given:
         def before = contents()
@@ -378,7 +365,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         contents() == before
     }
 
-    /** One of two who may is left, which is all the group needs. */
+
     def "with two who may change the membership, one takes that role from the other and one is left"() {
         given:
         member(PAYROLL, GRACE, "owner")
@@ -393,7 +380,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         openHoldingsOf("owner", PAYROLL) == [ADA]
     }
 
-    /** Giving up one's own role is a taking like any other, allowed while somebody else may still change it. */
+
     def "a member takes their own role that lets them change the membership while another holds one too"() {
         given:
         member(PAYROLL, GRACE, "owner")
@@ -407,7 +394,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         openHoldingsOf("owner", PAYROLL) == [ADA]
     }
 
-    /** Only open rows are closed: an earlier membership's rows keep who closed them, when, and how. */
+
     def "taking a role leaves the rows of an earlier membership as they were"() {
         given:
         def earlier = closedRowsOf(LINUS)
@@ -424,6 +411,7 @@ class MembershipChangesIntegrationSpec extends Specification {
     /** A change waits on the group's lock, so the transaction closing a row can have begun before it was made. */
     def "a role made after the change's transaction began is closed no earlier than it was made"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("update group_members set created_at = now() + interval '1 hour' where subject_id = ?::uuid")
                 .param(GRACE).update()
 
@@ -434,7 +422,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         count("select count(*) from group_members where subject_id = '${GRACE}' and removed_at = created_at") == 1
     }
 
-    /** Every row closed at once, and named as a removal rather than as roles taken one by one. */
+
     def "removes a member from the group, closing every role they hold as one removal by the caller"() {
         given:
         member(PAYROLL, GRACE, "overseer")
@@ -485,7 +473,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         contents() == before
     }
 
-    /** Leaving is a removal like any other, allowed while somebody else may still change the membership. */
+
     def "with two who may change the membership, either is removed, by the other or by themselves, and one is left"() {
         given:
         member(PAYROLL, GRACE, "owner")
@@ -504,7 +492,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         ADA    | ADA_USER   || GRACE
     }
 
-    /** Only open rows are closed: an earlier membership's rows keep who closed them, when, and how. */
+
     def "removing a member leaves the rows of an earlier membership as they were"() {
         given:
         def earlier = closedRowsOf(LINUS)
@@ -537,7 +525,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         [change, named] << [["bringIn", "give", "take", "remove"], [OLIVE, GONE]].combinations()
     }
 
-    /** Whatever they hold elsewhere, somebody holding nothing in a group sees into it no more than one that does not exist. */
+
     def "a caller holding nothing in the group, or asking of a group there is none of, is refused as no group in view"() {
         given:
         def before = contents()
@@ -557,15 +545,12 @@ class MembershipChangesIntegrationSpec extends Specification {
                             ["bringIn", "give", "take", "remove"]].combinations()
     }
 
-    /**
-     * The two who may change the membership each give it up, or each take it from the other, at once.
-     * Both wait on the group's lock, and whichever goes second reads what the first did: giving it up,
-     * it is the last and is kept; taking it, it may no longer change anything, or is no member at all.
-     */
+    /** A second waiter must read membership again after the first change commits. */
     def "two who may change the membership giving it up or taking it from each other at once leave one of them"() {
         given:
         member(PAYROLL, GRACE, "owner")
         repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         def held = holding("select 1 from groups where group_id = '${PAYROLL}' for no key update")
 
         when:
@@ -595,6 +580,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         given:
         member(PAYROLL, GRACE, "owner")
         repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         def held = holding("select 1 from groups where group_id = '${PAYROLL}' for no key update")
 
         when:
@@ -617,19 +603,18 @@ class MembershipChangesIntegrationSpec extends Specification {
         openHoldings(PAYROLL, OLIVE).size() == 1
     }
 
-    /**
-     * The caller holds the permission when the change starts and loses it while the change waits on
-     * the group's lock; under this database's default only a read made after the wait can say so.
-     */
+    /** Authorization must be read again after waiting for the group lock. */
     def "a change whose caller stops being able to change the membership while it waits is refused, changing nothing"() {
         given:
         member(PAYROLL, GRACE, "owner")
         repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         def held = holding("select 1 from groups where group_id = '${PAYROLL}' for no key update")
 
         when:
         def changing = attempting { attempt(change, GRACE_USER, OLIVE) }
         untilWaiting(1)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("""
                 update group_members set removed_at = now(), removed_by = ?::uuid, removal = 'role_taken'
                  where subject_id = ?::uuid and role = 'owner'
@@ -650,10 +635,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         change << ["bringIn", "give", "take", "remove"]
     }
 
-    /**
-     * A row pointing at the group takes the lock that only an update of the group's key would wait on,
-     * so a change to the membership passes one another transaction holds and has not committed.
-     */
+    /** Foreign-key key-share locks must allow changes taking no-key-update locks to proceed. */
     def "a change to the membership does not wait on another transaction's row pointing at the group"() {
         given:
         def other = holding("""
@@ -678,6 +660,7 @@ class MembershipChangesIntegrationSpec extends Specification {
     def "somebody brought in while leaving the pool is read as having left, and is refused"() {
         given:
         repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL SELECT FOR UPDATE.
         def leaving = holding("select 1 from pool_members where subject_id = '${LINUS}' and removed_at is null for update")
 
         when:
@@ -686,6 +669,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         }
         untilWaiting(1)
         leaving.createStatement().withCloseable {
+            // DB-SPECIFIC: PostgreSQL now().
             it.execute("update pool_members set removed_at = now(), removed_by = '${FIRST_STEWARD}'" +
                     " where subject_id = '${LINUS}' and removed_at is null")
         }
@@ -724,7 +708,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         }
     }
 
-    /** One side of a race between two who may change the membership, as the caller and the other. */
+
     private Object sideOf(String race, UserId caller, String self, String other) {
         switch (race) {
             case "giving it up":
@@ -741,22 +725,25 @@ class MembershipChangesIntegrationSpec extends Specification {
         new ChangeTransactions().readCommitted(new DataSourceTransactionManager(database))
     }
 
-    /** Each open holding as its role and who gave it, in role order. */
+
     private List<String> openHoldings(String group, String person) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         session.sql("""
                 select role::text || ' ' || created_by from group_members
                  where group_id = ?::uuid and subject_id = ?::uuid and removed_at is null order by role::text
                 """).params(group, person).query(String).list()
     }
 
-    /** Every closed row of somebody's, whole. */
+
     private List<String> closedRowsOf(String person) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         session.sql("select t::text from group_members t where subject_id = ?::uuid and removed_at is not null")
                 .param(person).query(String).list()
     }
 
-    /** Each closed holding as its role, who closed it and how, in role order. */
+
     private List<String> closedHoldings(String group, String person) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         session.sql("""
                 select role::text || ' ' || removed_by || ' ' || removal from group_members
                  where group_id = ?::uuid and subject_id = ?::uuid and removed_at is not null order by role::text
@@ -764,13 +751,14 @@ class MembershipChangesIntegrationSpec extends Specification {
     }
 
     private List<String> openHoldingsOf(String role, String group) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid, group_role.
         session.sql("""
                 select subject_id::text from group_members
                  where group_id = ?::uuid and role = ?::group_role and removed_at is null
                 """).params(group, role).query(String).list()
     }
 
-    /** What a change answered, or what it threw, taken on a thread of its own. */
+
     private Future<Object> attempting(Closure change) {
         racing.submit({
             try {
@@ -781,7 +769,7 @@ class MembershipChangesIntegrationSpec extends Specification {
         } as Callable<Object>)
     }
 
-    /** A transaction of the test's own, left open holding whatever the statement took. */
+
     private Connection holding(String statement) {
         def connection = database.connection
         connection.autoCommit = false
@@ -791,6 +779,7 @@ class MembershipChangesIntegrationSpec extends Specification {
 
     private void untilWaiting(int sessions) {
         def deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        // DB-SPECIFIC: PostgreSQL pg_stat_activity; current_database().
         while (count("""
                 select count(*) from pg_stat_activity
                  where datname = current_database() and wait_event_type = 'Lock'
@@ -801,9 +790,12 @@ class MembershipChangesIntegrationSpec extends Specification {
     }
 
     private void repeatableReadByDefault() {
+        // DB-SPECIFIC: PostgreSQL current_database().
         session.sql("select current_database()").query(String).single().with { name ->
+            // DB-SPECIFIC: PostgreSQL ALTER DATABASE settings.
             session.sql("alter database \"${name}\" set default_transaction_isolation = 'repeatable read'").update()
         }
+        // DB-SPECIFIC: PostgreSQL SHOW default_transaction_isolation.
         assert session.sql("show default_transaction_isolation").query(String).single() == "repeatable read"
     }
 
@@ -812,6 +804,7 @@ class MembershipChangesIntegrationSpec extends Specification {
     }
 
     private String digestOf(String rows) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; md5(), string_agg().
         session.sql("select coalesce(md5(string_agg(t::text, '|' order by t::text)), 'empty') from ${rows} t" as String)
                 .query(String).single()
     }
@@ -829,33 +822,39 @@ class MembershipChangesIntegrationSpec extends Specification {
     }
 
     private void pooled(String subject, String user, String name) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("""
                 insert into subjects (subject_id, kind, user_id, display_name, created_by)
                 values (?::uuid, 'person', ?, ?, ?::uuid)
                 """).params(subject, user, name, SEEDER).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                 .params(subject, FIRST_STEWARD).update()
     }
 
     private void endedStay(String subject) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("update pool_members set removed_at = now(), removed_by = ?::uuid where subject_id = ?::uuid")
                 .params(FIRST_STEWARD, subject).update()
     }
 
     private void group(String group, String key, String name) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, ?, ?, ?::uuid)")
                 .params(group, key, name, FIRST_STEWARD).update()
     }
 
     private void member(String group, String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role.
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid)
                 """).params(group, subject, role, FIRST_STEWARD).update()
     }
 
-    /** A holding made and closed hours ago, so which of several closings came last is a matter of time. */
+
     private void formerly(String group, String subject, String role, String removal, int hoursAgo) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role, group_member_removal; now().
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by, created_at, removed_at, removed_by,
                                            removal)
@@ -865,6 +864,7 @@ class MembershipChangesIntegrationSpec extends Specification {
     }
 
     private void closed(String group, String subject, String removal) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_member_removal; now().
         session.sql("""
                 update group_members set removed_at = now(), removed_by = ?::uuid, removal = ?::group_member_removal
                  where group_id = ?::uuid and subject_id = ?::uuid and removed_at is null

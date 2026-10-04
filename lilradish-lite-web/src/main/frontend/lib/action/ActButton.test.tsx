@@ -1,3 +1,4 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -140,6 +141,58 @@ describe("ActButton", () => {
       "aria-describedby",
     );
     expect(container.textContent).toBe("Remove");
+  });
+
+  it("is drawn in the warning colour only where it warns", () => {
+    render(
+      <>
+        <ActButton
+          action={stubbed()}
+          act={vi.fn(() => Promise.resolve(null))}
+          warns
+        >
+          Remove
+        </ActButton>
+        <ActButton action={stubbed()} act={vi.fn(() => Promise.resolve(null))}>
+          Give
+        </ActButton>
+      </>,
+      { wrapper: themed },
+    );
+
+    expect(screen.getByRole("button", { name: "Remove" })).toHaveClass(
+      buttonClasses.colorWarning,
+    );
+    expect(screen.getByRole("button", { name: "Give" })).not.toHaveClass(
+      buttonClasses.colorWarning,
+    );
+  });
+
+  it("is drawn filled only where it leads", () => {
+    render(
+      <>
+        <ActButton
+          action={stubbed()}
+          act={vi.fn(() => Promise.resolve(null))}
+          variant="contained"
+        >
+          Approve
+        </ActButton>
+        <ActButton action={stubbed()} act={vi.fn(() => Promise.resolve(null))}>
+          Withdraw
+        </ActButton>
+      </>,
+      { wrapper: themed },
+    );
+
+    const [leading, other] = ["Approve", "Withdraw"].map((name) =>
+      screen.getByRole("button", { name }),
+    );
+
+    expect(leading).toHaveClass(buttonClasses.contained);
+    expect(leading).not.toHaveClass(buttonClasses.outlined);
+    expect(other).toHaveClass(buttonClasses.outlined);
+    expect(other).not.toHaveClass(buttonClasses.contained);
   });
 
   /** The click somebody repeats because nothing appeared to happen. */

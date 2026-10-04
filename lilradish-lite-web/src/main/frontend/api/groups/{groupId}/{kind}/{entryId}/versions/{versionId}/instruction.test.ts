@@ -23,16 +23,16 @@ describe("instruct", () => {
           [[JSON.stringify(ANSWER), 200]],
       });
 
+      const signal = new AbortController().signal;
       await expect(
-        instruct(
-          GROUP,
-          ENTRY,
-          VERSION,
-          7,
-          instruction,
-          new AbortController().signal,
-        ),
+        instruct(GROUP, ENTRY, VERSION, 7, instruction, signal),
       ).resolves.toEqual(ANSWER);
+      expect(sent.mock.calls).toHaveLength(1);
+      expect(sent.mock.calls[0]![0]).toBe(
+        `/api/groups/${GROUP}/questions/${ENTRY}/versions/${VERSION}/instruction`,
+      );
+      expect(sent.mock.calls[0]![1]?.method).toBe("PUT");
+      expect(sent.mock.calls[0]![1]?.signal).toBe(signal);
       expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
         revision: 7,
         instruction,

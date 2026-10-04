@@ -1,3 +1,4 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -144,6 +145,24 @@ describe("PagingControls", () => {
     );
 
     expect(container.textContent).toBe("First pageNext page");
+  });
+
+  it("draws both directions in the compact navigation role", () => {
+    render(
+      <PagingControls page={paged({ onFirstPage: false, hasNext: true })} />,
+      { wrapper: themed },
+    );
+
+    for (const label of ["First page", "Next page"]) {
+      const control = screen.getByRole("button", { name: label });
+      expect(control).toHaveClass(buttonClasses.outlined);
+      expect(control).toHaveClass(buttonClasses.sizeSmall);
+      expect(control).toHaveClass(buttonClasses.colorInherit);
+      expect(getComputedStyle(control).minHeight).toBe("32px");
+      expect(
+        getComputedStyle(control).getPropertyValue("--variant-outlinedColor"),
+      ).not.toBe(theme.palette.primary.main);
+    }
   });
 
   it.each([

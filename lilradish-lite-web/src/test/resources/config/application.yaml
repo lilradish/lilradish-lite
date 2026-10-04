@@ -10,8 +10,8 @@ lilradish:
         came-back-per-call-limit: 8192
         prices-per-million:
           - currency: USD
-            sent-per-million: "3"
-            came-back-per-million: "15"
+            sent-per-million: "7"
+            came-back-per-million: "21"
 # A spec starting the whole application starts it on a copy of a database the real baseline was applied to, which
 # holds no migration Flyway could find on this classpath: left on, it would refuse every one already applied.
 spring:

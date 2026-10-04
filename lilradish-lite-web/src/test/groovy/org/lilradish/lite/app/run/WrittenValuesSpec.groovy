@@ -17,10 +17,12 @@ import org.lilradish.lite.domain.declaration.DeclarationSide
 import org.lilradish.lite.domain.declaration.Demand
 import org.lilradish.lite.domain.declaration.Demands
 import org.lilradish.lite.domain.declaration.Field
+import org.lilradish.lite.domain.declaration.FieldKind
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.filling.FillField
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
@@ -46,7 +48,7 @@ class WrittenValuesSpec extends Specification {
 
         where:
         field     | kept                           || written
-        FIELDS[1] | [since: "Monday", name: "Ada"] || '{"name":"Ada","since":"Monday"}'
+        FIELDS[1] | [since: "Monday", name: "Ari"] || '{"name":"Ari","since":"Monday"}'
         FIELDS[0] | "Lost bag"                     || '"Lost bag"'
         FIELDS[0] | null                           || 'null'
         ITEMS     | [[name: "Mug"]]                || '[{"name":"Mug"}]'
@@ -64,20 +66,57 @@ class WrittenValuesSpec extends Specification {
         where:
         field     | kept
         FIELDS[0] | ["Lost bag"]
-        FIELDS[1] | [name: "Ada"]
+        FIELDS[1] | [name: "Ari"]
         ITEMS     | [null]
+    }
+
+    def "a verified file is read with numeric size in one many and nested positions"() {
+        given:
+        def file = new FillField(new FieldName("attachment"), null, null, FieldKind.FILE, null, null, false,
+                null, [], [new MediaTypeName("application/pdf")], 100L)
+        def many = new FillField(new FieldName("attachments"), null, null, FieldKind.FILE, null, 2, false,
+                null, [], [new MediaTypeName("application/pdf")], 100L)
+        def nested = new FillField(new FieldName("bundle"), null, null, FieldKind.FIELDS, null, null, false,
+                null, [file])
+        def oneFile = [id: "00000000-0000-4000-8000-000000000001", name: "a.pdf", type: "application/pdf", size: 12]
+        def otherFile = [id: "00000000-0000-4000-8000-000000000002", name: "b.pdf", type: "application/pdf", size: 34]
+
+        expect:
+        JSON.writeValueAsString(WrittenValues.of(file, json(oneFile))) ==
+                '{"id":"00000000-0000-4000-8000-000000000001","name":"a.pdf","type":"application/pdf","size":12}'
+        JSON.writeValueAsString(WrittenValues.of(many, json([oneFile, otherFile]))) ==
+                '[{"id":"00000000-0000-4000-8000-000000000001","name":"a.pdf","type":"application/pdf","size":12},' +
+                '{"id":"00000000-0000-4000-8000-000000000002","name":"b.pdf","type":"application/pdf","size":34}]'
+        JSON.writeValueAsString(WrittenValues.of(nested, json([attachment: oneFile]))) ==
+                '{"attachment":{"id":"00000000-0000-4000-8000-000000000001","name":"a.pdf","type":"application/pdf","size":12}}'
+    }
+
+    def "a non-file number is still text and an unverified numeric leaf is rejected"() {
+        given:
+        def number = new FillField(new FieldName("count"), null, null, FieldKind.NUMBER, null, null, false,
+                null, [])
+
+        expect:
+        JSON.writeValueAsString(WrittenValues.of(number, json(12))) == '"12"'
+
+        when:
+        WrittenValues.node(FIELDS[0], json(12))
+
+        then:
+        def refused = thrown(IllegalStateException)
+        refused.message == "Filling writes every value as text, never as a flag or a number"
     }
 
     /** The store keeps members in an order of its own, so the declared order is all that puts them back. */
     def "values as kept are written as a person filling them sends them, every field in declared order"() {
         given:
-        def kept = json([sender: [since: "Monday", name: "Ada"], claim: "Lost bag"]) as JsonValue.JsonObject
+        def kept = json([sender: [since: "Monday", name: "Ari"], claim: "Lost bag"]) as JsonValue.JsonObject
 
         when:
         def written = WrittenValues.of(FIELDS, kept)
 
         then:
-        written == JSON.readTree('{"claim": "Lost bag", "sender": {"name": "Ada", "since": "Monday"}}')
+        written == JSON.readTree('{"claim": "Lost bag", "sender": {"name": "Ari", "since": "Monday"}}')
         written.propertyNames().toList() == ["claim", "sender"]
         written.get("sender").propertyNames().toList() == ["name", "since"]
     }

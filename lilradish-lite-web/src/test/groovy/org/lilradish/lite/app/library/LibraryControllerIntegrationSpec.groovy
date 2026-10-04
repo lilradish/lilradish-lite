@@ -84,7 +84,7 @@ class LibraryControllerIntegrationSpec extends Specification {
 
     static final PersonRows.Person ADA = new PersonRows.Person(
             new SubjectId(UUID.fromString("00000002-0000-4000-8000-000000000c01")), new UserId("000c01"),
-            new PersonName("Ada Lovelace"))
+            new PersonName("Ari Mockvale"))
 
     static final PersonRows.Person NAMELESS = new PersonRows.Person(
             new SubjectId(UUID.fromString("00000002-0000-4000-8000-000000000c02")), new UserId("000c02"), null)
@@ -159,9 +159,10 @@ class LibraryControllerIntegrationSpec extends Specification {
         new ListQuery<>(GROUP.toString(), order, typed == null ? null : new ListFilter(typed))
     }
 
-    private static Library.LibraryRow row(UUID entry, String name, Integer inService, boolean submitted,
-                                          boolean stopped) {
-        new Library.LibraryRow(new EntryId(entry), new EntryName(name), inService, submitted, stopped)
+    private static Library.LibraryRow row(UUID entry, String name, String purpose, Integer inService,
+                                          boolean submitted, boolean stopped, long statusRank) {
+        new Library.LibraryRow(new EntryId(entry), new EntryName(name),
+                purpose == null ? null : new EntryPurpose(purpose), inService, submitted, stopped, statusRank)
     }
 
     /** Void, so the verification is what fails rather than the null a mock's answer would assert as. */
@@ -202,7 +203,8 @@ class LibraryControllerIntegrationSpec extends Specification {
         given:
         holding(EnumSet.of(role))
         given(library.page(EntryKind.QUESTION, within(BY_NAME, null), null)).willReturn(new ListPage([
-                row(ENTRY, "Triage", 2, true, false), row(HOLDER, "Waiting", null, false, true)], null))
+                row(ENTRY, "Triage", "Sorts claims.", 2, true, false, 0L),
+                row(HOLDER, "Waiting", null, null, false, true, 1L)], null))
 
         when:
         def answered = listing("questions", [])
@@ -212,8 +214,12 @@ class LibraryControllerIntegrationSpec extends Specification {
         answered.response.status == 200
         membersOf(document) == ["items"]
         document.get("items").collect { membersOf(it) } ==
-                [["entryId", "name", "inService", "submitted", "stopped"], ["entryId", "name", "submitted", "stopped"]]
+                [["entryId", "name", "purpose", "inService", "submitted", "stopped"],
+                 ["entryId", "name", "submitted", "stopped"]]
+        document.get("items").every { !it.has("statusRank") }
         document.get("items").collect { it.get("entryId").asString() } == [ENTRY.toString(), HOLDER.toString()]
+        document.get("items").get(0).get("purpose").asString() == "Sorts claims."
+        document.get("items").get(1).has("purpose") == false
         document.get("items").get(0).get("inService").asInt() == 2
         document.get("items").collect { [it.get("submitted").asBoolean(), it.get("stopped").asBoolean()] } ==
                 [[true, false], [false, true]]
@@ -247,7 +253,7 @@ class LibraryControllerIntegrationSpec extends Specification {
         segment           | sent                                                          || kind                     | order                                               | typed
         "workflows"       | []                                                            || EntryKind.WORKFLOW       | BY_NAME                                             | null
         "reference-lists" | [["sort", "-inService"]]                                      || EntryKind.REFERENCE_LIST | new ListOrder<>(LibrarySortColumn.IN_SERVICE, true) | null
-        "questions"       | [["sort", "submitted"], ["filter", "Tri" + WIDE_SPACE + "age"]] || EntryKind.QUESTION     | new ListOrder<>(LibrarySortColumn.SUBMITTED, false) | "Tri age"
+        "questions"       | [["sort", "status"], ["filter", "Tri" + WIDE_SPACE + "age"]] || EntryKind.QUESTION     | new ListOrder<>(LibrarySortColumn.STATUS, false) | "Tri age"
     }
 
     /** A cursor names the kind it was minted for, so it pages through that kind's entries or through none. */
@@ -256,7 +262,7 @@ class LibraryControllerIntegrationSpec extends Specification {
         holding(EnumSet.of(GroupRole.OPERATOR))
         def ended = new ListPosition("Triage", "Triage")
         given(library.page(EntryKind.QUESTION, within(BY_NAME, null), null))
-                .willReturn(new ListPage([row(ENTRY, "Triage", null, false, false)], ended))
+                .willReturn(new ListPage([row(ENTRY, "Triage", null, null, false, false, 2L)], ended))
 
         when:
         def cursor = documentOf(listing("questions", [])).get("nextCursor").asString()

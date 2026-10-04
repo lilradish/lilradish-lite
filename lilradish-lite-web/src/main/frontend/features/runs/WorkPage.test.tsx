@@ -1,952 +1,565 @@
-import { ThemeProvider } from "@mui/material/styles";
+import { buttonClasses } from "@mui/material/Button";
 import {
   act,
+  cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { RouterProvider, createMemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { StandingProvider } from "../../app/standing/StandingContext";
-import { theme } from "../../lib/theme/theme";
-import { requestsTo, serving, type Reply } from "../../testutil/answering";
-import { laidOutAt } from "../../testutil/layout";
-import { answered, inGroup } from "../../testutil/standingRead";
-import { WorkPage } from "./WorkPage";
-
-const GROUP = "00000003-0000-4000-8000-000000000c61";
-
-const PAGE = `/groups/${GROUP}/work`;
-
-const RUNS = `/api/groups/${GROUP}/runs`;
-
-const OFFERED = `/api/groups/${GROUP}/offered-workflows`;
-
-const KEPT_AS = "lilradish.work.drawing";
-
-/** What an operator holds: starting runs, and reading the ones they started. */
-const STARTS_AND_READS_OWN = ["read_membership", "start_run", "read_own_runs"];
-
-/** Started this afternoon, and stopped since. */
-const ALAN = {
-  runId: "00000008-0000-4000-8000-000000000c63",
-  number: 3,
-  name: "Claim from Alan",
-  workflow: { name: "Handle a claim", version: 1 },
-  startedBy: { userId: "000c63", displayName: "Cat Example" },
-  startedAt: "2026-09-18T12:00:00Z",
-  lastHappenedAt: "2026-09-18T12:30:00Z",
-  state: "stopped",
-};
-
-/** Started yesterday, by somebody no name is held for, and nothing done to it since but its first step. */
-const GRACE = {
-  runId: "00000008-0000-4000-8000-000000000c62",
-  number: 2,
-  name: "Refund for Grace",
-  workflow: { name: "Pay a refund", version: 2 },
-  startedBy: { userId: "000c62" },
-  startedAt: "2026-09-17T09:00:00Z",
-  lastHappenedAt: "2026-09-17T09:00:00Z",
-  state: "running",
-  at: "summarise",
-};
-
-/** Started last week, failed on a step since, and renamed yesterday. */
-const ADA = {
-  runId: "00000008-0000-4000-8000-000000000c61",
-  number: 1,
-  name: "Claim from Ada",
-  workflow: { name: "Handle a claim", version: 1 },
-  startedBy: { userId: "000c63", displayName: "Cat Example" },
-  startedAt: "2026-09-11T08:00:00Z",
-  lastHappenedAt: "2026-09-17T08:00:00Z",
-  state: "failed",
-};
-
-const LISTED: Reply = [
-  JSON.stringify({ items: [ALAN, GRACE, ADA], reading: "own" }),
-  200,
-];
-
-/** Its newest version takes a complaint that must be given; the one before it takes nothing. */
-const HANDLE = {
-  entryId: "00000006-0000-4000-8000-000000000c61",
-  name: "Handle a claim",
-  purpose: "Sorts a claim out.",
-  versions: [
-    {
-      versionId: "00000007-0000-4000-8000-000000000c62",
-      number: 2,
-      takes: [
-        {
-          name: "complaint",
-          label: "Complaint",
-          kind: "text",
-          longest: 200,
-          mustBeGiven: true,
-        },
-      ],
-    },
-    {
-      versionId: "00000007-0000-4000-8000-000000000c61",
-      number: 1,
-      takes: [],
-    },
-  ],
-};
-
-const REFUND = {
-  entryId: "00000006-0000-4000-8000-000000000c62",
-  name: "Pay a refund",
-  versions: [
-    {
-      versionId: "00000007-0000-4000-8000-000000000c63",
-      number: 4,
-      takes: [],
-    },
-  ],
-};
-
-/** Ada's run, begun: the one the page opens on once it has started. */
-const BEGUN: Reply = [
-  JSON.stringify({ runId: ADA.runId, number: 7, readable: true }),
-  201,
-];
-
-/** Ada's run, begun, which the server says the reader may not read. */
-const BEGUN_UNREADABLE: Reply = [
-  JSON.stringify({ runId: ADA.runId, number: 7, readable: false }),
-  201,
-];
-
-/** What is said where a run began that the reader may not read. */
-const STARTED_UNREADABLE =
-  "SUPPORT-7 has begun. Reading it is a permission this group has not given you, so it cannot be opened here.";
-
-/** A refusal of values, listing each of `problems` and saying it found `found` in all. */
-const doesNotFit = (
-  problems: readonly { path: (string | number)[]; reason: string }[],
-  found = problems.length,
-): Reply => [
-  JSON.stringify({
-    code: "VALUE_DOES_NOT_FIT",
-    problems,
-    problemsFound: found,
-  }),
-  400,
-];
-
-/** What is said of a refusal of values, over what marks each place listed. */
-const VALUES_REFUSED = "Each value is written as its field takes it.";
-
-/** When the page opened, where the specs keep time, as the reader's own clock says it. */
-const OPENED_AT = "Sep 18, 03:00 PM";
-
-const ON_OFFER: Reply = [JSON.stringify({ workflows: [HANDLE, REFUND] }), 200];
-
-/** Takes the day it is due, and items each named, which must be given, and counted. */
-const ORDER = {
-  entryId: "00000006-0000-4000-8000-000000000c64",
-  name: "Take an order",
-  versions: [
-    {
-      versionId: "00000007-0000-4000-8000-000000000c65",
-      number: 1,
-      takes: [
-        { name: "due", label: "Due", kind: "date", mustBeGiven: false },
-        {
-          name: "items",
-          label: "Items",
-          kind: "fields",
-          most: 3,
-          mustBeGiven: false,
-          fields: [
-            {
-              name: "name",
-              label: "Name",
-              kind: "text",
-              longest: 20,
-              mustBeGiven: true,
-            },
-            {
-              name: "count",
-              label: "Count",
-              kind: "number",
-              mustBeGiven: false,
-            },
-          ],
-        },
-      ],
-    },
-  ],
-};
-
-const ORDER_ON_OFFER: Reply = [JSON.stringify({ workflows: [ORDER] }), 200];
-
-/** Ada's run as its own page reads it. */
-const ADAS_RUN_READ = {
-  runId: ADA.runId,
-  number: 1,
-  name: "Claim from Ada",
-  workflow: {
-    entryId: "00000006-0000-4000-8000-000000000c61",
-    name: "Handle a claim",
-    version: 1,
-  },
-  startedBy: ADA.startedBy,
-  startedAt: ADA.startedAt,
-  state: "running",
-  spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
-  ceiling: { raiseNeedsApproval: false },
-  acts: [],
-};
-
-const ADAS_RUN: Reply = [JSON.stringify(ADAS_RUN_READ), 200];
-
-const SUMMARISE = "00000009-0000-4000-8000-000000000c61";
-
-/** Ada's run as a step reads it: on its one step, which runs code, its first try being made. */
-const ADAS_RUN_HEADER = {
-  runId: ADA.runId,
-  number: 1,
-  versionId: HANDLE.versions[1].versionId,
-  state: "running",
-  at: { stepId: SUMMARISE, name: "summarise" },
-  acts: [],
-  progress: { done: 0, of: 1 },
-};
-
-const ADAS_STEP_ROW = {
-  stepId: SUMMARISE,
-  order: 1,
-  name: "summarise",
-  runs: { kind: "code_step", codeStep: "summarise" },
-  producer: { kind: "code" },
-  state: "running",
-  where: { kind: "running", on: "next_try" },
-  takesFrom: [],
-  tries: { current: 0, declared: 1, beyond: false },
-  cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
-};
-
-/** Ada's run's steps as it is read in detail, its workflow one that acts rather than answers. */
-const ADAS_STEPS: Reply = [
-  JSON.stringify({
-    run: ADAS_RUN_HEADER,
-    declarations: { [ADAS_RUN_HEADER.versionId]: { takes: [], gives: [] } },
-    gaveBack: { declares: "nothing" },
-    steps: [ADAS_STEP_ROW],
-  }),
-  200,
-];
-
-/** That one step's own page, nothing yet gone into it or come out of it. */
-const ADAS_STEP: Reply = [
-  JSON.stringify({
-    run: ADAS_RUN_HEADER,
-    declarations: {},
-    step: ADAS_STEP_ROW,
-    triesMade: [],
-  }),
-  200,
-];
-
-/** Ada's run as its own page reads it where the reader may stop it. */
-const STOPPABLE: Reply = [
-  JSON.stringify({ ...ADAS_RUN_READ, acts: ["stop"] }),
-  200,
-];
-
-/** Ada's run as stopping it answers. */
-const STOPPED_BY_CAT: Reply = [
-  JSON.stringify({
-    ...ADAS_RUN_READ,
-    state: "stopped",
-    stopped: { at: "2026-09-18T12:40:00Z", by: ADA.startedBy },
-    acts: ["open_again"],
-  }),
-  200,
-];
-
-const QUESTION_VERSION = "00000007-0000-4000-8000-000000000c69";
-
-/** What Ada's run declares where its one step asks a person, who gives back a summary. */
-const QUESTION_DECLARATIONS = {
-  [ADAS_RUN_HEADER.versionId]: { takes: [], gives: [] },
-  [QUESTION_VERSION]: {
-    takes: [],
-    gives: [
-      {
-        name: "summary",
-        label: "Summary",
-        kind: "text",
-        longest: 1000,
-        mustBeGiven: true,
-      },
-    ],
-  },
-};
-
-/** That one step asking a person, its summary waiting on the reader's review. */
-const REVIEWABLE_ROW = {
-  ...ADAS_STEP_ROW,
-  runs: {
-    kind: "question",
-    entryId: "00000006-0000-4000-8000-000000000c69",
-    name: "Summarise",
-    version: 1,
-    versionId: QUESTION_VERSION,
-  },
-  producer: { kind: "person" },
-  reviewer: { kind: "person" },
-  state: "waiting",
-  where: {
-    kind: "waiting_on_review",
-    number: 1,
-    values: [{ field: "summary", on: "review_at_gate" }],
-    since: "2026-09-18T12:00:00Z",
-    waitsOn: "review_at_gate",
-  },
-  tries: { current: 1, declared: 1, beyond: false },
-  gaveBack: [{ field: "summary", value: "A fire.", now: "waiting_on_review" }],
-  acts: ["review"],
-};
-
-/** The run once the summary stood, with nothing left to run. */
-const DONE_HEADER = {
-  ...ADAS_RUN_HEADER,
-  state: "done",
-  at: undefined,
-  progress: { done: 1, of: 1 },
-};
-
-/** That one step once its summary stood. */
-const STOOD_ROW = {
-  ...REVIEWABLE_ROW,
-  state: "done",
-  where: undefined,
-  gaveBack: [{ field: "summary", value: "A fire.", now: "stands" }],
-  acts: [],
-};
-
-const REVIEW = `${RUNS}/${ADA.runId}/steps/${SUMMARISE}/tries/1/review`;
-
-/** Ada's run's steps, as a list of steps is read, where the one step is as `row` says under `run`. */
-const stepsAs = (run: object, row: object): Reply => [
-  JSON.stringify({
-    run,
-    declarations: QUESTION_DECLARATIONS,
-    gaveBack: { declares: "nothing" },
-    steps: [row],
-  }),
-  200,
-];
-
-/** The step's own page while its summary waits on the reader's review. */
-const REVIEWABLE_STEP: Reply = [
-  JSON.stringify({
-    run: ADAS_RUN_HEADER,
-    declarations: QUESTION_DECLARATIONS,
-    step: REVIEWABLE_ROW,
-    cameOut: [{ field: "summary", now: "waiting_on_review" }],
-    triesMade: [
-      {
-        number: 1,
-        beyond: false,
-        producedBy: { kind: "person" },
-        values: [
-          { field: "summary", value: "A fire.", now: "waiting_on_review" },
-        ],
-        review: { asked: true },
-        ended: "waiting",
-        cost: { callsAModel: false },
-      },
-    ],
-  }),
-  200,
-];
-
-/** The step's own page once somebody assured the summary. */
-const ASSURED: Reply = [
-  JSON.stringify({
-    run: DONE_HEADER,
-    declarations: QUESTION_DECLARATIONS,
-    step: STOOD_ROW,
-    cameOut: [
-      {
-        field: "summary",
-        standing: { number: 1, value: "A fire." },
-        now: "stands",
-      },
-    ],
-    triesMade: [
-      {
-        number: 1,
-        beyond: false,
-        producedBy: { kind: "person" },
-        values: [
-          {
-            field: "summary",
-            value: "A fire.",
-            now: "stands",
-            decision: { outcome: "assured" },
-          },
-        ],
-        review: { asked: true, by: { kind: "person" } },
-        ended: "stands",
-        cost: { callsAModel: false },
-      },
-    ],
-  }),
-  200,
-];
-
-/** The runs listed as none but Ada's, as `row` says of it. */
-const listedAs = (row: object): Reply => [
-  JSON.stringify({ items: [row], reading: "own" }),
-  200,
-];
-
-/** A reply the server never sends. */
-const UNANSWERED: Reply = new Promise(() => {});
-
-/** What is said on a name the server refused. */
-const NAME_REFUSED =
-  "A run's name is one to 128 characters on one line, with something in it that shows.";
-
-/** What is said where starting is refused for the act itself: the rule of who may start one. */
-const ACT_REFUSED =
-  "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, only by a role in it that may start one.";
-
-/** What is said once what may be started is read again for a version no longer offered. */
-const NO_LONGER_OFFERED =
-  "That version can no longer be started here, so what may be started has been read again.";
-
-/** Set apart from the words around it, as every name in a heading is. */
-const isolatedName = (name: string) =>
-  `${String.fromCodePoint(0x2068)}${name}${String.fromCodePoint(0x2069)}`;
-
-interface Opening {
-  readonly permissions?: readonly string[];
-  readonly routes?: Readonly<Record<string, readonly Reply[]>>;
-}
-
-/**
- * The page under a real router with the standing it is handed, whose reading again is counted; only the
- * server and the day are stood in for, it being 15:00 on the 18th where the specs keep time.
- */
-function opening(
-  address: string,
-  { permissions = STARTS_AND_READS_OWN, routes = {} }: Opening = {},
-) {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-09-18T13:00:00Z"));
-  const sent = serving({
-    [`GET ${RUNS}`]: [LISTED],
-    [`GET ${OFFERED}`]: [ON_OFFER],
-    [`GET ${RUNS}/${ADA.runId}`]: [ADAS_RUN],
-    [`GET ${RUNS}/${ADA.runId}/steps`]: [ADAS_STEPS],
-    [`GET ${RUNS}/${ADA.runId}/steps/${SUMMARISE}`]: [ADAS_STEP],
-    ...routes,
-  });
-  const router = createMemoryRouter(
-    [
-      { path: "/groups/:groupId/work/:runId?", element: <WorkPage /> },
-      {
-        path: "/groups/:groupId/work/:runId/steps/:stepId",
-        element: <WorkPage />,
-      },
-    ],
-    { initialEntries: [address] },
-  );
-  const readAgain = vi.fn();
-  const standing = answered(
-    [],
-    [inGroup(GROUP, "SUPPORT", "Claims", permissions)],
-  );
-  render(
-    <ThemeProvider theme={theme}>
-      <StandingProvider read={{ ...standing, reload: readAgain }}>
-        <RouterProvider router={router} />
-      </StandingProvider>
-    </ThemeProvider>,
-  );
-  return {
-    sent,
-    readAgain,
-    router,
-    at: () =>
-      `${router.state.location.pathname}${router.state.location.search}${router.state.location.hash}`,
-  };
-}
-
-afterEach(() => {
-  vi.useRealTimers();
-  localStorage.clear();
-});
-
-function theRuns(): HTMLElement {
-  return screen.getByRole("region", { name: "The runs" });
-}
-
-/** Each day listed, with the name and the line under it of each run it lists. */
-async function days(): Promise<[string, string[]][]> {
-  await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-  return within(theRuns())
-    .getAllByRole("list")
-    .map((list) => [
-      list.getAttribute("aria-labelledby") === null
-        ? ""
-        : (document.getElementById(list.getAttribute("aria-labelledby")!)
-            ?.textContent ?? ""),
-      within(list)
-        .getAllByRole("link")
-        .map((link) => link.textContent ?? ""),
-    ]);
-}
-
-async function inDetail() {
-  await userEvent.click(screen.getByRole("button", { name: "In detail" }));
-}
-
-function table(): HTMLElement {
-  return screen.getByRole("table", { name: "What is running" });
-}
-
-/** What the table says of its rows, in the region that follows it. */
-function tableStatus(): HTMLElement {
-  const region = table().parentElement?.nextElementSibling;
-  if (
-    !(region instanceof HTMLElement) ||
-    region.getAttribute("role") !== "status"
-  ) {
-    throw new Error("No status follows the table of what is running.");
-  }
-  return region;
-}
-
-/** Every row's cells, once the first page has landed. */
-async function rows(): Promise<string[][]> {
-  await within(table()).findByRole("link", { name: "SUPPORT-1" });
-  const [, ...listed] =
-    within(table()).getAllByRole<HTMLTableRowElement>("row");
-  return listed.map((row) =>
-    [...row.cells].map((cell) => cell.textContent ?? ""),
-  );
-}
-
-function runsAsked(sent: Parameters<typeof requestsTo>[0]): string[] {
-  return requestsTo(sent).filter((each) => each.startsWith(`GET ${RUNS}?`));
-}
-
-/** Every run asked to start, as its document was sent. */
-function startsAsked(sent: Parameters<typeof requestsTo>[0]): unknown[] {
-  return sent.mock.calls
-    .filter(([, init]) => init?.method === "POST")
-    .map(([, init]) => JSON.parse(String(init?.body)) as unknown);
-}
-
-/** The card of a workflow pressed, once what is on offer has landed; the heading of what it draws. */
-async function picking(workflow: string): Promise<HTMLElement> {
-  await userEvent.click(
-    await screen.findByRole("button", { name: new RegExp(workflow) }),
-  );
-  return screen.getByRole("heading", {
-    level: 3,
-    name: isolatedName(workflow),
-  });
-}
-
-/** The dialog Start a run opens, drawn in detail once the runs have landed. */
-async function openingTheDialog(): Promise<HTMLElement> {
-  await rows();
-  await userEvent.click(screen.getByRole("button", { name: "Start a run" }));
-  return screen.findByRole("dialog", { name: "Start a run" });
-}
-
-async function choosingInTheDialog(
-  dialog: HTMLElement,
-  workflow: string,
-): Promise<void> {
-  await userEvent.click(
-    await within(dialog).findByRole("combobox", { name: "Workflow" }),
-  );
-  await userEvent.click(
-    screen.getByRole("option", { name: isolatedName(workflow) }),
-  );
-}
+import { requestsTo } from "../../testutil/answering";
+import {
+  PAGE,
+  NEW_RUN,
+  HISTORY,
+  RUNS,
+  OFFERED,
+  KEPT_AS,
+  AVON,
+  GLINN,
+  AVO,
+  LISTED,
+  HANDLE,
+  REFUND,
+  BEGUN,
+  BEGUN_UNREADABLE,
+  STARTED_UNREADABLE,
+  doesNotFit,
+  VALUES_REFUSED,
+  OPENED_AT,
+  ON_OFFER,
+  ORDER_ON_OFFER,
+  NAME_REFUSED,
+  ACT_REFUSED,
+  NO_LONGER_OFFERED,
+  isolatedName,
+  opening,
+  tab,
+  panel,
+  inHistory,
+  table,
+  precedes,
+  rows,
+  runsAsked,
+  startsAsked,
+  picking,
+  runOpened,
+} from "../../testutil/workPage";
 
 describe("WorkPage", () => {
-  describe("as a conversation", () => {
-    it("opens so on a first visit, asking for the run last acted on first and listing each under the day of that", async () => {
+  describe("its tabs", () => {
+    it("opens on New run for one who may start a run on a first visit, drawing the workflows on offer and no run already started", async () => {
       const { sent } = opening(PAGE);
 
-      expect(await days()).toEqual([
-        [
-          "Today",
-          [
-            `${isolatedName("Claim from Alan")}${isolatedName("Handle a claim")} · Stopped`,
-          ],
-        ],
-        [
-          "Yesterday",
-          [
-            `${isolatedName("Refund for Grace")}${isolatedName("Pay a refund")} · Running, on ${isolatedName("summarise")}`,
-            `${isolatedName("Claim from Ada")}${isolatedName("Handle a claim")} · Failed`,
-          ],
-        ],
-      ]);
+      const newRun = panel("New run");
       expect(
-        screen.getByRole("button", { name: "As a conversation" }),
-      ).toHaveAttribute("aria-pressed", "true");
+        await within(newRun).findByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(tab("New run")).toHaveAttribute("aria-selected", "true");
+      expect(tab("History")).toHaveAttribute("aria-selected", "false");
+      expect(screen.getAllByRole("tabpanel")).toEqual([newRun]);
       expect(screen.queryByRole("table")).toBeNull();
-      expect(runsAsked(sent)).toEqual([`GET ${RUNS}?sort=-lastHappened`]);
+      expect(screen.queryByText(/Claim from/)).toBeNull();
+      cleanup();
+      expect(runsAsked(sent)).toEqual([]);
+      expect(requestsTo(sent)).toContain(`GET ${OFFERED}`);
     });
 
-    it("names the page first, then each day as a heading under it, then what may start", async () => {
+    it("names the page first, then the tabs it holds as one list of tabs, each owning the panel it draws", async () => {
       opening(PAGE);
-      await days();
-      await screen.findByRole("heading", { name: "A new run" });
+      await picking("Pay a refund");
 
+      const title = screen.getByRole("heading", { level: 1 });
+      const tabs = screen.getByRole("tablist", {
+        name: `Work of ${isolatedName("Claims")}`,
+      });
+      expect(precedes(title, tabs)).toBe(true);
+      expect(within(tabs).getAllByRole("tab")).toEqual([
+        tab("New run"),
+        tab("History"),
+      ]);
+      expect(tab("New run")).toHaveAttribute(
+        "aria-controls",
+        panel("New run").id,
+      );
       expect(
         screen
           .getAllByRole("heading")
           .map((heading) => [heading.tagName, heading.textContent]),
       ).toEqual([
         ["H1", `Work of ${isolatedName("Claims")}`],
-        ["H2", "Today"],
-        ["H2", "Yesterday"],
-        ["H2", "A new run"],
+        ["H2", isolatedName("Pay a refund")],
       ]);
     });
 
-    it("names the page first and the run open under it, as the page's one first-level heading", async () => {
-      opening(`${PAGE}/${ADA.runId}`);
-      await days();
-      await screen.findByRole("heading", { level: 2, name: /Claim from Ada/ });
+    it.each([
+      ["nothing kept", null, "New run"],
+      ["New run kept", "newRun", "New run"],
+      ["History kept", "history", "History"],
+      ["a word this build does not know", "sideways", "New run"],
+      ["the name a run is drawn by", "fullDetail", "New run"],
+    ])(
+      "opens on the tab this device kept where the address names none, naming it there in place: %s",
+      async (_case, kept, opened) => {
+        if (kept !== null) {
+          localStorage.setItem(KEPT_AS, kept);
+        }
+        const { at, router } = opening(PAGE);
+
+        const other = opened === "New run" ? "History" : "New run";
+        expect(tab(opened)).toHaveAttribute("aria-selected", "true");
+        expect(tab(other)).toHaveAttribute("aria-selected", "false");
+        expect(panel(opened)).toBeVisible();
+        expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+        expect(localStorage.getItem(KEPT_AS)).toBe(kept);
+        await waitFor(() =>
+          expect(at()).toBe(opened === "New run" ? NEW_RUN : HISTORY),
+        );
+        expect(router.state.historyAction).toBe("REPLACE");
+      },
+    );
+
+    /** In place of the entry it was on, as a filter typed is: Back leaves Work rather than walking back through its tabs. */
+    it("draws the other tab once switched to, naming it in the address in place, keeping it on this device for the next time and leaving the keyboard on the tab pressed", async () => {
+      const { at, router } = opening(`${PAGE}?filter=claim&sort=name`);
+      await screen.findByRole("button", { name: /Handle a claim/ });
+
+      await inHistory();
+
+      expect(await rows()).toHaveLength(3);
+      expect(tab("History")).toHaveFocus();
+      expect(localStorage.getItem(KEPT_AS)).toBe("history");
+      expect(at()).toBe(`${PAGE}?filter=claim&sort=name&tab=history`);
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+
+      await userEvent.click(tab("New run"));
 
       expect(
-        screen
-          .getAllByRole("heading")
-          .map((heading) => [heading.tagName, heading.textContent]),
-      ).toEqual([
-        ["H1", `Work of ${isolatedName("Claims")}`],
-        ["H2", "Today"],
-        ["H2", "Yesterday"],
-        ["H2", isolatedName("Claim from Ada")],
-        ["H3", "What it was started with"],
-        ["H3", isolatedName("summarise")],
+        await screen.findByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(localStorage.getItem(KEPT_AS)).toBe("newRun");
+      expect(screen.queryByRole("table")).toBeNull();
+      expect(at()).toBe(`${PAGE}?filter=claim&sort=name&tab=newRun`);
+    });
+
+    /** Activated by hand: the form a reader is filling is not put away by a key that only moves along the tabs. */
+    it("moves along the tabs by the arrow keys without drawing another, which Enter then draws", async () => {
+      opening(PAGE);
+      await picking("Pay a refund");
+      tab("New run").focus();
+
+      await userEvent.keyboard("{ArrowRight}");
+
+      expect(tab("History")).toHaveFocus();
+      expect(tab("History")).toHaveAttribute("aria-selected", "false");
+      expect(
+        screen.getByRole("textbox", { name: "Name of this run" }),
+      ).toBeInTheDocument();
+      expect(localStorage.getItem(KEPT_AS)).toBeNull();
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(tab("History")).toHaveAttribute("aria-selected", "true");
+      expect(table()).toBeInTheDocument();
+      expect(
+        screen.queryByRole("textbox", { name: "Name of this run" }),
+      ).toBeNull();
+    });
+
+    it.each([
+      ["History, this device keeping New run", "newRun", "history", "History"],
+      ["New run, this device keeping History", "history", "newRun", "New run"],
+    ])(
+      "opens on the tab the address names, %s, keeping what this device kept",
+      (_case, kept, named, opened) => {
+        localStorage.setItem(KEPT_AS, kept);
+        const { at } = opening(`${PAGE}?sort=startedBy&tab=${named}`);
+
+        const other = opened === "New run" ? "History" : "New run";
+        expect(tab(opened)).toHaveAttribute("aria-selected", "true");
+        expect(tab(other)).toHaveAttribute("aria-selected", "false");
+        expect(localStorage.getItem(KEPT_AS)).toBe(kept);
+        expect(at()).toBe(`${PAGE}?sort=startedBy&tab=${named}`);
+      },
+    );
+
+    it("opens History as it was copied from it, filter and order kept", async () => {
+      localStorage.setItem(KEPT_AS, "newRun");
+      const { sent } = opening(
+        `${PAGE}?tab=history&filter=claim&sort=startedBy`,
+      );
+
+      expect(await rows()).toHaveLength(3);
+      expect(screen.getByRole("searchbox")).toHaveValue("claim");
+      expect(
+        within(table()).getByRole("columnheader", { name: /Started by$/ }),
+      ).toHaveAttribute("aria-sort", "ascending");
+      expect(runsAsked(sent)).toEqual([
+        `GET ${RUNS}?sort=startedBy&filter=claim`,
       ]);
     });
 
-    it("narrows the runs to what the filter typed holds, as the server matches it, and keeps the filter in the address", async () => {
-      const { sent, at } = opening(PAGE, {
+    it.each([
+      ["a filter", `${PAGE}?filter=avo`, `${PAGE}?filter=avo&tab=newRun`],
+      [
+        "an order",
+        `${PAGE}?sort=startedBy`,
+        `${PAGE}?sort=startedBy&tab=newRun`,
+      ],
+      ["what else it holds", `${PAGE}?utm=x`, `${PAGE}?utm=x&tab=newRun`],
+      [
+        "what a step's page picked",
+        `${PAGE}?value=summary&try=1`,
+        `${PAGE}?value=summary&try=1&tab=newRun`,
+      ],
+      ["a tab this build does not know", `${PAGE}?tab=sideways`, NEW_RUN],
+    ])(
+      "opens on the tab this device kept where the address holds %s and names no tab of itself",
+      async (_case, address, named) => {
+        localStorage.setItem(KEPT_AS, "newRun");
+        const { sent, at } = opening(address);
+
+        expect(tab("New run")).toHaveAttribute("aria-selected", "true");
+        expect(tab("History")).toHaveAttribute("aria-selected", "false");
+        expect(screen.queryByRole("table")).toBeNull();
+        await waitFor(() => expect(at()).toBe(named));
+        cleanup();
+        expect(runsAsked(sent)).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["nothing kept", null],
+      ["New run kept", "newRun"],
+    ])(
+      "draws History alone, with no tab, for one who may not start a run, whatever the address names, never asking what may be started: %s",
+      async (_case, kept) => {
+        if (kept !== null) {
+          localStorage.setItem(KEPT_AS, kept);
+        }
+        const { sent, at } = opening(NEW_RUN, {
+          permissions: ["read_membership", "read_own_runs"],
+        });
+
+        expect(await rows()).toHaveLength(3);
+        expect(at()).toBe(HISTORY);
+        expect(screen.queryByRole("tablist")).toBeNull();
+        expect(screen.queryByRole("tab")).toBeNull();
+        expect(screen.queryByRole("tabpanel")).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: /Handle a claim/ }),
+        ).toBeNull();
+        cleanup();
+        expect(requestsTo(sent)).not.toContain(`GET ${OFFERED}`);
+      },
+    );
+  });
+
+  describe("on New run", () => {
+    it("loads one next page in server order and keeps the selected form while a different name is filtered", async () => {
+      const { sent } = opening(PAGE, {
         routes: {
-          [`GET ${RUNS}`]: [
-            LISTED,
-            [JSON.stringify({ items: [ADA], reading: "own" }), 200],
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next one" }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
           ],
         },
       });
-      await days();
+      await picking("Handle a claim");
+      const complaint = screen.getByRole("textbox", { name: "Complaint" });
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.type(complaint, "Kettle leaks");
+      await userEvent.clear(name);
+      await userEvent.type(name, "My claim");
 
-      await userEvent.type(
-        screen.getByRole("searchbox", {
-          name: "Part of a run's name, or its workflow's",
-        }),
-        "ada",
+      await userEvent.click(
+        screen.getByRole("button", { name: "Load more workflows" }),
       );
 
+      expect(
+        await screen.findByRole("button", { name: /Pay a refund/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(requestsTo(sent)).toContain(`GET ${OFFERED}?cursor=next+one`);
+      expect(
+        screen.queryByRole("button", { name: "Load more workflows" }),
+      ).toBeNull();
+
+      fireEvent.change(
+        screen.getByRole("searchbox", { name: "Part of a name" }),
+        {
+          target: { value: "refund" },
+        },
+      );
       await waitFor(() =>
-        expect(requestsTo(sent)).toContain(
-          `GET ${RUNS}?sort=-lastHappened&filter=ada`,
-        ),
+        expect(requestsTo(sent)).toContain(`GET ${OFFERED}?filter=refund`),
       );
       await waitFor(() =>
         expect(
-          within(theRuns()).queryByRole("link", { name: /Claim from Alan/ }),
+          screen.queryByRole("button", { name: /Handle a claim/ }),
         ).toBeNull(),
       );
+      expect(complaint).toHaveValue("Kettle leaks");
+      expect(name).toHaveValue("My claim");
+      expect(startsAsked(sent)).toEqual([]);
       expect(
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}?filter=ada`);
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(3);
     });
 
-    it("opens a run in the rest of the page, the runs still beside it and its line marked, the filter kept", async () => {
-      const { at } = opening(`${PAGE}?filter=claim`);
-      await days();
-
-      await userEvent.click(
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ }),
-      );
-
-      expect(
-        await screen.findByRole("heading", {
-          level: 2,
-          name: /Claim from Ada/,
-        }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?filter=claim`);
-      expect(
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ }),
-      ).toHaveAttribute("aria-current", "true");
-      expect(
-        within(theRuns()).getByRole("link", { name: /Claim from Alan/ }),
-      ).not.toHaveAttribute("aria-current");
-      expect(screen.queryByRole("heading", { name: "A new run" })).toBeNull();
-    });
-
-    it("draws the page in detail once a run's More asks for it, as the switch at its top would, keeping that choice and taking the keyboard to that switch", async () => {
-      opening(`${PAGE}/${ADA.runId}`);
-      await screen.findByRole("list", { name: "The conversation" });
-      await userEvent.click(screen.getByRole("button", { name: "More" }));
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Show in detail" }),
-      );
-
-      expect(
-        await screen.findByRole("table", { name: "The steps" }),
-      ).toBeInTheDocument();
-      const inDetail = screen.getByRole("button", { name: "In detail" });
-      expect(inDetail).toHaveAttribute("aria-pressed", "true");
-      expect(document.activeElement).toBe(inDetail);
-      expect(localStorage.getItem(KEPT_AS)).toBe("detail");
-      expect(
-        screen.queryByRole("list", { name: "The conversation" }),
-      ).toBeNull();
-    });
-
-    it("starts the keyboard at the step's message the address names as the page arrives, forgetting it in place, and not again once the switch draws it anew", async () => {
-      const { at, router } = opening(
-        `${PAGE}/${ADA.runId}?filter=claim#step-${SUMMARISE}`,
-      );
-      const arrivedAt = await screen.findByRole("list", {
-        name: "The conversation",
+    it("keeps accepted cards and the form through a failed next page, then retries that cursor alone", async () => {
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            ['{"code":"SERVICE_BUSY"}', 503],
+            [JSON.stringify({ items: [REFUND] }), 200],
+          ],
+        },
       });
-      await waitFor(() =>
-        expect(document.activeElement).toBe(
-          document.getElementById(`step-${SUMMARISE}`),
+      await picking("Handle a claim");
+      const complaint = screen.getByRole("textbox", { name: "Complaint" });
+      await userEvent.type(complaint, "Kettle leaks");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Load more workflows" }),
+      );
+
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(complaint).toHaveValue("Kettle leaks");
+      expect(
+        requestsTo(sent).filter(
+          (each) => each === `GET ${OFFERED}?cursor=next`,
         ),
-      );
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?filter=claim`);
-      expect(router.state.historyAction).toBe("REPLACE");
-      await act(() => router.navigate(-1));
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?filter=claim`);
+      ).toHaveLength(1);
 
-      await userEvent.click(screen.getByRole("button", { name: "In detail" }));
-      await screen.findByRole("table", { name: "The steps" });
-      const asConversation = screen.getByRole("button", {
-        name: "As a conversation",
-      });
-      await userEvent.click(asConversation);
-
-      const drawnAgain = await screen.findByRole("list", {
-        name: "The conversation",
-      });
-      expect(drawnAgain).not.toBe(arrivedAt);
-      expect(document.activeElement).toBe(asConversation);
-    });
-
-    it("opens a step in the run's place, the runs still beside it and the run's line marked, with a way back to the run", async () => {
-      const { sent } = opening(
-        `${PAGE}/${ADA.runId}/steps/${SUMMARISE}?filter=claim`,
+      await userEvent.click(
+        screen.getByRole("button", { name: "Try loading again" }),
       );
 
       expect(
-        await screen.findByRole("heading", { level: 2, name: /summarise/ }),
+        await screen.findByRole("button", { name: /Pay a refund/ }),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole("link", { name: "Back to the run" }),
-      ).toHaveAttribute("href", `${PAGE}/${ADA.runId}?filter=claim`);
+        requestsTo(sent).filter(
+          (each) => each === `GET ${OFFERED}?cursor=next`,
+        ),
+      ).toHaveLength(2);
+      expect(complaint).toHaveValue("Kettle leaks");
+    });
+
+    it("issues one next-page request for two presses before the next page can settle", async () => {
+      let finishNext: (reply: readonly [string, number]) => void = () => {};
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            new Promise((settle) => {
+              finishNext = settle;
+            }),
+          ],
+        },
+      });
+      await screen.findByRole("button", { name: /Handle a claim/ });
+      const next = screen.getByRole("button", { name: "Load more workflows" });
+
+      act(() => {
+        fireEvent.click(next);
+        fireEvent.click(next);
+      });
+
+      await waitFor(() =>
+        expect(
+          requestsTo(sent).filter(
+            (each) => each === `GET ${OFFERED}?cursor=next`,
+          ),
+        ).toHaveLength(1),
+      );
+      finishNext([JSON.stringify({ items: [REFUND] }), 200]);
       expect(
-        await within(theRuns()).findByRole("link", { name: /Claim from Ada/ }),
-      ).toHaveAttribute("aria-current", "true");
+        await screen.findByRole("button", { name: /Pay a refund/ }),
+      ).toBeInTheDocument();
       expect(
-        screen.queryByRole("heading", { name: /Claim from Ada/ }),
+        screen.getByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Load more workflows" }),
       ).toBeNull();
-      expect(requestsTo(sent)).not.toContain(`GET ${RUNS}/${ADA.runId}`);
     });
 
-    it("reads the runs again once a review on the run open answers, so the run it finished is listed Done, the keyboard left where the review put it", async () => {
-      const { sent } = opening(`${PAGE}/${ADA.runId}`, {
+    it("takes accepted cards and the selected form away when the next page refuses the reader's authority", async () => {
+      const { sent, readAgain } = opening(PAGE, {
         routes: {
-          [`GET ${RUNS}`]: [
-            listedAs({ ...ADA, state: "running", at: "summarise" }),
-            listedAs({ ...ADA, state: "done" }),
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            ['{"code":"ACT_NOT_PERMITTED"}', 403],
           ],
-          [`GET ${RUNS}/${ADA.runId}/steps`]: [
-            stepsAs(ADAS_RUN_HEADER, REVIEWABLE_ROW),
-            stepsAs(DONE_HEADER, STOOD_ROW),
-          ],
-          [`PUT ${REVIEW}`]: [ASSURED],
         },
       });
-      const line = () =>
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ });
-      await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-      expect(line()).toHaveTextContent("Running");
+      await picking("Handle a claim");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
 
       await userEvent.click(
-        await screen.findByRole("button", { name: "Assure" }),
+        screen.getByRole("button", { name: "Load more workflows" }),
       );
-      await waitFor(() => expect(line()).toHaveTextContent("Done"));
 
-      expect(line()).not.toHaveTextContent("Running");
-      expect(line()).toHaveAttribute("aria-current", "true");
-      expect(runsAsked(sent)).toHaveLength(2);
-      expect(theRuns().contains(document.activeElement)).toBe(false);
-      expect(screen.queryByRole("button", { name: "Assure" })).toBeNull();
-    });
-
-    it("reads the runs again once a review on the step open answers, the keyboard left on what came out", async () => {
-      laidOutAt(0, 1200);
-      const { sent } = opening(`${PAGE}/${ADA.runId}/steps/${SUMMARISE}`, {
-        routes: {
-          [`GET ${RUNS}`]: [
-            listedAs({ ...ADA, state: "running", at: "summarise" }),
-            listedAs({ ...ADA, state: "done" }),
-          ],
-          [`GET ${RUNS}/${ADA.runId}/steps/${SUMMARISE}`]: [
-            REVIEWABLE_STEP,
-            ASSURED,
-          ],
-          [`PUT ${REVIEW}`]: [ASSURED],
-        },
-      });
-      const line = () =>
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ });
-      await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Assure" }),
-      );
-      await waitFor(() => expect(line()).toHaveTextContent("Done"));
-
-      expect(runsAsked(sent)).toHaveLength(2);
-      expect(document.activeElement).toBe(
-        screen.getByRole("heading", { name: "What came out" }),
-      );
-      expect(theRuns().contains(document.activeElement)).toBe(false);
-      expect(screen.queryByRole("button", { name: "Assure" })).toBeNull();
-    });
-
-    it("reads the runs again once Stop on the run open answers, the keyboard left on the control it became", async () => {
-      const { sent } = opening(`${PAGE}/${ADA.runId}`, {
-        routes: {
-          [`GET ${RUNS}`]: [
-            listedAs({ ...ADA, state: "running", at: "summarise" }),
-            listedAs({ ...ADA, state: "stopped" }),
-          ],
-          [`GET ${RUNS}/${ADA.runId}`]: [STOPPABLE, STOPPED_BY_CAT],
-          [`PUT ${RUNS}/${ADA.runId}/stop`]: [STOPPED_BY_CAT],
-        },
-      });
-      const line = () =>
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ });
-      await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-      const control = await screen.findByRole("button", { name: "Stop" });
-
-      await userEvent.click(control);
-      await waitFor(() => expect(line()).toHaveTextContent("Stopped"));
-
-      expect(line()).not.toHaveTextContent("Running");
-      expect(runsAsked(sent)).toHaveLength(2);
-      expect(control).toHaveTextContent("Open again");
-      expect(document.activeElement).toBe(control);
-      expect(theRuns().contains(document.activeElement)).toBe(false);
-    });
-
-    it("reads the runs again once the step is read again after a review refused as moved on, the keyboard left on what that says", async () => {
-      const { sent } = opening(`${PAGE}/${ADA.runId}`, {
-        routes: {
-          [`GET ${RUNS}`]: [
-            listedAs({ ...ADA, state: "running", at: "summarise" }),
-            listedAs({ ...ADA, state: "done" }),
-          ],
-          [`GET ${RUNS}/${ADA.runId}/steps`]: [
-            stepsAs(ADAS_RUN_HEADER, REVIEWABLE_ROW),
-            stepsAs(DONE_HEADER, STOOD_ROW),
-          ],
-          [`PUT ${REVIEW}`]: [[JSON.stringify({ code: "STEP_MOVED_ON" }), 409]],
-          [`GET ${RUNS}/${ADA.runId}/steps/${SUMMARISE}`]: [ASSURED],
-        },
-      });
-      const line = () =>
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ });
-      await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Assure" }),
-      );
-      await waitFor(() => expect(line()).toHaveTextContent("Done"));
-
-      const said = await screen.findByRole("alert");
-      expect(said).toHaveTextContent(
-        "That step has moved on since it was read.",
-      );
-      expect(runsAsked(sent)).toHaveLength(2);
-      expect(document.activeElement).toContainElement(said);
-      expect(theRuns().contains(document.activeElement)).toBe(false);
-    });
-
-    it("says it is still reading the runs only while none has answered, and not while they are read again after an act", async () => {
-      let settle!: (answer: readonly [string, number]) => void;
-      const first: Reply = new Promise((done) => {
-        settle = done;
-      });
-      const { sent } = opening(`${PAGE}/${ADA.runId}`, {
-        routes: {
-          [`GET ${RUNS}`]: [first, UNANSWERED],
-          [`GET ${RUNS}/${ADA.runId}`]: [STOPPABLE, STOPPED_BY_CAT],
-          [`PUT ${RUNS}/${ADA.runId}/stop`]: [STOPPED_BY_CAT],
-        },
-      });
-      const status = within(theRuns()).getByRole("status");
-      expect(status).toHaveTextContent("Still reading…");
-
-      settle(LISTED as readonly [string, number]);
-      await within(theRuns()).findByRole("link", { name: /Claim from Ada/ });
-      expect(status).not.toHaveTextContent("Still reading…");
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Stop" }),
-      );
-      await waitFor(() => expect(runsAsked(sent)).toHaveLength(2));
-
-      expect(status).not.toHaveTextContent("Still reading…");
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
       expect(
-        within(theRuns()).getByRole("link", { name: /Claim from Ada/ }),
-      ).toBeVisible();
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+      expect(name).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Try loading again" }),
+      ).toBeNull();
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(2);
+      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
     });
 
-    it("leaves what a step's page picked behind when another run is opened from beside it, keeping the list's address", async () => {
-      const { at } = opening(
-        `${PAGE}/${ADA.runId}/steps/${SUMMARISE}?filter=claim&value=summary&try=1`,
-      );
-      await screen.findByRole("heading", { level: 2, name: /summarise/ });
+    it("retries a failed first page without calling its failure an empty offer", async () => {
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [['{"code":"SERVICE_BUSY"}', 503], ON_OFFER],
+        },
+      });
+
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "No workflow of this group can be started: none has a version in service that is not stopped.",
+        ),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
 
       await userEvent.click(
-        await within(theRuns()).findByRole("link", { name: /Claim from Alan/ }),
+        screen.getByRole("button", { name: "Try loading again" }),
       );
 
-      expect(at()).toBe(`${PAGE}/${ALAN.runId}?filter=claim`);
       expect(
-        screen.getByRole("link", { name: "New run" }).getAttribute("href"),
-      ).toBe(`${PAGE}?filter=claim`);
+        await screen.findByRole("button", { name: /Handle a claim/ }),
+      ).toBeInTheDocument();
+      expect(
+        requestsTo(sent).filter((each) => each === `GET ${OFFERED}`),
+      ).toHaveLength(2);
     });
 
-    it("draws the workflows on offer as cards where no run is open, each saying what it is for, pressable and none picked yet", async () => {
+    it("hands on the final composed filter and says only after its empty page settles that no name matches", async () => {
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [ON_OFFER, [JSON.stringify({ items: [] }), 200]],
+        },
+      });
+      await screen.findByRole("button", { name: /Handle a claim/ });
+      const filter = screen.getByRole("searchbox", { name: "Part of a name" });
+
+      fireEvent.compositionStart(filter);
+      fireEvent.change(filter, { target: { value: "none" } });
+      expect(filter).toHaveValue("none");
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(1);
+      fireEvent.compositionEnd(filter);
+
+      expect(
+        await screen.findByText(
+          "No workflow on offer here has a name holding that.",
+        ),
+      ).toBeInTheDocument();
+      expect(requestsTo(sent)).toContain(`GET ${OFFERED}?filter=none`);
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("does not send a half-typed workflow filter after leaving New run or alter History's address filter", async () => {
+      const { sent, at } = opening(`${PAGE}?filter=claim`);
+      await screen.findByRole("button", { name: /Handle a claim/ });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.change(
+        screen.getByRole("searchbox", { name: "Part of a name" }),
+        {
+          target: { value: "refund" },
+        },
+      );
+
+      fireEvent.click(tab("History"));
+      act(() => vi.advanceTimersByTime(350));
+
+      expect(at()).toBe(`${PAGE}?filter=claim&tab=history`);
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toEqual([`GET ${OFFERED}`]);
+      expect(
+        screen.getByRole("searchbox", {
+          name: "Part of a run's name, or its workflow's",
+        }),
+      ).toHaveValue("claim");
+    });
+
+    it("abandons old pages and a selected draft when the reader changes within the group", async () => {
+      let finishOld: (reply: readonly [string, number]) => void = () => {};
+      const { sent, changeReader } = opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            new Promise((settle) => {
+              finishOld = settle;
+            }),
+            [JSON.stringify({ items: [REFUND] }), 200],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      await userEvent.type(
+        screen.getByRole("textbox", { name: "Complaint" }),
+        "Kettle leaks",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Load more workflows" }),
+      );
+      await waitFor(() =>
+        expect(
+          requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+        ).toHaveLength(2),
+      );
+
+      act(() => changeReader("another-reader"));
+      finishOld([JSON.stringify({ items: [HANDLE] }), 200]);
+
+      expect(
+        await screen.findByRole("button", { name: /Pay a refund/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Complaint" })).toBeNull();
+      expect(
+        screen.queryByRole("textbox", { name: "Name of this run" }),
+      ).toBeNull();
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(3);
+    });
+    it("draws the workflows on offer as cards, each saying what it is for, pressable and none picked yet", async () => {
       const { sent } = opening(PAGE);
 
-      const offered = await screen.findByRole("group", { name: "A new run" });
+      const offered = panel("New run");
 
       expect(
         await within(offered).findByText(isolatedName("Handle a claim")),
@@ -954,6 +567,7 @@ describe("WorkPage", () => {
       expect(
         within(offered).getByText(isolatedName("Sorts a claim out.")),
       ).toBeInTheDocument();
+      expect(within(offered).getAllByTestId("AccountTreeIcon")).toHaveLength(2);
       expect(
         within(offered)
           .getAllByRole("button")
@@ -967,6 +581,18 @@ describe("WorkPage", () => {
       ]);
       expect(within(offered).queryByRole("textbox")).toBeNull();
       expect(requestsTo(sent)).toContain(`GET ${OFFERED}`);
+
+      const card = within(offered)
+        .getByRole("button", { name: /Handle a claim/ })
+        .closest<HTMLElement>(".MuiCard-root")!;
+      const name = within(card).getByText(isolatedName("Handle a claim"));
+      const purpose = within(card).getByText(
+        isolatedName("Sorts a claim out."),
+      );
+      const icon = within(card).getByTestId("AccountTreeIcon");
+      expect(name.parentElement).toBe(purpose.parentElement);
+      expect(icon.parentElement).toBe(name.parentElement?.parentElement);
+      expect(getComputedStyle(icon.parentElement!).display).toBe("flex");
     });
 
     it("draws under the cards, once one is picked, what its newest version takes with a name already suggested, the version not shown until asked for", async () => {
@@ -974,7 +600,33 @@ describe("WorkPage", () => {
 
       const form = await picking("Handle a claim");
 
-      expect(form).toHaveFocus();
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      expect(name).toHaveFocus();
+      expect(form).not.toHaveFocus();
+      const formSpace = form.closest("section") as HTMLElement;
+      expect(formSpace.style.maxWidth).toBe("");
+      const card = screen
+        .getByRole("button", { name: /Handle a claim/ })
+        .closest<HTMLElement>(".MuiCard-root")!;
+      const browse = card.parentElement!;
+      expect(browse.parentElement).toBe(formSpace.parentElement);
+      expect(browse.style.maxWidth).toBe("");
+      const browseStyle = getComputedStyle(browse);
+      const formStyle = getComputedStyle(formSpace);
+      expect(browse.contains(formSpace)).toBe(false);
+      expect(formSpace).toContainElement(name);
+      expect(browseStyle.display).toBe("grid");
+      expect(browseStyle.borderWidth).toBe("1px");
+      expect(formStyle.borderWidth).toBe("2px");
+      expect(browseStyle.backgroundColor).not.toBe(formStyle.backgroundColor);
+      expect(browseStyle.borderColor).not.toBe(formStyle.borderColor);
+      expect(screen.getByRole("button", { name: "Start" })).toHaveClass(
+        buttonClasses.contained,
+      );
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveClass(
+        buttonClasses.outlined,
+        buttonClasses.colorInherit,
+      );
       expect(
         screen.getByRole("button", { name: /Handle a claim/ }),
       ).toHaveAttribute("aria-pressed", "true");
@@ -988,6 +640,28 @@ describe("WorkPage", () => {
       expect(
         screen.getByRole("button", { name: "Choose another version" }),
       ).toBeInTheDocument();
+    });
+
+    it("returns focus to the name when the selected card is pressed again or another card is picked", async () => {
+      opening(PAGE);
+      await picking("Handle a claim");
+      const firstName = screen.getByRole("textbox", {
+        name: "Name of this run",
+      });
+      const complaint = screen.getByRole("textbox", { name: "Complaint" });
+      complaint.focus();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /Handle a claim/ }),
+      );
+
+      expect(firstName).toHaveFocus();
+      await picking("Pay a refund");
+      const nextName = screen.getByRole("textbox", {
+        name: "Name of this run",
+      });
+      expect(nextName).toHaveFocus();
+      expect(nextName).not.toBe(firstName);
     });
 
     it("offers no other version where only one is in service, and nothing to fill where it takes nothing", async () => {
@@ -1006,92 +680,94 @@ describe("WorkPage", () => {
       ]);
     });
 
-    it("suggests the first line of the first text as the name, following it until the name is changed, and not again once it is cleared", async () => {
+    it("names the run afresh once another card is picked, forgetting a name typed for the one before", async () => {
       opening(PAGE);
+      await picking("Pay a refund");
+      const typed = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.clear(typed);
+      await userEvent.type(typed, "Mine");
+
+      await picking("Handle a claim");
+
+      expect(
+        screen.getByRole("textbox", { name: "Name of this run" }),
+      ).toHaveValue(`Handle a claim ${OPENED_AT}`);
+      await picking("Pay a refund");
+      expect(
+        screen.getByRole("textbox", { name: "Name of this run" }),
+      ).toHaveValue(`Pay a refund ${OPENED_AT}`);
+    });
+
+    it("suggests the workflow and the form's own drawing time, unaffected by filling, while allowing a chosen name", async () => {
+      opening(PAGE);
+      vi.setSystemTime(new Date("2026-09-18T13:07:00Z"));
       await picking("Handle a claim");
       const name = screen.getByRole("textbox", { name: "Name of this run" });
       const complaint = screen.getByRole("textbox", { name: "Complaint" });
 
+      expect(name).toHaveValue("Handle a claim Sep 18, 03:07 PM");
       await userEvent.type(complaint, "Kettle leaks{Enter}Since Monday");
-      expect(name).toHaveValue("Kettle leaks");
+      vi.setSystemTime(new Date("2026-09-18T13:19:00Z"));
+      await userEvent.type(complaint, ", badly");
+      expect(name).toHaveValue("Handle a claim Sep 18, 03:07 PM");
 
       await userEvent.clear(name);
-      await userEvent.type(complaint, ", badly");
-
       expect(name).toHaveValue("");
+      await userEvent.type(name, "Mine");
+      await userEvent.type(complaint, " again");
+      expect(name).toHaveValue("Mine");
     });
 
-    it("starts the run of the newest version with its name and every value, and the rest of the page becomes that run, taking the keyboard to its name", async () => {
-      const { sent, at } = opening(`${PAGE}?filter=claim`, {
-        routes: { [`POST ${RUNS}`]: [BEGUN] },
-      });
-      await picking("Handle a claim");
-      await userEvent.type(
-        screen.getByRole("textbox", { name: "Complaint" }),
-        "Kettle leaks",
-      );
-
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
-
-      const opened = await screen.findByRole("heading", {
-        level: 2,
-        name: /Claim from Ada/,
-      });
-      await waitFor(() => expect(opened).toHaveFocus());
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?filter=claim`);
-      expect(startsAsked(sent)).toEqual([
-        {
-          name: "Kettle leaks",
-          versionId: HANDLE.versions[0]!.versionId,
-          values: { complaint: "Kettle leaks" },
-        },
-      ]);
-      expect(runsAsked(sent)).toHaveLength(2);
-      expect(screen.queryByRole("group", { name: "A new run" })).toBeNull();
-    });
-
-    it("takes the keyboard to the run begun only as it arrives, and not once it is opened again after another", async () => {
-      const gracesRun: Reply = [
-        JSON.stringify({
-          ...(JSON.parse(ADAS_RUN[0] as string) as object),
-          runId: GRACE.runId,
-          name: GRACE.name,
-        }),
-        200,
-      ];
+    it("cuts only a long workflow name so the whole drawing time remains in the suggested name", async () => {
+      const symbol = String.fromCodePoint(0x1f600);
+      const longName = symbol.repeat(140);
       opening(PAGE, {
         routes: {
-          [`POST ${RUNS}`]: [BEGUN],
-          [`GET ${RUNS}/${GRACE.runId}`]: [gracesRun],
-          [`GET ${RUNS}/${GRACE.runId}/steps`]: [ADAS_STEPS],
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [{ ...REFUND, name: longName }] }), 200],
+          ],
         },
       });
-      await picking("Pay a refund");
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
-      const begun = await screen.findByRole("heading", {
-        level: 2,
-        name: /Claim from Ada/,
-      });
-      await waitFor(() => expect(begun).toHaveFocus());
+      await picking(longName);
 
-      await userEvent.click(
-        within(theRuns()).getByRole("link", { name: /Refund for Grace/ }),
+      const expected = `${symbol.repeat(128 - 1 - OPENED_AT.length)} ${OPENED_AT}`;
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      expect(name).toHaveValue(expected);
+      expect([...name.getAttribute("value")!]).toHaveLength(128);
+      expect(name.getAttribute("value")!.length).toBeGreaterThan(128);
+      expect(name).not.toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("keeps a card's continuous name and purpose available to wrap inside their shared text column", async () => {
+      const longName = "W".repeat(128);
+      const longPurpose = "P".repeat(180);
+      opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [
+            [
+              JSON.stringify({
+                items: [{ ...REFUND, name: longName, purpose: longPurpose }],
+              }),
+              200,
+            ],
+          ],
+        },
+      });
+
+      const button = await screen.findByRole("button", {
+        name: new RegExp(longName),
+      });
+      const name = within(button).getByText(isolatedName(longName));
+      const purpose = within(button).getByText(isolatedName(longPurpose));
+      const words = name.parentElement!;
+
+      expect(words).toBe(purpose.parentElement);
+      expect(getComputedStyle(words).overflowWrap).toBe("anywhere");
+      expect(name.textContent).toBe(isolatedName(longName));
+      expect(purpose.textContent).toBe(isolatedName(longPurpose));
+      expect(getComputedStyle(button.closest(".MuiCard-root")!).overflow).toBe(
+        "hidden",
       );
-      await screen.findByRole("heading", {
-        level: 2,
-        name: /Refund for Grace/,
-      });
-      const ada = within(theRuns()).getByRole("link", {
-        name: /Claim from Ada/,
-      });
-      await userEvent.click(ada);
-
-      const reopened = await screen.findByRole("heading", {
-        level: 2,
-        name: /Claim from Ada/,
-      });
-      expect(reopened).not.toHaveFocus();
-      expect(ada).toHaveFocus();
     });
 
     it("says at once that what must be given is empty, and once Start is pressed marks it so, takes the keyboard there and asks nothing", async () => {
@@ -1211,7 +887,7 @@ describe("WorkPage", () => {
       };
       opening(PAGE, {
         routes: {
-          [`GET ${OFFERED}`]: [[JSON.stringify({ workflows: [address] }), 200]],
+          [`GET ${OFFERED}`]: [[JSON.stringify({ items: [address] }), 200]],
         },
       });
       await picking("Send a letter");
@@ -1249,9 +925,7 @@ describe("WorkPage", () => {
       };
       opening(PAGE, {
         routes: {
-          [`GET ${OFFERED}`]: [
-            [JSON.stringify({ workflows: [labelled] }), 200],
-          ],
+          [`GET ${OFFERED}`]: [[JSON.stringify({ items: [labelled] }), 200]],
         },
       });
       await picking("Label a note");
@@ -1267,6 +941,7 @@ describe("WorkPage", () => {
           }),
         );
       await addOne();
+      expect(tag(1)).toHaveFocus();
       await userEvent.type(tag(1), "a");
       await addOne();
       await userEvent.type(tag(2), "b");
@@ -1298,6 +973,7 @@ describe("WorkPage", () => {
       expect(screen.getByRole("combobox", { name: "Version" })).toHaveFocus();
       await userEvent.click(screen.getByRole("combobox", { name: "Version" }));
       await userEvent.click(screen.getByRole("option", { name: "Version 1" }));
+      expect(screen.getByRole("combobox", { name: "Version" })).toHaveFocus();
       await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
       await waitFor(() =>
@@ -1312,7 +988,72 @@ describe("WorkPage", () => {
       expect(screen.queryByRole("textbox", { name: "Complaint" })).toBeNull();
     });
 
-    it("stays where it was for one who may start a run and not read it, saying it began, its key and number, and that it cannot be read", async () => {
+    it("clears a rejected file selection when a new version keeps the field name but changes its limits", async () => {
+      const fileField = {
+        name: "attachments",
+        label: "Attachments",
+        kind: "file",
+        types: ["text/plain"],
+        maximumBytes: 4,
+        most: 1,
+        mustBeGiven: false,
+      };
+      const offered = {
+        entryId: "00000006-0000-4000-8000-000000000c66",
+        name: "Archive a note",
+        versions: [
+          {
+            versionId: "00000007-0000-4000-8000-000000000c67",
+            number: 2,
+            takes: [fileField],
+          },
+          {
+            versionId: "00000007-0000-4000-8000-000000000c68",
+            number: 1,
+            takes: [{ ...fileField, maximumBytes: 8, most: 2 }],
+          },
+        ],
+      };
+      opening(PAGE, {
+        routes: {
+          [`GET ${OFFERED}`]: [[JSON.stringify({ items: [offered] }), 200]],
+        },
+      });
+      await picking("Archive a note");
+      const oldInput = screen.getByLabelText(/Choose files for/);
+      const fiveBytes = new File(["12345"], "Demo Sample.txt", {
+        type: "text/plain",
+      });
+      fireEvent.change(oldInput, { target: { files: [fiveBytes] } });
+      expect(oldInput).toHaveAttribute("aria-invalid", "true");
+      const fileStatus = (words: string) =>
+        screen.queryByText(
+          (_, element) =>
+            element?.firstElementChild?.tagName === "BDI" &&
+            element.textContent ===
+              `${isolatedName("Demo Sample.txt")} ${words}`,
+        );
+      expect(fileStatus("is larger than this field allows.")).toBeVisible();
+      expect(screen.getByText("0 / at most 1")).toBeVisible();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose another version" }),
+      );
+      await userEvent.click(screen.getByRole("combobox", { name: "Version" }));
+      await userEvent.click(screen.getByRole("option", { name: "Version 1" }));
+
+      const newInput = screen.getByLabelText(/Choose files for/);
+      expect(newInput).not.toBe(oldInput);
+      expect(newInput).not.toHaveAttribute("aria-invalid", "true");
+      expect(fileStatus("is larger than this field allows.")).toBeNull();
+      expect(screen.getByText("0 / at most 2")).toBeVisible();
+      expect(screen.getByText(/at most 8 bytes/)).toBeVisible();
+      fireEvent.change(newInput, { target: { files: [fiveBytes] } });
+      expect(fileStatus("is selected and awaits upload.")).toBeVisible();
+      expect(newInput).not.toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("stays on New run for one who may start a run and not read it, saying it began, its key and number, and that it cannot be read, the keyboard at the panel", async () => {
       const { at } = opening(PAGE, {
         permissions: ["read_membership", "start_run"],
         routes: {
@@ -1325,7 +1066,9 @@ describe("WorkPage", () => {
       await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
       expect(await screen.findByText(STARTED_UNREADABLE)).toBeInTheDocument();
-      expect(at()).toBe(PAGE);
+      expect(at()).toBe(NEW_RUN);
+      expect(tab("New run")).toHaveAttribute("aria-selected", "true");
+      expect(panel("New run")).toHaveFocus();
       expect(
         screen.queryByRole("textbox", { name: "Name of this run" }),
       ).toBeNull();
@@ -1343,9 +1086,9 @@ describe("WorkPage", () => {
       await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
       expect(await screen.findByText(STARTED_UNREADABLE)).toBeInTheDocument();
-      expect(at()).toBe(PAGE);
+      expect(at()).toBe(NEW_RUN);
       expect(
-        screen.queryByRole("heading", { level: 2, name: /Claim from Ada/ }),
+        screen.queryByRole("heading", { name: /Claim from Avo/ }),
       ).toBeNull();
     });
 
@@ -1358,13 +1101,8 @@ describe("WorkPage", () => {
 
       await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
-      expect(
-        await screen.findByRole("heading", {
-          level: 2,
-          name: /Claim from Ada/,
-        }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}/${ADA.runId}`);
+      expect(await runOpened(/Claim from Avo/)).toBeInTheDocument();
+      expect(at()).toBe(`${PAGE}/${AVO.runId}`);
       expect(screen.queryByText(STARTED_UNREADABLE)).toBeNull();
     });
 
@@ -1394,7 +1132,7 @@ describe("WorkPage", () => {
       ).toHaveAttribute("aria-invalid", "false");
       expect(screen.getByText(VALUES_REFUSED)).toBeInTheDocument();
       expect(screen.queryByText(/more place/)).toBeNull();
-      expect(at()).toBe(PAGE);
+      expect(at()).toBe(NEW_RUN);
     });
 
     it("marks a place the server refused within one of many fields and takes the keyboard there, marking nothing beside it", async () => {
@@ -1510,7 +1248,7 @@ describe("WorkPage", () => {
         await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
         expect(await screen.findByRole("alert")).toHaveTextContent(said);
-        expect(at()).toBe(PAGE);
+        expect(at()).toBe(NEW_RUN);
         expect(
           screen.getByRole("textbox", { name: "Name of this run" }),
         ).toHaveValue(`Pay a refund ${OPENED_AT}`);
@@ -1557,7 +1295,7 @@ describe("WorkPage", () => {
       expect(name).toHaveFocus();
     });
 
-    it("says a name refused no longer once the name suggested has changed", async () => {
+    it("keeps a name refusal through changes to what is filled, then clears it when the name changes", async () => {
       opening(PAGE, {
         routes: {
           [`POST ${RUNS}`]: [['{"code":"RUN_NAME_UNUSABLE"}', 400]],
@@ -1573,19 +1311,52 @@ describe("WorkPage", () => {
       );
 
       await userEvent.type(complaint, " leaks");
-
-      expect(name).toHaveValue("Kettle leaks");
+      expect(name).toHaveValue(`Handle a claim ${OPENED_AT}`);
+      expect(name).toHaveAccessibleDescription(NAME_REFUSED);
+      await userEvent.clear(name);
+      await userEvent.type(name, "Mine");
+      expect(name).toHaveValue("Mine");
       expect(name).toHaveAccessibleDescription("");
       expect(name).toHaveAttribute("aria-invalid", "false");
     });
 
-    it("reads what may be started again where the version is no longer offered, says so, and takes the keyboard back to what may start once the workflow is gone", async () => {
+    it("says nothing of a refusal on another card picked while the start was out, sending nothing more", async () => {
+      let refuse: (reply: readonly [string, number]) => void = () => {};
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [
+            new Promise((settle) => {
+              refuse = settle;
+            }),
+          ],
+        },
+      });
+      await picking("Pay a refund");
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await picking("Handle a claim");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+
+      refuse(['{"code":"RUN_NAME_UNUSABLE"}', 400]);
+      await act(async () => {});
+
+      expect(name).toHaveAttribute("aria-invalid", "false");
+      expect(name).toHaveAccessibleDescription("");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("button", { name: "Start" })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      expect(startsAsked(sent)).toHaveLength(1);
+    });
+
+    it("reads what may be started again where the version is no longer offered, says so, and takes the keyboard back to the panel once the workflow is gone", async () => {
       const { sent } = opening(PAGE, {
         routes: {
           [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
           [`GET ${OFFERED}`]: [
             ON_OFFER,
-            [JSON.stringify({ workflows: [REFUND] }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
           ],
         },
       });
@@ -1597,11 +1368,7 @@ describe("WorkPage", () => {
 
       await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
-      expect(
-        await screen.findByText(
-          "That version can no longer be started here, so what may be started has been read again.",
-        ),
-      ).toBeInTheDocument();
+      expect(await screen.findByText(NO_LONGER_OFFERED)).toBeInTheDocument();
       await waitFor(() =>
         expect(
           screen.queryByRole("button", { name: /Handle a claim/ }),
@@ -1609,9 +1376,372 @@ describe("WorkPage", () => {
       );
       expect(
         requestsTo(sent).filter((each) => each === `GET ${OFFERED}`),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
+      expect(requestsTo(sent)).toContain(
+        `GET ${OFFERED}?filter=Handle+a+claim`,
+      );
       expect(screen.queryByRole("textbox", { name: "Complaint" })).toBeNull();
-      expect(screen.getByRole("heading", { name: "A new run" })).toHaveFocus();
+      expect(panel("New run")).toHaveFocus();
+    });
+
+    it("checks the selected entry across name pages, then unfiltered pages after a rename, without losing its draft", async () => {
+      const renamed = { ...HANDLE, name: "Claim handling" };
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            ON_OFFER,
+            [JSON.stringify({ items: [] }), 200],
+            [JSON.stringify({ items: [REFUND], nextCursor: "more" }), 200],
+            [JSON.stringify({ items: [renamed] }), 200],
+            [JSON.stringify({ items: [renamed, REFUND] }), 200],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      const complaint = screen.getByRole("textbox", { name: "Complaint" });
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.type(complaint, "Kettle leaks");
+      await userEvent.clear(name);
+      await userEvent.type(name, "My claim");
+
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+      expect(
+        await screen.findByRole("heading", {
+          name: isolatedName("Claim handling"),
+        }),
+      ).toBeInTheDocument();
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toEqual([
+        `GET ${OFFERED}`,
+        `GET ${OFFERED}?filter=Handle+a+claim`,
+        `GET ${OFFERED}`,
+        `GET ${OFFERED}?cursor=more`,
+        `GET ${OFFERED}`,
+      ]);
+      expect(name).toHaveValue("My claim");
+      expect(complaint).toHaveValue("Kettle leaks");
+      expect(panel("New run")).not.toHaveFocus();
+      expect(startsAsked(sent)).toHaveLength(1);
+    });
+
+    it("uses the newest remaining version when the chosen one disappeared after a start refusal", async () => {
+      const newestOnly = { ...HANDLE, versions: [HANDLE.versions[0]] };
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            ON_OFFER,
+            [JSON.stringify({ items: [newestOnly] }), 200],
+            [JSON.stringify({ items: [newestOnly] }), 200],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.clear(name);
+      await userEvent.type(name, "My claim");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose another version" }),
+      );
+      await userEvent.click(screen.getByRole("combobox", { name: "Version" }));
+      await userEvent.click(screen.getByRole("option", { name: "Version 1" }));
+
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+      expect(
+        await screen.findByRole("textbox", { name: "Complaint" }),
+      ).toBeInTheDocument();
+      expect(name).toHaveValue("My claim");
+      expect(screen.queryByRole("option", { name: "Version 1" })).toBeNull();
+      expect(startsAsked(sent)).toEqual([
+        {
+          name: "My claim",
+          versionId: HANDLE.versions[1]!.versionId,
+          values: {},
+        },
+      ]);
+    });
+
+    it("finishes checking a refused start while the cards change filter and keeps the selected draft", async () => {
+      let finishCheck: (reply: readonly [string, number]) => void = () => {};
+      const newestOnly = { ...HANDLE, versions: [HANDLE.versions[0]] };
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            ON_OFFER,
+            new Promise((settle) => {
+              finishCheck = settle;
+            }),
+            [JSON.stringify({ items: [REFUND] }), 200],
+            [JSON.stringify({ items: [REFUND] }), 200],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.clear(name);
+      await userEvent.type(name, "My claim");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose another version" }),
+      );
+      await userEvent.click(screen.getByRole("combobox", { name: "Version" }));
+      await userEvent.click(screen.getByRole("option", { name: "Version 1" }));
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(
+          `GET ${OFFERED}?filter=Handle+a+claim`,
+        ),
+      );
+
+      fireEvent.change(
+        screen.getByRole("searchbox", { name: "Part of a name" }),
+        { target: { value: "refund" } },
+      );
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(`GET ${OFFERED}?filter=refund`),
+      );
+      finishCheck([JSON.stringify({ items: [newestOnly] }), 200]);
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole("combobox", { name: "Version" }),
+        ).toHaveTextContent("Version 2"),
+      );
+      expect(
+        screen.getByRole("textbox", { name: "Complaint" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: isolatedName("Handle a claim") }),
+      ).toBeInTheDocument();
+      expect(name).toHaveValue("My claim");
+      expect(startsAsked(sent)).toHaveLength(1);
+      expect(
+        requestsTo(sent).filter(
+          (each) => each === `GET ${OFFERED}?filter=Handle+a+claim`,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("keeps the selected form on an ordinary verification failure until Try loading again finds it", async () => {
+      const { sent } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            ON_OFFER,
+            ['{"code":"SERVICE_BUSY"}', 503],
+            ON_OFFER,
+            ON_OFFER,
+          ],
+        },
+      });
+      await picking("Pay a refund");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.clear(name);
+      await userEvent.type(name, "My refund");
+
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+      expect(
+        await screen.findByRole("button", { name: "Try loading again" }),
+      ).toBeInTheDocument();
+      expect(name).toHaveValue("My refund");
+      expect(
+        screen.getByRole("heading", { name: isolatedName("Pay a refund") }),
+      ).toBeInTheDocument();
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(2);
+
+      await userEvent.type(name, " now");
+      await act(async () => {});
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(2);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Try loading again" }),
+      );
+
+      await waitFor(() =>
+        expect(
+          requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+        ).toHaveLength(4),
+      );
+      expect(name).toHaveValue("My refund now");
+      expect(
+        screen.queryByRole("button", { name: "Try loading again" }),
+      ).toBeNull();
+    });
+
+    it("keeps failed start verification available for an explicit retry after the cards change filter", async () => {
+      const { sent, readAgain } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            ON_OFFER,
+            ['{"code":"SERVICE_BUSY"}', 503],
+            [JSON.stringify({ items: [HANDLE] }), 200],
+            ON_OFFER,
+            ON_OFFER,
+          ],
+        },
+      });
+      await picking("Pay a refund");
+      const name = screen.getByRole("textbox", { name: "Name of this run" });
+      await userEvent.clear(name);
+      await userEvent.type(name, "My refund");
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      expect(
+        await screen.findByRole("button", { name: "Try loading again" }),
+      ).toBeInTheDocument();
+
+      fireEvent.change(
+        screen.getByRole("searchbox", { name: "Part of a name" }),
+        { target: { value: "claim" } },
+      );
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(`GET ${OFFERED}?filter=claim`),
+      );
+      expect(
+        screen.getByRole("button", { name: "Try loading again" }),
+      ).toBeInTheDocument();
+      await act(async () => {});
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(3);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Try loading again" }),
+      );
+      await waitFor(() =>
+        expect(
+          requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+        ).toHaveLength(5),
+      );
+      expect(name).toHaveValue("My refund");
+      expect(startsAsked(sent)).toHaveLength(1);
+      expect(readAgain).not.toHaveBeenCalled();
+    });
+
+    it("closes a failed card page when start verification refuses authority and cannot retry its old cursor", async () => {
+      const { sent, readAgain } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            ['{"code":"SERVICE_BUSY"}', 503],
+            ['{"code":"ACT_NOT_PERMITTED"}', 403],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      await userEvent.type(
+        screen.getByRole("textbox", { name: "Complaint" }),
+        "Kettle leaks",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Load more workflows" }),
+      );
+      const retry = await screen.findByRole("button", {
+        name: "Try loading again",
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(
+          `GET ${OFFERED}?filter=Handle+a+claim`,
+        ),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Try loading again" }),
+        ).toBeNull(),
+      );
+      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("textbox", { name: "Name of this run" }),
+      ).toBeNull();
+      expect(screen.queryByText("Still reading…")).toBeNull();
+      fireEvent.click(retry);
+      await act(async () => {});
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(3);
+      expect(startsAsked(sent)).toHaveLength(1);
+      expect(readAgain).toHaveBeenCalledTimes(1);
+    });
+
+    it("abandons a pending card page after start verification refuses authority", async () => {
+      let finishNext: (reply: readonly [string, number]) => void = () => {};
+      const { sent, readAgain } = opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [
+            [JSON.stringify({ items: [HANDLE], nextCursor: "next" }), 200],
+            new Promise((settle) => {
+              finishNext = settle;
+            }),
+            ['{"code":"ACT_NOT_PERMITTED"}', 403],
+          ],
+        },
+      });
+      await picking("Handle a claim");
+      await userEvent.type(
+        screen.getByRole("textbox", { name: "Complaint" }),
+        "Kettle leaks",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Load more workflows" }),
+      );
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(`GET ${OFFERED}?cursor=next`),
+      );
+      const nextSignal = sent.mock.calls.find(([input]) =>
+        String(input).includes("cursor=next"),
+      )?.[1]?.signal;
+      expect(nextSignal?.aborted).toBe(false);
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+      await waitFor(() => expect(nextSignal?.aborted).toBe(true));
+      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
+      finishNext([JSON.stringify({ items: [REFUND] }), 200]);
+      await act(async () => {});
+      expect(screen.queryByRole("button", { name: /Pay a refund/ })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Handle a claim/ }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Try loading again" }),
+      ).toBeNull();
+      expect(screen.queryByText("Still reading…")).toBeNull();
+      expect(
+        requestsTo(sent).filter((each) => each.startsWith(`GET ${OFFERED}`)),
+      ).toHaveLength(3);
+      expect(startsAsked(sent)).toHaveLength(1);
+      expect(readAgain).toHaveBeenCalledTimes(1);
+    });
+
+    it("says no longer that a version is not offered once another card is picked", async () => {
+      opening(PAGE, {
+        routes: {
+          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
+          [`GET ${OFFERED}`]: [ON_OFFER, ON_OFFER],
+        },
+      });
+      await picking("Pay a refund");
+      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      expect(await screen.findByText(NO_LONGER_OFFERED)).toBeVisible();
+
+      await picking("Handle a claim");
+
+      expect(screen.queryByText(NO_LONGER_OFFERED)).toBeNull();
     });
 
     it("reads the standing again where starting is refused for the act itself, saying so and keeping the form where it is", async () => {
@@ -1627,12 +1757,12 @@ describe("WorkPage", () => {
 
       await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
       expect(await screen.findByRole("alert")).toHaveTextContent(ACT_REFUSED);
-      expect(at()).toBe(PAGE);
+      expect(at()).toBe(NEW_RUN);
       expect(name).toBeInTheDocument();
       expect(name).toHaveValue(`Pay a refund ${OPENED_AT}`);
     });
 
-    it("puts the form away when it is abandoned, starting nothing and taking the keyboard back to what may start", async () => {
+    it("puts the form away when it is abandoned, starting nothing and taking the keyboard back to the panel", async () => {
       const { sent } = opening(PAGE, {
         routes: { [`POST ${RUNS}`]: [BEGUN] },
       });
@@ -1643,93 +1773,13 @@ describe("WorkPage", () => {
       expect(
         screen.queryByRole("textbox", { name: "Name of this run" }),
       ).toBeNull();
-      expect(screen.getByRole("heading", { name: "A new run" })).toHaveFocus();
+      expect(panel("New run")).toHaveFocus();
       expect(startsAsked(sent)).toEqual([]);
-    });
-
-    it("takes the keyboard to what may start when New run is pressed with no run open, going nowhere", async () => {
-      const { at } = opening(`${PAGE}?filter=claim`);
-      const heading = await screen.findByRole("heading", { name: "A new run" });
-
-      await userEvent.click(screen.getByRole("link", { name: "New run" }));
-
-      expect(heading).toHaveFocus();
-      expect(at()).toBe(`${PAGE}?filter=claim`);
-    });
-
-    it.each([
-      ["a ctrl-click", { ctrlKey: true }, true],
-      ["a click of another button", { button: 1 }, true],
-      ["a plain click", {}, false],
-    ])(
-      "leaves %s on New run to the browser only where it asks for more than this page",
-      async (_case, modified, letThrough) => {
-        const { at } = opening(`${PAGE}?filter=claim`);
-        const heading = await screen.findByRole("heading", {
-          name: "A new run",
-        });
-
-        const dispatched = fireEvent.click(
-          screen.getByRole("link", { name: "New run" }),
-          modified,
-        );
-
-        expect(dispatched).toBe(letThrough);
-        expect(document.activeElement === heading).toBe(!letThrough);
-        expect(at()).toBe(`${PAGE}?filter=claim`);
-      },
-    );
-
-    it("offers New run to one who may start one, opening the workflows on offer in place of the run open and taking the keyboard there", async () => {
-      const { at } = opening(`${PAGE}/${ADA.runId}?filter=claim`);
-      await screen.findByRole("heading", { level: 2, name: /Claim from Ada/ });
-
-      await userEvent.click(screen.getByRole("link", { name: "New run" }));
-
-      await waitFor(() =>
-        expect(
-          screen.getByRole("heading", { name: "A new run" }),
-        ).toHaveFocus(),
-      );
-      expect(at()).toBe(`${PAGE}?filter=claim`);
-      expect(
-        screen.queryByRole("heading", { level: 2, name: /Claim from Ada/ }),
-      ).toBeNull();
-    });
-
-    it("draws nothing that starts a run for one who may not start one, and never asks what may be started", async () => {
-      const { sent } = opening(PAGE, {
-        permissions: ["read_membership", "read_own_runs"],
-      });
-      await days();
-
-      expect(screen.queryByRole("link", { name: "New run" })).toBeNull();
-      expect(screen.queryByRole("group", { name: "A new run" })).toBeNull();
-      expect(
-        screen.getByText("Open a run from the list to read it here."),
-      ).toBeInTheDocument();
-      expect(requestsTo(sent)).not.toContain(`GET ${OFFERED}`);
-    });
-
-    it("asks nobody who may neither start a run nor read one to open one from the list", async () => {
-      opening(PAGE, {
-        permissions: ["read_membership"],
-        routes: { [`GET ${RUNS}`]: [['{"items":[],"reading":"none"}', 200]] },
-      });
-
-      await within(theRuns()).findByText(
-        "Reading a run is a permission this group has not given you, so no run is listed, including the ones you started.",
-      );
-
-      expect(
-        screen.queryByText("Open a run from the list to read it here."),
-      ).toBeNull();
-      expect(screen.queryByRole("group", { name: "A new run" })).toBeNull();
     });
 
     it("says so where nothing can be started", async () => {
       opening(PAGE, {
-        routes: { [`GET ${OFFERED}`]: [['{"workflows":[]}', 200]] },
+        routes: { [`GET ${OFFERED}`]: [['{"items":[]}', 200]] },
       });
 
       expect(
@@ -1738,81 +1788,21 @@ describe("WorkPage", () => {
         ),
       ).toBeInTheDocument();
       expect(
-        within(screen.getByRole("group", { name: "A new run" })).queryAllByText(
-          isolatedName("Handle a claim"),
-        ),
+        within(panel("New run")).queryAllByText(isolatedName("Handle a claim")),
       ).toHaveLength(0);
-    });
-
-    /** Every row opened as an operator, so what is said follows the server's reading and not the standing. */
-    it.each([
-      [
-        "read none",
-        "none",
-        PAGE,
-        "Reading a run is a permission this group has not given you, so no run is listed, including the ones you started.",
-      ],
-      [
-        "read their own, and they started none",
-        "own",
-        PAGE,
-        "You have started no run here yet.",
-      ],
-      [
-        "read their own, and the filter matches none",
-        "own",
-        `${PAGE}?filter=zz`,
-        "No run you started matches that.",
-      ],
-      [
-        "read all, and nothing has been run",
-        "all",
-        PAGE,
-        "Nothing has been run here yet.",
-      ],
-      [
-        "read all, and the filter matches none",
-        "all",
-        `${PAGE}?filter=zz`,
-        "No run here, or its workflow, is called anything holding that.",
-      ],
-    ])(
-      "says why no run is listed where the server %s",
-      async (_case, reading, address, said) => {
-        opening(address, {
-          routes: {
-            [`GET ${RUNS}`]: [[`{"items":[],"reading":"${reading}"}`, 200]],
-          },
-        });
-
-        expect(await within(theRuns()).findByText(said)).toBeInTheDocument();
-        expect(within(theRuns()).queryAllByRole("list")).toHaveLength(0);
-      },
-    );
-
-    it("reads the standing again where the server says the reader is in the group no longer", async () => {
-      const { readAgain } = opening(PAGE, {
-        routes: {
-          [`GET ${RUNS}`]: [['{"code":"GROUP_NOT_IN_VIEW"}', 404]],
-        },
-      });
-
-      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
-      expect(within(theRuns()).queryAllByRole("list")).toHaveLength(0);
     });
   });
 
-  describe("in detail", () => {
-    it("draws what is running as a table sorted newest first by when each started, once switched to", async () => {
-      opening(PAGE);
-      await days();
+  describe("on History", () => {
+    it("draws what is running as a table sorted newest first by when each started", async () => {
+      const { sent } = opening(PAGE);
 
-      await inDetail();
+      await inHistory();
 
       expect(await rows()).toEqual([
         [
           "SUPPORT-3",
-          "Claim from Alan",
+          "Claim from Avonel",
           `${isolatedName("Handle a claim")}, version 1`,
           "02:00 PM today",
           "Cat Example",
@@ -1820,7 +1810,7 @@ describe("WorkPage", () => {
         ],
         [
           "SUPPORT-2",
-          "Refund for Grace",
+          "Refund for Glinn",
           `${isolatedName("Pay a refund")}, version 2`,
           "11:00 AM yesterday",
           "000c62",
@@ -1828,7 +1818,7 @@ describe("WorkPage", () => {
         ],
         [
           "SUPPORT-1",
-          "Claim from Ada",
+          "Claim from Avo",
           `${isolatedName("Handle a claim")}, version 1`,
           "Sep 11 10:00 AM",
           "Cat Example",
@@ -1838,24 +1828,77 @@ describe("WorkPage", () => {
       expect(
         within(table()).getByRole("columnheader", { name: /Started$/ }),
       ).toHaveAttribute("aria-sort", "descending");
-      expect(screen.queryByRole("region", { name: "The runs" })).toBeNull();
+      expect(runsAsked(sent)).toEqual([`GET ${RUNS}?sort=-started`]);
+      const [, ...listed] = within(table()).getAllByRole("row");
+      const name = within(listed[0]!).getByText("Claim from Avonel");
+      expect(name.tagName).toBe("BDI");
+      expect(name.parentElement?.tagName).toBe("STRONG");
+      expect(
+        within(listed[0]!).getByTestId("PauseCircleOutlinedIcon"),
+      ).toBeInTheDocument();
+      expect(
+        within(listed[1]!).getByTestId("AutorenewIcon"),
+      ).toBeInTheDocument();
+      const running = within(listed[1]!).getAllByText(
+        (_, element) =>
+          element?.firstElementChild?.tagName.toLowerCase() === "svg" &&
+          element.textContent === `Running, on ${isolatedName("summarise")}`,
+      );
+      expect(running).toHaveLength(1);
+      expect(running[0]).toBeVisible();
+      expect(
+        within(listed[2]!).getByTestId("ErrorOutlinedIcon"),
+      ).toBeInTheDocument();
+
+      expect(within(table()).queryAllByRole("link", { current: true })).toEqual(
+        [],
+      );
+    });
+
+    it("isolates a mixed-direction run name while keeping the row's link name", async () => {
+      const mixedName = "Demo Sample שלום";
+      localStorage.setItem(KEPT_AS, "history");
+      opening(PAGE, {
+        routes: {
+          [`GET ${RUNS}`]: [
+            [
+              JSON.stringify({
+                items: [{ ...AVON, name: mixedName }, AVO],
+                reading: "own",
+              }),
+              200,
+            ],
+          ],
+        },
+      });
+      await rows();
+
+      const row = within(table()).getAllByRole("row")[1]!;
+      const nameCell = within(row).getAllByRole("cell")[1]!;
+      const name = within(nameCell).getByText(mixedName);
+      expect(name.tagName).toBe("BDI");
+      expect(name.parentElement?.tagName).toBe("STRONG");
+      expect(nameCell).toHaveTextContent(mixedName);
+      expect(
+        within(row).getByRole("link", { name: "SUPPORT-3" }),
+      ).toBeInTheDocument();
     });
 
     it.each([
-      ["running where no step arrived", { ...GRACE, at: undefined }, "Running"],
+      ["running where no step arrived", { ...GLINN, at: undefined }, "Running"],
       [
         "in a state this build has not heard of, whatever step arrived",
-        { ...GRACE, state: "paused" },
+        { ...GLINN, state: "paused" },
         "Not something this page can say yet.",
       ],
     ])(
       "says where a run is %s without naming a step, and every other run as it was",
       async (_case, run, said) => {
-        localStorage.setItem(KEPT_AS, "detail");
+        localStorage.setItem(KEPT_AS, "history");
         opening(PAGE, {
           routes: {
             [`GET ${RUNS}`]: [
-              [JSON.stringify({ items: [run, ADA], reading: "own" }), 200],
+              [JSON.stringify({ items: [run, AVO], reading: "own" }), 200],
             ],
           },
         });
@@ -1864,25 +1907,135 @@ describe("WorkPage", () => {
           said,
           "Failed",
         ]);
+        const [, first] = within(table()).getAllByRole("row");
+        if (run.state === "paused") {
+          expect(within(first!).queryByTestId("AutorenewIcon")).toBeNull();
+          expect(within(first!).queryByRole("img")).toBeNull();
+        } else {
+          expect(
+            within(first!).getByTestId("AutorenewIcon"),
+          ).toBeInTheDocument();
+        }
       },
     );
 
-    /** The same runs the server lets the reader read, asked in another order and never under the conversation's filter. */
-    it("asks the server for the very runs the conversation asks for, in the table's own order", async () => {
-      const { sent } = opening(`${PAGE}?filter=claim`);
-      await days();
-
-      await inDetail();
+    it("draws a narrow leading-side filter under the tabs and above the table", async () => {
+      localStorage.setItem(KEPT_AS, "history");
+      opening(PAGE);
       await rows();
 
-      expect(runsAsked(sent)).toEqual([
-        `GET ${RUNS}?sort=-lastHappened&filter=claim`,
-        `GET ${RUNS}?sort=-started`,
-      ]);
+      const filter = screen.getByRole("searchbox", {
+        name: "Part of a run's name, or its workflow's",
+      });
+
+      expect(precedes(screen.getByRole("tablist"), filter)).toBe(true);
+      expect(precedes(filter, table())).toBe(true);
+      expect(panel("History")).toContainElement(filter);
+      const filterSpace = filter.closest(".MuiTextField-root")
+        ?.parentElement as HTMLElement;
+      expect(filterSpace.style.maxWidth).toBe("22rem");
+      expect(filterSpace.style.width).toBe("100%");
+
+      expect(screen.getAllByRole("searchbox")).toHaveLength(1);
     });
 
+    it("narrows the rows to what the filter typed holds, as the server matches it, and keeps the filter in the address", async () => {
+      localStorage.setItem(KEPT_AS, "history");
+      const { sent, at } = opening(PAGE, {
+        routes: {
+          [`GET ${RUNS}`]: [
+            LISTED,
+            [JSON.stringify({ items: [AVO], reading: "own" }), 200],
+          ],
+        },
+      });
+      await rows();
+
+      await userEvent.type(
+        screen.getByRole("searchbox", {
+          name: "Part of a run's name, or its workflow's",
+        }),
+        "avo",
+      );
+
+      await waitFor(() =>
+        expect(runsAsked(sent)).toContain(
+          `GET ${RUNS}?sort=-started&filter=avo`,
+        ),
+      );
+      await waitFor(() =>
+        expect(
+          within(table()).queryByRole("link", { name: "SUPPORT-3" }),
+        ).toBeNull(),
+      );
+      expect(
+        within(table()).getByRole("link", { name: "SUPPORT-1" }),
+      ).toBeInTheDocument();
+      expect(at()).toBe(`${HISTORY}&filter=avo`);
+    });
+
+    it.each([
+      [
+        "read their own, and the filter matches none",
+        "own",
+        "No run you started matches that.",
+        "You have started no run here yet.",
+      ],
+      [
+        "read all, and the filter matches none",
+        "all",
+        "No run here, or its workflow, is called anything holding that.",
+        "Nothing has been run here yet.",
+      ],
+    ])(
+      "says no row matches where the server %s",
+      async (_case, reading, said, unsaid) => {
+        opening(`${HISTORY}&filter=zz`, {
+          routes: {
+            [`GET ${RUNS}`]: [[`{"items":[],"reading":"${reading}"}`, 200]],
+          },
+        });
+
+        expect(await screen.findByText(said)).toBeInTheDocument();
+        expect(screen.queryByText(unsaid)).toBeNull();
+        expect(screen.getByRole("searchbox")).toHaveValue("zz");
+      },
+    );
+
+    /** Every row opened as an operator, so what is said follows the server's reading and not the standing. */
+    it.each([
+      [
+        "read none",
+        "none",
+        "Reading a run is a permission this group has not given you, so no run is listed, including the ones you started.",
+      ],
+      [
+        "read their own, and they started none",
+        "own",
+        "You have started no run here yet.",
+      ],
+      [
+        "read all, and nothing has been run",
+        "all",
+        "Nothing has been run here yet.",
+      ],
+    ])(
+      "says why no run is listed where the server %s",
+      async (_case, reading, said) => {
+        localStorage.setItem(KEPT_AS, "history");
+        opening(PAGE, {
+          routes: {
+            [`GET ${RUNS}`]: [[`{"items":[],"reading":"${reading}"}`, 200]],
+          },
+        });
+
+        expect(await screen.findByText(said)).toBeInTheDocument();
+        expect(within(table()).queryAllByRole("link")).toHaveLength(0);
+      },
+    );
+
     it("asks the server for another order when a heading is pressed, and keeps it in the address", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
+      localStorage.setItem(KEPT_AS, "history");
       const { sent, at } = opening(PAGE);
       await rows();
 
@@ -1893,12 +2046,11 @@ describe("WorkPage", () => {
       await waitFor(() =>
         expect(requestsTo(sent)).toContain(`GET ${RUNS}?sort=startedBy`),
       );
-      expect(at()).toBe(`${PAGE}?sort=startedBy`);
+      expect(at()).toBe(`${HISTORY}&sort=startedBy`);
     });
 
     it("offers no order by where a run is, and asks for the runs newest first where the address asks for that order", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      const { sent } = opening(`${PAGE}?sort=where`);
+      const { sent } = opening(`${HISTORY}&sort=where`);
       await rows();
 
       const where = within(table()).getByRole("columnheader", {
@@ -1912,390 +2064,16 @@ describe("WorkPage", () => {
       expect(runsAsked(sent)).toEqual([`GET ${RUNS}?sort=-started`]);
     });
 
-    it("opens as this device left it, and a row opens its run under the table, which keeps its order and marks the row", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      const { sent, at } = opening(`${PAGE}?sort=startedBy`);
-      await rows();
-
-      await userEvent.click(
-        within(table()).getByRole("link", { name: "SUPPORT-1" }),
-      );
-
-      expect(
-        await screen.findByRole("heading", {
-          level: 2,
-          name: /Claim from Ada/,
-        }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?sort=startedBy`);
-      expect(
-        within(table()).getByRole("link", { name: "SUPPORT-1" }),
-      ).toHaveAttribute("aria-current", "true");
-      expect(
-        within(table()).getByRole("link", { name: "SUPPORT-3" }),
-      ).not.toHaveAttribute("aria-current");
-      expect(
-        within(table()).getByRole("columnheader", { name: /Started by$/ }),
-      ).toHaveAttribute("aria-sort", "ascending");
-      expect(runsAsked(sent)).toEqual([`GET ${RUNS}?sort=startedBy`]);
-      expect(screen.queryByRole("region", { name: "The runs" })).toBeNull();
-    });
-
-    it("opens a step from the run's steps in the run's place under the table, which stays as it was, and goes back to the run by its link", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      const { sent, at } = opening(`${PAGE}/${ADA.runId}?sort=startedBy`);
-      const steps = await screen.findByRole("table", { name: "The steps" });
-
-      await userEvent.click(
-        within(steps).getByRole("link", { name: "summarise" }),
-      );
-
-      expect(
-        await screen.findByRole("heading", { level: 2, name: /summarise/ }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(
-        `${PAGE}/${ADA.runId}/steps/${SUMMARISE}?sort=startedBy`,
-      );
-      expect(screen.queryByRole("table", { name: "The steps" })).toBeNull();
-      expect(
-        within(table()).getByRole("link", { name: "SUPPORT-1" }),
-      ).toHaveAttribute("aria-current", "true");
-
-      await userEvent.click(
-        screen.getByRole("link", { name: "Back to the run" }),
-      );
-
-      expect(
-        await screen.findByRole("heading", {
-          level: 2,
-          name: /Claim from Ada/,
-        }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?sort=startedBy`);
-      expect(runsAsked(sent)).toEqual([`GET ${RUNS}?sort=startedBy`]);
-    });
-
-    it("says it is still reading the runs only while none has answered, and not while they are read again after an act on the run open under them", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      let settle!: (answer: readonly [string, number]) => void;
-      const first: Reply = new Promise((done) => {
-        settle = done;
-      });
-      const { sent } = opening(`${PAGE}/${ADA.runId}`, {
+    it("reads the standing again where the server says the reader is in the group no longer", async () => {
+      localStorage.setItem(KEPT_AS, "history");
+      const { readAgain } = opening(PAGE, {
         routes: {
-          [`GET ${RUNS}`]: [first, UNANSWERED],
-          [`GET ${RUNS}/${ADA.runId}`]: [STOPPABLE, STOPPED_BY_CAT],
-          [`PUT ${RUNS}/${ADA.runId}/stop`]: [STOPPED_BY_CAT],
+          [`GET ${RUNS}`]: [['{"code":"GROUP_NOT_IN_VIEW"}', 404]],
         },
       });
-      await screen.findByRole("table", { name: "What is running" });
-      const status = tableStatus();
-      expect(status).toHaveTextContent("Still reading…");
 
-      settle(LISTED as readonly [string, number]);
-      await within(table()).findByRole("link", { name: "SUPPORT-1" });
-      expect(status).not.toHaveTextContent("Still reading…");
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Stop" }),
-      );
-      await waitFor(() => expect(runsAsked(sent)).toHaveLength(2));
-
-      expect(tableStatus()).toBe(status);
-      expect(status).not.toHaveTextContent("Still reading…");
-      expect(
-        within(table()).getByRole("link", { name: "SUPPORT-1" }),
-      ).toBeVisible();
-    });
-
-    it("draws the runs beside a run open in detail once switched back to a conversation, and keeps that choice", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(`${PAGE}/${ADA.runId}`);
-      await screen.findByRole("heading", { level: 2, name: /Claim from Ada/ });
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "As a conversation" }),
-      );
-
-      expect(
-        await within(theRuns()).findByRole("link", { name: /Claim from Ada/ }),
-      ).toHaveAttribute("aria-current", "true");
-      expect(localStorage.getItem(KEPT_AS)).toBe("conversation");
-    });
-
-    it("leaves the keyboard on the drawing pressed where the run was come back to from its step, starting it at the run's name only as it arrived", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(`${PAGE}/${ADA.runId}/steps/${SUMMARISE}`);
-      await screen.findByRole("heading", { level: 2, name: /summarise/ });
-      await userEvent.click(
-        screen.getByRole("link", { name: "Back to the run" }),
-      );
-      const arrivedAt = await screen.findByRole("heading", {
-        level: 2,
-        name: /Claim from Ada/,
-      });
-      expect(document.activeElement).toBe(arrivedAt);
-      const conversation = screen.getByRole("button", {
-        name: "As a conversation",
-      });
-
-      await userEvent.click(conversation);
-
-      const drawnAgain = await screen.findByRole("heading", {
-        level: 2,
-        name: /Claim from Ada/,
-      });
-      expect(drawnAgain).not.toBe(arrivedAt);
-      expect(document.activeElement).toBe(conversation);
-      expect(document.activeElement).not.toBe(drawnAgain);
-    });
-
-    it("keeps the choice on this device for the next time the page opens", async () => {
-      opening(PAGE);
-      await days();
-
-      await inDetail();
-
-      expect(localStorage.getItem(KEPT_AS)).toBe("detail");
-    });
-
-    it("offers Start a run level with the title to one who may start one, and only drawn in detail", async () => {
-      opening(PAGE);
-      await days();
-      expect(screen.queryByRole("button", { name: "Start a run" })).toBeNull();
-
-      await inDetail();
-
-      expect(
-        screen.getByRole("button", { name: "Start a run" }),
-      ).toBeInTheDocument();
-    });
-
-    it("draws no Start a run for one who may not start a run", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(PAGE, { permissions: ["read_membership", "read_own_runs"] });
-      await rows();
-
-      expect(screen.queryByRole("button", { name: "Start a run" })).toBeNull();
-    });
-
-    it("starts a run from the dialog, a workflow chosen with its newest version already picked, and opens it under the table", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      const { sent, at } = opening(`${PAGE}?sort=startedBy`, {
-        routes: { [`POST ${RUNS}`]: [BEGUN] },
-      });
-      await rows();
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Start a run" }),
-      );
-      const dialog = await screen.findByRole("dialog", { name: "Start a run" });
-      await userEvent.click(
-        await within(dialog).findByRole("combobox", { name: "Workflow" }),
-      );
-      await userEvent.click(
-        screen.getByRole("option", { name: isolatedName("Handle a claim") }),
-      );
-      expect(
-        within(dialog).getByRole("combobox", { name: "Version" }),
-      ).toHaveTextContent("Version 2");
-      await userEvent.type(
-        within(dialog).getByRole("textbox", { name: "Complaint" }),
-        "Kettle leaks",
-      );
-      await userEvent.click(
-        within(dialog).getByRole("button", { name: "Start" }),
-      );
-
-      expect(
-        await screen.findByRole("heading", {
-          level: 2,
-          name: /Claim from Ada/,
-        }),
-      ).toBeInTheDocument();
-      expect(at()).toBe(`${PAGE}/${ADA.runId}?sort=startedBy`);
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      expect(startsAsked(sent)).toEqual([
-        {
-          name: "Kettle leaks",
-          versionId: HANDLE.versions[0]!.versionId,
-          values: { complaint: "Kettle leaks" },
-        },
-      ]);
-      expect(runsAsked(sent)).toEqual([
-        `GET ${RUNS}?sort=startedBy`,
-        `GET ${RUNS}?sort=startedBy`,
-      ]);
-    });
-
-    it("holds the dialog's start until a workflow is chosen", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(PAGE);
-      await rows();
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Start a run" }),
-      );
-      const dialog = await screen.findByRole("dialog", { name: "Start a run" });
-
-      expect(
-        within(dialog).getByRole("button", { name: "Start" }),
-      ).toHaveAttribute("aria-disabled", "true");
-      expect(
-        within(dialog).getByText("Choose a workflow first."),
-      ).toBeInTheDocument();
-    });
-
-    it("names the run afresh once another workflow is chosen in the dialog, forgetting a name typed or refused for the one before", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(PAGE, {
-        routes: {
-          [`POST ${RUNS}`]: [['{"code":"RUN_NAME_UNUSABLE"}', 400]],
-        },
-      });
-      const dialog = await openingTheDialog();
-      await choosingInTheDialog(dialog, "Pay a refund");
-      const name = within(dialog).getByRole("textbox", {
-        name: "Name of this run",
-      });
-      await userEvent.clear(name);
-      await userEvent.type(name, "Mine");
-      await userEvent.click(
-        within(dialog).getByRole("button", { name: "Start" }),
-      );
-      await waitFor(() =>
-        expect(name).toHaveAccessibleDescription(NAME_REFUSED),
-      );
-
-      await choosingInTheDialog(dialog, "Handle a claim");
-      expect(name).toHaveValue(`Handle a claim ${OPENED_AT}`);
-      expect(name).toHaveAccessibleDescription("");
-
-      await choosingInTheDialog(dialog, "Pay a refund");
-      expect(name).toHaveValue(`Pay a refund ${OPENED_AT}`);
-      expect(name).toHaveAccessibleDescription("");
-    });
-
-    it("says no longer that a version is not offered once another workflow is chosen in the dialog", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(PAGE, {
-        routes: {
-          [`POST ${RUNS}`]: [['{"code":"WORKFLOW_NOT_OFFERED"}', 409]],
-          [`GET ${OFFERED}`]: [ON_OFFER, ON_OFFER],
-        },
-      });
-      const dialog = await openingTheDialog();
-      await choosingInTheDialog(dialog, "Pay a refund");
-      await userEvent.click(
-        within(dialog).getByRole("button", { name: "Start" }),
-      );
-      expect(await within(dialog).findByText(NO_LONGER_OFFERED)).toBeVisible();
-
-      await choosingInTheDialog(dialog, "Handle a claim");
-
-      expect(within(dialog).queryByText(NO_LONGER_OFFERED)).toBeNull();
-    });
-
-    it.each([
-      ["a name refused", '{"code":"RUN_NAME_UNUSABLE"}', 400],
-      ["a version no longer offered", '{"code":"WORKFLOW_NOT_OFFERED"}', 409],
-    ])(
-      "says nothing of %s on another workflow chosen in the dialog while the start was out",
-      async (_case, body, status) => {
-        let refuse: (reply: readonly [string, number]) => void = () => {};
-        localStorage.setItem(KEPT_AS, "detail");
-        const { sent } = opening(PAGE, {
-          routes: {
-            [`POST ${RUNS}`]: [
-              new Promise((settle) => {
-                refuse = settle;
-              }),
-            ],
-          },
-        });
-        const dialog = await openingTheDialog();
-        await choosingInTheDialog(dialog, "Pay a refund");
-        const name = within(dialog).getByRole("textbox", {
-          name: "Name of this run",
-        });
-        await userEvent.clear(name);
-        await userEvent.type(name, "Mine");
-        const start = within(dialog).getByRole("button", { name: "Start" });
-        await userEvent.click(start);
-        await choosingInTheDialog(dialog, "Handle a claim");
-        await userEvent.clear(name);
-        await userEvent.type(name, "Mine");
-        const complaint = within(dialog).getByRole("textbox", {
-          name: "Complaint",
-        });
-        await userEvent.click(complaint);
-
-        refuse([body, status]);
-
-        await waitFor(() => expect(start).not.toHaveAttribute("aria-disabled"));
-        expect(complaint).toHaveFocus();
-        expect(name).toHaveAttribute("aria-invalid", "false");
-        expect(name).toHaveAccessibleDescription("");
-        expect(within(dialog).queryByText(NO_LONGER_OFFERED)).toBeNull();
-        expect(within(dialog).queryByRole("alert")).toBeNull();
-        expect(
-          requestsTo(sent).filter((each) => each === `GET ${OFFERED}`),
-        ).toEqual([`GET ${OFFERED}`]);
-      },
-    );
-
-    it("says a refusal no longer once another workflow is chosen in the dialog, nor again once the first is chosen back", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      opening(PAGE, {
-        routes: { [`POST ${RUNS}`]: [['{"code":"SERVICE_BUSY"}', 503]] },
-      });
-      const dialog = await openingTheDialog();
-      await choosingInTheDialog(dialog, "Pay a refund");
-      await userEvent.click(
-        within(dialog).getByRole("button", { name: "Start" }),
-      );
-      expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
-
-      await choosingInTheDialog(dialog, "Handle a claim");
-      expect(within(dialog).queryByRole("alert")).toBeNull();
-
-      await choosingInTheDialog(dialog, "Pay a refund");
-      expect(within(dialog).queryByRole("alert")).toBeNull();
-    });
-
-    it("shuts the dialog and stays for one who may not read the run begun, saying it began and its number", async () => {
-      localStorage.setItem(KEPT_AS, "detail");
-      const { at } = opening(PAGE, {
-        permissions: ["read_membership", "start_run"],
-        routes: {
-          [`GET ${RUNS}`]: [['{"items":[],"reading":"none"}', 200]],
-          [`POST ${RUNS}`]: [BEGUN_UNREADABLE],
-        },
-      });
-      await screen.findByText(
-        "Reading a run is a permission this group has not given you, so no run is listed, including the ones you started.",
-      );
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Start a run" }),
-      );
-      const dialog = await screen.findByRole("dialog", { name: "Start a run" });
-      await userEvent.click(
-        await within(dialog).findByRole("combobox", { name: "Workflow" }),
-      );
-      await userEvent.click(
-        screen.getByRole("option", { name: isolatedName("Pay a refund") }),
-      );
-      await userEvent.click(
-        within(dialog).getByRole("button", { name: "Start" }),
-      );
-
-      expect(
-        await screen.findByText(
-          "SUPPORT-7 has begun. Reading it is a permission this group has not given you, so it cannot be opened here.",
-        ),
-      ).toBeInTheDocument();
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      expect(at()).toBe(PAGE);
+      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(1));
+      expect(within(table()).queryAllByRole("link")).toHaveLength(0);
     });
   });
 });

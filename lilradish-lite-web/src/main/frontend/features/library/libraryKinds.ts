@@ -18,7 +18,8 @@ export interface LibraryKind {
   readonly heading: MessageId;
   readonly label: MessageId;
   readonly empty: MessageId;
-  readonly start: MessageId;
+  /** Names the button that makes one, and the dialog it opens. */
+  readonly newButton: MessageId;
 }
 
 /** Every kind's page, closed over the kinds in both directions. */
@@ -29,7 +30,7 @@ export const LIBRARY_KINDS = {
     heading: "library.workflows",
     label: "library.workflowsLabel",
     empty: "library.noWorkflows",
-    start: "library.startWorkflow",
+    newButton: "library.newWorkflow",
   },
   question: {
     kind: "question",
@@ -37,7 +38,7 @@ export const LIBRARY_KINDS = {
     heading: "library.questions",
     label: "library.questionsLabel",
     empty: "library.noQuestions",
-    start: "library.startQuestion",
+    newButton: "library.newQuestion",
   },
   reference_list: {
     kind: "reference_list",
@@ -45,7 +46,7 @@ export const LIBRARY_KINDS = {
     heading: "library.referenceLists",
     label: "library.referenceListsLabel",
     empty: "library.noReferenceLists",
-    start: "library.startReferenceList",
+    newButton: "library.newReferenceList",
   },
 } as const satisfies { readonly [K in EntryKind]: LibraryKind & { kind: K } };
 

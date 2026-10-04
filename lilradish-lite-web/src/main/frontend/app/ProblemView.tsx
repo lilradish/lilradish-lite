@@ -10,7 +10,6 @@ const DISCLOSURE_SX = {
   mt: 1,
   typography: "body2",
   "& summary": { cursor: "pointer" },
-  "& code": { typography: "identifier" },
   "& dl": {
     display: "grid",
     gridTemplateColumns: "max-content 1fr",

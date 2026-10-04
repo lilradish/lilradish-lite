@@ -1,8 +1,10 @@
+import { ThemeProvider } from "@mui/material/styles";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Step } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { theme } from "../../lib/theme/theme";
 import { SendsPast } from "./SendsPast";
 
 const STEPS: readonly Step[] = [
@@ -13,6 +15,14 @@ const STEPS: readonly Step[] = [
 const TRIAGE = isolatedInText("triage");
 
 const CHECK = isolatedInText("check");
+
+function saidOf(each: HTMLElement): string | null {
+  const words = each.getAttribute("aria-label");
+  expect(each.textContent).toBe(
+    words?.replaceAll("\u2068", "").replaceAll("\u2069", ""),
+  );
+  return words;
+}
 
 describe("SendsPast", () => {
   it("says each step past what a model takes by its name, what it asks the model and about how far past", () => {
@@ -31,7 +41,7 @@ describe("SendsPast", () => {
       screen.getByRole("list", { name: "What could be too long to send" }),
     )
       .getAllByRole("listitem")
-      .map((each) => each.textContent);
+      .map(saidOf);
     expect(said).toEqual([
       `${TRIAGE}: what it could send ${isolatedInText("general")} to produce runs about 1,234 units past what that model takes.`,
       `${TRIAGE}: what it could send ${isolatedInText("small")} to review runs about 1 unit past what that model takes.`,
@@ -62,9 +72,7 @@ describe("SendsPast", () => {
       />,
     );
 
-    expect(
-      screen.getAllByRole("listitem").map((each) => each.textContent),
-    ).toEqual([
+    expect(screen.getAllByRole("listitem").map(saidOf)).toEqual([
       `${TRIAGE}: what it could send ${isolatedInText("small")} to produce runs more than 9,007,199,254,740,991 units past what that model takes.`,
       `${TRIAGE}: what it could send ${isolatedInText("small")} to review runs more than 9,007,199,254,740,991 units past what that model takes.`,
       `${CHECK}: what it could send ${isolatedInText("small")} to produce runs about 9,007,199,254,740,991 units past what that model takes.`,
@@ -81,7 +89,7 @@ describe("SendsPast", () => {
       />,
     );
 
-    expect(screen.getByRole("listitem").textContent).toBe(
+    expect(saidOf(screen.getByRole("listitem"))).toBe(
       `${isolatedInText("s9")}: what it could send ${isolatedInText("small")} to produce runs about 3 units past what that model takes.`,
     );
   });
@@ -91,5 +99,35 @@ describe("SendsPast", () => {
 
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("keeps model and step names as literal data beside the inherited warning hint", () => {
+    const name = "Demo Sample <img src=x>";
+    render(
+      <ThemeProvider theme={theme}>
+        <div style={{ color: theme.palette.warning.dark }}>
+          <SendsPast
+            sendsPast={[
+              { stepId: "s1", role: "producing", model: name, past: 1 },
+            ]}
+            steps={[{ stepId: "s1", name, bindings: [] }]}
+          />
+        </div>
+      </ThemeProvider>,
+    );
+    const item = screen.getByRole("listitem");
+    expect(saidOf(item)).toBe(
+      `${isolatedInText(name)}: what it could send ${isolatedInText(name)} to produce runs about 1 unit past what that model takes.`,
+    );
+    const names = within(item).getAllByText(name);
+    expect(names).toHaveLength(2);
+    for (const data of names) {
+      expect(data.tagName).toBe("BDI");
+      expect(getComputedStyle(data).fontStyle).not.toBe("italic");
+    }
+    const note = within(item).getByText(/to produce runs about 1 unit/);
+    expect(getComputedStyle(note).fontStyle).toBe("italic");
+    expect(getComputedStyle(note).color).toBe(getComputedStyle(item).color);
+    expect(item.querySelector("img")).toBeNull();
   });
 });

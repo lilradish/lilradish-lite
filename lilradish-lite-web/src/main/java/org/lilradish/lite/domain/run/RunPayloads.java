@@ -2,11 +2,14 @@ package org.lilradish.lite.domain.run;
 
 import static java.util.Objects.requireNonNull;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.codestep.CodeError;
 import org.lilradish.lite.domain.codestep.CodeErrorReason;
@@ -17,16 +20,15 @@ import org.lilradish.lite.domain.declaration.Declaration;
 import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.inference.Payload;
 import org.lilradish.lite.domain.run.StepInputs.BindingRecord;
+import org.lilradish.lite.domain.search.SearchAnswer;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.wire.JsonValue;
 import org.lilradish.lite.domain.wire.JsonValue.JsonMember;
 import org.lilradish.lite.domain.wire.JsonValue.JsonObject;
 import org.lilradish.lite.domain.workflow.Producer;
 
 /**
- * What a model is sent beside the envelope, worked out from a run as the store holds it: every field the step
- * takes, as {@link StepInputs#filled} fills it; and a production refused before where the step tells the next
- * asking what happened, which {@link #refusedInWords} names. A model reviewing is sent what went into the
- * production under review and everything that came out of it, and never who or what produced it.
+ * A model reviewing receives no production identity or confidence; code is described by the running release.
  */
 public final class RunPayloads {
 
@@ -44,19 +46,43 @@ public final class RunPayloads {
         return Payload.toProduce(asking, taken(question.takes(), bound), told(refused, tells(step)));
     }
 
-    /**
-     * What the model {@code step} names is sent to review {@code reviewed}: what went into it, as
-     * {@link StepInputs#took} reads it back; the production refused before that went into it, as {@link #wentInto}
-     * names it, told only as far as it was refused in words; every value it gave back, none as none, and no
-     * confidence; and those {@link #deciding} names, to decide. A code step's production is reviewed as the running
-     * release declares that code step now, with no instruction, and cannot be built where the release pins a list
-     * not here, no longer takes what the version binds into it, or no longer declares what came back of the try or of
-     * the production told; the first of those found, in that order, is said instead.
-     */
-    public static ReviewPayload toReview(RunSnapshot run, StepSnapshot step, TryRecord reviewed) {
-        requireNonNull(run, "RunPayloads run must not be null");
+    public static JsonObject toProduce(
+            RunInTree at, PlannedStep step, List<BindingRecord> bound, @Nullable TryRecord refused) {
+        requireNonNull(at, "RunPayloads context must not be null");
+        StepRuns.Question question = question(step);
+        Asking asking = Asking.of(question.instruction(), question.takes(), question.gives(), question.lists());
+        return Payload.toProduce(
+                asking,
+                taken(question.takes(), bound),
+                told(refused, tells(step)),
+                fromTheWeb(at, bound, question.takes()));
+    }
+
+    /** A historical production is reviewed against the running release, not its original declaration. */
+    public static ReviewPayload toReview(RunInTree at, StepSnapshot step, TryRecord reviewed) {
+        return toReview(at, step, reviewed, null, null);
+    }
+
+    public static ReviewPayload toReview(
+            RunInTree at,
+            StepSnapshot step,
+            TryRecord reviewed,
+            @Nullable String searchQuestion,
+            JsonValue.@Nullable JsonObject searchRecord) {
+        return toReview(at, step, reviewed, searchQuestion, searchRecord, null);
+    }
+
+    public static ReviewPayload toReview(
+            RunInTree at,
+            StepSnapshot step,
+            TryRecord reviewed,
+            @Nullable String searchQuestion,
+            JsonValue.@Nullable JsonObject searchRecord,
+            JsonValue.@Nullable JsonObject questionSent) {
+        requireNonNull(at, "RunPayloads context must not be null");
         requireNonNull(step, "RunPayloads step must not be null");
         requireNonNull(reviewed, "RunPayloads reviewed must not be null");
+        RunSnapshot run = at.run();
         if (!reviewed.yielded()) {
             throw new IllegalArgumentException("RunPayloads reviews only a production that gave something back");
         }
@@ -67,27 +93,67 @@ public final class RunPayloads {
         }
         Payload.Refused told = told(wentInto(step, reviewed).orElse(null), true);
         return switch (step.planned().runs()) {
-            case StepRuns.Question question ->
-                new ReviewPayload.Built(Payload.toReview(
+            case StepRuns.Question question -> {
+                if (questionSent != null) {
+                    Optional<JsonObject> kept = Payload.toReviewKept(
+                            Asking.of(question.instruction(), question.takes(), question.gives(), question.lists()),
+                            questionSent,
+                            told,
+                            given(reviewed),
+                            deciding);
+                    yield kept.<ReviewPayload>map(ReviewPayload.Built::new)
+                            .orElseGet(() -> new ReviewPayload.Unbuilt(ReviewUnbuiltReason.NO_LONGER_DECLARED));
+                }
+                List<BindingRecord> bound = StepInputs.took(at, step, reviewed);
+                yield new ReviewPayload.Built(Payload.toReview(
                         Asking.of(question.instruction(), question.takes(), question.gives(), question.lists()),
-                        taken(question.takes(), StepInputs.took(run, step, reviewed)),
+                        taken(question.takes(), bound),
                         told,
                         given(reviewed),
-                        deciding));
-            case StepRuns.Code code -> reviewedCode(run, step, code, told, reviewed, deciding);
+                        deciding,
+                        fromTheWeb(at, bound, question.takes())));
+            }
+            case StepRuns.Code code -> reviewedCode(at, step, code, told, reviewed, deciding);
+            case StepRuns.Search search -> {
+                SearchWay way = search.released();
+                if (way == null) {
+                    yield new ReviewPayload.Unbuilt(ReviewUnbuiltReason.NO_LONGER_DECLARED);
+                }
+                StepInputs.tookSearch(at, search.question(), reviewed);
+                List<AskedField> gives = SearchAnswer.asked(way);
+                if (!Payload.holds(gives, given(reviewed)) || (told != null && !Payload.holds(gives, told.values()))) {
+                    yield new ReviewPayload.Unbuilt(ReviewUnbuiltReason.NO_LONGER_DECLARED);
+                }
+                yield new ReviewPayload.Built(Payload.toReviewSearch(
+                        requireNonNull(searchQuestion, "A search review keeps its historical question"),
+                        gives,
+                        told,
+                        given(reviewed),
+                        deciding,
+                        requireNonNull(searchRecord, "A search review keeps its historical records")));
+            }
             case StepRuns.Workflow ignored -> throw notProduced();
             case StepRuns.Route ignored -> throw notProduced();
         };
     }
 
     private static ReviewPayload reviewedCode(
-            RunSnapshot run,
+            RunInTree at,
             StepSnapshot step,
             StepRuns.Code code,
             Payload.@Nullable Refused told,
             TryRecord reviewed,
             List<FieldName> deciding) {
-        ReleasedCodeStep released = requireNonNull(code.released(), "a code step reviewed is one the release holds");
+        RunSnapshot run = at.run();
+        ReleasedCodeStep released = code.released();
+        if (released == null) {
+            return new ReviewPayload.Unbuilt(ReviewUnbuiltReason.NO_LONGER_DECLARED);
+        }
+        Declaration takes = released.declared().takes();
+        Declaration givesDeclared = released.declared().gives();
+        if (takes.hasFile() || givesDeclared.hasFile()) {
+            return new ReviewPayload.Unbuilt(ReviewUnbuiltReason.HOLDS_A_FILE);
+        }
         if (!released.listsMissing().isEmpty()) {
             return new ReviewPayload.Unbuilt(ReviewUnbuiltReason.LIST_NOT_HERE);
         }
@@ -96,18 +162,66 @@ public final class RunPayloads {
         if (misfit != null && misfit.reason() == CodeErrorReason.TAKES_OTHERWISE) {
             return new ReviewPayload.Unbuilt(ReviewUnbuiltReason.TAKES_NO_LONGER_DECLARED);
         }
-        List<AskedField> gives = Asking.told(released.declared().gives(), released.lists());
+        List<AskedField> gives = Asking.told(givesDeclared, released.lists());
         if (!Payload.holds(gives, given(reviewed)) || (told != null && !Payload.holds(gives, told.values()))) {
             return new ReviewPayload.Unbuilt(ReviewUnbuiltReason.NO_LONGER_DECLARED);
         }
-        Declaration takes = released.declared().takes();
+        List<BindingRecord> bound = StepInputs.took(at, step, reviewed);
         return new ReviewPayload.Built(Payload.toReviewUninstructed(
                 Asking.told(takes, released.lists()),
                 gives,
-                taken(takes, StepInputs.took(run, step, reviewed)),
+                taken(takes, bound),
                 told,
                 given(reviewed),
-                deciding));
+                deciding,
+                fromTheWeb(at, bound, takes)));
+    }
+
+    private static List<FieldName> fromTheWeb(RunInTree at, List<BindingRecord> bound, Declaration takes) {
+        Set<ProductionValueId> wanted = new HashSet<>();
+        for (BindingRecord input : bound) {
+            wanted.addAll(input.sources());
+        }
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+        RunInTree root = at;
+        while (root.above() != null) {
+            root = requireNonNull(root.above());
+        }
+        Set<ProductionValueId> searched = new HashSet<>();
+        ArrayDeque<RunSnapshot> pending = new ArrayDeque<>();
+        pending.push(root.run());
+        while (!pending.isEmpty() && !wanted.isEmpty()) {
+            RunSnapshot run = pending.pop();
+            for (StepSnapshot step : run.steps()) {
+                for (TryRecord aTry : step.tries()) {
+                    for (ValueRecord value : aTry.values()) {
+                        if (wanted.remove(value.id()) && step.planned().runs() instanceof StepRuns.Search) {
+                            searched.add(value.id());
+                        }
+                    }
+                }
+                if (step.beneath() != null) {
+                    pending.push(step.beneath().run());
+                }
+            }
+        }
+        if (!wanted.isEmpty()) {
+            throw new IllegalStateException("An input's historical maker is missing from its tree");
+        }
+        Set<FieldName> marked = new HashSet<>();
+        for (BindingRecord input : bound) {
+            if (input.sources().stream().anyMatch(searched::contains)) {
+                marked.add(requireNonNull(input.binding().target(), "a model input fills a field")
+                        .names()
+                        .getFirst());
+            }
+        }
+        return takes.fields().stream()
+                .map(field -> field.name())
+                .filter(marked::contains)
+                .toList();
     }
 
     private static IllegalArgumentException notProduced() {
@@ -135,24 +249,35 @@ public final class RunPayloads {
         requireNonNull(step, "RunPayloads step must not be null");
         requireNonNull(reviewed, "RunPayloads reviewed must not be null");
         return switch (reviewed.producer()) {
-            case MODEL -> tells(step.planned()) ? refusedInWords(step, reviewed.number()) : Optional.empty();
-            case PERSON -> refusedInWords(step, reviewed.number());
+            case MODEL -> tells(step.planned()) ? refusedInWords(step, reviewed.id()) : Optional.empty();
+            case PERSON -> refusedInWords(step, reviewed.id());
             case CODE -> Optional.empty();
         };
     }
 
-    /**
-     * The production refused before try {@code asking} of {@code step}, the one wherever it is named: the newest try
-     * numbered below {@code asking} whose production a review refused in words, for its values or for their length;
-     * none where none was. Tries lost, open, or refused in no words, as by a review that went wrong, are passed over.
-     */
-    public static Optional<TryRecord> refusedInWords(StepSnapshot step, int asking) {
+    /** The newest production refused in words before the actual production named, whether it has a number or not. */
+    public static Optional<TryRecord> refusedInWords(StepSnapshot step, ProductionId asking) {
         requireNonNull(step, "RunPayloads step must not be null");
-        if (asking < 1) {
-            throw new IllegalArgumentException("RunPayloads asking must be a try's number: " + asking);
-        }
+        requireNonNull(asking, "RunPayloads asking must not be null");
         List<TryRecord> tries = step.tries();
-        for (int index = Math.min(asking - 1, tries.size()) - 1; index >= 0; index--) {
+        for (int index = 0; index < tries.size(); index++) {
+            if (tries.get(index).id().equals(asking)) {
+                return refusedBefore(tries, index);
+            }
+        }
+        throw new IllegalArgumentException("RunPayloads names a production its step does not hold");
+    }
+
+    /** The newest production refused in words before the next answer, which may not have been asked yet. */
+    public static Optional<TryRecord> refusedBeforeAnswer(StepSnapshot step) {
+        requireNonNull(step, "RunPayloads step must not be null");
+        List<TryRecord> tries = step.tries();
+        int before = tries.size() - (step.newest().map(TryRecord::open).orElse(false) ? 1 : 0);
+        return refusedBefore(tries, before);
+    }
+
+    private static Optional<TryRecord> refusedBefore(List<TryRecord> tries, int before) {
+        for (int index = before - 1; index >= 0; index--) {
             TryRecord aTry = tries.get(index);
             if (aTry.yielded() && refusedInWords(aTry)) {
                 return Optional.of(aTry);
@@ -181,7 +306,7 @@ public final class RunPayloads {
         return taken;
     }
 
-    private static Payload.@Nullable Refused told(@Nullable TryRecord refused, boolean tells) {
+    public static Payload.@Nullable Refused told(@Nullable TryRecord refused, boolean tells) {
         if (refused == null) {
             return null;
         }

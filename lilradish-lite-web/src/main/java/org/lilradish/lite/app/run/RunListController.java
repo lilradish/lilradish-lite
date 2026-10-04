@@ -72,7 +72,6 @@ final class RunListController {
                 new WorkflowAnswer(run.workflow().value(), run.version()),
                 PersonAnswer.of(run.startedBy()),
                 run.startedAt().toString(),
-                run.lastHappenedAt().toString(),
                 row.state().published(),
                 at == null ? null : at.value());
     }
@@ -90,7 +89,6 @@ final class RunListController {
             WorkflowAnswer workflow,
             PersonAnswer startedBy,
             String startedAt,
-            String lastHappenedAt,
             String state,
             @Nullable String at) {}
 

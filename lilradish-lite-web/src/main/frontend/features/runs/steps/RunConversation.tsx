@@ -6,11 +6,11 @@ import type { StepRow } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import type { StepAnswer } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import { say } from "../../../i18n/app";
 import { stepAnchor } from "../runAddress";
+import { ActMessage } from "./ActMessage";
 import { RunEndMessage } from "./RunEndMessage";
 import { StartedWithMessage } from "./StartedWithMessage";
 import { StepMessage } from "./StepMessage";
 import type { RunReading } from "./useRunRead";
-import { WhatComesNext } from "./WhatComesNext";
 
 // Its markers are taken off, and some engines stop reading a list without them out as a list.
 const LIST_SX = { listStyle: "none", m: 0, p: 0 };
@@ -33,14 +33,23 @@ export function RunConversation({
   const navigate = useNavigate();
   const [arrival] = useState(useLocation());
   const [firstRead] = useState(steps);
+  const reached = reachedOf(steps.steps);
+  const byStep = new Map(reached.map((step) => [step.stepId, step]));
+  const events = run.conversationEvents;
+  const handTries = new Map<string, Set<number>>();
+  for (const event of events) {
+    if (event.kind === "answered_by_hand") {
+      const numbers = handTries.get(event.stepId) ?? new Set<number>();
+      numbers.add(event.number);
+      handTries.set(event.stepId, numbers);
+    }
+  }
 
   useEffect(() => {
     if (arrival.hash === "") {
       return;
     }
-    const aimed = reachedOf(firstRead.steps).find(
-      (step) => arrival.hash === `#${stepAnchor(step.stepId)}`,
-    );
+    const aimed = messageNamed(firstRead.steps, arrival.hash);
     if (aimed !== undefined) {
       document.getElementById(stepAnchor(aimed.stepId))?.focus();
     }
@@ -60,20 +69,47 @@ export function RunConversation({
           groupId={groupId}
           run={run}
           takes={steps.declarations.get(steps.run.versionId)?.takes}
+          declarations={steps.declarations}
+          versionId={steps.run.versionId}
         />
-        {reachedOf(steps.steps).map((step) => (
-          <StepMessage
-            key={step.stepId}
-            groupId={groupId}
-            reading={steps}
-            step={step}
-            onShown={onShown}
-          />
-        ))}
+        {events.map((event) => {
+          if (event.kind === "step_reached") {
+            const step = byStep.get(event.stepId);
+            return step === undefined ? null : (
+              <StepMessage
+                key={event.id}
+                groupId={groupId}
+                reading={steps}
+                step={step}
+                handTries={handTries.get(step.stepId)}
+                onShown={onShown}
+              />
+            );
+          }
+          return (
+            <ActMessage
+              key={event.id}
+              event={event}
+              run={run}
+              reading={steps}
+              step={"stepId" in event ? byStep.get(event.stepId) : undefined}
+              groupId={groupId}
+            />
+          );
+        })}
         <RunEndMessage run={run} reading={steps} />
       </Box>
-      <WhatComesNext steps={steps.steps} />
     </>
+  );
+}
+
+/** The step whose message an address's fragment names, of those the conversation draws; none where it names none. */
+export function messageNamed(
+  steps: readonly StepRow[],
+  hash: string,
+): StepRow | undefined {
+  return reachedOf(steps).find(
+    (step) => hash === `#${stepAnchor(step.stepId)}`,
   );
 }
 

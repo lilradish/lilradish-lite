@@ -14,6 +14,7 @@ import static org.lilradish.lite.app.run.fixture.TicketWorkflow.VERSION
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.WORKFLOW
 import static org.lilradish.lite.testutil.library.LibraryStore.groupId
 
+import ch.qos.logback.classic.Logger
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -21,10 +22,13 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.inference.CallProgress
 import org.lilradish.lite.domain.inference.CallRequest
+import org.lilradish.lite.domain.inference.DidNotFitReason
+import org.lilradish.lite.domain.inference.KeptAnswer
 import org.lilradish.lite.domain.inference.ModelCallPurpose
 import org.lilradish.lite.domain.inference.ModelCalls
 import org.lilradish.lite.domain.inference.TurnAway
@@ -32,6 +36,7 @@ import org.lilradish.lite.domain.model.DeployedModel
 import org.lilradish.lite.domain.model.ModelCatalog
 import org.lilradish.lite.domain.model.ModelMode
 import org.lilradish.lite.domain.model.ModelName
+import org.lilradish.lite.domain.run.Ceiling
 import org.lilradish.lite.domain.run.ReviewOutcome
 import org.lilradish.lite.domain.run.ReviewSending
 import org.lilradish.lite.domain.run.RunId
@@ -43,12 +48,14 @@ import org.lilradish.lite.domain.run.StepPosition
 import org.lilradish.lite.domain.run.StepPositions
 import org.lilradish.lite.domain.run.WaitsOn
 import org.lilradish.lite.domain.run.WorkflowStepId
+import org.lilradish.lite.testutil.SnapshottingAppender
 import org.lilradish.lite.testutil.codestep.CodeStepsHeld
 import org.lilradish.lite.testutil.inference.Pause
 import org.lilradish.lite.testutil.inference.ScriptedModelCalls
 import org.lilradish.lite.testutil.library.DeployedModels
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.run.RunRows
+import org.slf4j.LoggerFactory
 import org.springframework.context.event.ContextClosedEvent
 import org.springframework.context.support.GenericApplicationContext
 import org.springframework.transaction.support.TransactionSynchronizationManager
@@ -57,12 +64,6 @@ import spock.lang.Shared
 import spock.lang.Specification
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * A step whose values a model reviews, on a real server running the real baseline, the model scripted: summarise
- * produced by one model and every value it gives back waiting on a review, which the model the step names is sent
- * on the engine's own threads once nothing else is, and each way that call can end landing as a review, a try spent,
- * or values left waiting.
- */
 class ModelReviewIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -86,7 +87,6 @@ class ModelReviewIntegrationSpec extends Specification {
 
     ScriptedModelCalls model
 
-    /** For each call made, whether it was made on an engine thread, and whether inside a transaction. */
     List<List<Boolean>> madeOn = [].asSynchronized()
 
     RunTree tree
@@ -95,7 +95,11 @@ class ModelReviewIntegrationSpec extends Specification {
 
     EngineWrites writes
 
+    org.lilradish.lite.app.files.RunFiles heldFiles
+
     EngineExecutor executor
+
+    EngineTaskBarrier tasks
 
     EngineCalls calls
 
@@ -113,18 +117,21 @@ class ModelReviewIntegrationSpec extends Specification {
         store = LibraryStore.copied(server, "model_review_" + (++databasesMade))
         model = new ScriptedModelCalls()
         tree = new RunTree(store.session)
-        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
         writes = new EngineWrites(store.session)
+        heldFiles = EngineWiring.files(store)
         executor = EngineExecutors.of(store.database)
+        tasks = EngineTaskBarrier.attach(executor)
         def recording = { CallRequest request, CallProgress progress ->
             madeOn << [Thread.currentThread() instanceof EngineThread,
                        TransactionSynchronizationManager.isActualTransactionActive()]
             model.call(request, progress)
         } as ModelCalls
         ceilings = new CeilingReach(store.session, DeployedModels.HELD, writes)
-        calls = new EngineCalls(recording, store.transactions(), tree, writes, ceilings)
+        calls = new EngineCalls(EngineWiring.withoutTools(), recording, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
         holding(DeployedModels.HELD)
         TicketWorkflow.seed(store, 1)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary',
                                           reviewer_model = 'small', reviewer_mode = 'ordinary'
@@ -137,18 +144,20 @@ class ModelReviewIntegrationSpec extends Specification {
 
     private void holding(ModelCatalog catalog) {
         engine = new RunEngine(store.session, store.transactions(), tree, snapshots, writes, executor, calls,
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                catalog, ceilings, new GroupRoles(store.session))
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                catalog, ceilings, new GroupRoles(store.session), Deployments.DEEP_ENOUGH, heldFiles)
         acts = new StepActs(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, writes,
-                engine)
+                engine, heldFiles, EngineWiring.fileDeployment())
     }
 
     private void reviewedBy(String name, String mode) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set reviewer_model = ?, reviewer_mode = ? where workflow_step_id = ?::uuid")
                 .params(name, mode, SUMMARISE).update()
     }
 
     private void summariseTries(int tries, boolean tells = false) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set tries = ?, tells_what_happened = ? where workflow_step_id = ?::uuid")
                 .params(tries, tells, SUMMARISE).update()
     }
@@ -157,7 +166,7 @@ class ModelReviewIntegrationSpec extends Specification {
         new RunId(UUID.fromString(RUN))
     }
 
-    /** As a start does: the run written, its tree locked, the first step planned, in one transaction. */
+    // Write the run, lock its tree, and plan the first step in one transaction.
     private void started() {
         store.transactions().executeWithoutResult {
             StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, TicketWorkflow.STARTED_WITH)
@@ -177,13 +186,13 @@ class ModelReviewIntegrationSpec extends Specification {
         until("${calls} calls ended") { store.count("select count(*) from model_calls where outcome is not null") == calls }
     }
 
-    /** Everything handed to the engine's threads done, those it handed over in turn too. */
+    // Drain work already handed over, including any further work it submits.
     private void drained() {
         executor.destroy()
     }
 
-    /** Each try of a step as its number, producer, who asked for it, and how it stands. */
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open' else coalesce(try.lost_reason::text, 'yielded') end
@@ -192,15 +201,14 @@ class ModelReviewIntegrationSpec extends Specification {
                 """, step)
     }
 
-    /** Each call as what it was for, how it ended, and the model and mode it was made to, in the order made. */
     private List<String> callRows() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select call.purpose || ' ' || coalesce(call.outcome::text, 'out') || ' ' || call.model || ' ' || call.mode
                   from model_calls call order by call.created_at, call.model_call_id
                 """)
     }
 
-    /** Each attempt to review as the model and mode it names, whether too long, who wrote it, and the try's number. */
     private List<String> reviewAttempts() {
         store.texts("""
                 select attempt.model || ' ' || attempt.mode || ' ' || attempt.too_long || ' ' || attempt.created_by_kind
@@ -210,11 +218,8 @@ class ModelReviewIntegrationSpec extends Specification {
                 """)
     }
 
-    /**
-     * Each review as who wrote it, how its call ended, how it was lost and why it did not fit, whether what came back
-     * was kept altered, and whether it names an attempt too long.
-     */
     private List<String> reviewRows() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select review.created_by_kind || ' ' || coalesce(review.model_call_outcome::text, '-') || ' '
                        || coalesce(review.lost_reason::text, '-') || ' ' || coalesce(review.did_not_fit_reason::text, '-')
@@ -236,6 +241,7 @@ class ModelReviewIntegrationSpec extends Specification {
     }
 
     private List<String> holds() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select reason::text from run_step_holds order by created_at")
     }
 
@@ -254,7 +260,7 @@ class ModelReviewIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer, boolean cutOff = false) {
-        new CallOutcome.CameBack(answer, 321, 12, true, cutOff)
+        new CallOutcome.CameBack(answer, 321, 12, true, cutOff, null, null)
     }
 
     def "values waiting on the model the step names are written down as sent to it on the engine's thread, what went in and what came out, to the model and mode it names for reviewing"() {
@@ -302,9 +308,9 @@ class ModelReviewIntegrationSpec extends Specification {
         gate.release()
     }
 
-    /** What went into a person's production is what answering it showed them; here nothing was refused before it. */
     def "a production a person answered is sent to the model to review as any is, nothing saying who produced it"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'person', producer_model = null, producer_mode = null
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -385,13 +391,9 @@ class ModelReviewIntegrationSpec extends Specification {
         tells << [true, false]
     }
 
-    /**
-     * A person answering after a refusal was shown the refused production, whatever the step tells its model, so the
-     * review of their answer carries it; one refused in no words, as by a review gone wrong, is no refusal and is shown
-     * nobody.
-     */
     def "a person's production answered after the model refused one is reviewed with the refusal shown them, in its words"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'person', producer_model = null, producer_mode = null
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -419,10 +421,9 @@ class ModelReviewIntegrationSpec extends Specification {
         where:
         first                                  || refused
         cameBack(REFUSES)                      || [values: [summary: "A printer fire."], words: [summary: "Say it is on fire."]]
-        new CallOutcome.Errored("Timed out.")  || null
+        new CallOutcome.Errored("Timed out.", null) || null
     }
 
-    /** A refusal saying nothing of why, or anything else that does not fit, decides nothing. */
     def "a review whose answer does not fit is lost saying why, which spends the try, and decides nothing"() {
         given:
         model.answering(cameBack(FITS))
@@ -435,6 +436,7 @@ class ModelReviewIntegrationSpec extends Specification {
 
         then:
         reviewRows() == ["system came_back did_not_fit ${reason} ${altered} false" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select answer_altered::text from model_calls where purpose = 'review'") == [altered as String]
         decisions() == []
 
@@ -453,10 +455,43 @@ class ModelReviewIntegrationSpec extends Specification {
         cameBack(ASSURES + " " * 8_388_608) || "not_kept_as_it_came" | true
     }
 
+    def "a model declining review keeps its answer and words separately without a decision"() {
+        given:
+        def answer = "Demo Sample answer" + (answerAltered ? Character.toString(0) : "")
+        def words = "Demo Sample decline" + (wordsAltered ? Character.toString(0) : "")
+        model.answering(cameBack(FITS))
+        model.answering(new CallOutcome.CameBack(answer, 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, words))
+
+        when:
+        started()
+        untilEnded(2)
+        drained()
+
+        then:
+        reviewRows() == ["system came_back did_not_fit model_declined ${answerAltered} false" as String]
+        decisions() == []
+        (summarising() as StepPosition.Failed).why() == new StepFailure.TriesSpent(1, 1)
+        store.texts("select answer from model_calls where purpose = 'review'") ==
+                [answer.replace(Character.toString(0), "\uFFFD")]
+        store.texts("select declined_words from model_calls where purpose = 'review'") ==
+                [words.replace(Character.toString(0), "\uFFFD")]
+        store.texts("""
+                select answer_altered || ' ' || answer_truncated || ' ' || declined_words_altered || ' ' ||
+                       declined_words_truncated || ' ' || came_back_count
+                  from model_calls where purpose = 'review'""") ==
+                ["${answerAltered} false ${wordsAltered} false 12" as String]
+
+        where:
+        answerAltered | wordsAltered
+        false         | true
+        true          | false
+    }
+
     def "a review whose call went wrong is lost as gone wrong, which spends the try, and decides nothing"() {
         given:
         model.answering(cameBack(FITS))
-        model.answering(new CallOutcome.Errored("Timed out."))
+        model.answering(new CallOutcome.Errored("Timed out.", null))
 
         when:
         started()
@@ -472,6 +507,31 @@ class ModelReviewIntegrationSpec extends Specification {
         and:
         holds() == []
         triesOf(CONFIRM) == []
+    }
+
+    def "an unreadable review response is kept on its review call without a returned count or decision"() {
+        given:
+        model.answering(cameBack(FITS))
+        model.answering(new CallOutcome.Errored(
+                'The model service returned a response this system could not read.',
+                KeptAnswer.captured('Demo Sample review raw', true, true)))
+
+        when:
+        started()
+        untilEnded(2)
+        drained()
+
+        then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts('''
+                select call.purpose::text || '|' || call.outcome::text || '|' || call.unreadable_response || '|' ||
+                       call.unreadable_response_altered || '|' || call.unreadable_response_truncated || '|' ||
+                       (call.came_back_count is null) || '|' || (call.sent_count is not null)
+                  from model_calls call where call.purpose = 'review'
+                ''') == ['review|errored|Demo Sample review raw|true|true|true|true']
+        store.count("select count(*) from model_calls where purpose = 'produce' and unreadable_response is not null") == 0
+        reviewRows() == ['system errored errored - false false']
+        decisions() == []
     }
 
     def "a review turned away for the last time holds nothing and spends nothing, the values waiting on whoever started the run"() {
@@ -503,7 +563,6 @@ class ModelReviewIntegrationSpec extends Specification {
         spentUp << [false, true]
     }
 
-    /** Opened again, it still waits: a turnaway is tried again only by somebody pressing for it. */
     def "a review turned away while its run is stopped is not sent again, holding nothing, nor once the run is opened again"() {
         given:
         def gate = new Pause()
@@ -516,13 +575,15 @@ class ModelReviewIntegrationSpec extends Specification {
         RunRows.stopped(store, RUN, CAT)
         gate.release()
         untilEnded(2)
-        until("the end was gone on from") { executor.@pool.threadPoolExecutor.activeCount == 0 }
+        tasks.awaitDrained()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update run_stops set opened_again_at = now(), opened_again_by = ?::uuid").params(ANN).update()
         engine.goOn(groupId(GROUP), runId())
         drained()
 
         then:
         callRows() == ["produce came_back general ordinary", "review turned_away small ordinary"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select coalesce(resent_at::text, 'not sent again') from model_call_turnaways") == ["not sent again"]
         model.events.count { it == ScriptedModelCalls.SENT } == 2
         reviewAttempts() == ["small ordinary false system 1"]
@@ -533,7 +594,171 @@ class ModelReviewIntegrationSpec extends Specification {
         (summarising() as StepPosition.AwaitingReview).sending() == ReviewSending.TURNED_AWAY
     }
 
-    /** Written down as sent only on the engine's thread, so a hand-over that meets stopping there leaves nothing. */
+    def "stopped by hand, or by its ceiling lowered under what it spent, and opened again during a review turnaway wait, a run preserves its values until Try sending is pressed"() {
+        given:
+        def gate = new Pause()
+        def logged = new SnapshottingAppender()
+        logged.start()
+        def callsLogger = LoggerFactory.getLogger(EngineCalls) as Logger
+        callsLogger.addAppender(logged)
+        waitingAfterTurnaway(gate, lateProgress)
+        model.answering(cameBack(FITS))
+        model.answering([new TurnAway("Busy.", false)], cameBack(ASSURES))
+        started()
+        gate.awaitReached()
+        assert store.count("select count(*) from model_calls where outcome is null") == 1
+        assert store.count("select count(*) from model_call_turnaways where resent_at is null") == 1
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def original = store.texts("select model_call_id::text from model_calls where purpose = 'review'")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def production = store.texts("select production_id::text from productions")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def value = store.texts("select production_value_id::text from production_values")[0]
+        def changes = new RunChanges(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, engine)
+
+        when:
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), new Ceiling(1), ANN_USER)
+        } else {
+            changes.stop(groupId(GROUP), runId(), ANN_USER)
+        }
+        def stopsMade = RunRows.stops(store)
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), null, ANN_USER)
+        }
+
+        def endedAtStop = callRows()
+        def heldAtStop = holds()
+        def reviewsAtStop = reviewRows()
+        def decisionsAtStop = decisions()
+        changes.openAgain(groupId(GROUP), runId(), ANN_USER)
+        gate.release()
+        settled()
+
+        then:
+        stopsMade == [atCeiling ? "system ${RUN} 0" as String : "person - 0"]
+        model.events == [ScriptedModelCalls.SENT, ScriptedModelCalls.SENT, new TurnAway("Busy.", false)]
+        endedAtStop == ["produce came_back general ordinary", "review turned_away small ordinary"]
+        heldAtStop == []
+        reviewsAtStop == []
+        decisionsAtStop == []
+        model.requests.size() == 2
+        logged.list.findAll { it.formattedMessage.contains(original) }.every {
+            !it.formattedMessage.contains("writing what happened to it failed") && it.throwableProxy == null
+        }
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select model_call_id::text from model_calls where purpose = 'review'") == [original]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_id::text from productions") == [production]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_value_id::text from production_values") == [value]
+        reviewAttempts() == ["small ordinary false system 1"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select coalesce(resent_at::text, 'not sent again') from model_call_turnaways") == ["not sent again"]
+        RunBudget.spentAsRead(store.session, runId(), true).spent() == 333
+        with(summarising() as StepPosition.AwaitingReview) {
+            sending() == ReviewSending.TURNED_AWAY
+            values()*.on() == [WaitsOn.MODEL]
+        }
+        sendingRefused() == null
+        holds() == []
+        reviewRows() == []
+        decisions() == []
+        failures() == []
+
+        when:
+        model.answering(cameBack(ASSURES))
+        pressed()
+        untilEnded(3)
+        settled()
+
+        then:
+        model.requests.size() == 3
+        model.events.count { it == ScriptedModelCalls.SENT } == 3
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_id::text from productions where producer = 'model'") == [production]
+        triesOf(CONFIRM) == ["1 person ${SYSTEM} open" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_value_id::text from production_values") == [value]
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        store.texts("select outcome::text from model_calls where model_call_id = ?::uuid", original) == ["turned_away"]
+        reviewAttempts() == ["small ordinary false system 1", "small ordinary false person 1"]
+        reviewRows() == ["system came_back - - false false"]
+        decisions() == ["1 summary assured -"]
+        holds() == []
+        store.count("select count(*) from model_call_turnaways where resent_at is not null") == 0
+        RunBudget.spentAsRead(store.session, runId(), true).spent() == 666
+
+        cleanup:
+        gate.release()
+        callsLogger.detachAppender(logged)
+
+        where:
+        atCeiling | lateProgress
+        false     | false
+        true      | false
+        false     | true
+    }
+
+    def "stopped by hand, or by its ceiling lowered under what it spent, and opened again while a review is already out, a run records its original decision and cost"() {
+        given:
+        def gate = new Pause()
+        model.answering(cameBack(FITS))
+        if (resentAlready) {
+            waitingAfterResend(gate)
+            model.answering([new TurnAway("Busy.", false)], cameBack(ASSURES))
+        } else {
+            model.pausing(gate, [], cameBack(ASSURES))
+        }
+        started()
+        gate.awaitReached()
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def original = store.texts("select model_call_id::text from model_calls where purpose = 'review'")[0]
+        def changes = new RunChanges(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, engine)
+
+        when:
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), new Ceiling(1), ANN_USER)
+        } else {
+            changes.stop(groupId(GROUP), runId(), ANN_USER)
+        }
+        def stopsMade = RunRows.stops(store)
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), null, ANN_USER)
+        }
+        changes.openAgain(groupId(GROUP), runId(), ANN_USER)
+        gate.release()
+        untilEnded(2)
+        settled()
+
+        then:
+        stopsMade == [atCeiling ? "system ${RUN} 0" as String : "person - 0"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select model_call_id::text from model_calls where purpose = 'review'") == [original]
+        callRows() == ["produce came_back general ordinary", "review came_back small ordinary"]
+        reviewRows() == ["system came_back - - false false"]
+        decisions() == ["1 summary assured -"]
+        holds() == []
+        model.events == (resentAlready
+                ? [ScriptedModelCalls.SENT, ScriptedModelCalls.SENT, new TurnAway("Busy.", false), ScriptedModelCalls.SENT]
+                : [ScriptedModelCalls.SENT, ScriptedModelCalls.SENT])
+        store.count("select count(*) from model_call_turnaways") == (resentAlready ? 1 : 0)
+        store.count("select count(*) from model_call_turnaways where resent_at is not null") == (resentAlready ? 1 : 0)
+        RunBudget.spentAsRead(store.session, runId(), true).spent() == 666
+
+        cleanup:
+        gate.release()
+
+        where:
+        atCeiling | resentAlready
+        false     | false
+        false     | true
+        true      | false
+        true      | true
+    }
+
+
+    // Record sending on the engine thread; if stopping wins before handover, write nothing.
     def "a review handed over and taken up only once this system is stopping writes nothing and sends nothing"() {
         given:
         personAnswered()
@@ -599,7 +824,6 @@ class ModelReviewIntegrationSpec extends Specification {
         model.requests.size() == 1
     }
 
-    /** One the model takes a few units of, so its envelope alone is past them; producing goes to another. */
     def "a review too long for its model is not sent, and its values wait on a person, nothing held"() {
         given:
         tooLongToReview()
@@ -639,6 +863,7 @@ class ModelReviewIntegrationSpec extends Specification {
 
         then:
         reviewRows() == ["person - - - false true"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select created_by::text from reviews") == [ANN]
         decisions() == ["1 summary assured -"]
         summarising() == new StepPosition.Done()
@@ -658,10 +883,11 @@ class ModelReviewIntegrationSpec extends Specification {
         RunRows.stopped(store, RUN, CAT)
         gate.release()
         untilEnded(1)
-        until("the end was gone on from") { executor.@pool.threadPoolExecutor.activeCount == 0 }
+        tasks.awaitDrained()
         def attemptsWhileStopped = reviewAttempts()
 
         when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update run_stops set opened_again_at = now(), opened_again_by = ?::uuid").params(ANN).update()
         engine.goOn(groupId(GROUP), runId())
         untilEnded(2)
@@ -677,6 +903,7 @@ class ModelReviewIntegrationSpec extends Specification {
 
     def "a review whose run's ceiling is reached is not sent, and the run is stopped by its ceiling"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_versions set ceiling = 300 where entry_version_id = ?::uuid").params(VERSION)
                 .update()
         model.answering(cameBack(FITS))
@@ -723,7 +950,6 @@ class ModelReviewIntegrationSpec extends Specification {
         }
     }
 
-    /** Pressed by whoever may start a run: the review is sent again as the presser's attempt, built afresh. */
     def "values the model turned away are sent to it again once Try sending is pressed, as the presser's attempt, and decided"() {
         given:
         turnedAwayOnce()
@@ -736,6 +962,7 @@ class ModelReviewIntegrationSpec extends Specification {
 
         then:
         reviewAttempts() == ["small ordinary false system 1", "small ordinary false person 1"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select created_by::text from run_step_send_attempts where created_by_kind = 'person'") == [CAT]
         callRows() == ["produce came_back general ordinary", "review turned_away small ordinary",
                        "review came_back small ordinary"]
@@ -750,7 +977,6 @@ class ModelReviewIntegrationSpec extends Specification {
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} yielded" as String]
     }
 
-    /** Measured, never said: what is too long is the system's attempt whoever pressed, and a person reviews instead. */
     def "values turned away and too long for the model once pressed are left to a person, the too-long attempt the system's, nothing sent"() {
         given:
         turnedAwayOnce()
@@ -796,6 +1022,7 @@ class ModelReviewIntegrationSpec extends Specification {
 
         then:
         failures() == ["model_not_deployed review: Model small is not held here."]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select failure.reason::text || ' ' || failure.purpose::text from run_step_send_attempts attempt
                   join run_step_failures failure on failure.run_step_failure_id = attempt.answers_failure_id""") ==
@@ -809,7 +1036,6 @@ class ModelReviewIntegrationSpec extends Specification {
         holds() == []
     }
 
-    /** Reviewing what was produced is not running what the step runs, so a stop on that holds no review back. */
     def "values the model turned away are sent again when pressed while what the step runs is stopped, no stop read beside them"() {
         given:
         turnedAwayOnce()
@@ -835,7 +1061,6 @@ class ModelReviewIntegrationSpec extends Specification {
         holds() == []
     }
 
-    /** Each press names the attempt turned away, so the one taken up after the first was sent finds another. */
     def "two presses on one turnaway taken before the engine's thread comes to either make one attempt and one call"() {
         given:
         turnedAwayOnce()
@@ -856,11 +1081,11 @@ class ModelReviewIntegrationSpec extends Specification {
         failures() == []
 
         and: "made once, by whichever press the engine's thread came to first"
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select created_by::text from run_step_send_attempts where created_by_kind = 'person'") in
                 [[CAT], [ANN]]
     }
 
-    /** The second press named a turnaway; once the first wrote a failure the values no longer stand turned away. */
     def "two presses on one turnaway, the first finding the reviewer not held, write one failure and the second nothing"() {
         given:
         turnedAwayOnce()
@@ -882,7 +1107,6 @@ class ModelReviewIntegrationSpec extends Specification {
                 new StepFailure.Recorded(RunStepFailureReason.MODEL_NOT_DEPLOYED, ModelCallPurpose.REVIEW)
     }
 
-    /** As on a hold: the engine's thread asks again whether the presser may, and one who no longer may pressed nothing. */
     def "a press on a review turned away whose presser is removed from the group before the engine's thread takes it up writes and sends nothing, and it is still offered"() {
         given:
         turnedAwayOnce()
@@ -904,15 +1128,14 @@ class ModelReviewIntegrationSpec extends Specification {
         sendingRefused() == null
     }
 
-    /** Cat no longer a member of the group, as a steward removing her does. */
     private void catRemoved() {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update group_members set removed_at = now(), removed_by = ?::uuid, removal = 'removed_from_group'
                  where group_id = ?::uuid and subject_id = ?::uuid and removed_at is null""").params(ANN, GROUP, CAT)
                 .update()
     }
 
-    /** Summarise produced by the model and its review turned away for the last time, the engine's threads idle. */
     private void turnedAwayOnce() {
         model.answering(cameBack(FITS))
         model.answering(new CallOutcome.TurnedAway(new TurnAway("Busy.", false)))
@@ -921,34 +1144,28 @@ class ModelReviewIntegrationSpec extends Specification {
         settled()
     }
 
-    /**
-     * Everything handed to the engine's threads done, the threads left running for what is pressed next. Not
-     * {@link #drained}: that stops the engine first, and a press it then takes up sends nothing for stopping.
-     */
+    // Keep the threads running while draining submitted work; stopping first would suppress the next press.
     private void settled() {
-        def pool = executor.@pool.threadPoolExecutor
-        until("the engine's threads idle") { pool.completedTaskCount == pool.taskCount }
+        tasks.awaitDrained()
     }
 
     private void pressed(def presser = CAT_USER) {
         acts.trySending(groupId(GROUP), runId(), new WorkflowStepId(UUID.fromString(SUMMARISE)), presser)
     }
 
-    /** What pressing Try sending on summarise now would be refused with, none where it is offered. */
     private RefusalCode sendingRefused() {
         def read = store.transactions().execute { snapshots.asRead(groupId(GROUP), runId()) }
         def step = read.step(new WorkflowStepId(UUID.fromString(SUMMARISE))).orElseThrow()
         StepAct.TRY_SENDING.refusal(StepGround.of(read, step, StepPositions.of(read, step), null))
     }
 
-    /** Summarise as Cat, who started the run and may start another, reads it. */
     private StepAnswers.StepRowAnswer summariseRow() {
-        new RunSteps(store.session, new GroupRoles(store.session), snapshots, store.transactionManager())
+        new RunSteps(store.session, new GroupRoles(store.session), snapshots, store.transactionManager(), Deployments.DEEP_ENOUGH, new org.lilradish.lite.app.currency.GroupCurrencies(store.session, new org.springframework.transaction.support.TransactionTemplate(store.transactionManager()), new GroupRoles(store.session), org.lilradish.lite.testutil.library.DeployedModels.HELD))
                 .steps(groupId(GROUP), runId(), CAT_USER).steps()[0]
     }
 
-    /** Summarise made a person's, asked and answered, its values waiting on the model and nothing yet sent for them. */
     private void personAnswered() {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'person', producer_model = null, producer_mode = null
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -956,7 +1173,7 @@ class ModelReviewIntegrationSpec extends Specification {
         StepRows.answered(store, SUMMARISE, CAT, "Read it twice.", [(SUMMARY): '"A printer fire."'])
     }
 
-    /** Both of the engine's threads kept busy until the gate returned is opened, so what is handed over meanwhile waits. */
+    // Occupy both engine threads until the gate opens so submitted work cannot run early.
     private CountDownLatch occupied() {
         def gate = new CountDownLatch(1)
         def busy = new CountDownLatch(2)
@@ -976,4 +1193,37 @@ class ModelReviewIntegrationSpec extends Specification {
                 new DeployedModel(new ModelName("small"), [], 20, 4.0G, 4_000, [])]))
         model.answering(cameBack(FITS))
     }
+    private void waitingAfterTurnaway(Pause gate, boolean lateProgress) {
+        def waiting = { CallRequest request, CallProgress progress ->
+            def outcome = model.call(request, [aboutToSend: { progress.aboutToSend() },
+                                              turnedAway: { TurnAway away ->
+                                                  progress.turnedAway(away)
+                                                  gate.hold()
+                                                  if (lateProgress) {
+                                                      progress.turnedAway(away)
+                                                  }
+                                              },
+                                              mayResend: { progress.mayResend() }] as CallProgress)
+            lateProgress ? cameBack(request.purpose() == ModelCallPurpose.PRODUCE ? FITS : ASSURES) : outcome
+        } as ModelCalls
+        calls = new EngineCalls(EngineWiring.withoutTools(), waiting, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
+        holding(DeployedModels.HELD)
+    }
+
+    private void waitingAfterResend(Pause gate) {
+        def waiting = { CallRequest request, CallProgress progress ->
+            model.call(request, [aboutToSend: { progress.aboutToSend() },
+                                 turnedAway: { TurnAway away -> progress.turnedAway(away) },
+                                 mayResend: {
+                                     def allowed = progress.mayResend()
+                                     if (allowed) {
+                                         gate.hold()
+                                     }
+                                     allowed
+                                 }] as CallProgress)
+        } as ModelCalls
+        calls = new EngineCalls(EngineWiring.withoutTools(), waiting, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
+        holding(DeployedModels.HELD)
+    }
+
 }

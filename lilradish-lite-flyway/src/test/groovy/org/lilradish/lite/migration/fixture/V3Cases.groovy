@@ -24,14 +24,18 @@ final class V3Cases {
         attack("estate_role_grants_author_fk", "estate_role_grants",
                 "insert into app.estate_role_grants (subject_id, role, created_by)" +
                         " values ('${MEMBER}', 'steward', '${ABSENT}')"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("estate_role_grants_remover_person_fk", "estate_role_grants",
                 "update app.estate_role_grants set removed_at = now(), removed_by = '${SEEDER}'" +
                         " where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("estate_role_grants_remover_is_person", "estate_role_grants",
                 "update app.estate_role_grants set removed_at = now(), removed_by = '${WORKFLOW_RUNNER}'," +
                         " removed_by_kind = 'system' where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("estate_role_grants_removed_together", "estate_role_grants",
                 "update app.estate_role_grants set removed_at = now() where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("estate_role_grants_removed_after_created", "estate_role_grants",
                 "update app.estate_role_grants set removed_at = created_at - interval '1 day'," +
                         " removed_by = '${STEWARD}' where estate_role_grant_id = '${GRANT}'"),

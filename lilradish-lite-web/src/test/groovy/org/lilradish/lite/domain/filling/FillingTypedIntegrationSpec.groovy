@@ -79,7 +79,7 @@ class FillingTypedIntegrationSpec extends Specification {
 
     def "the table holds cases of every kind one value is written as, each verdict among them, an empty table agreeing with anything"() {
         expect:
-        CASES.keySet() == (FieldKind.values() - FieldKind.FIELDS)*.published() as Set
+        CASES.keySet() == (FieldKind.values() - [FieldKind.FIELDS, FieldKind.FILE])*.published() as Set
         CASES.values().every { !it.isEmpty() }
         !ROWS.findAll { it.refused == null }.isEmpty()
         !ROWS.findAll { it.refused == "missing" }.isEmpty()

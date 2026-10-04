@@ -65,11 +65,11 @@ class KeysetStatementsSpec extends Specification {
 
     static final String NAME = '(t.name) collate "unicode"'
 
-    static final ListFilter GRACE = new ListFilter("grace")
+    static final ListFilter GRACE = new ListFilter("greno")
 
     static final ListPosition AFTER_KEY = new ListPosition("k150", "k150")
 
-    static final ListPosition AFTER_NAME = new ListPosition("grace hopper", "k150")
+    static final ListPosition AFTER_NAME = new ListPosition("greno nockal", "k150")
 
     static final ListPosition AFTER_NAMELESS = new ListPosition(null, "k150")
 
@@ -268,9 +268,9 @@ class KeysetStatementsSpec extends Specification {
         where:
         order   | filter | after          || bound
         BY_KEY  | null   | null           || [limit: ListPage.SIZE + 1]
-        BY_KEY  | GRACE  | AFTER_KEY      || [filter: "grace", afterTie: "k150", limit: ListPage.SIZE + 1]
-        BY_NAME | null   | AFTER_NAME     || [afterValue: "grace hopper", afterTie: "k150", limit: ListPage.SIZE + 1]
-        BY_NAME | GRACE  | AFTER_NAMELESS || [filter: "grace", afterTie: "k150", limit: ListPage.SIZE + 1]
+        BY_KEY  | GRACE  | AFTER_KEY      || [filter: "greno", afterTie: "k150", limit: ListPage.SIZE + 1]
+        BY_NAME | null   | AFTER_NAME     || [afterValue: "greno nockal", afterTie: "k150", limit: ListPage.SIZE + 1]
+        BY_NAME | GRACE  | AFTER_NAMELESS || [filter: "greno", afterTie: "k150", limit: ListPage.SIZE + 1]
         BY_SIZE | null   | AFTER_SIZE     || [afterValue: 2L, afterTie: "k150", limit: ListPage.SIZE + 1]
     }
 
@@ -373,7 +373,7 @@ class KeysetStatementsSpec extends Specification {
     def "a filter condition matching names is bound what was typed spaced as names are, beside it as typed"() {
         given:
         def noBreak = String.valueOf((char) 0xA0)
-        def typed = "grace" + noBreak + " hopper"
+        def typed = "greno" + noBreak + " nockal"
 
         when:
         def parameters = declaredOn(SampleColumn.KEY, RELATION, filtered, EVERY_EXPRESSION, [:])
@@ -386,7 +386,7 @@ class KeysetStatementsSpec extends Specification {
 
         where:
         filtered                                         || spaced
-        "f(t.name, :filterSpaced) or f(t.key, :filter)"  || "grace hopper"
+        "f(t.name, :filterSpaced) or f(t.key, :filter)"  || "greno nockal"
         FILTERED                                         || null
     }
 

@@ -1,7 +1,13 @@
 import type { WordedRefusal } from "../../../../../../../../../i18n/app";
 import { atSegment } from "../../../../../../../../../lib/request/address";
-import { putDocument } from "../../../../../../../../../lib/request/http";
-import type { FillValues } from "../../../../../../../../filling";
+import {
+  putDocument,
+  putForm,
+} from "../../../../../../../../../lib/request/http";
+import {
+  multipartOf,
+  type FillSubmission,
+} from "../../../../../../../../filling";
 import { servedAmong, type Problem } from "../../../../../../../../problem";
 import { atRun } from "../../../../../{runId}";
 import { stepAnswerFrom, type StepAnswer } from "../../../{stepId}";
@@ -34,19 +40,27 @@ export function answerTry(
   runId: string,
   stepId: string,
   number: number,
-  values: FillValues,
+  submission: FillSubmission,
   why: string,
   signal: AbortSignal,
 ): Promise<StepAnswer> {
   return atRun(groupId, runId, (run) =>
-    atSegment(`${run}/steps`, stepId, (step) =>
-      putDocument(
-        `${step}/tries/${number}/answer`,
-        { values, why },
-        signal,
-        stepAnswerFrom,
-      ),
-    ),
+    atSegment(`${run}/steps`, stepId, (step) => {
+      const document = { values: submission.values, why };
+      return submission.hasFilePositions
+        ? putForm(
+            `${step}/tries/${number}/answer`,
+            multipartOf(document, submission.uploads),
+            signal,
+            stepAnswerFrom,
+          )
+        : putDocument(
+            `${step}/tries/${number}/answer`,
+            document,
+            signal,
+            stepAnswerFrom,
+          );
+    }),
   );
 }
 

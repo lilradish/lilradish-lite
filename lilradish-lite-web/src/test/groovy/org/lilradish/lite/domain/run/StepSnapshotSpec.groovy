@@ -34,8 +34,8 @@ class StepSnapshotSpec extends Specification {
         new StepSnapshot(ASKED, null, null,
                 row == "a hold" ? hold(RunStepHoldReason.TOO_LONG, minutes(10)) : null,
                 row == "a failure" ? [new FailureRecord(new RunStepFailureId(key(1101)), RunStepFailureReason.UNCLAIMED_VALUE,
-                        null, null, minutes(10), false)] : [],
-                row == "a try" ? [yielded(1, PERSON, [])] : [])
+                        null, null, minutes(10), false, null, null, null)] : [],
+                row == "a try" ? [yielded(1, PERSON, [])] : [], null, [:])
 
         then:
         def refused = thrown(IllegalArgumentException)
@@ -72,4 +72,43 @@ class StepSnapshotSpec extends Specification {
         step.newest().isEmpty()
         step.used() == 0
     }
+    def "an unnumbered model production is newest but spends no try"() {
+        given:
+        def pending = new TryRecord(new ProductionId(UUID.randomUUID()), null,
+                org.lilradish.lite.domain.workflow.StepProducer.MODEL, null, minutes(30), null, null, null, null, null,
+                null, false, null, [], [], [], [], [])
+        def before = (1..count).collect { yielded(it, PERSON, []) }
+
+        when:
+        def step = started(ASKED, before + [pending])
+
+        then:
+        step.newest().orElseThrow() == pending
+        step.used() == count
+        step.tries().size() == count + 1
+        pending.number() == null
+
+        where:
+        count << [1, 2]
+    }
+
+    def "an unnumbered production must be last and only one may be open"() {
+        given:
+        def first = new TryRecord(new ProductionId(UUID.randomUUID()), null,
+                org.lilradish.lite.domain.workflow.StepProducer.MODEL, null, minutes(10), null, null, null, null, null,
+                null, false, null, [], [], [], [], [])
+        def second = new TryRecord(new ProductionId(UUID.randomUUID()), null,
+                org.lilradish.lite.domain.workflow.StepProducer.MODEL, null, minutes(20), null, null, null, null, null,
+                null, false, null, [], [], [], [], [])
+
+        when:
+        started(ASKED, [first, duplicate ? second : yielded(1, PERSON, [])])
+
+        then:
+        thrown(IllegalArgumentException)
+
+        where:
+        duplicate << [false, true]
+    }
+
 }

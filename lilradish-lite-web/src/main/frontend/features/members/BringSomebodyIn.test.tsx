@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -9,9 +9,6 @@ import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { BringSomebodyIn } from "./BringSomebodyIn";
 import type { Asked, Outcome } from "./changes";
-
-/** How long typing has to pause before what was typed is sent. */
-const QUIET_MS = 300;
 
 const GROUP = "00000003-0000-4000-8000-0000000009d1";
 
@@ -71,15 +68,11 @@ async function opened() {
   return screen.getByRole("dialog", { name: "Bring somebody in" });
 }
 
-/** Typed, and the pause that hands it on waited out in real time. */
 async function searchedFor(text: string) {
   await userEvent.type(
     screen.getByRole("searchbox", { name: "User number or name" }),
     text,
   );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  });
 }
 
 function takeOn(): HTMLElement {

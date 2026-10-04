@@ -17,12 +17,12 @@ import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
+import { SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
 import { useAction } from "../../../lib/request/useAction";
 import { STEP_ACT_RULES } from "../actRules";
+import { useRunReadAccess } from "../RunReadAccess";
 import { movedOnNotice } from "./movedOn";
-
-const PART_SX = { mt: 2 };
 
 const SEND_RULE: Rule = { inGroup: STEP_ACT_RULES.try_sending };
 
@@ -34,10 +34,6 @@ function heldAt(step: StepRow): string | null {
     : `${where.kind} ${where.since ?? ""} ${step.acts.includes("try_sending")}`;
 }
 
-/**
- * Try sending, drawn only where the step offers it the reader. The step the press is answered with is handed to
- * `onShown`; one refused as changed since it was read is read again, and that is handed on too.
- */
 export function TrySendingButton({
   groupId,
   runId,
@@ -51,6 +47,7 @@ export function TrySendingButton({
 }) {
   const noticeId = useId();
   const reloadStanding = useStandingRead().reload;
+  const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const [pressedAt, setPressedAt] = useState<string | null>(null);
   const [readAgainAt, setReadAgainAt] = useState<string | null>(null);
@@ -82,7 +79,9 @@ export function TrySendingButton({
       }
       if (refusedAsChanged(problem)) {
         rereading.run((signal) =>
-          readStep(groupId, runId, step.stepId, signal),
+          access.read(signal, () =>
+            readStep(groupId, runId, step.stepId, signal),
+          ),
         );
       }
       if (!refusedAsMovedOn(problem)) {
@@ -115,8 +114,9 @@ export function TrySendingButton({
   return (
     <>
       {!step.acts.includes("try_sending") ? null : (
-        <Box sx={PART_SX}>
+        <Box sx={SPACED_ABOVE_SX}>
           <ActButton
+            variant="contained"
             action={sending}
             waiting={rereading.running || sent}
             reason={
@@ -140,7 +140,7 @@ export function TrySendingButton({
         ) : null}
       </div>
       {notice === null && rereadRefusal === null ? null : (
-        <Box id={noticeId} tabIndex={-1} sx={PART_SX}>
+        <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
           {notice}
           {rereadRefusal === null ? null : (
             <ProblemView problem={rereadRefusal} />

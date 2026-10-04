@@ -16,6 +16,7 @@ import { movesTheReader } from "../../app/refusal";
 import type { Rule } from "../../app/standing/actRules";
 import { say, type WordedRefusal } from "../../i18n/app";
 import { readersIntl } from "../../i18n/intl";
+import { Press } from "../../lib/action/Press";
 import { useAction } from "../../lib/request/useAction";
 import { useResource } from "../../lib/request/useResource";
 
@@ -27,7 +28,14 @@ const READS: Rule = { inGroup: "read_membership" };
 
 const CHANGES: Rule = { inGroup: "change_membership" };
 
-const PICKER_SX = { display: "flex", flexDirection: "column", gap: 1 };
+const PICKER_SX = { display: "flex", flexDirection: "column", gap: 1, mb: 2 };
+
+const SUMMARY_SX = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 1,
+};
 
 const SELECT_SX = { minWidth: 220 };
 
@@ -49,10 +57,12 @@ interface Answered {
  */
 export function CurrencyPicker({
   groupId,
+  mayChange,
   onChosen,
   onMoved,
 }: {
   readonly groupId: string;
+  readonly mayChange: boolean;
   /** Told the currency chosen, as it is said. */
   readonly onChosen: (said: string) => void;
   /** Told the reader's standing has moved under the page. */
@@ -65,6 +75,7 @@ export function CurrencyPicker({
   const read = useResource(load, NOTHING_READ);
   const reread = read.reload;
   const [answered, setAnswered] = useState<Answered | null>(null);
+  const [showChoices, setShowChoices] = useState(false);
   const choosing = useAction<Answered>(
     (answer) => {
       setAnswered(answer);
@@ -94,23 +105,33 @@ export function CurrencyPicker({
           !offered.includes(chosen);
         return (
           <Box sx={PICKER_SX}>
-            {offered === undefined || offered.length === 0 ? (
-              <>
-                <Typography>
-                  {say("currency.read", {
-                    currency:
-                      chosen === undefined
-                        ? say("currency.noneChosen")
-                        : currencySaid(chosen),
-                  })}
-                </Typography>
-                {notPriced ? (
-                  <Typography variant="body2" sx={QUIET_SX}>
-                    {say("currency.notPriced")}
-                  </Typography>
-                ) : null}
-              </>
-            ) : (
+            <Box sx={SUMMARY_SX}>
+              <Typography variant="body2" sx={QUIET_SX}>
+                {say("currency.read", {
+                  currency:
+                    chosen === undefined
+                      ? say("currency.noneChosen")
+                      : currencySaid(chosen),
+                })}
+              </Typography>
+              {mayChange && offered !== undefined && offered.length > 0 ? (
+                <Press
+                  unavailable={choosing.running}
+                  onPress={() => setShowChoices((shown) => !shown)}
+                >
+                  {say("currency.change")}
+                </Press>
+              ) : null}
+            </Box>
+            {notPriced && !showChoices ? (
+              <Typography variant="body2" sx={QUIET_SX}>
+                {say("currency.notPriced")}
+              </Typography>
+            ) : null}
+            {mayChange &&
+            showChoices &&
+            offered !== undefined &&
+            offered.length > 0 ? (
               <TextField
                 select
                 size="small"
@@ -152,7 +173,7 @@ export function CurrencyPicker({
                   </MenuItem>
                 ))}
               </TextField>
-            )}
+            ) : null}
             {choosing.problem === null ? null : (
               <ProblemView problem={choosing.problem} rule={CHANGES} />
             )}

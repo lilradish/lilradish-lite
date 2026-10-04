@@ -10,6 +10,7 @@ import static org.lilradish.lite.app.run.fixture.TicketWorkflow.SUMMARY
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.VERSION
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.WORKFLOW
 import static org.lilradish.lite.testutil.library.LibraryStore.groupId
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import java.util.concurrent.TimeUnit
@@ -17,8 +18,12 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
+import org.lilradish.lite.domain.identity.GroupPermission
 import org.lilradish.lite.domain.inference.CallOutcome
+import org.lilradish.lite.domain.inference.DidNotFitReason
+import org.lilradish.lite.domain.inference.KeptAnswer
 import org.lilradish.lite.domain.inference.TurnAway
 import org.lilradish.lite.domain.model.DeployedModel
 import org.lilradish.lite.domain.model.ModelCatalog
@@ -31,14 +36,14 @@ import org.lilradish.lite.testutil.inference.ScriptedModelCalls
 import org.lilradish.lite.testutil.library.DeployedModels
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.run.RunRows
+import org.lilradish.lite.web.ActAdmission
+import org.lilradish.lite.web.CallerAdmission
+import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
+import tools.jackson.databind.json.JsonMapper
 
-/**
- * A step whose values the model it names reviews, as its readers read it, on a real server running the real baseline,
- * the model scripted: how those values stand with that model while they wait, and how a review of it was lost.
- */
 class RunStepsReviewIntegrationSpec extends Specification {
 
     static final String FITS = '{"values":{"summary":"A printer fire."},"confidences":{}}'
@@ -82,13 +87,14 @@ class RunStepsReviewIntegrationSpec extends Specification {
         store = LibraryStore.copied(server, "run_steps_review_" + (++databasesMade))
         model = new ScriptedModelCalls()
         tree = new RunTree(store.session)
-        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
         writes = new EngineWrites(store.session)
         executor = EngineExecutors.of(store.database)
         ceilings = new CeilingReach(store.session, DeployedModels.HELD, writes)
         holding(DeployedModels.HELD)
-        steps = new RunSteps(store.session, new GroupRoles(store.session), snapshots, store.transactionManager())
+        steps = new RunSteps(store.session, new GroupRoles(store.session), snapshots, store.transactionManager(), Deployments.DEEP_ENOUGH, new org.lilradish.lite.app.currency.GroupCurrencies(store.session, new org.springframework.transaction.support.TransactionTemplate(store.transactionManager()), new GroupRoles(store.session), org.lilradish.lite.testutil.library.DeployedModels.HELD))
         TicketWorkflow.seed(store, 1)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary',
                                           reviewer_model = 'small', reviewer_mode = 'ordinary'
@@ -100,10 +106,11 @@ class RunStepsReviewIntegrationSpec extends Specification {
     }
 
     private void holding(ModelCatalog catalog) {
+        def heldFiles = EngineWiring.files(store)
         engine = new RunEngine(store.session, store.transactions(), tree, snapshots, writes, executor,
-                new EngineCalls(model, store.transactions(), tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                catalog, ceilings, new GroupRoles(store.session))
+                new EngineCalls(EngineWiring.withoutTools(), model, store.transactions(), tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                catalog, ceilings, new GroupRoles(store.session), Deployments.DEEP_ENOUGH, heldFiles)
     }
 
     private static RunId runId() {
@@ -138,7 +145,34 @@ class RunStepsReviewIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer) {
-        new CallOutcome.CameBack(answer, 321, 12, true, false)
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
+    }
+
+    def "a declined review reads the review call's two texts without attributing them to its production"() {
+        given:
+        model.answering(cameBack(FITS))
+        model.answering(new CallOutcome.CameBack("Demo Sample review answer", 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, "Demo Sample review refusal"))
+        started()
+        untilEnded(2)
+
+        when:
+        def detail = steps.step(groupId(GROUP), runId(), summarise(), ANN_USER)
+
+        then:
+        detail.triesMade().size() == 1
+        detail.triesMade()[0].declined() == null
+        detail.triesMade()[0].review().didNotFit() == "model_declined"
+        detail.triesMade()[0].review().declined() == new StepAnswers.DeclinedAnswer(
+                new StepAnswers.DeclinedTextAnswer("Demo Sample review refusal", false, false),
+                new StepAnswers.DeclinedTextAnswer("Demo Sample review answer", false, false), null)
+
+        and: "the same persisted review tells a reader without inference permission no part of either text"
+        def snapshot = snapshots.inTreeAsRead(groupId(GROUP), runId())
+        def withoutWords = new StepReading(snapshot, 1, true, [GroupPermission.READ_OWN_RUNS] as Set, null,
+                Optional.empty(), [:], [:], [:], [:], Deployments.DEEP_ENOUGH)
+        withoutWords.step(summarise()).triesMade()[0].review().declined() ==
+                new StepAnswers.DeclinedAnswer(null, null, true)
     }
 
     def "values whose review is out read as waiting on the model it is out to, and offer nobody a review"() {
@@ -255,12 +289,9 @@ class RunStepsReviewIntegrationSpec extends Specification {
         row.withheld() == [new StepAnswers.WithheldAnswer("review", RefusalCode.RUN_STOPPED.code(), null, null)]
     }
 
-    /**
-     * What answering here shows is the production refused before that the model reviewing the answer is told of, and
-     * the one a model asking again is told: the newest refused in words, a review gone wrong refusing in none.
-     */
     def "answering after the model refused shows the newest production refused in words, passing over one refused in none"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'person', producer_model = null, producer_mode = null, tries = 3
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -284,8 +315,8 @@ class RunStepsReviewIntegrationSpec extends Specification {
         where:
         reviews                                                                             || shown
         [cameBack(REFUSES)]                                                                 || 1
-        [new CallOutcome.Errored("Timed out.")]                                             || null
-        [cameBack(REFUSES), new CallOutcome.Errored("Timed out.")]                          || 1
+        [new CallOutcome.Errored("Timed out.", null)]                                       || null
+        [cameBack(REFUSES), new CallOutcome.Errored("Timed out.", null)]                    || 1
     }
 
     def "a model's review that was lost reads as the model's, saying how it was lost and, where it did not fit, which way"() {
@@ -300,14 +331,45 @@ class RunStepsReviewIntegrationSpec extends Specification {
         def read = steps.step(groupId(GROUP), runId(), summarise(), ANN_USER)
 
         then:
-        read.triesMade()*.review() == [new StepAnswers.ReviewAnswer(true, SMALL, true, lost, didNotFit)]
+        read.triesMade()*.review() == [new StepAnswers.ReviewAnswer(true, SMALL, true, lost, didNotFit, null, null)]
         read.triesMade()*.values().collect { it*.now() } == [["refused"]]
 
         where:
         outcome                                                    || lost          | didNotFit
         cameBack('{"decisions":{"summary":{"outcome":"refused"}}}') || "did_not_fit" | "words_missing"
         cameBack('{"decisions":{}}')                               || "did_not_fit" | "undecided"
-        new CallOutcome.Errored("Timed out.")                      || "errored"     | null
+        new CallOutcome.Errored("Timed out.", null)                || "errored"     | null
+    }
+
+    def "an unreadable review response belongs to the review call and only an inference reader sees it"() {
+        given:
+        model.answering(cameBack(FITS))
+        model.answering(new CallOutcome.Errored(
+                'The model service returned a response this system could not read.',
+                KeptAnswer.of('Demo Sample review envelope')))
+        started()
+        untilEnded(2)
+        executor.destroy()
+        def mvc = MockMvcBuilders.standaloneSetup(new RunStepsController(steps)).build()
+
+        when:
+        def response = mvc.perform(get("/api/groups/${GROUP}/runs/${RUN}/steps/${SUMMARISE}")
+                .requestAttr(CallerAdmission.class.name + '.caller', ANN_USER)
+                .requestAttr(ActAdmission.class.name + '.group', groupId(GROUP))).andReturn().response
+        def shown = JsonMapper.builder().build().readTree(response.contentAsString).path('triesMade').get(0)
+
+        then:
+        response.status == 200
+        !shown.has('unreadableResponse')
+        shown.path('review').path('unreadableResponse').path('text').asText() == 'Demo Sample review envelope'
+        !shown.path('review').path('unreadableResponse').path('altered').asBoolean()
+        !shown.path('review').path('unreadableResponse').path('truncated').asBoolean()
+        store.count('''
+                select count(*) from model_calls call join reviews review on review.model_call_id = call.model_call_id
+                 where call.purpose = 'review' and call.unreadable_response = 'Demo Sample review envelope'
+                ''') == 1
+        store.count("select count(*) from model_calls where purpose = 'produce' and unreadable_response is not null") == 0
+
     }
 
     def "a model's review that decided reads as the model's, and as lost in no way"() {
@@ -322,12 +384,13 @@ class RunStepsReviewIntegrationSpec extends Specification {
         def read = steps.step(groupId(GROUP), runId(), summarise(), ANN_USER)
 
         then:
-        read.triesMade()*.review() == [new StepAnswers.ReviewAnswer(true, SMALL, null, null, null)]
+        read.triesMade()*.review() == [new StepAnswers.ReviewAnswer(true, SMALL, null, null, null, null, null)]
         read.step().where() == null
     }
 
     def "values a person reviews say nothing of any model's review"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set reviewer_model = null, reviewer_mode = null where workflow_step_id = ?::uuid")
                 .params(SUMMARISE).update()
         model.answering(cameBack(FITS))

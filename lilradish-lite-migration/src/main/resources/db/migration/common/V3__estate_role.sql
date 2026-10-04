@@ -1,5 +1,7 @@
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type estate_role as enum ('steward', 'watcher');
 
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table estate_role_grants (
     estate_role_grant_id uuid         not null default uuidv7(),
     subject_id           uuid         not null,
@@ -27,5 +29,6 @@ create table estate_role_grants (
         check (removed_at is null or removed_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index estate_role_grants_one_current_holding
     on estate_role_grants (subject_id, role) where removed_at is null;

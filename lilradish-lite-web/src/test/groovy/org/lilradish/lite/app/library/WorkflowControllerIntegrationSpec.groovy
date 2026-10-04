@@ -20,7 +20,9 @@ import org.lilradish.lite.domain.declaration.Demands
 import org.lilradish.lite.domain.declaration.Field
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
+import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.identity.EstateRole
 import org.lilradish.lite.domain.identity.GroupId
 import org.lilradish.lite.domain.identity.GroupRole
@@ -37,6 +39,7 @@ import org.lilradish.lite.domain.registry.EntryName
 import org.lilradish.lite.domain.registry.EntryVersionId
 import org.lilradish.lite.domain.registry.VersionStanding
 import org.lilradish.lite.domain.run.Ceiling
+import org.lilradish.lite.domain.search.SearchWay
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.domain.workflow.Binding
 import org.lilradish.lite.domain.workflow.BindingSource
@@ -44,6 +47,7 @@ import org.lilradish.lite.domain.workflow.ModelChoice
 import org.lilradish.lite.domain.workflow.Pointer
 import org.lilradish.lite.domain.workflow.Producer
 import org.lilradish.lite.domain.workflow.RouteCase
+import org.lilradish.lite.domain.workflow.SearchQuestionPart
 import org.lilradish.lite.domain.workflow.StepId
 import org.lilradish.lite.testutil.OfferedLists
 import org.lilradish.lite.testutil.codestep.SpecCodeStep
@@ -61,11 +65,7 @@ import spock.lang.Specification
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * What reading a workflow version and writing each part of it are answered with, over a real dispatcher: what
- * each request was turned into, the document it answers with, and every refusal met before the store is asked.
- * The store is replaced, and so is who is calling and what they hold.
- */
+
 @WebMvcTest(WorkflowController)
 @ImportAutoConfiguration(ApiErrorAutoConfiguration)
 class WorkflowControllerIntegrationSpec extends Specification {
@@ -93,13 +93,17 @@ class WorkflowControllerIntegrationSpec extends Specification {
 
     static final List<UUID> KEYS = (1..8).collect { UUID.fromString("0000000b-0000-4000-8000-000000000f3${it}") }
 
-    static final List<UUID> STEPS = (1..4).collect { UUID.fromString("0000000c-0000-4000-8000-000000000f3${it}") }
+    static final List<UUID> STEPS = (1..5).collect { UUID.fromString("0000000c-0000-4000-8000-000000000f3${it}") }
+
+    static final UUID PART = UUID.fromString("0000000f-0000-4000-8000-000000000f31")
 
     static final List<UUID> CASES = (1..2).collect { UUID.fromString("0000000d-0000-4000-8000-000000000f3${it}") }
 
     static final List<UUID> BINDINGS = (1..4).collect { UUID.fromString("0000000e-0000-4000-8000-000000000f3${it}") }
 
     static final String AT_VERSION = "/api/groups/${GROUP}/workflows/${ENTRY}/versions/${VERSION}"
+
+    static final List<String> FILE_TYPES_65 = (0..<65).collect { "application/x${it}" as String }
 
     static final StoredDeclarations.Half TAKES = half(DeclarationSide.TAKES, [taken("complaint", 4000)], [KEYS[0]])
 
@@ -118,8 +122,11 @@ class WorkflowControllerIntegrationSpec extends Specification {
     static final StoredDeclarations.Halves NOTHING = new StoredDeclarations.Halves(
             half(DeclarationSide.TAKES, [], []), half(DeclarationSide.GIVES, [], []))
 
-    /** What the release declares of the code step offered, keyed as a reader is answered it. */
+
     static final StoredDeclarations.Halves SENDING = StoredDeclarations.ofCodeStep("send_reply", SpecCodeStep.SEND_REPLY.declaration())
+
+
+    static final StoredDeclarations.Half SEARCH_GIVES = StoredDeclarations.ofSearchWay(DeployedModels.WEB)
 
     static final StoredWorkflow STORED = new StoredWorkflow(4, TAKES, GIVES, [
             new StoredWorkflow.Step(STEPS[0], new StepId("classify"),
@@ -135,13 +142,19 @@ class WorkflowControllerIntegrationSpec extends Specification {
                      new RouteCase(CASES[1], null, null, [])]), null, null, null, []),
             new StoredWorkflow.Step(STEPS[2], new StepId("send"), new StoredWorkflow.Runs.Code("send_reply"),
                     new Producer.Code(), 1, null, []),
-            new StoredWorkflow.Step(STEPS[3], new StepId("later"), new StoredWorkflow.Runs.Unchosen(), null, null, null, [])],
+            new StoredWorkflow.Step(STEPS[3], new StepId("later"), new StoredWorkflow.Runs.Unchosen(), null, null, null, []),
+            new StoredWorkflow.Step(STEPS[4], new StepId("find"), new StoredWorkflow.Runs.Search("web", [
+                    new SearchQuestionPart.LiteralPart("Find "),
+                    new SearchQuestionPart.Read(PART, new BindingSource.StepOutput(STEPS[0], Pointer.parse("summary")))],
+                    [(SearchWay.TITLE): FieldStanding.ALWAYS, (SearchWay.BODY): FieldStanding.NEVER]),
+                    new Producer.Model(new ModelChoice(new ModelName("general"), null), false), 2, null, [])],
             [new Binding(BINDINGS[3], Pointer.parse("summary"), new BindingSource.StepOutput(STEPS[0], Pointer.parse("abstract")))],
             new Ceiling(1000), true, false, true, new ModelChoice(new ModelName("general"), null))
 
     static final Workflows.WorkflowView READ = new Workflows.WorkflowView(STORED,
             [(new EntryVersionId(ASKED)): ASKING, (new EntryVersionId(LED)): LEADING, (new EntryVersionId(LED_NEWER)): NOTHING],
             [send_reply: SENDING],
+            [web: SEARCH_GIVES],
             [(new EntryVersionId(ASKED)): new PinnedVersions.PinnedVersion(new EntryName("Classify"),
                     new EntryVersionId(ASKED), 2, VersionStanding.IN_SERVICE, null),
              (new EntryVersionId(LED))  : new PinnedVersions.PinnedVersion(new EntryName("Escalate"),
@@ -150,43 +163,52 @@ class WorkflowControllerIntegrationSpec extends Specification {
              (new EntryVersionId(LIST)) : new PinnedVersions.PinnedVersion(new EntryName("Categories"),
                      new EntryVersionId(LIST), 1, VersionStanding.IN_SERVICE, null)],
             OfferedLists.offering([(new EntryVersionId(LIST)): ["Billing", "Delivery"]]),
-            [new ContentProblem(ContentProblemCode.INPUT_UNBOUND,
-                    new ContentPlace.AtInput(STEPS[2], null, SENDING.takes().keyAt([0])), null),
-             new ContentProblem(ContentProblemCode.CASE_TARGET_MISSING, new ContentPlace.AtCase(STEPS[1], CASES[1]), null),
+            new ContentProblemReport.Result([new ContentProblem(ContentProblemCode.INPUT_UNBOUND,
+                    new ContentPlace.AtInput(STEPS[2], null, SENDING.takes().keyAt([0])), null, null),
+             new ContentProblem(ContentProblemCode.CASE_TARGET_MISSING, new ContentPlace.AtCase(STEPS[1], CASES[1]), null, null),
              new ContentProblem(ContentProblemCode.CONSTANT_DOES_NOT_FIT,
-                     new ContentPlace.AtBinding(ContentPart.STEPS, BINDINGS[2]), null),
-             new ContentProblem(ContentProblemCode.INPUT_UNBOUND, new ContentPlace.AtInput(STEPS[1], CASES[0], KEYS[7]), null),
-             new ContentProblem(ContentProblemCode.OUTPUT_UNBOUND, new ContentPlace.AtField(ContentPart.GIVES, KEYS[1]), null),
-             new ContentProblem(ContentProblemCode.HELPER_NOT_HELD, new ContentPlace.Whole(ContentPart.HELPER), null)],
+                     new ContentPlace.AtBinding(ContentPart.STEPS, BINDINGS[2]), null, null),
+             new ContentProblem(ContentProblemCode.INPUT_UNBOUND, new ContentPlace.AtInput(STEPS[1], CASES[0], KEYS[7]), null, null),
+             new ContentProblem(ContentProblemCode.OUTPUT_UNBOUND, new ContentPlace.AtField(ContentPart.GIVES, KEYS[1]), null, null),
+             new ContentProblem(ContentProblemCode.SEARCH_STANDING_MISSING,
+                     new ContentPlace.AtStepFields(STEPS[4], ["references", "other"]), null, null),
+             new ContentProblem(ContentProblemCode.HELPER_NOT_HELD, new ContentPlace.Whole(ContentPart.HELPER), null, null)], 9),
             [new SendPast(STEPS[0], SendingRole.REVIEWING, new ModelName("small"), 1234)],
             new Workflows.Offers(
                     [new PinnedVersions.OfferedVersion(new EntryName("Categories"), new EntryVersionId(LIST), 1)],
                     [new Workflows.Offered(new PinnedVersions.OfferedVersion(new EntryName("Classify"), new EntryVersionId(ASKED), 2), ASKING)],
                     [new Workflows.Offered(new PinnedVersions.OfferedVersion(new EntryName("Escalate"), new EntryVersionId(LED_NEWER), 2), NOTHING)],
                     [new Workflows.OfferedCodeStep("send_reply", SENDING)],
-                    DeployedModels.HELD.all()))
+                    [new Workflows.OfferedSearchWay(DeployedModels.WEB, SEARCH_GIVES)],
+                    DeployedModels.SEARCHING.all()))
 
-    static final List SENDING_TAKES = [[fieldId: SENDING.takes().keyAt([0]).toString(), name: "reply", kind: "text",
+    static final List SENDING_TAKES = [[fieldId: SENDING.takes().keyAt([0]).toString(), name: "reply", kind: "text", lines: "several",
                                         longest: 2000, many: false, mustBeGiven: true]]
 
-    static final List SENDING_GIVES = [[fieldId: SENDING.gives().keyAt([0]).toString(), name: "receipt", kind: "text",
+    static final List SENDING_GIVES = [[fieldId: SENDING.gives().keyAt([0]).toString(), name: "receipt", kind: "text", lines: "several",
                                         longest: 64, many: false, mustBeGiven: true, stands: "always"]]
 
-    static final Map COMPLAINT = [fieldId: KEYS[4].toString(), name: "complaint", kind: "text", longest: 4000, many: false,
+    static final List WEB_GIVES = [["title", 200, true], ["body", 4000, true], ["references", 2000, false], ["other", 1000, false]]
+            .withIndex().collect { output, at ->
+                [fieldId: SEARCH_GIVES.keyAt([at]).toString(), name: output[0], kind: "text", lines: "several", longest: output[1], many: false,
+                 mustBeGiven: output[2]]
+            }
+
+    static final Map COMPLAINT = [fieldId: KEYS[4].toString(), name: "complaint", kind: "text", lines: "several", longest: 4000, many: false,
                                   mustBeGiven: true]
 
     static final List ASKING_GIVES = [
             [fieldId: KEYS[5].toString(), name: "category", kind: "term", many: false,
              list   : [name: "Categories", versionId: LIST.toString(), number: 1, standing: "in_service"],
              mustBeGiven: false],
-            [fieldId: KEYS[6].toString(), name: "summary", kind: "text", longest: 500, many: false, mustBeGiven: false]]
+            [fieldId: KEYS[6].toString(), name: "summary", kind: "text", lines: "several", longest: 500, many: false, mustBeGiven: false]]
 
     /** Held whole, so a member added, dropped or renamed on either side of the wire is a change seen here. */
     static final Map ANSWER = [
             revision          : 4,
-            takes             : [[fieldId: KEYS[0].toString(), name: "complaint", kind: "text", longest: 4000, many: false,
+            takes             : [[fieldId: KEYS[0].toString(), name: "complaint", kind: "text", lines: "several", longest: 4000, many: false,
                                   mustBeGiven: true]],
-            gives             : [[fieldId: KEYS[1].toString(), name: "summary", kind: "text", longest: 500, many: false,
+            gives             : [[fieldId: KEYS[1].toString(), name: "summary", kind: "text", lines: "several", longest: 500, many: false,
                                   mustBeGiven: false]],
             steps             : [
                     [stepId  : STEPS[0].toString(), name: "classify",
@@ -199,14 +221,14 @@ class WorkflowControllerIntegrationSpec extends Specification {
                      bindings: [[bindingId: BINDINGS[0].toString(), target: "complaint", source: [input: "message"]]]],
                     [stepId  : STEPS[1].toString(), name: "route",
                      runs    : [kind         : "route",
-                                gives        : [[fieldId: KEYS[2].toString(), name: "note", kind: "text", longest: 100, many: false,
+                                gives        : [[fieldId: KEYS[2].toString(), name: "note", kind: "text", lines: "several", longest: 100, many: false,
                                                  mustBeGiven: false]],
                                 discriminator: [bindingId: BINDINGS[1].toString(), source: [step: 0, path: "category"]],
                                 cases        : [
                                         [caseId  : CASES[0].toString(), term: "Billing",
                                          workflow: [name : "Escalate", versionId: LED.toString(), number: 1, standing: "retired",
                                                     newer: [versionId: LED_NEWER.toString(), number: 2]],
-                                         takes   : [[fieldId: KEYS[7].toString(), name: "complaint", kind: "text", longest: 4000,
+                                         takes   : [[fieldId: KEYS[7].toString(), name: "complaint", kind: "text", lines: "several", longest: 4000,
                                                      many   : false, mustBeGiven: true]],
                                          gives   : [],
                                          bindings: [[bindingId: BINDINGS[2].toString(), target: "complaint",
@@ -216,13 +238,21 @@ class WorkflowControllerIntegrationSpec extends Specification {
                     [stepId: STEPS[2].toString(), name: "send",
                      runs: [kind: "code_step", takes: SENDING_TAKES, gives: SENDING_GIVES, codeStep: "send_reply"],
                      producer: [kind: "code"], tries: 1, bindings: []],
-                    [stepId: STEPS[3].toString(), name: "later", bindings: []]],
+                    [stepId: STEPS[3].toString(), name: "later", bindings: []],
+                    [stepId  : STEPS[4].toString(), name: "find",
+                     runs    : [kind     : "search", gives: WEB_GIVES, searchWay: "web",
+                                question : [[text: "Find "], [partId: PART.toString(), from: [step: 0, path: "summary"]]],
+                                standings: [title: "always", body: "never"]],
+                     producer: [kind: "model", model: "general", toldWhatHappened: false],
+                     tries   : 2,
+                     bindings: []]],
             outputs           : [[bindingId: BINDINGS[3].toString(), target: "summary", source: [step: 0, path: "abstract"]]],
             ceiling           : "1000",
             keepsOwnCeiling   : true,
             raiseNeedsApproval: false,
             mayBeHelped       : true,
             helper            : [model: "general"],
+            problemTotal      : 9,
             problems          : [
                     [code: "input_unbound", part: "steps", stepId: STEPS[2].toString(),
                      fieldId: SENDING.takes().keyAt([0]).toString()],
@@ -231,6 +261,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
                     [code: "input_unbound", part: "steps", stepId: STEPS[1].toString(), caseId: CASES[0].toString(),
                      fieldId: KEYS[7].toString()],
                     [code: "output_unbound", part: "gives", fieldId: KEYS[1].toString()],
+                    [code: "search_standing_missing", part: "steps", stepId: STEPS[4].toString(), fields: ["references", "other"]],
                     [code: "helper_not_held", part: "helper"]],
             sendsPast         : [[stepId: STEPS[0].toString(), role: "reviewing", model: "small", past: 1234]],
             terms             : [(LIST.toString()): ["Billing", "Delivery"]],
@@ -239,7 +270,9 @@ class WorkflowControllerIntegrationSpec extends Specification {
                     questions: [[name: "Classify", versionId: ASKED.toString(), number: 2, takes: [COMPLAINT], gives: ASKING_GIVES]],
                     workflows: [[name: "Escalate", versionId: LED_NEWER.toString(), number: 2, takes: [], gives: []]],
                     codeSteps: [[name: "send_reply", takes: SENDING_TAKES, gives: SENDING_GIVES]],
-                    models   : [[name: "general", modes: ["research"]], [name: "small", modes: []]]]]
+                    searchWays: [[name: "web", tool: "web_search", gives: WEB_GIVES]],
+                    models   : [[name: "general", modes: ["research"], tools: ["web_search", "archive_search"]],
+                                [name: "small", modes: [], tools: []]]]]
 
     @Autowired
     private MockMvc mockMvc
@@ -282,17 +315,14 @@ class WorkflowControllerIntegrationSpec extends Specification {
         JSON.readTree(answered.response.contentAsString)
     }
 
-    /**
-     * Void, so the verification is what fails rather than the null a mock's answer would assert as. The answer is
-     * what the change itself read, so nothing reads the version again beside it.
-     */
+    /** Use void so Groovy does not interpret the helper result as an assertion. */
     private void writtenAlone(Closure<?> change) {
         change(Mockito.verify(drafts))
         Mockito.verifyNoMoreInteractions(drafts)
         Mockito.verifyNoInteractions(workflows)
     }
 
-    /** Each key beside what it keys, each version pinned named, and every member nothing was chosen for left out. */
+
     def "reads a workflow version to any member, as the library reads it"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
@@ -331,7 +361,51 @@ class WorkflowControllerIntegrationSpec extends Specification {
         DeclarationSide.GIVES | '{"name":"summary","label":null,"help":null,"kind":"text","many":false,"most":null,"longest":500,"mustBeGiven":true}'  || new Field(new FieldName("summary"), null, null, new FieldShape.Text(500), new HowMany.One(), new Demand.Given(true))
     }
 
-    /** What a workflow gives back stood where it was made, so a field of it saying how it stands is refused whole. */
+    def "writes a draft file field with sixty-four types and the exact largest byte count"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def types = (0..<64).collect { "application/x${it}" as String }
+        def field = [name: "attachments", label: null, help: null, kind: "file", many: false, most: null,
+                     types: types, maximumBytes: 9_007_199_254_740_991L, mustBeGiven: false]
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/gives", JSON.writeValueAsString([revision: 3, fields: [field]])))
+
+        then:
+        answered.response.status == 200
+        JSON.convertValue(documentOf(answered), Map) == ANSWER
+        writtenAlone {
+            it.declare(new GroupId(GROUP), new EntryId(ENTRY), new EntryVersionId(VERSION), READER, 3,
+                    new Declaration(DeclarationSide.GIVES, Demands.ofWorkflow(DeclarationSide.GIVES),
+                            [held("attachments", new FieldShape.File(types.collect { new MediaTypeName(it) },
+                                    9_007_199_254_740_991L))]), [null])
+        }
+    }
+
+    def "refuses an invalid file limit while changing a draft, without asking the draft writer"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def field = [name: "attachments", label: null, help: null, kind: "file", many: false, most: null,
+                     types: types, maximumBytes: bytes, mustBeGiven: false]
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/gives", JSON.writeValueAsString([revision: 3, fields: [field]])))
+
+        then:
+        answered.response.status == 400
+        documentOf(answered).get("code").asString() == code
+        Mockito.verifyNoInteractions(drafts, workflows)
+
+        where:
+        types                                                    | bytes                 || code
+        FILE_TYPES_65                                            | 1L                    || "FILE_TYPES_TOO_MANY"
+        ["application/pdf"]                                      | 9_007_199_254_740_992L || "FILE_SIZE_LIMIT_UNUSABLE"
+        ["application/pdf"]                                      | 1.5G                  || "FILE_SIZE_LIMIT_UNUSABLE"
+        ["application/pdf"]                                      | 0L                    || "FILE_SIZE_LIMIT_UNUSABLE"
+        ["application/pdf"]                                      | -1L                   || "FILE_SIZE_LIMIT_UNUSABLE"
+    }
+
+
     def "a field a workflow gives back asking to stand is refused as a body its depth does not take"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
@@ -369,7 +443,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
         }
     }
 
-    /** An exponent at the int bound once passed as a small number, then filled memory writing its digits out. */
+    /** Decimal exponents at the integer bound must be refused before expanding their digits. */
     def "a constant at the edge of what a decimal holds is refused as one that does not fit, before the store is asked"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
@@ -385,6 +459,24 @@ class WorkflowControllerIntegrationSpec extends Specification {
 
         where:
         constant << ["1e2147483647", "-1e2147483647", "12e2147483647", "1e-2147483647"]
+    }
+
+    def "a searching step's question of one part more than one holds is refused under its own code, before the store is asked"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def parts = (['{"text":""}'] + (1..FlowBody.MOST_QUESTION_PARTS).collect { '{"text":"part ' + it + '"}' }).join(",")
+        def body = '{"revision":2,"steps":[{"name":"find_context","runs":{"kind":"search","searchWay":"web_search",' +
+                '"question":[' + parts + '],"standings":{"title":null,"body":null,"references":null,"other":null}},' +
+                '"producer":null,"tries":null,"reviewer":null,"bindings":[]}],"outputs":[]}'
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/steps", body))
+
+        then:
+        answered.response.status == 400
+        documentOf(answered).get("code").asString() == "SEARCH_QUESTION_PARTS_TOO_MANY"
+        documentOf(answered).get("detail").asString() == "A searching step's question holds at most 256 parts."
+        Mockito.verifyNoInteractions(drafts, workflows)
     }
 
     def "sets the ceiling as digits or none, and the two declarations beside it"() {
@@ -456,7 +548,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
         false | 'null'                                    || null
     }
 
-    /** A helper is named only for runs that may be helped, and only as a model and a mode a deployment could name. */
+
     def "a helper named where it may not be, or named as no model could be, is refused before the store is asked"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
@@ -478,7 +570,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
                  '{"revision":6,"mayBeHelped":true}']
     }
 
-    /** Every write names the revision it read, a whole number from one, and one that does not is refused whole. */
+
     def "a write naming no revision it read, or one that is none, is refused before the store is asked"() {
         given:
         holding(EnumSet.of(GroupRole.OWNER))
@@ -502,7 +594,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
         "/help"    | '{"revision":1.5,"mayBeHelped":false,"helper":null}'
     }
 
-    /** What the store refused is answered as the store refused it; the version is not read again. */
+
     def "answers a write the store refuses with that refusal, and reads nothing after it"() {
         given:
         holding(EnumSet.of(GroupRole.OWNER))
@@ -518,7 +610,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
         Mockito.verifyNoInteractions(workflows)
     }
 
-    /** Whatever the caller holds in the estate, holding nothing here reaches no version of the group's. */
+
     def "refuses a read or a write by a caller in no role here as no group, never asking the store"() {
         given:
         holding(EnumSet.noneOf(GroupRole))
@@ -576,7 +668,7 @@ class WorkflowControllerIntegrationSpec extends Specification {
                     sent(AT_VERSION + "/help", '{"revision":1,"mayBeHelped":false,"helper":null}').queryParam("x", "1")]
     }
 
-    /** The workflow kind's own segment, and the halves each under the spelling they are published by. */
+
     def "a workflow version and its halves are addressed under the spellings their vocabularies publish"() {
         expect:
         WorkflowController.VERSION.contains("/" + EntryKind.WORKFLOW.segment() + "/")

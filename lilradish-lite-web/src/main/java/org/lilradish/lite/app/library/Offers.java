@@ -11,10 +11,22 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.lilradish.lite.app.listing.KeysetPages;
+import org.lilradish.lite.app.listing.KeysetStatements;
+import org.lilradish.lite.app.listing.SearchFolding;
+import org.lilradish.lite.app.listing.SortExpression;
 import org.lilradish.lite.domain.declaration.Field;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.filling.FillField;
 import org.lilradish.lite.domain.identity.GroupId;
+import org.lilradish.lite.domain.listing.ListColumn;
+import org.lilradish.lite.domain.listing.ListOrder;
+import org.lilradish.lite.domain.listing.ListPage;
+import org.lilradish.lite.domain.listing.ListPosition;
+import org.lilradish.lite.domain.listing.ListQuery;
+import org.lilradish.lite.domain.listing.ListRow;
+import org.lilradish.lite.domain.listing.ListShape;
+import org.lilradish.lite.domain.listing.ListValueKind;
 import org.lilradish.lite.domain.registry.EntryId;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryName;
@@ -27,20 +39,38 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * What a group may start a run of, read as one moment: each workflow it owns with a version in service, unstopped,
- * and each such version with the fields it takes as whoever starts it fills them in.
+ * One page of unstopped workflows a group may start a run of, read as one moment. Each returned workflow includes
+ * every version of it in service, with the fields whoever starts it fills in.
  */
 @Component
 final class Offers {
 
-    // DB-SPECIFIC: an enum cast and the collation named below are PostgreSQL's.
-    private static final String OFFERED = """
-            select entry.entry_id, entry.name, entry.purpose, version.entry_version_id, version.number
+    // DB-SPECIFIC: the enum and UUID casts are PostgreSQL's.
+    private static final String SEEDS = """
+            select entry.entry_id, entry.name, entry.purpose
               from entries entry
-              join entry_versions version on version.entry_id = entry.entry_id
-             where %s
-             order by entry.name collate "unicode", entry.entry_id, version.number desc
-            """.formatted(offered("entry", "version"));
+             where exists (select 1 from entry_versions version where %s)
+            """.formatted(offered("entry", "version", "cast(:within as uuid)"));
+
+    // DB-SPECIFIC: any with a UUID array cast is PostgreSQL's.
+    private static final String VERSIONS = """
+            select version.entry_id, version.entry_version_id, version.number
+              from entry_versions version
+             where version.entry_id = any(cast(:entries as uuid[])) and %s
+             order by version.entry_id, version.number desc
+            """.formatted(VersionMarks.inService("version"));
+
+    // DB-SPECIFIC: ::text and the named unicode/C collations are PostgreSQL's.
+    private static final KeysetStatements<Column> PAGES = new KeysetStatements<>(
+            "workflows offered to start",
+            Column.ENTRY_ID,
+            new ListOrder<>(Column.NAME, false),
+            SEEDS,
+            SearchFolding.holds("entry.name_folded", KeysetStatements.TYPED),
+            List.of(
+                    new SortExpression<>(Column.NAME, "entry.name", "\"unicode\""),
+                    new SortExpression<>(Column.ENTRY_ID, "entry.entry_id::text", "\"C\"")),
+            Map.of());
 
     private final JdbcClient database;
 
@@ -53,14 +83,19 @@ final class Offers {
 
     /** A workflow of the group bound as {@code :group}, the version in service and the entry unstopped. */
     static String offered(String entry, String version) {
+        return offered(entry, version, ":group");
+    }
+
+    private static String offered(String entry, String version, String scope) {
         return """
-                %1$s.group_id = :group and %1$s.kind = cast('%3$s' as entry_kind) and %2$s.entry_id = %1$s.entry_id
+                %1$s.group_id = %6$s and %1$s.kind = cast('%3$s' as entry_kind) and %2$s.entry_id = %1$s.entry_id
                 and %4$s and not %5$s""".formatted(
                         entry,
                         version,
                         StoreLabels.label(EntryKind.WORKFLOW),
                         VersionMarks.inService(version),
-                        EntryStops.stopped(entry + ".entry_id"));
+                        EntryStops.stopped(entry + ".entry_id"),
+                        scope);
     }
 
     /**
@@ -74,28 +109,43 @@ final class Offers {
         return FillField.of(fields, lists);
     }
 
-    /** Workflows by name, each version newest first. */
-    List<Offered> offeredIn(GroupId group) {
-        requireNonNull(group, "Offers group must not be null");
-        return requireNonNull(snapshot.execute(status -> read(group)));
+    static ListShape<Column> listed() {
+        return PAGES.shape();
     }
 
-    private List<Offered> read(GroupId group) {
+    /** One page of offered workflows, each with all its in-service versions newest first. */
+    ListPage<Offered> offeredIn(ListQuery<Column> query, @Nullable ListPosition after) {
+        requireNonNull(query, "Offers query must not be null");
+        return requireNonNull(snapshot.execute(status -> read(query, after)));
+    }
+
+    private ListPage<Offered> read(ListQuery<Column> query, @Nullable ListPosition after) {
+        ListPage<Seed> page = KeysetPages.read(
+                database,
+                PAGES,
+                query,
+                after,
+                (result, number) -> new Seed(workflow(
+                        new EntryId(result.getObject("entry_id", UUID.class)),
+                        result.getString("name"),
+                        result.getString("purpose"))));
+        if (page.rows().isEmpty()) {
+            return new ListPage<>(List.of(), page.next());
+        }
+        GroupId group = new GroupId(UUID.fromString(query.scope()));
         Map<EntryId, Offered> workflows = new LinkedHashMap<>();
         Map<EntryId, List<Row>> rows = new HashMap<>();
         Map<EntryVersionId, EntryKind> versions = new LinkedHashMap<>();
-        database.sql(OFFERED).param("group", group.value()).query(result -> {
+        page.rows().forEach(seed -> workflows.put(seed.workflow().entryId(), seed.workflow()));
+        String[] entries = workflows.keySet().stream()
+                .map(entry -> entry.value().toString())
+                .toArray(String[]::new);
+        database.sql(VERSIONS).param("entries", entries).query(result -> {
             EntryId entry = new EntryId(result.getObject("entry_id", UUID.class));
-            if (!workflows.containsKey(entry)) {
-                workflows.put(entry, workflow(entry, result.getString("name"), result.getString("purpose")));
-            }
             EntryVersionId version = new EntryVersionId(result.getObject("entry_version_id", UUID.class));
             rows.computeIfAbsent(entry, ignored -> new ArrayList<>()).add(new Row(version, result.getInt("number")));
             versions.put(version, EntryKind.WORKFLOW);
         });
-        if (versions.isEmpty()) {
-            return List.of();
-        }
         Map<EntryVersionId, StoredDeclarations.Halves> declared = StoredDeclarations.ofVersions(database, versions);
         Set<EntryVersionId> pinned = new HashSet<>();
         for (StoredDeclarations.Halves halves : declared.values()) {
@@ -114,7 +164,7 @@ final class Offers {
             }
             offered.add(new Offered(workflow.entryId(), workflow.name(), workflow.purpose(), inService));
         });
-        return List.copyOf(offered);
+        return new ListPage<>(List.copyOf(offered), page.next());
     }
 
     private static Offered workflow(EntryId entry, String name, @Nullable String purpose) {
@@ -145,4 +195,36 @@ final class Offers {
     }
 
     private record Row(EntryVersionId version, int number) {}
+
+    enum Column implements ListColumn {
+        NAME("name"),
+        ENTRY_ID("entryId");
+
+        private final String published;
+
+        Column(String published) {
+            this.published = published;
+        }
+
+        @Override
+        public String published() {
+            return published;
+        }
+
+        @Override
+        public ListValueKind kind() {
+            return ListValueKind.TEXT;
+        }
+    }
+
+    private record Seed(Offered workflow) implements ListRow<Column> {
+
+        @Override
+        public Object valueIn(Column column) {
+            return switch (column) {
+                case NAME -> workflow.name().value();
+                case ENTRY_ID -> workflow.entryId().value().toString();
+            };
+        }
+    }
 }

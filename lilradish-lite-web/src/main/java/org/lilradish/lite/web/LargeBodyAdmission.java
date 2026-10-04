@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.function.LongSupplier;
 import org.jspecify.annotations.Nullable;
 import org.libprunus.core.error.ApiErrorException;
+import org.lilradish.lite.app.files.TransferPace;
 import org.lilradish.lite.domain.failure.RefusalCode;
 import org.lilradish.lite.domain.filling.Filling;
 import org.springframework.core.Ordered;
@@ -40,10 +41,8 @@ final class LargeBodyAdmission extends OncePerRequestFilter {
 
     static final Duration LONGEST_WAIT = Duration.ofSeconds(30);
 
-    private static final long MINIMUM_BYTES_PER_SECOND = 256L * 1024L;
-
     private static final Duration LONGEST_READ =
-            Duration.ofSeconds(1).multipliedBy(Filling.LARGEST_REQUEST_BYTES).dividedBy(MINIMUM_BYTES_PER_SECOND);
+            Duration.ofSeconds(1).multipliedBy(Filling.LARGEST_REQUEST_BYTES).dividedBy(TransferPace.BYTES_PER_SECOND);
 
     /* Every waiter holds a container worker for the whole wait. */
     private static final int MOST_WAITING = 16;
@@ -102,6 +101,10 @@ final class LargeBodyAdmission extends OncePerRequestFilter {
     }
 
     record ReadDeadline(LongSupplier nanoTime, long endsAtNanos) {
+
+        long startedAtNanos() {
+            return endsAtNanos - LONGEST_READ.toNanos();
+        }
 
         boolean passed() {
             return nanoTime.getAsLong() - endsAtNanos > 0;

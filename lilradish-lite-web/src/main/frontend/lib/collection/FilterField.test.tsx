@@ -63,7 +63,7 @@ afterEach(() => {
 describe("FilterField", () => {
   /** Back, forward, or a link: the address changed, and the box says what it now holds. */
   it("takes a value arriving from outside into the box without handing it back", () => {
-    const { box, onChange, rerender } = field("ada");
+    const { box, onChange, rerender } = field("avo");
 
     rerender("bob");
     wait(QUIET_MS * 3);
@@ -79,15 +79,15 @@ describe("FilterField", () => {
    */
   it("keeps what was typed since, when the value it handed on comes back to it", () => {
     const { box, onChange, rerender } = field("");
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
-    type(box, "ada");
+    type(box, "avo");
 
-    rerender("ad");
+    rerender("av");
     wait(QUIET_MS);
 
-    expect(box).toHaveValue("ada");
-    expect(onChange.mock.calls).toEqual([["ad"], ["ada"]]);
+    expect(box).toHaveValue("avo");
+    expect(onChange.mock.calls).toEqual([["av"], ["avo"]]);
   });
 
   /** Only the first return is this box's own; back and then forward again is the address. */

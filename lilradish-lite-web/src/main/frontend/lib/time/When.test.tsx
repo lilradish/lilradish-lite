@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { namedDay, When, whenText } from "./When";
@@ -55,6 +55,12 @@ describe("namedDay", () => {
 });
 
 describe("whenText", () => {
+  it("says the complete local time and day for a known Berlin instant", () => {
+    now("2026-09-18T15:00:00Z");
+
+    expect(whenText("2026-09-18T07:00:00Z")).toBe("09:00 AM today");
+  });
+
   it("names today by the day rather than by the date", () => {
     now("2026-09-18T15:00:00Z");
 
@@ -78,7 +84,7 @@ describe("whenText", () => {
 
     const said = whenText("2026-09-15T07:00:00Z");
 
-    expect(said).toContain("Sep 15");
+    expect(said).toBe("Sep 15 09:00 AM");
     expect(said).not.toContain("days ago");
   });
 
@@ -124,16 +130,67 @@ describe("whenText", () => {
 });
 
 describe("When", () => {
+  it("updates every mounted time at the next local midnight with one shared timer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T21:59:59Z"));
+    const { unmount } = render(
+      <>
+        <When iso="2026-09-18T07:00:00Z" />
+        <When iso="2026-09-18T08:00:00Z" />
+      </>,
+    );
+
+    expect(screen.getAllByText(/today/)).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.getAllByText(/yesterday/)).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rechecks the calendar when the page becomes visible after its clock was suspended", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T21:00:00Z"));
+    const { unmount } = render(<When iso="2026-09-18T07:00:00Z" />);
+    expect(screen.getByText(/today/)).toBeInTheDocument();
+
+    vi.setSystemTime(new Date("2026-09-19T02:00:00Z"));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(screen.getByText(/yesterday/)).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("schedules the next midnight by the local calendar across a short day", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-29T00:00:00Z"));
+    const { unmount } = render(<When iso="2026-03-28T10:00:00Z" />);
+    expect(screen.getByText(/yesterday/)).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(22 * 60 * 60 * 1000 - 1));
+    expect(screen.getByText(/yesterday/)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByText(/Mar 28/)).toBeInTheDocument();
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps the exact instant beside the readable one", () => {
     now("2026-09-18T15:00:00Z");
 
-    render(<When iso="2026-09-17T07:00:00Z" />);
+    render(<When iso="2026-09-18T07:00:00Z" />);
 
-    const shown = screen.getByText(/yesterday/);
+    const shown = screen.getByText("09:00 AM today");
 
     expect(shown.tagName).toBe("TIME");
-    expect(shown).toHaveAttribute("dateTime", "2026-09-17T07:00:00Z");
-    expect(shown).toHaveAttribute("title", "2026-09-17T07:00:00Z");
+    expect(shown).toHaveAttribute("dateTime", "2026-09-18T07:00:00Z");
+    expect(shown).toHaveAttribute("title", "2026-09-18T07:00:00Z");
   });
 
   it("says the same thing as the bare-string form", () => {

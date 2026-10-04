@@ -1,4 +1,5 @@
-create type step_kind as enum ('entry', 'code_step', 'route');
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
+create type step_kind as enum ('entry', 'code_step', 'route', 'search');
 create type step_producer as enum ('model', 'person', 'code');
 create type declaration_side as enum ('takes', 'gives');
 create type field_kind as enum ('text', 'number', 'date', 'moment', 'yes_no', 'term', 'fields');
@@ -8,6 +9,7 @@ create type field_standing as enum ('always', 'never', 'above_confidence');
 
 -- Null is what nobody has chosen yet, which a draft may hold; each rule here refuses only a combination
 -- no step could ever be finished from.
+-- DB-SPECIFIC: deferrable, text, ~, generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table workflow_steps (
     workflow_step_id    uuid          not null default uuidv7(),
     entry_version_id    uuid          not null,
@@ -17,18 +19,21 @@ create table workflow_steps (
     pinned_version_id   uuid,
     pinned_kind         entry_kind,
     code_step           code_step,
+    search_way          text,
     producer            step_producer,
     producer_model      text,
     -- 'ordinary' where the model runs as it is, for the reason workflow_versions.helper_mode gives.
     producer_mode       text,
     tries               integer,
-    -- The reviewer is the model named where one is; otherwise a person on a step running a question or a
-    -- code step, and nobody on a workflow or a route.
     reviewer_model      text,
     -- 'ordinary' where the model runs as it is, as producer_mode.
     reviewer_mode       text,
     reviewed_by_model   boolean       generated always as (reviewer_model is not null) stored,
     tells_what_happened boolean       not null default false,
+    search_title_standing      field_standing,
+    search_body_standing       field_standing,
+    search_references_standing field_standing,
+    search_other_standing      field_standing,
     created_at          timestamptz   not null default now(),
     created_by          uuid          not null,
     updated_at          timestamptz,
@@ -63,6 +68,18 @@ create table workflow_steps (
         check (pinned_version_id is null or pinned_version_id <> entry_version_id),
     constraint workflow_steps_code_step_only_for_code_step
         check (code_step is null or coalesce(kind = 'code_step', false)),
+    constraint workflow_steps_search_only_for_search check (
+        coalesce(kind = 'search', false) or (search_way is null and search_title_standing is null
+            and search_body_standing is null and search_references_standing is null
+            and search_other_standing is null)),
+    constraint workflow_steps_search_way_shape check (search_way ~ '^[a-z][a-z0-9_]{0,62}$'),
+    constraint workflow_steps_search_standing_without_confidence check (
+        (search_title_standing is null or search_title_standing in ('always', 'never'))
+            and (search_body_standing is null or search_body_standing in ('always', 'never'))
+            and (search_references_standing is null or search_references_standing in ('always', 'never'))
+            and (search_other_standing is null or search_other_standing in ('always', 'never'))),
+    constraint workflow_steps_search_produced_by_model_or_person
+        check ((kind = 'search') is not true or producer is null or producer <> 'code'),
     constraint workflow_steps_code_step_produced_by_code_or_person
         check ((kind = 'code_step') is not true or producer is null or producer <> 'model'),
     constraint workflow_steps_question_produced_by_model_or_person
@@ -89,9 +106,68 @@ create table workflow_steps (
     constraint workflow_steps_updated_after_created check (updated_at is null or updated_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index workflow_steps_by_pinned_version
     on workflow_steps (pinned_version_id) where pinned_version_id is not null;
 
+-- DB-SPECIFIC: deferrable, length(), text, !~, ~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
+create table search_question_parts (
+    search_question_part_id uuid         not null default uuidv7(),
+    entry_version_id       uuid         not null,
+    workflow_step_id       uuid         not null,
+    step_kind              step_kind    not null default 'search',
+    position               integer      not null,
+    literal_text           text,
+    source_step_id         uuid,
+    source_path            text,
+    created_at             timestamptz  not null default now(),
+    created_by             uuid         not null,
+    updated_at             timestamptz,
+    updated_by             uuid,
+    updated_by_kind        subject_kind not null default 'person',
+
+    constraint search_question_parts_pk primary key (search_question_part_id),
+    constraint search_question_parts_step_fk foreign key (workflow_step_id, entry_version_id)
+        references workflow_steps (workflow_step_id, entry_version_id),
+    constraint search_question_parts_search_fk foreign key (workflow_step_id, step_kind)
+        references workflow_steps (workflow_step_id, kind),
+    constraint search_question_parts_step_kind_is_search check (step_kind = 'search'),
+    -- A foreign key target, at the cost subjects_kind_unique gives.
+    constraint search_question_parts_step_unique unique (search_question_part_id, workflow_step_id),
+    constraint search_question_parts_position_unique unique (workflow_step_id, position)
+        deferrable initially deferred,
+    constraint search_question_parts_position_not_negative check (position >= 0),
+    constraint search_question_parts_position_bounded check (position < 256),
+    -- Written text, or a path into this workflow's input or into a step.
+    constraint search_question_parts_exactly_one_source check (
+        (literal_text is null) = (source_path is not null) and (literal_text is null or source_step_id is null)),
+    -- Prose, for the reason reference_list_versions_note_visible gives.
+    constraint search_question_parts_literal_visible check (
+        literal_text is null
+            or (length(literal_text) > 0 and literal_text !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
+    constraint search_question_parts_literal_bounded check (length(literal_text) <= 8192),
+    constraint search_question_parts_source_step_fk foreign key (source_step_id, entry_version_id)
+        references workflow_steps (workflow_step_id, entry_version_id),
+    constraint search_question_parts_not_from_itself check (
+        source_step_id is null or source_step_id <> workflow_step_id),
+    constraint search_question_parts_source_path_shape check (
+        source_path ~ '^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})*$'),
+    constraint search_question_parts_source_path_bounded check (length(source_path) <= 1023),
+    constraint search_question_parts_author_fk foreign key (created_by) references subjects (subject_id),
+    constraint search_question_parts_editor_person_fk foreign key (updated_by, updated_by_kind)
+        references subjects (subject_id, kind),
+    constraint search_question_parts_editor_is_person check (updated_by_kind = 'person'),
+    constraint search_question_parts_updated_together check ((updated_at is null) = (updated_by is null)),
+    constraint search_question_parts_updated_after_created check (updated_at is null or updated_at >= created_at)
+);
+
+create index search_question_parts_by_version on search_question_parts (entry_version_id);
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index search_question_parts_by_source_step
+    on search_question_parts (source_step_id) where source_step_id is not null;
+
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table route_cases (
     route_case_id     uuid         not null default uuidv7(),
     -- Carried so that what binds a case's inputs can be held to the version the case is in.
@@ -136,14 +212,18 @@ create table route_cases (
     constraint route_cases_updated_after_created check (updated_at is null or updated_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index route_cases_one_fallback on route_cases (workflow_step_id) where term is null;
 
 create index route_cases_by_step on route_cases (workflow_step_id);
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index route_cases_by_target on route_cases (target_version_id) where target_version_id is not null;
 
 -- ---------------------------------------------------------------- declarations
 
+-- DB-SPECIFIC: deferrable, nulls not distinct, length(), num_nonnulls(), text, ~, !~, four-digit Unicode escapes in regular expressions,
+-- generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table declaration_fields (
     declaration_field_id uuid             not null default uuidv7(),
     entry_version_id     uuid,
@@ -164,6 +244,7 @@ create table declaration_fields (
     kind                 field_kind       not null,
     holds_many           boolean          not null default false,
     text_limit           integer,
+    text_lines           text,
     many_limit           integer,
     term_list_version_id uuid,
     -- Unchecked while term_list_version_id is null, for the reason pool_members gives.
@@ -195,7 +276,7 @@ create table declaration_fields (
     constraint declaration_fields_parent_key_unique unique (declaration_field_id, owner_id, side, kind),
     constraint declaration_fields_standing_unique unique (declaration_field_id, owner_id, standing),
     constraint declaration_fields_threshold_unique unique (declaration_field_id, standing_threshold),
-    -- A parent has the same owner and side and holds fields; a cycle longer than one is the application's.
+    -- A parent has the same owner and side and holds fields.
     constraint declaration_fields_parent_fk foreign key (parent_field_id, owner_id, side, parent_kind)
         references declaration_fields (declaration_field_id, owner_id, side, kind),
     constraint declaration_fields_parent_is_fields check (parent_kind = 'fields'),
@@ -214,6 +295,8 @@ create table declaration_fields (
     constraint declaration_fields_help_visible check (
         help is null or (length(help) > 0 and help !~ '[\u0000-\u001f\u007f-\u009f]')),
     constraint declaration_fields_help_bounded check (length(help) <= 512),
+    constraint declaration_fields_text_lines_known check (text_lines in ('one', 'several')),
+    constraint declaration_fields_text_lines_only_for_text check (text_lines is null or kind = 'text'),
     constraint declaration_fields_text_limit_positive check (text_limit >= 1),
     constraint declaration_fields_text_limit_only_for_text check (text_limit is null or kind = 'text'),
     constraint declaration_fields_many_limit_positive check (many_limit >= 1),
@@ -238,18 +321,22 @@ create table declaration_fields (
     constraint declaration_fields_updated_after_created check (updated_at is null or updated_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index declaration_fields_by_route
     on declaration_fields (workflow_step_id) where workflow_step_id is not null;
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index declaration_fields_by_parent
     on declaration_fields (parent_field_id) where parent_field_id is not null;
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index declaration_fields_by_term_list
     on declaration_fields (term_list_version_id) where term_list_version_id is not null;
 
 -- ---------------------------------------------------------------- bindings
 
 -- A path names fields and never a place among many.
+-- DB-SPECIFIC: ::, jsonb, length(), num_nonnulls(), text, ~, generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table bindings (
     binding_id       uuid         not null default uuidv7(),
     -- The workflow version the binding is written in; with neither a step nor a case, it fills an output.
@@ -313,12 +400,16 @@ create table bindings (
     constraint bindings_updated_after_created check (updated_at is null or updated_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index bindings_one_discriminator on bindings (workflow_step_id) where target_path is null;
 
 create index bindings_by_version on bindings (entry_version_id);
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index bindings_by_step on bindings (workflow_step_id) where workflow_step_id is not null;
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index bindings_by_route_case on bindings (route_case_id) where route_case_id is not null;
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index bindings_by_source_step on bindings (source_step_id) where source_step_id is not null;

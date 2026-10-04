@@ -3,6 +3,7 @@ package org.lilradish.lite.app.start;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.app.library.ConstantJson;
 import org.lilradish.lite.domain.filling.Filling;
 import org.lilradish.lite.domain.identity.GroupId;
@@ -16,6 +17,7 @@ import org.lilradish.lite.web.ChangeRequests;
 import org.lilradish.lite.web.GroupPermissionRequired;
 import org.lilradish.lite.web.JsonBody;
 import org.lilradish.lite.web.MintedIdentifiers;
+import org.lilradish.lite.web.MultipartFiles;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -27,8 +29,8 @@ import tools.jackson.databind.JsonNode;
  * the run's address, its number and whether they may read it, judged here by the rule reading a run is judged by:
  * whoever may start a run need not be one who may read it, and the page is never the one to judge that.
  *
- * <p>The body is read as {@link JsonBody} reads one: the run's name, the version it runs, and the values filled
- * in, every value a string, none, or many or fields of them. No parameter is taken.
+ * <p>The request gives a run name, version, and filled values as JSON, or as bounded JSON followed by file parts.
+ * File values come only from the checked parts. No parameter is taken.
  */
 @RestController
 final class StartRunsController {
@@ -54,7 +56,17 @@ final class StartRunsController {
     ResponseEntity<StartedAnswer> start(HttpServletRequest request) throws IOException {
         GroupId group = ActAdmission.admittedGroup(request);
         ChangeRequests.requireNoParameter(request);
+        if (MultipartFiles.sent(request)) {
+            try (MultipartFiles multipart = MultipartFiles.open(request, Filling.LARGEST_REQUEST_BYTES)) {
+                return start(request, group, multipart.document(), multipart);
+            }
+        }
         JsonNode body = JsonBody.read(request, Filling.LARGEST_REQUEST_BYTES, StartRefusal.BODY_UNUSABLE.sentence());
+        return start(request, group, body, null);
+    }
+
+    private ResponseEntity<StartedAnswer> start(
+            HttpServletRequest request, GroupId group, JsonNode body, @Nullable MultipartFiles multipart) {
         if (!body.isObject()
                 || body.size() != 3
                 || !body.path(NAME).isString()
@@ -67,7 +79,9 @@ final class StartRunsController {
                 .map(EntryVersionId::new)
                 .orElseThrow(StartRefusal.WORKFLOW_NOT_OFFERED::raised);
         JsonValue values = valuesIn(body.get(VALUES));
-        StartRuns.Started started = starts.start(group, version, name, values, CallerAdmission.callerOf(request));
+        StartRuns.Started started = multipart == null
+                ? starts.start(group, version, name, values, CallerAdmission.callerOf(request))
+                : starts.startFiles(group, version, name, values, CallerAdmission.callerOf(request), multipart);
         UUID run = started.run().value();
         return ResponseEntity.created(UriComponentsBuilder.fromPath(RUN)
                         .buildAndExpand(group.value(), run)

@@ -43,6 +43,37 @@ class TryRecordSpec extends Specification {
         number << [0, -1]
     }
 
+    def "an open model production may have no number and retains its identity"() {
+        given:
+        def identity = tryId(1)
+
+        when:
+        def pending = new TryRecord(identity, null, MODEL, null, askedAt(1), null, null, null, null, null, null,
+                false, null, [], [], [], [], [])
+
+        then:
+        pending.id() == identity
+        pending.number() == null
+        pending.open()
+        pending.unsent()
+    }
+
+    def "a person, code or completed model production must have a number"() {
+        when:
+        new TryRecord(tryId(1), null, producer, null, askedAt(1), ended ? endedAt(1) : null, null, null,
+                ended ? TryLostReason.ERRORED : null, null, null, false, null, [], [], [], [], [])
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == "TryRecord has no number only while a model production is open"
+
+        where:
+        producer                                        | ended
+        org.lilradish.lite.domain.workflow.StepProducer.PERSON | false
+        org.lilradish.lite.domain.workflow.StepProducer.CODE   | false
+        MODEL                                           | true
+    }
+
     def "an open try is refused where it names who ended it, how it was lost, or values it gave back"() {
         when:
         new TryRecord(tryId(1), 1, MODEL, null, askedAt(1), null, named == "who ended it" ? PERSON : null, null,

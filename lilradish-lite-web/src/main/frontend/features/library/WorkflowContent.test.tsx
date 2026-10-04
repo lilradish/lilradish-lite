@@ -1,5 +1,7 @@
+import { iconButtonClasses } from "@mui/material/IconButton";
 import { ThemeProvider } from "@mui/material/styles";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -16,7 +18,9 @@ import { isolatedInText } from "../../lib/direction/isolated";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { deferred } from "../../testutil/deferred";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
 import { laidOutAt } from "../../testutil/layout";
+import { noticesIn } from "../../testutil/notices";
 import type { ReadContent } from "./ContentProblems";
 import { WorkflowContent } from "./WorkflowContent";
 
@@ -126,6 +130,7 @@ const WORKFLOW = {
     ],
     workflows: [],
     codeSteps: [],
+    searchWays: [],
     models: [],
   },
   terms: {},
@@ -148,6 +153,13 @@ const NOTIFYING = {
       source: { step: 0, path: "summary" },
     },
   ],
+};
+
+const CLOSING = {
+  ...NOTIFYING,
+  stepId: "0000000c-0000-4000-8000-000000000cb4",
+  name: "close",
+  bindings: [],
 };
 
 const PINNING_OLDER = {
@@ -214,11 +226,25 @@ function opening(
 }
 
 function part(name: string): HTMLElement {
-  return screen.getByRole("region", { name });
+  return name === "The steps"
+    ? screen.getByRole("heading", { name, level: 3 }).parentElement!
+        .parentElement!
+    : screen.getByRole("region", { name });
+}
+
+function nameInOpenedField(partName: string): HTMLElement {
+  const region = part(partName);
+  const closed = region.querySelector<HTMLElement>(
+    'fieldset button[aria-expanded="false"]',
+  );
+  if (closed !== null) {
+    fireEvent.click(closed);
+  }
+  return within(region).getByRole("textbox", { name: "Name" });
 }
 
 async function opened(): Promise<void> {
-  await screen.findByRole("region", { name: "The steps" });
+  await screen.findByRole("heading", { name: "The steps", level: 3 });
 }
 
 function rowsOf(): HTMLElement[] {
@@ -227,6 +253,14 @@ function rowsOf(): HTMLElement[] {
 
 function rowWords(): string[] {
   return rowsOf().map((row) => row.textContent ?? "");
+}
+
+function wordsOf(item: HTMLElement): string | null {
+  const words = item.getAttribute("aria-label");
+  expect(item.textContent).toBe(
+    words?.replaceAll("\u2068", "").replaceAll("\u2069", ""),
+  );
+  return words;
 }
 
 function panel(name: string): HTMLElement {
@@ -267,6 +301,225 @@ async function savedSince() {
 }
 
 describe("WorkflowContent", () => {
+  it.each(["answered", "unchanged", "refused"] as const)(
+    "keeps the selected draft during a reread and reconciles it when %s",
+    async (outcome) => {
+      const afresh = deferred<readonly [string, number]>();
+      const { sent, search } = opening(
+        DRAFT,
+        {
+          [`GET ${ADDRESS}`]: [reply(WORKFLOW), afresh.promise],
+          [`PUT ${ADDRESS}/steps`]: [
+            reply({ code: "DRAFT_WRITTEN_SINCE_READ" }, 409),
+          ],
+        },
+        `?step=${ASKING.stepId}&keep=yes`,
+      );
+      await opened();
+      const name = screen.getByRole("textbox", { name: "Name" });
+      await userEvent.type(name, "_draft");
+      await userEvent.click(saveSteps());
+      const readAfresh = await screen.findByRole("button", {
+        name: "Read it afresh",
+      });
+      const nameAfterWrite = screen.getByRole("textbox", { name: "Name" });
+      await userEvent.click(readAfresh);
+      expect(screen.getByRole("textbox", { name: "Name" })).toBe(
+        nameAfterWrite,
+      );
+      expect(nameAfterWrite).toHaveValue("triage_draft");
+      expect(saveSteps()).toHaveAttribute("aria-disabled", "true");
+      saveSteps().focus();
+      await userEvent.keyboard("{Enter}");
+      expect(requestsTo(sent)).toEqual([
+        `GET ${ADDRESS}`,
+        `PUT ${ADDRESS}/steps`,
+        `GET ${ADDRESS}`,
+      ]);
+      await act(async () =>
+        afresh.settle(
+          await (outcome === "refused"
+            ? reply({ code: "ENTRY_GONE" }, 404)
+            : reply({
+                ...WORKFLOW,
+                revision: 5,
+                steps:
+                  outcome === "unchanged"
+                    ? WORKFLOW.steps
+                    : [{ ...ASKING, tries: 3 }],
+              })),
+        ),
+      );
+      if (outcome === "refused") {
+        await waitFor(() =>
+          expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+        );
+        expect(screen.queryByRole("button", { name: SAVE_STEPS })).toBeNull();
+        expect(
+          screen.queryByRole("region", {
+            name: isolatedInText("triage_draft"),
+          }),
+        ).toBeNull();
+        expect(
+          screen.getByRole("region", { name: "The steps" }),
+        ).toBeInTheDocument();
+      } else if (outcome === "unchanged") {
+        await waitFor(() =>
+          expect(saveSteps()).not.toHaveAttribute("aria-disabled"),
+        );
+        expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue(
+          "triage_draft",
+        );
+        expect(saveSteps()).toHaveClass("MuiButton-contained");
+      } else {
+        await waitFor(() =>
+          expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue(
+            "triage",
+          ),
+        );
+        expect(saveSteps()).not.toHaveClass("MuiButton-contained");
+      }
+      expect(search().get("keep")).toBe("yes");
+      expect(search().get("step")).toBe(ASKING.stepId);
+    },
+  );
+
+  it("shows a searching step's way, four returned fields and ordinary producer and reviewer", async () => {
+    const fields = (["title", "body", "references", "other"] as const).map(
+      (name, index) => ({ ...SUMMARY, fieldId: `search-${index}`, name }),
+    );
+    const search = {
+      stepId: "0000000c-0000-4000-8000-000000000cb9",
+      name: "find",
+      bindings: [],
+      runs: {
+        kind: "search",
+        searchWay: "web",
+        gives: fields,
+        question: [
+          { text: "Find " },
+          { partId: "p1", from: { input: "complaint" } },
+        ],
+        standings: { title: "always", body: "never" },
+      },
+      producer: { kind: "person" },
+      tries: 2,
+    };
+    opening(READ_ONLY, {
+      [`GET ${ADDRESS}`]: [
+        reply({
+          ...WORKFLOW,
+          steps: [ASKING, search],
+          problems: [],
+          offered: {
+            ...WORKFLOW.offered,
+            searchWays: [{ name: "web", tool: "web_search", gives: fields }],
+          },
+        }),
+      ],
+    });
+    await opened();
+
+    const row = within(part("The steps")).getByRole("row", { name: /find/ });
+    expect(row).toHaveTextContent("Search");
+    expect(row).toHaveTextContent("web");
+    expect(row).toHaveTextContent("4 values");
+    expect(row).toHaveTextContent("A person");
+    expect(row).not.toHaveTextContent("Nothing chosen yet");
+  });
+
+  it("shows run settings shut with ceiling and help in one summary while a helper problem stays visible", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [
+        reply({
+          ...WORKFLOW,
+          mayBeHelped: true,
+          problems: [{ code: "helper_missing", part: "helper" }],
+        }),
+      ],
+    });
+    await opened();
+
+    const settings = part("Run settings");
+    const disclosure = within(settings).getByRole("button", {
+      name: "Run settings",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(settings).toHaveTextContent(
+      "At most 100 sent and came back in all · May be helped by a model not chosen yet",
+    );
+    expect(settings).toHaveTextContent(
+      "Runs may be helped, and no model is named to help them.",
+    );
+    expect(
+      within(settings).queryByRole("textbox", { name: "Ceiling" }),
+    ).toBeNull();
+
+    const information = within(settings).getByRole("button", {
+      name: "What is sent and what comes back, added together. Leave it empty for no ceiling.",
+    });
+    nameInOpenedField("What it takes").focus();
+    await userEvent.keyboard("{ArrowLeft}");
+    information.focus();
+    expect(information).toHaveFocus();
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Leave it empty for no ceiling.",
+    );
+    await userEvent.click(disclosure);
+    expect(
+      within(settings).getByRole("textbox", { name: "Ceiling" }),
+    ).toBeInTheDocument();
+    expect(
+      within(settings).getByRole("switch", { name: "Runs may be helped" }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "no ceiling",
+      { ceiling: undefined, mayBeHelped: false },
+      "No ceiling · May not be helped",
+    ],
+    [
+      "helper still to be chosen",
+      { mayBeHelped: true },
+      "At most 100 sent and came back in all · May be helped by a model not chosen yet",
+    ],
+    [
+      "helper and mode chosen",
+      { mayBeHelped: true, helper: { model: "general", mode: "research" } },
+      "At most 100 sent and came back in all · May be helped by general in research",
+    ],
+  ])("summarizes run settings with %s", async (_case, changes, summary) => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [reply({ ...WORKFLOW, ...changes })],
+    });
+    await opened();
+
+    expect(part("Run settings")).toHaveTextContent(summary);
+    expect(
+      screen.getByRole("button", { name: "Run settings" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps a typed ceiling when run settings are shut and opened again, sending nothing", async () => {
+    const { sent } = opening(DRAFT);
+    await opened();
+    const disclosure = screen.getByRole("button", { name: "Run settings" });
+    await userEvent.click(disclosure);
+    const ceiling = screen.getByRole("textbox", { name: "Ceiling" });
+    await userEvent.type(ceiling, "0");
+    await userEvent.click(disclosure);
+
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("textbox", { name: "Ceiling" })).toBeNull();
+    await userEvent.click(disclosure);
+    expect(screen.getByRole("textbox", { name: "Ceiling" })).toHaveValue(
+      "1000",
+    );
+    expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
+  });
+
   it("reads every step in its own row, what it runs, who produces it and what it gives", async () => {
     opening(READ_ONLY);
     await opened();
@@ -281,6 +534,110 @@ describe("WorkflowContent", () => {
     ]);
   });
 
+  it("sets the kind a step runs apart above which one it runs, saying the kind nowhere else", async () => {
+    opening(READ_ONLY);
+    await opened();
+
+    const runs = within(rowsOf()[0]!).getAllByRole("cell")[2]!;
+    const tag = within(runs).getByText("Question");
+
+    expect(tag.nextSibling?.textContent).toBe(
+      `${isolatedInText("Triage")}, version 4`,
+    );
+    expect(runs.textContent?.match(/question/gi)).toEqual(["Question"]);
+  });
+
+  it("sets a code step apart above its name alone, and a route by its kind alone", async () => {
+    opening(READ_ONLY, {
+      [`GET ${ADDRESS}`]: [
+        reply({
+          ...WORKFLOW,
+          steps: [
+            {
+              ...ASKING,
+              runs: { kind: "code_step", codeStep: "tidy_up" },
+              producer: { kind: "code" },
+              bindings: [],
+            },
+            {
+              ...ASKING,
+              stepId: NOTIFYING.stepId,
+              name: "choose",
+              runs: { kind: "route", gives: [], cases: [] },
+              producer: undefined,
+              bindings: [],
+            },
+          ],
+        }),
+      ],
+    });
+    await opened();
+
+    const [code, route] = rowsOf().map(
+      (row) => within(row).getAllByRole("cell")[2]!,
+    );
+
+    expect(within(code!).getByText("Code step").nextSibling?.textContent).toBe(
+      "tidy_up",
+    );
+    expect(code!.textContent).toBe("Code steptidy_up");
+    expect(route!.textContent).toBe("Route");
+    expect(within(route!).getByText("Route").nextSibling).toBeNull();
+  });
+
+  it("says a step that runs nothing yet has nothing chosen, with no kind set apart", async () => {
+    opening(DRAFT);
+    await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
+
+    const runs = within(rowsOf()[1]!).getAllByRole("cell")[2]!;
+
+    expect(runs.textContent).toBe("Nothing chosen yet");
+    expect(runs.querySelector("span")).toBeNull();
+  });
+
+  /** The steps are named by the list's own box, not a region of their own, yet framed like every other block. */
+  it("frames the steps as a block of the version, as it does what fills what it gives back, under a heading one below the version's", async () => {
+    opening(READ_ONLY);
+    await opened();
+
+    const steps = within(part("The steps")).getByRole("heading", {
+      name: "The steps",
+    });
+    const framed = [
+      steps.parentElement!,
+      part("What fills each value it gives back"),
+    ];
+
+    expect(steps.tagName).toBe("H3");
+    expect(steps.parentElement!.tagName).toBe("DIV");
+    expect(framed.map(drawnOf)).toEqual(framed.map(() => drawnAtDepth(2)));
+  });
+
+  it("keeps an output's earlier step selected while its field is still to be chosen", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [reply({ ...WORKFLOW, outputs: [] })],
+    });
+    await opened();
+    const output = part("What fills each value it gives back");
+    const from = within(output).getByRole("combobox", { name: "From" });
+
+    await userEvent.click(from);
+    await userEvent.click(
+      screen.getByRole("option", { name: "Step 1: triage" }),
+    );
+    expect(from).toHaveTextContent("Step 1: triage");
+    expect(
+      within(output).getByRole("combobox", { name: "Which" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(output).getByRole("combobox", { name: "Which" }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "summary" }));
+    expect(within(output).queryByText(/Nothing fills it yet/)).toBeNull();
+  });
+
   it("lists what submitting would refuse by its place, and nothing it would not", async () => {
     opening(READ_ONLY);
     await opened();
@@ -288,12 +645,28 @@ describe("WorkflowContent", () => {
     const listed = within(
       screen.getByRole("list", { name: "What does not hold yet" }),
     ).getAllByRole("listitem");
-    expect(listed.map((item) => item.textContent)).toEqual([
+    expect(listed.map(wordsOf)).toEqual([
       `The steps, ${isolatedInText("triage")}: It says nothing yet of how many tries it may make.`,
     ]);
     expect(
       screen.queryByRole("list", { name: "What could be too long to send" }),
     ).toBeNull();
+  });
+
+  it("says how many more problems the workflow read counted after its visible list", async () => {
+    opening(READ_ONLY, {
+      [`GET ${ADDRESS}`]: [reply({ ...WORKFLOW, problemTotal: 4 })],
+    });
+    await opened();
+
+    expect(
+      screen.getByText("3 more things do not hold and are not listed."),
+    ).toBeVisible();
+    expect(
+      within(
+        screen.getByRole("list", { name: "What does not hold yet" }),
+      ).getAllByRole("listitem"),
+    ).toHaveLength(1);
   });
 
   it("says a step that could send its model more than it takes apart from what submitting would refuse", async () => {
@@ -317,7 +690,7 @@ describe("WorkflowContent", () => {
     const said = within(
       screen.getByRole("list", { name: "What could be too long to send" }),
     ).getAllByRole("listitem");
-    expect(said.map((item) => item.textContent)).toEqual([
+    expect(said.map(wordsOf)).toEqual([
       `${isolatedInText("triage")}: what it could send ${isolatedInText("small")} to review runs about 2,500 units past what that model takes.`,
     ]);
     expect(
@@ -349,7 +722,7 @@ describe("WorkflowContent", () => {
     const said = within(
       screen.getByRole("list", { name: "What could be too long to send" }),
     ).getAllByRole("listitem");
-    expect(said.map((item) => item.textContent)).toEqual([
+    expect(said.map(wordsOf)).toEqual([
       `${isolatedInText("triage")}: what it could send ${isolatedInText("general")} to produce runs about 1 unit past what that model takes.`,
     ]);
     expect(
@@ -398,10 +771,13 @@ describe("WorkflowContent", () => {
     const { sent } = opening(DRAFT);
     await opened();
 
+    expect(screen.queryByText("Unsaved")).toBeNull();
+    expect(saveSteps()).not.toHaveClass("MuiButton-contained");
     expect(saveSteps()).toHaveAttribute("aria-disabled", "true");
     expect(saveSteps()).toHaveAccessibleDescription(
       "Change a step or what fills what it gives back first.",
     );
+    expect(noticesIn(saveSteps().parentElement!)).toEqual([]);
     saveSteps().focus();
     await userEvent.keyboard("{Enter}");
     expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
@@ -435,6 +811,55 @@ describe("WorkflowContent", () => {
     expect(saveSteps()).toHaveAccessibleDescription(
       "Step 2, not named yet: A step's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
     );
+    expect(noticesIn(saveSteps().parentElement!)).toEqual([
+      {
+        severity: "warning",
+        words:
+          "Step 2, not named yet: A step's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
+      },
+    ]);
+    const reason =
+      saveSteps().parentElement!.querySelector<HTMLElement>('[role="none"]')!;
+    const hint = within(reason).getByText("not named yet");
+    expect(getComputedStyle(hint).fontStyle).toBe("italic");
+    expect(getComputedStyle(hint).fontWeight).toBe("400");
+    expect(getComputedStyle(hint).color).toBe(getComputedStyle(reason).color);
+    expect(getComputedStyle(hint).color).not.toBe("rgb(89, 89, 89)");
+    expect(within(reason).getByText("Step 2").tagName).toBe("BDI");
+    expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
+  });
+
+  it("isolates a named step in a held reason and keeps the complete text description", async () => {
+    const { sent } = opening(DRAFT);
+    await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
+    const name = "Demo Sample <img src=x>";
+
+    fireEvent.change(
+      within(panel("Step 2, not named yet")).getByRole("textbox", {
+        name: "Name",
+      }),
+      { target: { value: name } },
+    );
+    fireEvent.click(saveSteps());
+
+    const reason =
+      saveSteps().parentElement!.querySelector<HTMLElement>('[role="none"]')!;
+    expect(saveSteps()).toHaveAccessibleDescription(
+      `${isolatedInText(name)}: A step's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.`,
+    );
+    expect(saveSteps()).toHaveAttribute("aria-disabled", "true");
+    const stepName = within(reason).getByText(name);
+    const why = within(reason).getByText(
+      "A step's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
+    );
+    expect(stepName.tagName).toBe("BDI");
+    expect(getComputedStyle(why).fontStyle).toBe("italic");
+    expect(getComputedStyle(why).fontWeight).toBe("400");
+    expect(getComputedStyle(why).color).toBe(getComputedStyle(reason).color);
+    expect(getComputedStyle(stepName).fontStyle).not.toBe("italic");
+    expect(reason.querySelector("img")).toBeNull();
+    expect(within(reason).queryByText("not named yet")).toBeNull();
     expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
   });
 
@@ -451,6 +876,10 @@ describe("WorkflowContent", () => {
     });
     await opened();
     await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
+    expect(screen.getByText("Unsaved")).toBeVisible();
+    expect(getComputedStyle(screen.getByText("Unsaved")).fontStyle).toBe(
+      "italic",
+    );
     const added = search().get("step");
     await userEvent.type(
       within(panel("Step 2, not named yet")).getByRole("textbox", {
@@ -459,9 +888,12 @@ describe("WorkflowContent", () => {
       "tidy",
     );
 
+    expect(saveSteps()).toHaveClass("MuiButton-contained");
     await userEvent.click(saveSteps());
 
     await waitFor(() => expect(written).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Unsaved")).toBeNull();
+    expect(saveSteps()).not.toHaveClass("MuiButton-contained");
     expect(search().getAll("step")).toEqual([tidying]);
     expect(search().get("step")).not.toBe(added);
     expect(
@@ -519,7 +951,7 @@ describe("WorkflowContent", () => {
       outputs: [{ target: "summary", source: { step: 0, path: "summary" } }],
     });
     expect(rowWords()).toHaveLength(2);
-    expect(rowWords()[1]).toContain(isolatedInText("tidy"));
+    expect(rowsOf()[1]!.querySelector("a bdi")?.textContent).toBe("tidy");
   });
 
   it("opens the step the address picks under a heading one below the steps', and at no other level", async () => {
@@ -535,6 +967,60 @@ describe("WorkflowContent", () => {
         name: isolatedInText("triage"),
       }),
     ).toBeNull();
+  });
+
+  it("opens the step picked in a panel wider than the usual one", async () => {
+    opening(DRAFT, {}, `?step=${ASKING.stepId}`);
+    await opened();
+
+    expect(getComputedStyle(panel(isolatedInText("triage"))).width).toBe(
+      "464px",
+    );
+  });
+
+  it("sets the kind the step picked runs apart beside its panel's heading, no part of the name the panel takes from it", async () => {
+    opening(READ_ONLY, {}, `?step=${ASKING.stepId}`);
+    await opened();
+
+    const picked = panel(isolatedInText("triage"));
+    const heading = within(picked).getByRole("heading", { level: 4 });
+    const tag = within(picked).getByText("Question");
+
+    expect(heading.nextElementSibling).toBe(tag);
+    expect(tag.firstElementChild?.getAttribute("data-testid")).toBe(
+      "QuestionAnswerIcon",
+    );
+    expect(heading).toHaveAccessibleName(isolatedInText("triage"));
+  });
+
+  it("sets the kind chosen apart beside the heading of a step added once one is chosen, and none before", async () => {
+    opening(DRAFT);
+    await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
+    const added = panel("Step 2, not named yet");
+    const defaultHeading = within(added).getByRole("heading", { level: 4 });
+    const hint = within(defaultHeading).getByText("not named yet");
+    expect(within(defaultHeading).getByText("Step 2").tagName).toBe("BDI");
+    expect(getComputedStyle(hint).fontWeight).toBe("400");
+    expect(getComputedStyle(hint).fontStyle).toBe("italic");
+    expect(getComputedStyle(hint).fontSize).toBe(
+      getComputedStyle(defaultHeading).fontSize,
+    );
+    expect(getComputedStyle(defaultHeading).fontStyle).not.toBe("italic");
+    const headedBefore = within(added).getByRole("heading", {
+      level: 4,
+    }).parentElement;
+
+    await userEvent.click(
+      within(added).getByRole("combobox", { name: "Runs" }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "A code step" }));
+    const heading = within(added).getByRole("heading", { level: 4 });
+
+    expect(headedBefore).toBe(added);
+    expect(heading.parentElement).not.toBe(added);
+    expect(heading.nextElementSibling?.textContent).toBe("Code step");
+    expect(heading).toHaveAccessibleName("Step 2, not named yet");
   });
 
   it("marks the row of the step the address picks as the current one, and no other", async () => {
@@ -599,6 +1085,231 @@ describe("WorkflowContent", () => {
     expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
   });
 
+  /** Words on every row would outweigh the steps; each icon's name still says which step it acts on. */
+  it("draws each step's moves and taking it out as an icon alone, named with its step, and only taking it out in the warning colour", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING] })],
+    });
+    await opened();
+
+    const icons = {
+      up: "ArrowUpwardIcon",
+      down: "ArrowDownwardIcon",
+      out: "DeleteOutlinedIcon",
+    } as const;
+    const drawn = ["triage", "notify"].flatMap((name) => {
+      const step = isolatedInText(name);
+      return (
+        [
+          ["up", `Move up: ${step}`],
+          ["down", `Move down: ${step}`],
+          ["out", `Take out: ${step}`],
+        ] as const
+      ).map(([act, words]) => ({
+        act,
+        button: screen.getByRole("button", { name: words }),
+      }));
+    });
+
+    expect(drawn.map(({ button }) => button.textContent)).toEqual(
+      drawn.map(() => ""),
+    );
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("data-testid"),
+      ),
+    ).toEqual(drawn.map(({ act }) => icons[act]));
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("aria-hidden"),
+      ),
+    ).toEqual(drawn.map(() => "true"));
+    expect(
+      drawn
+        .filter(({ button }) =>
+          button.classList.contains(iconButtonClasses.colorWarning),
+        )
+        .map(({ act }) => act),
+    ).toEqual(["out", "out"]);
+  });
+
+  it("shows a typed step name in its row", async () => {
+    opening(
+      DRAFT,
+      {
+        [`GET ${ADDRESS}`]: [
+          reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING] }),
+        ],
+      },
+      `?step=${ASKING.stepId}`,
+    );
+    await opened();
+    within(panel(isolatedInText("triage")))
+      .getByRole("textbox", { name: "Name" })
+      .focus();
+    await userEvent.keyboard("s");
+
+    expect(rowsOf()[0]!.querySelector("a bdi")?.textContent).toBe("triages");
+    expect(rowsOf()[1]!.querySelector("a bdi")?.textContent).toBe("notify");
+  });
+
+  it("marks only the picked step when another row is opened", async () => {
+    opening(
+      DRAFT,
+      {
+        [`GET ${ADDRESS}`]: [
+          reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING, CLOSING] }),
+        ],
+      },
+      `?step=${ASKING.stepId}`,
+    );
+    await opened();
+    await userEvent.click(
+      screen.getByRole("link", { name: `Open ${isolatedInText("close")}` }),
+    );
+
+    expect(panel(isolatedInText("close"))).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: `Open ${isolatedInText("close")}` }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(
+      screen.getByRole("link", { name: `Open ${isolatedInText("triage")}` }),
+    ).not.toHaveAttribute("aria-current");
+  });
+
+  it("holds moving the first step up and the last down, and no other move", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [
+        reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING, CLOSING] }),
+      ],
+    });
+    await opened();
+
+    const held = (name: string) =>
+      screen.getByRole("button", { name }).getAttribute("aria-disabled");
+    expect(
+      ["triage", "notify", "close"].flatMap((step) => [
+        held(`Move up: ${isolatedInText(step)}`),
+        held(`Move down: ${isolatedInText(step)}`),
+        held(`Take out: ${isolatedInText(step)}`),
+      ]),
+    ).toEqual(["true", null, null, null, null, null, null, "true", null]);
+  });
+
+  it("holds every move and taking out while the steps are being saved, changing nothing, sending nothing more and keeping the step open", async () => {
+    const saving = deferred<readonly [string, number]>();
+    const { sent, search } = opening(
+      DRAFT,
+      {
+        [`GET ${ADDRESS}`]: [
+          reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING, CLOSING] }),
+        ],
+        [`PUT ${ADDRESS}/steps`]: [saving.promise],
+      },
+      `?step=${NOTIFYING.stepId}`,
+    );
+    await opened();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `Move down: ${isolatedInText("triage")}`,
+      }),
+    );
+    await userEvent.click(saveSteps());
+    const acts = within(part("The steps"))
+      .getAllByRole("button")
+      .filter((button) =>
+        /^(Move (?:up|down)|Take out): /.test(
+          button.getAttribute("aria-label") ?? "",
+        ),
+      );
+    const order = rowWords();
+
+    for (const act of acts) {
+      act.focus();
+      await userEvent.keyboard("{Enter}");
+    }
+
+    expect(acts).toHaveLength(9);
+    expect(
+      acts.filter((act) => act.getAttribute("aria-disabled") !== "true"),
+    ).toEqual([]);
+    expect(rowWords()).toEqual(order);
+    expect(requestsTo(sent)).toEqual([
+      `GET ${ADDRESS}`,
+      `PUT ${ADDRESS}/steps`,
+    ]);
+    expect(search().get("step")).toBe(NOTIFYING.stepId);
+    expect(panel(isolatedInText("notify"))).toBeInTheDocument();
+  });
+
+  /** The icon's name says which step it acts on; the tip needs only say what it does, held or not. */
+  it.each([
+    ["held", `Move up: ${isolatedInText("triage")}`, "Move up"],
+    ["available", `Move down: ${isolatedInText("triage")}`, "Move down"],
+    ["warning", `Take out: ${isolatedInText("triage")}`, "Take out"],
+  ])(
+    "says what an act does as a tip of its own words once pointed at, %s",
+    async (_state, name, tip) => {
+      opening(DRAFT, {
+        [`GET ${ADDRESS}`]: [
+          reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING] }),
+        ],
+      });
+      await opened();
+
+      const button = screen.getByRole("button", { name });
+      await userEvent.hover(button);
+
+      expect(button).toHaveAttribute("aria-label", name);
+      expect(name.startsWith(`${tip}: `)).toBe(true);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(tip);
+    },
+  );
+
+  it("sets each step's order, its heading with it, at the trailing end in digits of one width, and no other column so", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING] })],
+    });
+    await opened();
+
+    const table = within(part("The steps")).getByRole("table");
+    const columnOf = (at: number) =>
+      [...table.querySelectorAll("tr")].map((row) => row.cells[at]!);
+    const setAs = (cell: HTMLElement) => {
+      const drawn = getComputedStyle(cell);
+      return `${drawn.textAlign} ${drawn.fontVariantNumeric}`;
+    };
+
+    expect(columnOf(0).map((cell) => cell.textContent)).toEqual([
+      "Order",
+      "1",
+      "2",
+    ]);
+    expect(new Set(columnOf(0).map(setAs))).toEqual(
+      new Set(["right tabular-nums"]),
+    );
+    expect(
+      [1, 2, 3, 4, 5]
+        .flatMap(columnOf)
+        .map(setAs)
+        .filter((set) => set.includes("right") || set.includes("tabular")),
+    ).toEqual([]);
+  });
+
+  it("lets the steps scroll sideways in a box of their own, leaving the block around them as wide as the page gives it", async () => {
+    opening(DRAFT);
+    await opened();
+
+    const table = within(part("The steps")).getByRole("table");
+    const block = within(part("The steps")).getByRole("heading", {
+      name: "The steps",
+    }).parentElement!.parentElement!;
+
+    expect(getComputedStyle(table.parentElement!).overflowX).toBe("auto");
+    expect(table.parentElement!.parentElement).toBe(block);
+    expect(getComputedStyle(block).overflowX).not.toBe("auto");
+  });
+
   /** React hands focus back to a focused node it moves, so the press is made with focus elsewhere to see the page's own. */
   it("puts focus on the move pressed once its row has moved, wherever focus was", async () => {
     opening(DRAFT, {
@@ -606,12 +1317,12 @@ describe("WorkflowContent", () => {
     });
     await opened();
     const down = screen.getByRole("button", {
-      name: `Move ${isolatedInText("triage")} down`,
+      name: `Move down: ${isolatedInText("triage")}`,
     });
 
     fireEvent.click(down);
 
-    expect(rowWords()[1]).toContain(isolatedInText("triage"));
+    expect(rowsOf()[1]!.querySelector("a bdi")?.textContent).toBe("triage");
     expect(down).toHaveFocus();
     expect(
       screen.getByRole("link", { name: `Open ${isolatedInText("notify")}` }),
@@ -627,7 +1338,7 @@ describe("WorkflowContent", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: `Move ${isolatedInText("triage")} down`,
+        name: `Move down: ${isolatedInText("triage")}`,
       }),
     );
     await userEvent.click(saveSteps());
@@ -661,7 +1372,7 @@ describe("WorkflowContent", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: `Take ${isolatedInText("triage")} out`,
+        name: `Take out: ${isolatedInText("triage")}`,
       }),
     );
 
@@ -681,7 +1392,7 @@ describe("WorkflowContent", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: `Take ${isolatedInText("notify")} out`,
+        name: `Take out: ${isolatedInText("notify")}`,
       }),
     );
 
@@ -693,6 +1404,60 @@ describe("WorkflowContent", () => {
     ).toBeNull();
   });
 
+  it("puts focus on the next row's step after a middle one taken out, and on no other", async () => {
+    opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [
+        reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING, CLOSING] }),
+      ],
+    });
+    await opened();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `Take out: ${isolatedInText("notify")}`,
+      }),
+    );
+
+    expect(
+      screen.getByRole("link", { name: `Open ${isolatedInText("close")}` }),
+    ).toHaveFocus();
+    expect(
+      screen.getByRole("link", { name: `Open ${isolatedInText("triage")}` }),
+    ).not.toHaveFocus();
+    expect(
+      screen.queryByRole("link", { name: `Open ${isolatedInText("notify")}` }),
+    ).toBeNull();
+  });
+
+  it("shuts the step picked once it is taken out, drops it from the address, and puts focus on the step after it", async () => {
+    const { search } = opening(
+      DRAFT,
+      {
+        [`GET ${ADDRESS}`]: [
+          reply({ ...WORKFLOW, steps: [ASKING, NOTIFYING, CLOSING] }),
+        ],
+      },
+      `?step=${NOTIFYING.stepId}`,
+    );
+    await opened();
+    const before = panel(isolatedInText("notify"));
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `Take out: ${isolatedInText("notify")}`,
+      }),
+    );
+
+    expect(before).not.toBeInTheDocument();
+    expect(search().get("step")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: isolatedInText("close") }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: `Open ${isolatedInText("close")}` }),
+    ).toHaveFocus();
+  });
+
   it("puts focus on the steps' heading once the last step is taken out, saying there is none", async () => {
     opening(DRAFT);
     await opened();
@@ -700,7 +1465,7 @@ describe("WorkflowContent", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: `Take ${isolatedInText("triage")} out`,
+        name: `Take out: ${isolatedInText("triage")}`,
       }),
     );
 
@@ -796,13 +1561,18 @@ describe("WorkflowContent", () => {
         }),
       ],
     });
-    await opened();
-
-    const add = screen.getByRole("button", { name: "Add a step" });
+    const add = await screen.findByText("Add a step", { selector: "button" });
+    expect(add).toHaveAccessibleName("Add a step");
     expect(add).toHaveAttribute("aria-disabled", "true");
     expect(add).toHaveAccessibleDescription(
       "A workflow version holds at most 256 steps.",
     );
+    expect(noticesIn(add.parentElement!)).toEqual([
+      {
+        severity: "warning",
+        words: "A workflow version holds at most 256 steps.",
+      },
+    ]);
     add.focus();
     await userEvent.keyboard("{Enter}");
     expect(rowsOf()).toHaveLength(256);
@@ -851,9 +1621,9 @@ describe("WorkflowContent", () => {
     );
 
     await waitFor(() =>
-      expect(rowWords()).toEqual([
-        expect.stringContaining(isolatedInText("their_triage")),
-      ]),
+      expect(
+        rowsOf().map((row) => row.querySelector("a bdi")?.textContent),
+      ).toEqual(["their_triage"]),
     );
     expect(
       screen.queryByText(/Somebody saved this draft since it was read here\./),
@@ -870,6 +1640,7 @@ describe("WorkflowContent", () => {
       [`PUT ${ADDRESS}/ceiling`]: [reply({ code: "CEILING_UNUSABLE" }, 400)],
     });
     await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
 
     await userEvent.clear(screen.getByRole("textbox", { name: "Ceiling" }));
     await userEvent.click(
@@ -882,6 +1653,14 @@ describe("WorkflowContent", () => {
         { selector: '[role="alert"] *' },
       ),
     ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
+    expect(
+      screen.getByText(
+        "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
+        { selector: '[role="alert"] *' },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Ceiling" })).toBeNull();
     expect(screen.queryByText(/Somebody saved this draft/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Read it afresh" })).toBeNull();
   });
@@ -894,6 +1673,7 @@ describe("WorkflowContent", () => {
       ],
     });
     await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
     const ceiling = screen.getByRole("textbox", { name: "Ceiling" });
     const save = screen.getByRole("button", {
       name: "Save what a run may spend",
@@ -916,6 +1696,7 @@ describe("WorkflowContent", () => {
       [`PUT ${ADDRESS}/ceiling`]: [reply({ ...WORKFLOW, ceiling: "5000" })],
     });
     await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
 
     await userEvent.type(
       within(part("What a run may spend")).getByRole("textbox", {
@@ -946,14 +1727,9 @@ describe("WorkflowContent", () => {
       [`PUT ${ADDRESS}/ceiling`]: [held.promise],
     });
     await opened();
-    await userEvent.type(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
-    await userEvent.type(
-      within(part("What it gives back")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
+    await userEvent.type(nameInOpenedField("What it takes"), "_text");
+    await userEvent.type(nameInOpenedField("What it gives back"), "_text");
     await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
     await userEvent.type(
       within(panel("Step 2, not named yet")).getByRole("textbox", {
@@ -1008,6 +1784,7 @@ describe("WorkflowContent", () => {
       ],
     });
     await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
     await userEvent.type(screen.getByRole("textbox", { name: "Ceiling" }), "0");
     await userEvent.click(
       screen.getByRole("button", { name: "Save what a run may spend" }),
@@ -1030,6 +1807,47 @@ describe("WorkflowContent", () => {
     expect(revisions).toEqual([3, 4]);
   });
 
+  it("keeps an unsaved step when another part is saved and its pin description changes", async () => {
+    const { sent, written } = opening(DRAFT, {
+      [`GET ${ADDRESS}`]: [reply(PINNING_OLDER)],
+      [`PUT ${ADDRESS}/ceiling`]: [
+        reply({
+          ...PINNING_OLDER,
+          revision: 4,
+          ceiling: "200",
+          steps: [ASKING],
+        }),
+      ],
+    });
+    await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Add a step" }));
+    await userEvent.type(
+      within(panel("Step 2, not named yet")).getByRole("textbox", {
+        name: "Name",
+      }),
+      "tidy",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
+    const ceiling = screen.getByRole("textbox", { name: "Ceiling" });
+    await userEvent.clear(ceiling);
+    await userEvent.type(ceiling, "200");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save what a run may spend" }),
+    );
+
+    await waitFor(() => expect(written).toHaveBeenCalledTimes(1));
+    expect(
+      within(panel(isolatedInText("tidy"))).getByRole("textbox", {
+        name: "Name",
+      }),
+    ).toHaveValue("tidy");
+    expect(saveSteps()).toHaveClass("MuiButton-contained");
+    expect(requestsTo(sent)).toEqual([
+      `GET ${ADDRESS}`,
+      `PUT ${ADDRESS}/ceiling`,
+    ]);
+  });
+
   /** What is drawn while it is read afresh is the revision being replaced, which a write would be refused over. */
   it("holds every save while the workflow is read afresh, and sends nothing until the read lands", async () => {
     const afresh = deferred<readonly [string, number]>();
@@ -1040,6 +1858,7 @@ describe("WorkflowContent", () => {
       ],
     });
     await opened();
+    await userEvent.click(screen.getByRole("button", { name: "Run settings" }));
     await userEvent.type(screen.getByRole("textbox", { name: "Ceiling" }), "0");
     await userEvent.click(
       screen.getByRole("switch", { name: "Runs may be helped" }),

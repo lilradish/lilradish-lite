@@ -93,6 +93,7 @@ class EntryChangesIntegrationSpec extends Specification {
                 new EntryPurpose("Says what a complaint is about."), CAT_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("""
                 select group_id || ' ' || kind || ' ' || name || ' ' || purpose || ' ' || created_by || ' '
                        || coalesce(updated_by::text, '-')
@@ -101,6 +102,7 @@ class EntryChangesIntegrationSpec extends Specification {
                 ["${GROUP} ${label} Summarise a complaint Says what a complaint is about. ${CAT} -" as String]
 
         and: "one version, the first, started by the caller and neither submitted, approved nor retired"
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("""
                 select number || ' ' || entry_kind || ' ' || created_by || ' '
                        || coalesce(approved_at::text, '-') || ' ' || coalesce(retired_at::text, '-')
@@ -109,6 +111,7 @@ class EntryChangesIntegrationSpec extends Specification {
         store.count("select count(*) from entry_version_submissions") == 0
 
         and: "its content row in its kind's table alone, empty, and the starter held as no writer"
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select created_by::text from ${table}") == [CAT]
         (["workflow_versions", "question_versions", "reference_list_versions"] - table)
                 .every { store.count("select count(*) from ${it}") == 0 }
@@ -126,6 +129,7 @@ class EntryChangesIntegrationSpec extends Specification {
         def started = changes.start(groupId(GROUP), EntryKind.QUESTION, new EntryName("Triage"), null, ANN_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select coalesce(purpose, '-') from entries where entry_id = ?::uuid", started.value()) == ["-"]
     }
 
@@ -262,6 +266,7 @@ class EntryChangesIntegrationSpec extends Specification {
         given:
         store.entry(ENTRY, GROUP, "question", "Triage")
         store.repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL now().
         def other = store.holding("update entries set name = 'Sort', purpose = 'Said.', updated_at = now()," +
                 " updated_by = '${FIRST_STEWARD}' where entry_id = '${ENTRY}'")
 
@@ -290,6 +295,7 @@ class EntryChangesIntegrationSpec extends Specification {
         changes.stop(groupId(GROUP), EntryKind.WORKFLOW, entryId(ENTRY), ANN_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select entry_id || ' ' || created_by || ' ' || coalesce(let_go_at::text, '-') from entry_stops") ==
                 ["${ENTRY} ${ANN} -" as String]
         store.digestOf("entry_versions") == versions
@@ -329,6 +335,7 @@ class EntryChangesIntegrationSpec extends Specification {
 
         then:
         store.count("select count(*) from entry_stops") == 2
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select created_by::text from entry_stops where let_go_at is null") == [ANN]
 
         and: "a stop handing nothing on"
@@ -383,6 +390,7 @@ class EntryChangesIntegrationSpec extends Specification {
     def "an entry let go of by a change begun before the stop was made is let go no earlier than it was stopped"() {
         given:
         store.entry(ENTRY, GROUP, "workflow", "Triage")
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         def membership = store.holding("select 1 from groups where group_id = '${GROUP}' for no key update")
 
         when:
@@ -408,6 +416,7 @@ class EntryChangesIntegrationSpec extends Specification {
             store.stopped(ENTRY, FIRST_STEWARD)
         }
         def before = store.digestOf("entry_stops")
+        // DB-SPECIFIC: PostgreSQL SELECT FOR SHARE.
         def starting = store.holding("select 1 from entries where entry_id = '${ENTRY}' for share" as String)
 
         when:

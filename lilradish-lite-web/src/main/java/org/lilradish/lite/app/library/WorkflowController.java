@@ -4,13 +4,17 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.libprunus.core.error.ApiErrorException;
+import org.libprunus.core.log.annotation.DoNotLog;
 import org.lilradish.lite.domain.declaration.DeclarationSide;
 import org.lilradish.lite.domain.declaration.Demands;
+import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.failure.RefusalCode;
 import org.lilradish.lite.domain.identity.GroupPermission;
 import org.lilradish.lite.domain.model.DeployedModel;
@@ -18,11 +22,13 @@ import org.lilradish.lite.domain.model.ModelMode;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 import org.lilradish.lite.domain.run.Ceiling;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.workflow.Binding;
 import org.lilradish.lite.domain.workflow.BindingSource;
 import org.lilradish.lite.domain.workflow.ModelChoice;
 import org.lilradish.lite.domain.workflow.Producer;
 import org.lilradish.lite.domain.workflow.RouteCase;
+import org.lilradish.lite.domain.workflow.SearchQuestionPart;
 import org.lilradish.lite.web.ActAdmission;
 import org.lilradish.lite.web.ChangeRequests;
 import org.lilradish.lite.web.GroupMembershipRequired;
@@ -240,9 +246,10 @@ final class WorkflowController {
                 stored.raiseNeedsApproval(),
                 stored.mayBeHelped(),
                 helper == null ? null : choiceAnswer(helper),
-                view.problems().stream()
+                view.problems().problems().stream()
                         .map(ContentProblemsOutlet::problemAnswer)
                         .toList(),
+                view.problems().total(),
                 view.sendsPast().stream()
                         .map(past -> new SendPastAnswer(
                                 past.step(),
@@ -264,6 +271,12 @@ final class WorkflowController {
                                         offered.name(),
                                         DeclarationAnswers.of(offered.declared().takes(), pins),
                                         DeclarationAnswers.of(offered.declared().gives(), pins)))
+                                .toList(),
+                        offers.searchWays().stream()
+                                .map(offered -> new SearchWayAnswer(
+                                        offered.way().name(),
+                                        offered.way().requiredTool().value(),
+                                        DeclarationAnswers.of(offered.gives(), pins)))
                                 .toList(),
                         offers.models().stream()
                                 .map(WorkflowController::modelAnswer)
@@ -287,6 +300,9 @@ final class WorkflowController {
                                 DeclarationAnswers.of(declared.gives(), pins),
                                 null,
                                 null,
+                                null,
+                                null,
+                                null,
                                 null);
                     }
                     case StoredWorkflow.Runs.Code code -> {
@@ -299,6 +315,9 @@ final class WorkflowController {
                                 declared == null ? null : DeclarationAnswers.of(declared.takes(), pins),
                                 declared == null ? null : DeclarationAnswers.of(declared.gives(), pins),
                                 code.codeStep(),
+                                null,
+                                null,
+                                null,
                                 null,
                                 null);
                     }
@@ -313,7 +332,27 @@ final class WorkflowController {
                                 chosenBy == null ? null : bindingAnswer(chosenBy, positions),
                                 route.cases().stream()
                                         .map(routeCase -> caseAnswer(routeCase, view, positions))
-                                        .toList());
+                                        .toList(),
+                                null,
+                                null,
+                                null);
+                    }
+                    case StoredWorkflow.Runs.Search search -> {
+                        StoredDeclarations.Half gives =
+                                search.way() == null ? null : view.searchGives().get(search.way());
+                        yield new RunsAnswer(
+                                RunsKind.SEARCH.published(),
+                                null,
+                                null,
+                                gives == null ? null : DeclarationAnswers.of(gives, pins),
+                                null,
+                                null,
+                                null,
+                                search.way(),
+                                search.question().stream()
+                                        .map(part -> partAnswer(part, positions))
+                                        .toList(),
+                                standingsAnswer(search.standings()));
                     }
                 };
         ModelChoice reviewer = step.reviewer();
@@ -362,21 +401,43 @@ final class WorkflowController {
     }
 
     private static BindingAnswer bindingAnswer(Binding binding, Map<UUID, Integer> positions) {
-        SourceAnswer source =
-                switch (binding.source()) {
-                    case BindingSource.WorkflowInput input ->
-                        new InputSource(input.pointer().published());
-                    case BindingSource.StepOutput output -> {
-                        Integer at = positions.get(output.step());
-                        if (at == null) {
-                            throw new IllegalStateException("A binding reads a step its version does not hold");
-                        }
-                        yield new StepSource(at, output.pointer().published());
-                    }
-                    case BindingSource.Written written -> new ConstantSource(ConstantJson.written(written.constant()));
-                };
         return new BindingAnswer(
-                binding.id(), binding.target() == null ? null : binding.target().published(), source);
+                binding.id(),
+                binding.target() == null ? null : binding.target().published(),
+                sourceAnswer(binding.source(), positions));
+    }
+
+    private static SourceAnswer sourceAnswer(BindingSource source, Map<UUID, Integer> positions) {
+        return switch (source) {
+            case BindingSource.WorkflowInput input ->
+                new InputSource(input.pointer().published());
+            case BindingSource.StepOutput output -> {
+                Integer at = positions.get(output.step());
+                if (at == null) {
+                    throw new IllegalStateException("What is read names a step its version does not hold");
+                }
+                yield new StepSource(at, output.pointer().published());
+            }
+            case BindingSource.Written written -> new ConstantSource(ConstantJson.written(written.constant()));
+        };
+    }
+
+    private static PartAnswer partAnswer(SearchQuestionPart part, Map<UUID, Integer> positions) {
+        return switch (part) {
+            case SearchQuestionPart.LiteralPart literal -> new WrittenPart(literal.text());
+            case SearchQuestionPart.Read read -> new ReadPart(read.id(), sourceAnswer(read.source(), positions));
+        };
+    }
+
+    private static Map<String, String> standingsAnswer(Map<FieldName, FieldStanding> standings) {
+        Map<String, String> answer = LinkedHashMap.newLinkedHashMap(standings.size());
+        for (FieldName field : SearchWay.FIELDS) {
+            FieldStanding standing = standings.get(field);
+            if (standing != null) {
+                answer.put(field.value(), standing.published());
+            }
+        }
+        return answer;
     }
 
     private static @Nullable ProducerAnswer producerAnswer(@Nullable Producer producer) {
@@ -410,7 +471,8 @@ final class WorkflowController {
     private static ModelAnswer modelAnswer(DeployedModel model) {
         return new ModelAnswer(
                 model.name().value(),
-                model.modes().stream().map(ModelMode::value).toList());
+                model.modes().stream().map(ModelMode::value).toList(),
+                model.tools().stream().map(tool -> tool.name().value()).toList());
     }
 
     /**
@@ -437,6 +499,7 @@ final class WorkflowController {
             boolean mayBeHelped,
             @Nullable ChoiceAnswer helper,
             List<ContentProblemsOutlet.ProblemAnswer> problems,
+            long problemTotal,
             List<SendPastAnswer> sendsPast,
             Map<UUID, List<String>> terms,
             OffersAnswer offered) {}
@@ -465,8 +528,9 @@ final class WorkflowController {
 
     /**
      * Only the members its kind takes: a version and what it declares for a question or a workflow, a code
-     * step's name for one and what the release declares of it where the group may name it, and for a route what it
-     * chooses by, what it gives back and its cases.
+     * step's name for one and what the release declares of it where the group may name it, for a route what it
+     * chooses by, what it gives back and its cases, and for a search its way, what that gives back where held, its
+     * question and how each field chosen for stands.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record RunsAnswer(
@@ -476,7 +540,24 @@ final class WorkflowController {
             @Nullable List<DeclarationAnswers.FieldAnswer> gives,
             @Nullable String codeStep,
             @Nullable BindingAnswer discriminator,
-            @Nullable List<CaseAnswer> cases) {}
+            @Nullable List<CaseAnswer> cases,
+            @Nullable String searchWay,
+            @Nullable List<PartAnswer> question,
+            @Nullable Map<String, String> standings) {}
+
+    /**
+     * One part of a search's question, answered by its own member alone. The logging convention weaves these by
+     * name: the text written is never logged, and neither is a source, which a log cannot render.
+     */
+    sealed interface PartAnswer permits WrittenPart, ReadPart {}
+
+    record WrittenPart(@DoNotLog String text) implements PartAnswer {}
+
+    /**
+     * @param partId the key a problem with what it reads is placed by, as a binding's is
+     * @param from where the value put in is read from, as a binding answers it
+     */
+    record ReadPart(UUID partId, @DoNotLog SourceAnswer from) implements PartAnswer {}
 
     /** @param term absent for the fallback */
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -519,6 +600,7 @@ final class WorkflowController {
             List<DeclaredAnswer> questions,
             List<DeclaredAnswer> workflows,
             List<CodeStepAnswer> codeSteps,
+            List<SearchWayAnswer> searchWays,
             List<ModelAnswer> models) {}
 
     record DeclaredAnswer(
@@ -532,6 +614,12 @@ final class WorkflowController {
     record CodeStepAnswer(
             String name, List<DeclarationAnswers.FieldAnswer> takes, List<DeclarationAnswers.FieldAnswer> gives) {}
 
-    /** @param modes those it offers beyond running as it is, in the order the deployment lists them */
-    record ModelAnswer(String name, List<String> modes) {}
+    /**
+     * What this release declares of a way to search, each field it gives back keyed as a step running it is.
+     *
+     * @param tool the tool a model searching this way must offer
+     */
+    record SearchWayAnswer(String name, String tool, List<DeclarationAnswers.FieldAnswer> gives) {}
+
+    record ModelAnswer(String name, List<String> modes, List<String> tools) {}
 }

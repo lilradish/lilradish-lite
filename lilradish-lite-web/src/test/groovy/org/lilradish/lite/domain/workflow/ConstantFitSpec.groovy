@@ -8,6 +8,7 @@ import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.declaration.TextLines
 import org.lilradish.lite.domain.registry.EntryVersionId
 import org.lilradish.lite.domain.text.ConcealingCharacter
 import org.lilradish.lite.domain.wire.JsonValue
@@ -23,6 +24,20 @@ class ConstantFitSpec extends Specification {
     static final JsonValue NOTHING = new JsonValue.JsonNull()
 
     static final String NUL = Character.toString(0)
+
+    def "a constant of text may hold line breaks only where its field takes several"() {
+        given:
+        def value = new JsonValue.JsonString("Demo Sample" + Character.toString(codePoint))
+        def one = field(new FieldShape.Text(30, TextLines.ONE), new HowMany.One(), new Demand.Given(false))
+        def several = field(new FieldShape.Text(30), new HowMany.One(), new Demand.Given(false))
+
+        expect:
+        !ConstantFit.fits(value, one, [:])
+        ConstantFit.fits(value, several, [:])
+
+        where:
+        codePoint << [0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029]
+    }
 
     /** Judged before its plain form is ever written out, which for a number this long would never end. */
     def "a constant no store keeps as written is unwritable, wherever in it the reason stands"() {
@@ -205,6 +220,66 @@ class ConstantFitSpec extends Specification {
                 field(new FieldShape.Text(3), new HowMany.One(), new Demand.Given(true)), TERMS)
     }
 
+    def "line breaks are refused at one-line fields, including fields held inside lists and objects"() {
+        given:
+        def one = named("title", new FieldShape.Text(20, TextLines.ONE), new HowMany.One(), new Demand.Given(false))
+        def several = named("title", new FieldShape.Text(20), new HowMany.One(), new Demand.Given(false))
+        def value = text(Character.toString(codePoint))
+        def constant = shape == "one" ? value : shape == "many" ? new JsonValue.JsonArray([text("Demo Sample"), value]) :
+                new JsonValue.JsonObject([member("title", value), member("other", new JsonValue.JsonNumber(1G))])
+        def howMany = shape == "many" ? new HowMany.Many(3) : new HowMany.One()
+        def oneField = shape == "nested" ? field(new FieldShape.Nested([one]), howMany, new Demand.Given(false)) :
+                field(one.shape(), howMany, one.demand())
+        def severalField = shape == "nested" ? field(new FieldShape.Nested([several]), howMany, new Demand.Given(false)) :
+                field(several.shape(), howMany, several.demand())
+
+        expect:
+        ConstantFit.breaksTextLines(constant, oneField)
+        !ConstantFit.breaksTextLines(constant, severalField)
+
+        where:
+        [codePoint, shape] << [[0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029], ["one", "many", "nested"]].combinations()
+    }
+
+    def "a known one-line child is checked even when its object holds other mismatches"() {
+        given:
+        def child = named("title", new FieldShape.Text(20, TextLines.ONE), new HowMany.Many(2), new Demand.Given(false))
+        def held = field(new FieldShape.Nested([child]), new HowMany.Many(2), new Demand.Given(false))
+        def constant = new JsonValue.JsonArray([new JsonValue.JsonObject([
+                member("title", new JsonValue.JsonArray([text("Demo Sample"), text("last\n")])),
+                member("undeclared", new JsonValue.JsonBoolean(true))])])
+
+        expect:
+        ConstantFit.breaksTextLines(constant, held)
+        !ConstantFit.fits(constant, held, [:])
+    }
+
+    def "a line-break check leaves other mismatches for judging the draft's content"() {
+        given:
+        def one = field(new FieldShape.Text(3, TextLines.ONE), new HowMany.One(), new Demand.Given(true))
+        def nested = field(new FieldShape.Nested([
+                named("title", one.shape(), one.howMany(), one.demand())]), new HowMany.One(), new Demand.Given(true))
+        def held = shape == "nested" ? nested : shape == "many" ?
+                field(one.shape(), new HowMany.Many(2), one.demand()) : shape == "number" ?
+                field(new FieldShape.Plain(FieldKind.NUMBER), new HowMany.One(), one.demand()) : one
+
+        expect:
+        !ConstantFit.breaksTextLines(constant, held)
+        !ConstantFit.fits(constant, held, [:])
+
+        where:
+        shape    | constant
+        "one"    | NOTHING
+        "one"    | new JsonValue.JsonNumber(1G)
+        "one"    | text("longer")
+        "one"    | new JsonValue.JsonArray([text("last\n")])
+        "many"   | text("last\n")
+        "number" | text("last\n")
+        "nested" | text("last\n")
+        "nested" | new JsonValue.JsonObject([member("unknown", text("last\n"))])
+        "nested" | new JsonValue.JsonObject([])
+    }
+
     def "what is held to what is never absent"() {
         when:
         ConstantFit."${asked}"(*arguments)
@@ -221,6 +296,8 @@ class ConstantFitSpec extends Specification {
         "fits"       | [null, field(new FieldShape.Text(1), new HowMany.One(), new Demand.Given(false)), [:]] || "ConstantFit constant must not be null"
         "fits"       | [NOTHING, null, [:]]                                                        || "ConstantFit field must not be null"
         "fits"       | [NOTHING, field(new FieldShape.Text(1), new HowMany.One(), new Demand.Given(false)), null] || "ConstantFit terms must not be null"
+        "breaksTextLines" | [null, field(new FieldShape.Text(1), new HowMany.One(), new Demand.Given(false))] || "ConstantFit constant must not be null"
+        "breaksTextLines" | [NOTHING, null] || "ConstantFit field must not be null"
     }
 
     private static JsonValue text(String value) {

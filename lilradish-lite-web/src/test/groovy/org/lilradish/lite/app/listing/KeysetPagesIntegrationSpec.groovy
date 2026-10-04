@@ -54,8 +54,8 @@ class KeysetPagesIntegrationSpec extends Specification {
 
     static final List<String> KEY_PREFIXES = ["k", "K", CAPITAL_A_RING]
 
-    static final List<String> NAMES = [null, "Alan", "alan", "ALAN", CAPITAL_E_ACUTE + "mile", "E" + COMBINING_ACUTE + "mile",
-                                       SMALL_E_ACUTE + "mile", "zed", "Zed", null, CAPITAL_A_RING + "sa"]
+    static final List<String> NAMES = [null, "Arlo", "arlo", "ARLO", CAPITAL_E_ACUTE + "vren", "E" + COMBINING_ACUTE + "vren",
+                                       SMALL_E_ACUTE + "vren", "zed", "Zed", null, CAPITAL_A_RING + "sa"]
 
     static final List<String> LABELS = ["b", "B", "a", SMALL_A_DIAERESIS, "A"]
 
@@ -71,6 +71,7 @@ class KeysetPagesIntegrationSpec extends Specification {
             Column.KEY,
             new ListOrder<>(Column.KEY, false),
             "select listed.key, listed.name, listed.label, listed.size from listed where true",
+            // DB-SPECIFIC: PostgreSQL strpos() in the typed filter fragment.
             "strpos(listed.key, ${KeysetStatements.TYPED}) > 0",
             [new SortExpression<>(Column.KEY, "listed.key", "ucs_basic"),
              new SortExpression<>(Column.NAME, "listed.name", '"unicode"'),
@@ -152,6 +153,7 @@ class KeysetPagesIntegrationSpec extends Specification {
     def setupSpec() {
         server.postgresDatabase.connection.withCloseable { Connection administration ->
             administration.createStatement().withCloseable { statement ->
+                // DB-SPECIFIC: PostgreSQL CREATE DATABASE TEMPLATE ICU locale options.
                 statement.execute("""
                         create database icu_default template template0 encoding 'UTF8'
                             locale_provider icu icu_locale 'und' locale 'C'
@@ -191,7 +193,7 @@ class KeysetPagesIntegrationSpec extends Specification {
         [rows*.name, rows*.label, rows*.size].every { it.toSet().size() < it.size() }
 
         and: "names differing only by case, and one name written with its accent composed and decomposed"
-        rows*.name.containsAll(["Alan", "alan", "ALAN", CAPITAL_E_ACUTE + "mile", "E" + COMBINING_ACUTE + "mile"])
+        rows*.name.containsAll(["Arlo", "arlo", "ARLO", CAPITAL_E_ACUTE + "vren", "E" + COMBINING_ACUTE + "vren"])
 
         and: "and the filter keeps exactly two pages of it"
         rows.count { it.key.contains(KEPT) } == 2 * ListPage.SIZE
@@ -259,13 +261,16 @@ class KeysetPagesIntegrationSpec extends Specification {
     }
 
     private static List<Row> wholeOrder(JdbcClient database, ListOrder<Column> order, ListFilter filter) {
+        // DB-SPECIFIC: PostgreSQL strpos() in the filter fragment.
         def narrowed = filter == null ? "" : "where strpos(key, :filter) > 0"
         def ordered = WHOLE_ORDER[order.column()].formatted(order.descending() ? "desc" : "asc")
+        // DB-SPECIFIC: PostgreSQL strpos() when the statement includes the filter fragment.
         def statement = database.sql("select key, name, label, size from listed ${narrowed} order by ${ordered}" as String)
         (filter == null ? statement : statement.param("filter", filter.text())).query(READ).list()
     }
 
     private String defaultProviderOf(String database) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; pg_database; current_database().
         databases[database].sql("select datlocprovider::text from pg_database where datname = current_database()")
                 .query(String)
                 .single()

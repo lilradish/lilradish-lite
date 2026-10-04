@@ -1,6 +1,7 @@
 import { isUnchecked, wordsIn, type Unchecked } from "../lib/request/document";
 import { get } from "../lib/request/http";
 import { useResource, type Resource } from "../lib/request/useResource";
+import type { Person } from "./person";
 
 const STANDING = "/api/standing";
 
@@ -51,6 +52,8 @@ export interface GroupStanding {
  * nothing rather than failing; the groups are the reader's own, in its order.
  */
 export interface Standing {
+  /** The reader's own, as an answer naming a person names them; absent where the server knows them as nobody. */
+  readonly userId?: string;
   readonly acts: ReadonlySet<string>;
   readonly groups: readonly GroupStanding[];
 }
@@ -73,6 +76,18 @@ export function mayIn(
 }
 
 /**
+ * Whether the person an answer names is the reader, told by the user each is
+ * known by and never by a name, which two people may share. Nobody named, or a
+ * reader known as nobody, is never the reader.
+ */
+export function isTheReader(
+  standing: Standing,
+  person: Person | undefined,
+): boolean {
+  return standing.userId !== undefined && person?.userId === standing.userId;
+}
+
+/**
  * Held as a module constant, for the reason `useResource` gives: the read is
  * keyed on the value handed in, and one built per render reads forever.
  */
@@ -88,12 +103,15 @@ function readStanding(signal: AbortSignal): Promise<Standing> {
  */
 function standingFrom(body: unknown): Standing {
   const answer: Unchecked = isUnchecked(body) ? body : {};
-  return {
+  const standing = {
     acts: new Set(wordsIn(answer.acts) ?? []),
     groups: Array.isArray(answer.groups)
       ? answer.groups.flatMap(groupFrom)
       : [],
   };
+  return typeof answer.userId === "string"
+    ? { userId: answer.userId, ...standing }
+    : standing;
 }
 
 /** A group that cannot be addressed or shown is left out, and the rest kept. */

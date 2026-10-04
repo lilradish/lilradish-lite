@@ -1,10 +1,14 @@
 package org.lilradish.lite.app.model
 
 import org.lilradish.lite.domain.model.DeployedModel
+import org.lilradish.lite.domain.model.DeployedTool
 import org.lilradish.lite.domain.model.ModelCatalog
 import org.lilradish.lite.domain.model.ModelMode
 import org.lilradish.lite.domain.model.ModelName
 import org.lilradish.lite.domain.model.ModelPrice
+import org.lilradish.lite.domain.model.ModelToolKind
+import org.lilradish.lite.domain.model.ModelToolName
+import org.lilradish.lite.domain.model.ToolPrice
 import org.springframework.boot.LazyInitializationBeanFactoryPostProcessor
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
@@ -59,7 +63,7 @@ class ModelCatalogConfigurationIntegrationSpec extends Specification {
         refused == null
         bound == [
             new DeployedModel(new ModelName("sample_model"), [RESEARCH, new ModelMode("deep_research")],
-                    200000, new BigDecimal("4"), 8192, [new ModelPrice(USD, new BigDecimal("3"), new BigDecimal("15"))]),
+                    200000, new BigDecimal("4"), 8192, [new ModelPrice(USD, new BigDecimal("7"), new BigDecimal("21"))]),
             new DeployedModel(new ModelName("other_model"), [RESEARCH], 1000, new BigDecimal("3.5"), 10,
                     [new ModelPrice(EUR, new BigDecimal("0.25"), new BigDecimal("1.50")),
                      new ModelPrice(USD, new BigDecimal("0.30"), new BigDecimal("1.75"))]),
@@ -91,7 +95,9 @@ class ModelCatalogConfigurationIntegrationSpec extends Specification {
         namedByDevelopmentFile == ["sample_model"]
         bound == [
             new DeployedModel(new ModelName("sample_model"), [RESEARCH],
-                    200000, new BigDecimal("4"), 8192, [new ModelPrice(USD, new BigDecimal("3"), new BigDecimal("15"))]),
+                    200000, new BigDecimal("4"), 8192, [new ModelPrice(USD, new BigDecimal("7"), new BigDecimal("21"))],
+                    [new DeployedTool(new ModelToolName("web_search"), ModelToolKind.WEB_SEARCH, 3,
+                            [new ToolPrice(USD, new BigDecimal("0.01"))])]),
         ]
     }
 
@@ -111,7 +117,7 @@ class ModelCatalogConfigurationIntegrationSpec extends Specification {
         refused == null
         bound == [
             new DeployedModel(new ModelName("sample_model"), [], 200000, new BigDecimal("4"), 8192,
-                    [new ModelPrice(USD, new BigDecimal("3"), new BigDecimal("15"))]),
+                    [new ModelPrice(USD, new BigDecimal("7"), new BigDecimal("21"))]),
         ]
 
         where:
@@ -193,8 +199,8 @@ class ModelCatalogConfigurationIntegrationSpec extends Specification {
             "characters-per-unit": "4",
             "came-back-per-call-limit": "8192",
             "prices-per-million[0].currency": "USD",
-            "prices-per-million[0].sent-per-million": "3",
-            "prices-per-million[0].came-back-per-million": "15",
+            "prices-per-million[0].sent-per-million": "7",
+            "prices-per-million[0].came-back-per-million": "21",
         ] + overrides
         fields.findAll { it.value != null }.collect { key, value ->
             "lilradish.deployed.models[" + index + "]." + key + "=" + value

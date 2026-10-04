@@ -7,6 +7,7 @@ import {
   MOST_DIGITS,
   MOST_FRACTION_DIGITS,
   numberWrittenPlainly,
+  hasLineBreak,
   valueRefused,
 } from "../../lib/filling/writing";
 import { concealingIn } from "../../lib/text/legibility";
@@ -126,6 +127,9 @@ export function constantRead(
           : "refusal.PROSE_DIRECTION_CONTROL",
     };
   }
+  if (lineBreakIn(value, target)) {
+    return { why: "fill.line_break" };
+  }
   const unwritten =
     kind === "text"
       ? formWhy(typed, target)
@@ -140,6 +144,55 @@ export function constantRead(
     textIn(value) > MOST_TEXT
     ? { why: "refusal.CONSTANT_DOES_NOT_FIT" }
     : { written };
+}
+
+/** A saved constant is kept byte for byte, while its text still has to fit the current line choice. */
+export function constantHasLineBreak(
+  written: string,
+  target: Shape | undefined,
+): boolean {
+  if (!containsOneLineText(target)) {
+    return false;
+  }
+  const value = parsed(written);
+  return value !== undefined && lineBreakIn(value, target);
+}
+
+function containsOneLineText(target: Shape | undefined): boolean {
+  if (target?.kind === "text") {
+    return target.lines === "one";
+  }
+  return (
+    target?.kind === "fields" && (target.fields ?? []).some(containsOneLineText)
+  );
+}
+
+function lineBreakIn(value: Parsed, target: Shape | undefined): boolean {
+  if (target === undefined || value === null) {
+    return false;
+  }
+  if (target.many) {
+    const itemShape = { ...target, many: false };
+    return (
+      Array.isArray(value) && value.some((item) => lineBreakIn(item, itemShape))
+    );
+  }
+  if (target.kind === "text") {
+    return (
+      target.lines === "one" && typeof value === "string" && hasLineBreak(value)
+    );
+  }
+  if (
+    target.kind !== "fields" ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
+  const members = value as { readonly [name: string]: Parsed };
+  return (target.fields ?? []).some((field) =>
+    lineBreakIn(members[field.name] ?? null, field),
+  );
 }
 
 function yesOrNo(typed: string): string | undefined {

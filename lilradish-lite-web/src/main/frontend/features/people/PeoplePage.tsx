@@ -12,6 +12,7 @@ import {
   refusedForWhatStillHolds,
 } from "../../api/pool/people/{subjectId}";
 import { holds } from "../../api/standing";
+import { PEOPLE_PAGE } from "../../app/addresses";
 import { Async } from "../../app/Async";
 import { ProblemView } from "../../app/ProblemView";
 import { refusalSentence, refusesTheAct } from "../../app/refusal";
@@ -36,7 +37,7 @@ import { usePickedPerson } from "./usePickedPerson";
 import { whatHasToGoFirst } from "./whatHasToGoFirst";
 
 /** Where the page is, and what every address naming somebody on it begins with. */
-export const PEOPLE_PAGE = "/system/people";
+export { PEOPLE_PAGE } from "../../app/addresses";
 
 const SAID_SX = { mb: 1 };
 

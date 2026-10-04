@@ -46,21 +46,21 @@ class PersonNameAlgorithmSpec extends Specification {
     static final String GRINNING_FACE = Character.toString(0x1F600)
 
     /** Every kind of White_Space at once: a control, a space separator, a line and a paragraph separator. */
-    static final String MIXED_RUNS = "\t" + NO_BREAK_SPACE + "Ada" + IDEOGRAPHIC_SPACE + " " + LINE_SEPARATOR +
-            "Lovelace" + NEXT_LINE + PARAGRAPH_SEPARATOR
+    static final String MIXED_RUNS = "\t" + NO_BREAK_SPACE + "Ari" + IDEOGRAPHIC_SPACE + " " + LINE_SEPARATOR +
+            "Mockvale" + NEXT_LINE + PARAGRAPH_SEPARATOR
 
     def "every White_Space code point is one U+0020 between words, nothing at either end, and alone no name"() {
         given:
         def space = Character.toString(codePoint)
 
         when:
-        def between = PersonName.fromDirectory("Ada" + space + "Lovelace")
-        def around = PersonName.fromDirectory(space + "Ada" + space)
+        def between = PersonName.fromDirectory("Ari" + space + "Mockvale")
+        def around = PersonName.fromDirectory(space + "Ari" + space)
         def alone = PersonName.fromDirectory(space)
 
         then:
-        between.value() == "Ada Lovelace"
-        around.value() == "Ada"
+        between.value() == "Ari Mockvale"
+        around.value() == "Ari"
         alone == null
 
         where:
@@ -73,7 +73,7 @@ class PersonNameAlgorithmSpec extends Specification {
      */
     def "what only looks like whitespace is kept where it stands, splitting the spaces either side of it"() {
         given:
-        def held = NO_BREAK_SPACE + lookAlike + "Ada" + NO_BREAK_SPACE + lookAlike + IDEOGRAPHIC_SPACE + "Lovelace "
+        def held = NO_BREAK_SPACE + lookAlike + "Ari" + NO_BREAK_SPACE + lookAlike + IDEOGRAPHIC_SPACE + "Mockvale "
 
         when:
         def name = PersonName.fromDirectory(held)
@@ -83,13 +83,13 @@ class PersonNameAlgorithmSpec extends Specification {
 
         where:
         lookAlike                 || spaced
-        ZERO_WIDTH_SPACE          || ZERO_WIDTH_SPACE + "Ada " + ZERO_WIDTH_SPACE + " Lovelace"
-        ZERO_WIDTH_NON_JOINER     || ZERO_WIDTH_NON_JOINER + "Ada " + ZERO_WIDTH_NON_JOINER + " Lovelace"
-        ZERO_WIDTH_JOINER         || ZERO_WIDTH_JOINER + "Ada " + ZERO_WIDTH_JOINER + " Lovelace"
-        WORD_JOINER               || WORD_JOINER + "Ada " + WORD_JOINER + " Lovelace"
-        ZERO_WIDTH_NO_BREAK_SPACE || ZERO_WIDTH_NO_BREAK_SPACE + "Ada " + ZERO_WIDTH_NO_BREAK_SPACE + " Lovelace"
-        MONGOLIAN_VOWEL_SEPARATOR || MONGOLIAN_VOWEL_SEPARATOR + "Ada " + MONGOLIAN_VOWEL_SEPARATOR + " Lovelace"
-        SOFT_HYPHEN               || SOFT_HYPHEN + "Ada " + SOFT_HYPHEN + " Lovelace"
+        ZERO_WIDTH_SPACE          || ZERO_WIDTH_SPACE + "Ari " + ZERO_WIDTH_SPACE + " Mockvale"
+        ZERO_WIDTH_NON_JOINER     || ZERO_WIDTH_NON_JOINER + "Ari " + ZERO_WIDTH_NON_JOINER + " Mockvale"
+        ZERO_WIDTH_JOINER         || ZERO_WIDTH_JOINER + "Ari " + ZERO_WIDTH_JOINER + " Mockvale"
+        WORD_JOINER               || WORD_JOINER + "Ari " + WORD_JOINER + " Mockvale"
+        ZERO_WIDTH_NO_BREAK_SPACE || ZERO_WIDTH_NO_BREAK_SPACE + "Ari " + ZERO_WIDTH_NO_BREAK_SPACE + " Mockvale"
+        MONGOLIAN_VOWEL_SEPARATOR || MONGOLIAN_VOWEL_SEPARATOR + "Ari " + MONGOLIAN_VOWEL_SEPARATOR + " Mockvale"
+        SOFT_HYPHEN               || SOFT_HYPHEN + "Ari " + SOFT_HYPHEN + " Mockvale"
     }
 
     /**
@@ -105,17 +105,17 @@ class PersonNameAlgorithmSpec extends Specification {
 
         where:
         held                                                  || spaced
-        "  Ada  Lovelace  "                                   || "Ada Lovelace"
-        MIXED_RUNS                                            || "Ada Lovelace"
-        "Ada" + NO_BREAK_SPACE + "Augusta King"               || "Ada Augusta King"
-        "Ada Augusta" + NO_BREAK_SPACE + "King"               || "Ada Augusta King"
-        "Ada Augusta  King"                                   || "Ada Augusta King"
-        "Ada   Augusta" + NO_BREAK_SPACE + " King"            || "Ada Augusta King"
+        "  Ari  Mockvale  "                                   || "Ari Mockvale"
+        MIXED_RUNS                                            || "Ari Mockvale"
+        "Ari" + NO_BREAK_SPACE + "Mockora Zest"               || "Ari Mockora Zest"
+        "Ari Mockora" + NO_BREAK_SPACE + "Zest"               || "Ari Mockora Zest"
+        "Ari Mockora  Zest"                                   || "Ari Mockora Zest"
+        "Ari   Mockora" + NO_BREAK_SPACE + " Zest"            || "Ari Mockora Zest"
         " A "                                                 || "A"
         GRINNING_FACE + NO_BREAK_SPACE + GRINNING_FACE        || GRINNING_FACE + " " + GRINNING_FACE
         IDEOGRAPHIC_SPACE + GRINNING_FACE + IDEOGRAPHIC_SPACE || GRINNING_FACE
-        "Ada Lovelace"                                        || "Ada Lovelace"
-        "Ada" + ZERO_WIDTH_JOINER                             || "Ada" + ZERO_WIDTH_JOINER
+        "Ari Mockvale"                                        || "Ari Mockvale"
+        "Ari" + ZERO_WIDTH_JOINER                             || "Ari" + ZERO_WIDTH_JOINER
         ZERO_WIDTH_JOINER + IDEOGRAPHIC_SPACE + "A"           || ZERO_WIDTH_JOINER + " A"
     }
 
@@ -146,13 +146,13 @@ class PersonNameAlgorithmSpec extends Specification {
 
         where:
         typed                                             || expected
-        "ADA" + IDEOGRAPHIC_SPACE                         || "ADA "
-        IDEOGRAPHIC_SPACE + "ada"                         || " ada"
+        "ARI" + IDEOGRAPHIC_SPACE                         || "ARI "
+        IDEOGRAPHIC_SPACE + "ari"                         || " ari"
         "田中" + IDEOGRAPHIC_SPACE + "一郎"                   || "田中 一郎"
-        "  ada  "                                         || " ada "
+        "  ari  "                                         || " ari "
         " " + IDEOGRAPHIC_SPACE + NO_BREAK_SPACE          || " "
         "\t"                                              || " "
-        "ADA" + NO_BREAK_SPACE + "B C"                    || "ADA B C"
+        "ARI" + NO_BREAK_SPACE + "B C"                    || "ARI B C"
         "A B" + NO_BREAK_SPACE + NO_BREAK_SPACE           || "A B "
         "A B  "                                           || "A B "
         ZERO_WIDTH_SPACE + IDEOGRAPHIC_SPACE              || ZERO_WIDTH_SPACE + " "

@@ -19,10 +19,8 @@ import {
   type GroupStanding,
   type SurfaceAct,
 } from "../api/standing";
-import { GROUPS_PAGE } from "../features/groups/GroupsPage";
-import { MEASUREMENTS_PAGE } from "../features/measurements/MeasurementsPage";
-import { PEOPLE_PAGE } from "../features/people/PeoplePage";
 import type { MessageId } from "../i18n/app";
+import { GROUPS_PAGE, MEASUREMENTS_PAGE, PEOPLE_PAGE } from "./addresses";
 
 interface Destination {
   /** Rooted: a relative one would resolve against whatever screen is in view. */

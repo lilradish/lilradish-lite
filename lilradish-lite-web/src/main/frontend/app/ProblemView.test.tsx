@@ -4,7 +4,11 @@ import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import { STOPPED_HERE, type Problem } from "../api/problem";
+import {
+  NOT_A_PROBLEM_DOCUMENT,
+  STOPPED_HERE,
+  type Problem,
+} from "../api/problem";
 import { theme } from "../lib/theme/theme";
 import { noticesIn } from "../testutil/notices";
 import { ProblemView } from "./ProblemView";
@@ -56,6 +60,14 @@ async function disclose() {
 }
 
 describe("ProblemView", () => {
+  it("says an unreadable successful response as an answer rather than a refusal", () => {
+    view({ status: 200, code: NOT_A_PROBLEM_DOCUMENT });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The server answered, but this page could not read the answer. Check what happened before trying again.",
+    );
+  });
+
   /**
    * The contract says nothing may branch on `detail`, which is another way of
    * saying it was not written for the person who came here to approve

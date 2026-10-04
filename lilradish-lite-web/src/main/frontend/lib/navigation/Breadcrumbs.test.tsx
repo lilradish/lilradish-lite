@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -18,8 +18,8 @@ const CURRENT_COLOUR = "rgb(26, 26, 26)";
 const TRAIL_COLOUR = "rgb(89, 89, 89)";
 
 const TRAIL: readonly Crumb[] = [
-  { label: "Groups", path: "/system/groups" },
-  { label: "Finance", path: "/system/groups/finance" },
+  { label: "Groups", path: "/system/groups", search: "" },
+  { label: "Finance", path: "/system/groups/finance", search: "" },
 ];
 
 function arrivedWith(
@@ -43,15 +43,6 @@ function hrefOf(label: string): string {
 }
 
 describe("Breadcrumbs", () => {
-  it("restores the journey's filter on the first crumb and on no other", () => {
-    render(<Breadcrumbs trail={TRAIL} current="a3f2" />, {
-      wrapper: arrivedWith({ from: "?lens=mine&page=2" }),
-    });
-
-    expect(hrefOf("Groups")).toBe("/system/groups?lens=mine&page=2");
-    expect(hrefOf("Finance")).toBe("/system/groups/finance");
-  });
-
   it("links to the plain list when the screen was arrived at directly", () => {
     render(<Breadcrumbs trail={TRAIL} current="a3f2" />, {
       wrapper: arrivedWith(undefined),
@@ -59,6 +50,43 @@ describe("Breadcrumbs", () => {
 
     expect(hrefOf("Groups")).toBe("/system/groups");
     expect(hrefOf("Groups")).not.toContain("?");
+  });
+
+  it("opens each crumb that holds a search of its own with that one, wherever it stands, and history state's on none", () => {
+    render(
+      <Breadcrumbs
+        trail={[
+          { label: "Work", path: "/work", search: "" },
+          { label: "History", path: "/work", search: "?tab=history&sort=name" },
+          { label: "Run 6", path: "/work/r6", search: "" },
+        ]}
+        current="Run 7"
+      />,
+      { wrapper: arrivedWith({ from: "?lens=mine&page=2" }) },
+    );
+
+    expect(hrefOf("Work")).toBe("/work");
+    expect(hrefOf("History")).toBe("/work?tab=history&sort=name");
+    expect(hrefOf("Run 6")).toBe("/work/r6");
+    expect(
+      screen
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("href")!.includes("lens=mine")),
+    ).toEqual([]);
+  });
+
+  it("draws the trail alone, every part of it a link, where the screen does not say what it is called", () => {
+    render(<Breadcrumbs trail={TRAIL} />, {
+      wrapper: arrivedWith(undefined),
+    });
+
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(
+      within(trail)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["Groups", "Finance"]);
+    expect(within(trail).getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("leaves the screen you are on unlinked, which is what excuses it from aria-current", () => {
@@ -98,6 +126,7 @@ describe("Breadcrumbs", () => {
     const long = Array.from({ length: 8 }, (_, at) => ({
       label: `Step ${at + 1}`,
       path: `/step/${at + 1}`,
+      search: "",
     }));
     render(<Breadcrumbs trail={long} current="a3f2" />, {
       wrapper: arrivedWith(undefined),

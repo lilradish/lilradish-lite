@@ -10,12 +10,14 @@ import static org.lilradish.lite.domain.run.fixture.Runs.key
 import static org.lilradish.lite.domain.run.fixture.Runs.person
 import static org.lilradish.lite.domain.run.fixture.Runs.question
 import static org.lilradish.lite.domain.run.fixture.Runs.questionTaking
+import static org.lilradish.lite.domain.run.fixture.Runs.searchStep
 import static org.lilradish.lite.domain.run.fixture.Runs.standing
 import static org.lilradish.lite.domain.run.fixture.Runs.stepId
 import static org.lilradish.lite.domain.run.fixture.Runs.takes
 import static org.lilradish.lite.domain.run.fixture.Runs.text
 import static org.lilradish.lite.domain.run.fixture.Runs.tidy
 import static org.lilradish.lite.domain.run.fixture.Runs.unstarted
+import static org.lilradish.lite.domain.run.fixture.Runs.webSearch
 
 import org.lilradish.lite.domain.codestep.CodeError
 import org.lilradish.lite.domain.codestep.CodeErrorReason
@@ -37,12 +39,10 @@ import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.domain.workflow.Binding
 import org.lilradish.lite.domain.workflow.BindingSource
 import org.lilradish.lite.domain.workflow.Pointer
+import org.lilradish.lite.domain.workflow.SearchQuestionPart
 import spock.lang.Specification
 
-/**
- * A run of three steps: a person's question giving back {@code answer}, the code step {@code tidy} taking
- * {@code note} from that answer and giving back {@code receipt}, and a question taking that receipt.
- */
+
 class CodeStepFitSpec extends Specification {
 
     static final EntryVersionId TIERS = new EntryVersionId(key(950))
@@ -55,6 +55,12 @@ class CodeStepFitSpec extends Specification {
 
     static final Binding RESULT_OUT = new Binding(key(804), Pointer.parse("result"),
             new BindingSource.StepOutput(stepId(2).value(), Pointer.parse("receipt")))
+
+    static final Binding NOTE_FROM_TITLE = new Binding(key(806), Pointer.parse("note"),
+            new BindingSource.StepOutput(stepId(1).value(), Pointer.parse("title")))
+
+    static final SearchQuestionPart RECEIPT_ASKED =
+            new SearchQuestionPart.Read(key(807), new BindingSource.StepOutput(stepId(2).value(), Pointer.parse("receipt")))
 
     def "code whose release still declares all its version binds into and out of it fits"() {
         given:
@@ -102,7 +108,23 @@ class CodeStepFitSpec extends Specification {
         CodeStepFit.misfit(run, run.steps()[1]) == Optional.of(fault(CodeErrorReason.TAKES_OTHERWISE, "note"))
     }
 
-    /** The field is the code step's own; what reads it is the later step, or the field the workflow gives it back in. */
+    def "what a search gives back into the step is judged against the way the release declares now, and not where it holds none"() {
+        given:
+        def into = unstarted(codeStep(2, 1, released([mustBe("note", 200)], [standing("receipt")]), code(),
+                [NOTE_FROM_TITLE]))
+        def run = Runs.run([unstarted(searchStep(1, way)), into])
+
+        expect:
+        CodeStepFit.misfit(run, run.steps()[1]) == expected
+
+        where:
+        way            || expected
+        webSearch(200) || Optional.empty()
+        webSearch(201) || Optional.of(fault(CodeErrorReason.TAKES_OTHERWISE, "note"))
+        null           || Optional.empty()
+    }
+
+
     def "what a later step or the workflow reads of the step is judged against what the release gives back now, naming the reader"() {
         given:
         def run = running(released([mustBe("note", 200)], givenBack), [NOTE_FROM_ANSWER], readBy, [], outputs)
@@ -117,6 +139,107 @@ class CodeStepFitSpec extends Specification {
         [standing("ticket_id")] | [RECEIPT_READ] | []           || new CodeError.StepReads(stepId(3).value())
         [yesNo("receipt")]      | [RECEIPT_READ] | []           || new CodeError.StepReads(stepId(3).value())
         [standing("ticket_id")] | []             | [RESULT_OUT] || new CodeError.OutputReads([new FieldName("result")])
+    }
+
+    def "what a search's question reads of the step need only still be given back, naming the search reading it"() {
+        given:
+        def run = searchedFrom(released([mustBe("note", 200)], givenBack))
+
+        expect:
+        CodeStepFit.misfit(run, run.steps()[1]) == expected
+        CodeStepFit.givesOtherwise(run, run.steps()[1]) == expected
+
+        where:
+        givenBack                             || expected
+        [standing("ticket_id")]               || Optional.of(new CodeError.Fault(CodeErrorReason.GIVES_OTHERWISE,
+                [new FieldName("receipt")], null, new CodeError.StepReads(stepId(3).value())))
+        [standing("receipt"), yesNo("more")]  || Optional.empty()
+        [yesNo("receipt"), standing("other")] || Optional.empty()
+    }
+
+    def "a current code output must still keep a search tellable and unable to hold nothing"() {
+        given:
+        def receipt = new Field(new FieldName('receipt'), null, null, shape, new HowMany.One(),
+                new org.lilradish.lite.domain.declaration.Demand.Stands(mustBeGiven,
+                        FieldStanding.ALWAYS, null))
+        def parts = written ? [new SearchQuestionPart.LiteralPart('Demo Sample '), RECEIPT_ASKED] : [RECEIPT_ASKED]
+        def run = Runs.run([
+                unstarted(question(1, person(), 1)),
+                unstarted(codeStep(2, 1, released([mustBe('note', 200)], [receipt]), code(), [NOTE_FROM_ANSWER])),
+                unstarted(searchStep(3, webSearch(), parts)),
+        ])
+        def expected = refused ? Optional.of(new CodeError.Fault(CodeErrorReason.GIVES_OTHERWISE,
+                [new FieldName('receipt')], null, new CodeError.StepReads(stepId(3).value()))) : Optional.empty()
+
+        expect:
+        CodeStepFit.misfit(run, run.steps()[1]) == expected
+        CodeStepFit.givesOtherwise(run, run.steps()[1]) == expected
+
+        where:
+        shape                    | mustBeGiven | written || refused
+        new FieldShape.Text(200) | true        | false   || false
+        new FieldShape.Text(200) | false       | false   || true
+        new FieldShape.Text(200) | false       | true    || false
+        new FieldShape.File([new org.lilradish.lite.domain.file.MediaTypeName('text/plain')], null) | true | false || true
+        new FieldShape.File([new org.lilradish.lite.domain.file.MediaTypeName('text/plain')], null) | true | true  || true
+    }
+
+    def "an unstarted pinned workflow gives the real whole or nested demand keeping a search nonempty"() {
+        given:
+        def receipt = new Field(new FieldName('receipt'), null, null, new FieldShape.Text(200), new HowMany.One(),
+                new Demand.Stands(false, FieldStanding.ALWAYS, null))
+        def note = new Field(new FieldName('note'), null, null, new FieldShape.Text(200), new HowMany.One(),
+                new Demand.Given(nestedPath || required))
+        def fields = nestedPath ? [new Field(new FieldName('bundle'), null, null, new FieldShape.Nested([note]),
+                new HowMany.One(), new Demand.Given(required))] : [note]
+        def declared = new Declaration(DeclarationSide.GIVES, Demands.ofWorkflow(DeclarationSide.GIVES), fields)
+        def workflow = new PlannedStep(stepId(3), 3, Runs.workflowStep(3).name(),
+                new StepRuns.Workflow(Runs.pinned(3), declared), null, null, null, [])
+        def other = new SearchQuestionPart.Read(key(923),
+                new BindingSource.StepOutput(stepId(3).value(), Pointer.parse(nestedPath ? 'bundle.note' : 'note')))
+        def run = Runs.run([
+                unstarted(question(1, person(), 1)),
+                unstarted(codeStep(2, 1, released([mustBe('note', 200)], [receipt]), code(), [NOTE_FROM_ANSWER])),
+                unstarted(workflow),
+                unstarted(searchStep(4, webSearch(), [RECEIPT_ASKED, other])),
+        ])
+        def expected = required ? Optional.empty() : Optional.of(new CodeError.Fault(CodeErrorReason.GIVES_OTHERWISE,
+                [new FieldName('receipt')], null, new CodeError.StepReads(stepId(4).value())))
+
+        expect:
+        run.steps()[2].beneath() == null
+        CodeStepFit.misfit(run, run.steps()[1]) == expected
+        CodeStepFit.givesOtherwise(run, run.steps()[1]) == expected
+
+        where:
+        [nestedPath, required] << [[true, false], [true, false]].combinations()
+    }
+
+    def "a temporarily absent search way keeps its standard required and optional output demands"() {
+        given:
+        def receipt = new Field(new FieldName('receipt'), null, null, new FieldShape.Text(200), new HowMany.One(),
+                new Demand.Stands(false, FieldStanding.ALWAYS, null))
+        def other = new SearchQuestionPart.Read(key(924),
+                new BindingSource.StepOutput(stepId(3).value(), Pointer.parse(field)))
+        def run = Runs.run([
+                unstarted(question(1, person(), 1)),
+                unstarted(codeStep(2, 1, released([mustBe('note', 200)], [receipt]), code(), [NOTE_FROM_ANSWER])),
+                unstarted(searchStep(3, null)),
+                unstarted(searchStep(4, webSearch(), [RECEIPT_ASKED, other])),
+        ])
+        def expected = required ? Optional.empty() : Optional.of(new CodeError.Fault(CodeErrorReason.GIVES_OTHERWISE,
+                [new FieldName('receipt')], null, new CodeError.StepReads(stepId(4).value())))
+
+        expect:
+        CodeStepFit.misfit(run, run.steps()[1]) == expected
+        CodeStepFit.givesOtherwise(run, run.steps()[1]) == expected
+
+        where:
+        field        || required
+        'title'      || true
+        'body'       || true
+        'references' || false
+        'other'      || false
     }
 
     def "a term of a list the group does not hold is given with the field it is in, in what it takes before what it gives"() {
@@ -145,7 +268,7 @@ class CodeStepFitSpec extends Specification {
                 Optional.of(fault(CodeErrorReason.GIVES_A_LIST_NOT_HERE, "level"))
     }
 
-    /** A person gives back as the release declares; what the step would have been given has no part in that. */
+
     def "what a person would give back matches where only what goes into the step no longer does"() {
         given:
         def run = running(release)
@@ -195,7 +318,16 @@ class CodeStepFitSpec extends Specification {
         new RunSnapshot(RUN, RUN, GROUP, VERSION, false, null, json([:]) as JsonValue.JsonObject, workflow, steps)
     }
 
-    /** Gone wrong for {@code reason} about {@code field}, naming no reader: only giving otherwise names one. */
+
+    private static RunSnapshot searchedFrom(ReleasedCodeStep released) {
+        Runs.run([
+                unstarted(question(1, person(), 1)),
+                unstarted(codeStep(2, 1, released, code(), [NOTE_FROM_ANSWER])),
+                unstarted(searchStep(3, webSearch(), [new SearchQuestionPart.LiteralPart("Find "), RECEIPT_ASKED])),
+        ])
+    }
+
+
     private static CodeError.Fault fault(CodeErrorReason reason, String field) {
         new CodeError.Fault(reason, Pointer.parse(field).names(), null, null)
     }

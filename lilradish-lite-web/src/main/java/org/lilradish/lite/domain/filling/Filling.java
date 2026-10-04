@@ -13,6 +13,7 @@ import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.declaration.Declaration;
 import org.lilradish.lite.domain.declaration.FieldKind;
 import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.file.StoredFile;
 import org.lilradish.lite.domain.text.Legibility;
 import org.lilradish.lite.domain.text.ProseRefusal;
 import org.lilradish.lite.domain.wire.CanonicalJson;
@@ -152,6 +153,9 @@ public final class Filling {
     }
 
     private @Nullable JsonValue many(FillField field, JsonValue value) {
+        if (empty(field, value)) {
+            return field.mustBeGiven() ? refuse(FillReason.MISSING) : new JsonArray(List.of());
+        }
         if (!(value instanceof JsonArray given)) {
             return null;
         }
@@ -215,10 +219,14 @@ public final class Filling {
                     case NUMBER -> number(said);
                     case YES_NO -> yesOrNo(said);
                     case TEXT, TERM, DATE, MOMENT -> sent;
+                    case FILE -> throw new IllegalStateException("File values are supplied by file storage, not text");
                     case FIELDS -> throw new IllegalStateException("Filling reads fields as fields, not as text");
                 };
         if (typed == null || !kind.writes(typed)) {
             return refuse(FillReason.MALFORMED);
+        }
+        if (kind == FieldKind.TEXT && !requireNonNull(field.lines()).accepts(said)) {
+            return refuse(FillReason.LINE_BREAK);
         }
         ProseRefusal refusal = kind == FieldKind.TEXT ? refusalOf(said) : null;
         if (refusal != null) {
@@ -268,11 +276,12 @@ public final class Filling {
      * for: that is never dropped. Nothing is trimmed, so spacing around what shows is still how it is written.
      */
     private static boolean empty(FillField field, JsonValue value) {
-        if (field.kind() == FieldKind.FIELDS || !(value instanceof JsonString said)) {
+        if (!(value instanceof JsonString said)) {
             return false;
         }
         String text = said.value();
-        return text.isEmpty() || (!Legibility.holdsSomethingVisibleInProse(text) && refusalOf(text) == null);
+        return (field.kind() != FieldKind.TEXT || requireNonNull(field.lines()).accepts(text))
+                && (text.isEmpty() || (!Legibility.holdsSomethingVisibleInProse(text) && refusalOf(text) == null));
     }
 
     private static @Nullable ProseRefusal refusalOf(String text) {
@@ -352,6 +361,7 @@ public final class Filling {
         return switch (kept) {
             case JsonNull absent -> NONE;
             case JsonObject object when kind == FieldKind.FIELDS -> written(field.fields(), object, noneWhereMany);
+            case JsonObject object when kind == FieldKind.FILE -> fileWritten(field, object);
             case JsonNumber number
             when kind == FieldKind.NUMBER && kind.writes(number) ->
                 new JsonString(number.value().toPlainString());
@@ -359,6 +369,19 @@ public final class Filling {
             case JsonString text when kind.writes(text) -> text;
             default -> throw unlike();
         };
+    }
+
+    private static JsonValue fileWritten(FillField field, JsonObject kept) {
+        try {
+            StoredFile stored = StoredFile.fromKept(kept);
+            if (requireNonNull(field.fileTypes()).contains(stored.type())
+                    && stored.size() <= requireNonNull(field.maximumBytes())) {
+                return stored.kept();
+            }
+        } catch (IllegalArgumentException refused) {
+            throw unlike();
+        }
+        throw unlike();
     }
 
     private static Map<String, JsonValue> named(JsonObject object) {

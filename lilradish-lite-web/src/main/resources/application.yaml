@@ -35,6 +35,14 @@ lilradish:
     # The longest a code step this release holds runs for; a shutdown in order waits that long for one under way.
     # A deployment holding one that calls out sets its own bound.
     longest-run: 1m
+  files:
+    maximum-size: 100MB
+    maximum-per-field: 100
+    maximum-total-size: 1GB
+  runs:
+    # How many runs deep a tree may go, the run at the top counted as one. Each level more lets one tree hold one
+    # run more beneath another, and every run started takes a number of its group's.
+    maximum-depth: 32
 logging:
   pattern:
     # Under the keys RequestTrace puts them in; a line logged outside a request shows them empty.

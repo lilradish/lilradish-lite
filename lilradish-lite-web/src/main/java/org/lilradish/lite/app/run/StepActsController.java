@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.libprunus.core.error.ApiErrorException;
 import org.lilradish.lite.app.library.ConstantJson;
 import org.lilradish.lite.domain.declaration.Declaration;
@@ -23,6 +24,7 @@ import org.lilradish.lite.web.CallerAdmission;
 import org.lilradish.lite.web.ChangeRequests;
 import org.lilradish.lite.web.GroupPermissionRequired;
 import org.lilradish.lite.web.JsonBody;
+import org.lilradish.lite.web.MultipartFiles;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -121,7 +123,15 @@ final class StepActsController {
             throws IOException {
         Addressed addressed = addressed(runId, stepId, number, request);
         ChangeRequests.requireNoParameter(request);
-        JsonNode body = JsonBody.read(request, LARGEST_ANSWER_BODY, ANSWER_REFUSED);
+        if (MultipartFiles.sent(request)) {
+            try (MultipartFiles multipart = MultipartFiles.open(request, LARGEST_ANSWER_BODY)) {
+                return answer(addressed, multipart.document(), multipart);
+            }
+        }
+        return answer(addressed, JsonBody.read(request, LARGEST_ANSWER_BODY, ANSWER_REFUSED), null);
+    }
+
+    private StepAnswers.StepAnswer answer(Addressed addressed, JsonNode body, @Nullable MultipartFiles multipart) {
         JsonNode values = body.path(VALUES);
         JsonNode why = body.path(WHY);
         if (!body.isObject()
@@ -131,14 +141,26 @@ final class StepActsController {
             throw new ApiErrorException(RefusalCode.BODY_UNUSABLE, ANSWER_REFUSED);
         }
         String said = reasonIn(why);
-        acts.answer(
-                addressed.group(),
-                addressed.run(),
-                addressed.step(),
-                addressed.number(),
-                addressed.caller(),
-                ConstantJson.sent(values.toString()),
-                said);
+        if (multipart == null) {
+            acts.answer(
+                    addressed.group(),
+                    addressed.run(),
+                    addressed.step(),
+                    addressed.number(),
+                    addressed.caller(),
+                    ConstantJson.sent(values.toString()),
+                    said);
+        } else {
+            acts.answerFiles(
+                    addressed.group(),
+                    addressed.run(),
+                    addressed.step(),
+                    addressed.number(),
+                    addressed.caller(),
+                    ConstantJson.sent(values.toString()),
+                    said,
+                    multipart);
+        }
         return read(addressed);
     }
 

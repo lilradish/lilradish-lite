@@ -2,16 +2,22 @@ package org.lilradish.lite.app.codestep
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
+import java.io.ByteArrayInputStream
+import java.io.InputStream
+import java.io.UncheckedIOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.lilradish.lite.domain.codestep.CodeCall
 import org.lilradish.lite.domain.codestep.CodeError
 import org.lilradish.lite.domain.codestep.CodeErrorReason
 import org.lilradish.lite.domain.codestep.CodeOutcome
+import org.lilradish.lite.domain.codestep.CodeStep
+import org.lilradish.lite.domain.codestep.CodeStepDeclaration
 import org.lilradish.lite.domain.codestep.CodeStepName
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
+import org.lilradish.lite.domain.filling.FillPath
 import org.lilradish.lite.domain.inference.ForeignProse
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.testutil.SnapshottingAppender
@@ -36,6 +42,10 @@ class CodeRunsSpec extends Specification {
 
     static final CodeError.Fault SAID_NOTHING = new CodeError.Fault(CodeErrorReason.SAID_NOTHING, [], null, null)
 
+    static final FillPath FILE = new FillPath([new FillPath.Named(new FieldName("file"))])
+
+    static final FillPath NEXT_FILE = new FillPath([new FillPath.Named(new FieldName("next_file"))])
+
     private final SnapshottingAppender logged = new SnapshottingAppender()
 
     def setup() {
@@ -57,7 +67,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing, other]))
 
         when:
-        def outcome = runs.run(callTo(filing))
+        def outcome = read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         outcome == new CodeOutcome.Gave([
@@ -76,7 +86,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         expect:
-        erred(runs.run(callTo(filing))) ==
+        erred(read(runs.run(callTo(filing)), callTo(filing))) ==
                 [new CodeError.Fault(reason, path.collect { new FieldName(it) }, null, null), kept]
 
         where:
@@ -93,7 +103,7 @@ class CodeRunsSpec extends Specification {
         TransactionSynchronizationManager.setActualTransactionActive(true)
 
         when:
-        runs.run(callTo(filing))
+        read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         def refused = thrown(IllegalStateException)
@@ -108,7 +118,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        runs.run(new CodeCall(new CodeStepName("close_ticket"), filing.declaration(), [:], TAKES))
+        runs.run(new CodeCall(new CodeStepName("close_ticket"), filing.declaration(), [:], TAKES, [:]))
 
         then:
         def refused = thrown(IllegalStateException)
@@ -123,7 +133,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        def outcome = runs.run(callTo(filing))
+        def outcome = read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         erred(outcome) == [said("ticket T-1 for account 4471 was refused"), null]
@@ -152,7 +162,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        def outcome = runs.run(callTo(filing))
+        def outcome = read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         erred(outcome) == [said("ticket T-1 was waiting"), null]
@@ -167,7 +177,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        def outcome = runs.run(callTo(filing))
+        def outcome = read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         erred(outcome) == [SAID_NOTHING, null]
@@ -183,7 +193,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        runs.run(callTo(filing))
+        read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         def escaped = thrown(OutOfMemoryError)
@@ -206,7 +216,7 @@ class CodeRunsSpec extends Specification {
         def runs = new CodeRuns(new CodeSteps([filing]))
 
         when:
-        runs.run(callTo(filing))
+        read(runs.run(callTo(filing)), callTo(filing))
 
         then:
         def escaped = thrown(ScriptedCodeStep.GateNeverOpened)
@@ -215,13 +225,190 @@ class CodeRunsSpec extends Specification {
         logged.list.isEmpty()
     }
 
+
+    def "a code input file is opened on demand and the framework closes its stream once"() {
+        given:
+        def closed = new java.util.concurrent.atomic.AtomicInteger()
+        def opened = new java.util.concurrent.atomic.AtomicInteger()
+        def stream = new ByteArrayInputStream("input".bytes) {
+            @Override
+            void close() {
+                closed.incrementAndGet()
+                super.close()
+            }
+        }
+        def code = fileReader { CodeStep.Input input ->
+            assert new String(input.files()[FILE].open().readAllBytes(), "UTF-8") == "input"
+            CodeStep.Output.plain(RECEIPT)
+        }
+        def runs = new CodeRuns(new CodeSteps([code]))
+        def call = new CodeCall(code.name(), code.declaration(), [:], TAKES,
+                [(FILE): { opened.incrementAndGet(); stream } as CodeStep.FileInput])
+
+        when:
+        def ran = runs.run(call)
+
+        then:
+        ran.failure() == null
+        opened.get() == 1
+        closed.get() == 0
+
+        when:
+        ran.close()
+
+        then:
+        closed.get() == 1
+    }
+
+    def "a second code input cannot open until code closes the first"() {
+        given:
+        def firstClosed = new java.util.concurrent.atomic.AtomicInteger()
+        def secondClosed = new java.util.concurrent.atomic.AtomicInteger()
+        def first = new ByteArrayInputStream("first".bytes) {
+            @Override
+            void close() {
+                firstClosed.incrementAndGet()
+                super.close()
+            }
+        }
+        def second = new ByteArrayInputStream("second".bytes) {
+            @Override
+            void close() {
+                secondClosed.incrementAndGet()
+                super.close()
+            }
+        }
+        def secondOpens = new java.util.concurrent.atomic.AtomicInteger()
+        def code = fileReader { CodeStep.Input input ->
+            def old = input.files()[FILE].open()
+            assert old.read() == (int) 'f'
+            try {
+                input.files()[NEXT_FILE].open()
+                assert false: "a second file opened while the first was still open"
+            } catch (IllegalStateException refusal) {
+                assert refusal.message == "A code step may open only one file at a time; close it before opening another."
+            }
+            assert firstClosed.get() == 0
+            old.close()
+            def next = input.files()[NEXT_FILE].open()
+            assert new String(next.readAllBytes(), "UTF-8") == "second"
+            CodeStep.Output.plain(RECEIPT)
+        }
+        def runs = new CodeRuns(new CodeSteps([code]))
+        def call = new CodeCall(code.name(), code.declaration(), [:], TAKES,
+                [(FILE): { first } as CodeStep.FileInput,
+                 (NEXT_FILE): { secondOpens.incrementAndGet(); second } as CodeStep.FileInput])
+
+        when:
+        def ran = runs.run(call)
+
+        then:
+        ran.failure() == null
+        firstClosed.get() == 1
+        secondClosed.get() == 0
+        secondOpens.get() == 1
+
+        when:
+        ran.close()
+
+        then:
+        firstClosed.get() == 1
+        secondClosed.get() == 1
+    }
+
+    def "an unhandled second-open refusal is code's own error, not a framework fault"() {
+        given:
+        def closed = new java.util.concurrent.atomic.AtomicInteger()
+        def first = new ByteArrayInputStream("first".bytes) {
+            @Override
+            void close() {
+                closed.incrementAndGet()
+                super.close()
+            }
+        }
+        def code = fileReader { CodeStep.Input input ->
+            input.files()[FILE].open()
+            input.files()[NEXT_FILE].open()
+            CodeStep.Output.plain(RECEIPT)
+        }
+        def runs = new CodeRuns(new CodeSteps([code]))
+        def call = new CodeCall(code.name(), code.declaration(), [:], TAKES,
+                [(FILE): { first } as CodeStep.FileInput,
+                 (NEXT_FILE): { throw new AssertionError("second source must not open") } as CodeStep.FileInput])
+
+        when:
+        def outcome = read(runs.run(call), call)
+
+        then:
+        erred(outcome) == [said("A code step may open only one file at a time; close it before opening another."), null]
+        closed.get() == 1
+    }
+
+    def "a trusted input stream read failure escapes as framework failure and closes the stream"() {
+        given:
+        def closed = new java.util.concurrent.atomic.AtomicInteger()
+        def stream = new InputStream() {
+            @Override
+            int read() throws IOException {
+                throw new IOException("private file content")
+            }
+
+            @Override
+            void close() {
+                closed.incrementAndGet()
+            }
+        }
+        def code = fileReader { CodeStep.Input input ->
+            try {
+                input.files()[FILE].open().read()
+            } catch (IOException ignored) {
+                // The trusted input fault cannot become a successful or code-authored return.
+            }
+            CodeStep.Output.plain(RECEIPT)
+        }
+        def runs = new CodeRuns(new CodeSteps([code]))
+        def call = new CodeCall(code.name(), code.declaration(), [:], TAKES,
+                [(FILE): { stream } as CodeStep.FileInput])
+
+        when:
+        runs.run(call)
+
+        then:
+        def escaped = thrown(UncheckedIOException)
+        escaped.cause.message == "private file content"
+        closed.get() == 1
+        logged.list.isEmpty()
+    }
+
+    private static CodeStep fileReader(Closure<CodeStep.Output> behaviour) {
+        def declared = scripted("file_claim") { RECEIPT }.declaration()
+        new CodeStep() {
+            @Override
+            CodeStepName name() { new CodeStepName("file_claim") }
+
+            @Override
+            CodeStepDeclaration declaration() { declared }
+
+            @Override
+            CodeStep.Output run(CodeStep.Input takes) { behaviour.call(takes) }
+        }
+    }
+
     private static ScriptedCodeStep scripted(String name, Closure<JsonValue.JsonObject> behaviour) {
         new ScriptedCodeStep(name, [SpecCodeStep.given("ticket", new FieldShape.Text(64))],
                 [SpecCodeStep.standing("receipt", new FieldShape.Text(8))], false, behaviour)
     }
 
     private static CodeCall callTo(ScriptedCodeStep codeStep) {
-        new CodeCall(codeStep.name(), codeStep.declaration(), [:], TAKES)
+        new CodeCall(codeStep.name(), codeStep.declaration(), [:], TAKES, [:])
+    }
+
+    private static CodeOutcome read(CodeRuns.Ran ran, CodeCall call) {
+        try {
+            ran.failure() != null ? ran.failure() : CodeOutcome.returned(call, ran.returned()?.values())
+        } finally {
+            ran.close()
+        }
     }
 
     /** Why an outcome went wrong and what it kept, or none where it did not go wrong. */

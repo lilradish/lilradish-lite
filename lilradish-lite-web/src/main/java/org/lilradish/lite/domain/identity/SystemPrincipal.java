@@ -22,8 +22,7 @@ import java.util.UUID;
  */
 public final class SystemPrincipal implements Principal {
 
-    /* Paired with a row the baseline seeds, held level by SeededSubjectIntegrationSpec. It holds no
-     * permission: what running a workflow asks of one is not yet decided. */
+    /* This system principal has no role and cannot surface content. */
     public static final SystemPrincipal WORKFLOW_RUNNER = new SystemPrincipal("00000000-0000-4000-8000-000000000001");
 
     private final SubjectId subject;

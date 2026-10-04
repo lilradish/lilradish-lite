@@ -1,5 +1,6 @@
 package org.lilradish.lite.domain.inference;
 
+import org.jspecify.annotations.Nullable;
 import org.libprunus.core.log.annotation.DoNotLog;
 import org.lilradish.lite.domain.model.CameBackMeasure;
 import org.lilradish.lite.domain.model.DeployedModel;
@@ -12,7 +13,7 @@ import org.lilradish.lite.domain.model.SentText;
 public sealed interface CallOutcome {
 
     /**
-     * The model answered, every count in the model's own units. A sent count below one, a negative
+     * The model returned a completion, even if it declined, with every count in the model's own units. A sent count below one, a negative
      * came-back count, or only one of the two, is taken as none given, and both are measured here.
      * The answer has not been checked against what the store can hold, and may not be storable.
      *
@@ -20,8 +21,16 @@ public sealed interface CallOutcome {
      * @param countedByModel false where the model said nothing of what it counted, both counts then
      *     being this system's measure
      * @param cutOff the model stopped at the most it may give back
+     * @param declinedWords what it said in declining, where it did; separate from its answer
      */
-    record CameBack(@DoNotLog String answer, long sentCount, long cameBackCount, boolean countedByModel, boolean cutOff)
+    record CameBack(
+            @DoNotLog String answer,
+            long sentCount,
+            long cameBackCount,
+            boolean countedByModel,
+            boolean cutOff,
+            @Nullable DidNotFitReason didNotFitReason,
+            @DoNotLog @Nullable String declinedWords)
             implements CallOutcome {
 
         public CameBack {
@@ -34,16 +43,37 @@ public sealed interface CallOutcome {
             if (cameBackCount < 0) {
                 throw new IllegalArgumentException("CameBack came-back count must not be negative: " + cameBackCount);
             }
+            if (didNotFitReason != null && !didNotFitReason.mayEndCallBeforeUnwrapping()) {
+                throw new IllegalArgumentException("CameBack has no such provider outcome");
+            }
+            if (declinedWords != null && didNotFitReason != DidNotFitReason.MODEL_DECLINED) {
+                throw new IllegalArgumentException("CameBack has decline words only with model decline");
+            }
         }
 
         /** Both counts this system's own measure, of what was sent and of what came back. */
-        public static CameBack measuredHere(DeployedModel model, SentText sent, String answer, boolean cutOff) {
+        public static CameBack measuredHere(
+                DeployedModel model,
+                SentText sent,
+                String answer,
+                boolean cutOff,
+                @Nullable DidNotFitReason didNotFitReason,
+                @Nullable String declinedWords,
+                long generatedToolCallCharacters) {
+            if (generatedToolCallCharacters < 0) {
+                throw new IllegalArgumentException("Generated tool-call characters must not be negative");
+            }
+            long cameBackCharacters = Math.addExact(
+                    CameBackMeasure.characters(answer),
+                    declinedWords == null ? 0 : CameBackMeasure.characters(declinedWords));
             return new CameBack(
                     answer,
                     model.unitsOf(sent.characters()),
-                    model.unitsOf(CameBackMeasure.characters(answer)),
+                    model.unitsOf(Math.addExact(cameBackCharacters, generatedToolCallCharacters)),
                     false,
-                    cutOff);
+                    cutOff,
+                    didNotFitReason,
+                    declinedWords);
         }
     }
 
@@ -52,7 +82,8 @@ public sealed interface CallOutcome {
      *
      * @param detail what went wrong, as the other side put it
      */
-    record Errored(@DoNotLog String detail) implements CallOutcome {
+    record Errored(
+            @DoNotLog String detail, @DoNotLog @Nullable KeptAnswer unreadableResponse) implements CallOutcome {
 
         public Errored {
             if (detail == null) {

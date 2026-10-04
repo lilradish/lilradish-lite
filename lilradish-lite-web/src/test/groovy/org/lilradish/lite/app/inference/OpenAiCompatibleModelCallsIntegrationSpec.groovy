@@ -124,7 +124,7 @@ class OpenAiCompatibleModelCallsIntegrationSpec extends Specification {
 
         where:
         status | body       || expected
-        200    | COMPLETION || new CallOutcome.CameBack("ok", 9, 1, false, false)
+        200    | COMPLETION || new CallOutcome.CameBack("ok", 9, 1, false, false, null, null)
         503    | OVERLOADED || new CallOutcome.TurnedAway(new TurnAway("The server is overloaded", false))
     }
 
@@ -145,8 +145,11 @@ class OpenAiCompatibleModelCallsIntegrationSpec extends Specification {
                 [new VendorModel(SAMPLE, "vendor-sample", [])])
         def resend = new TurnAwayResend(new ResendPolicy(3, Duration.ofHours(1), Duration.ofHours(1)),
                 shutdown, InstantSource.system())
-        new OpenAiCompatibleModelCalls(ModelCallsConfiguration.modelClient(endpoint, "test-key", resend),
-                endpoint.completions(), endpoint.pairedWith(new ModelCatalog([MODEL])))
+        def compatible = new OpenAiCompatibleCallConversion()
+        new OpenAiCompatibleModelCalls(new ModelCallTransport(
+                ModelCallsConfiguration.modelClient(endpoint, "test-key", resend),
+                endpoint.callWays(new ModelCatalog([MODEL])),
+                new ModelCallConversions([compatible], [compatible])))
     }
 
     private static CallRequest request() {

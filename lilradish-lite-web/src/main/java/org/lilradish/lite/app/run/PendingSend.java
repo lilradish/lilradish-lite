@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.identity.UserId;
 import org.lilradish.lite.domain.inference.ModelCallPurpose;
+import org.lilradish.lite.domain.run.ProductionId;
 import org.lilradish.lite.domain.run.RunId;
 import org.lilradish.lite.domain.run.RunStepFailureId;
 import org.lilradish.lite.domain.run.RunStepSendAttemptId;
@@ -17,7 +18,7 @@ import org.lilradish.lite.domain.run.WorkflowStepId;
  * what was pressed, once it holds the tree.
  *
  * @param root the run at the top of {@code run}'s tree, which every write about the try locks
- * @param number the try to be sent, which is its step's newest
+ * @param aTry the production to be sent, which is its step's newest
  * @param presser the person who pressed Try sending, whose attempt what is sent is; none where the run sends it by
  *     itself. What is measured too long, or not built, is the system's whoever pressed.
  * @param attemptOn the attempt pressed on: the one a hold names, or the one whose call to review was turned away;
@@ -29,7 +30,7 @@ record PendingSend(
         RunId root,
         RunId run,
         WorkflowStepId step,
-        int number,
+        ProductionId aTry,
         ModelCallPurpose purpose,
         @Nullable UserId presser,
         @Nullable RunStepSendAttemptId attemptOn,
@@ -42,9 +43,7 @@ record PendingSend(
         requireNonNull(run, "PendingSend run must not be null");
         requireNonNull(step, "PendingSend step must not be null");
         requireNonNull(purpose, "PendingSend purpose must not be null");
-        if (number < 1) {
-            throw new IllegalArgumentException("PendingSend number must be positive: " + number);
-        }
+        requireNonNull(aTry, "PendingSend aTry must not be null");
         if (purpose == ModelCallPurpose.HELP) {
             throw new IllegalArgumentException("PendingSend sends a try to be produced or reviewed");
         }

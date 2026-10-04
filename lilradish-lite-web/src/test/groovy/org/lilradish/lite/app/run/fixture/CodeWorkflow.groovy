@@ -9,24 +9,16 @@ import org.lilradish.lite.testutil.codestep.ScriptedCodeStep
 import org.lilradish.lite.testutil.codestep.SpecCodeStep
 import org.lilradish.lite.testutil.library.LibraryStore
 
-/**
- * One group, its people, and a workflow whose first step, {@code send}, runs the code step {@code send_reply} on
- * the ticket the run was started with, giving back a receipt; its second, {@code check}, asks a person whether that
- * receipt looks right, or, where the workflow sends twice, runs the same code again on the receipt. The workflow
- * gives the receipt back.
- */
 final class CodeWorkflow {
 
     static final String CODE_STEP = "send_reply"
 
     static final String GROUP = "00000003-0000-4000-8000-000000000c01"
 
-    /** An overseer: reads every run, answers a step, reviews at a gate. */
     static final String ANN = "00000002-0000-4000-8000-000000000c01"
 
     static final UserId ANN_USER = new UserId("000c01")
 
-    /** An operator, who starts the run. */
     static final String CAT = "00000002-0000-4000-8000-000000000c03"
 
     static final UserId CAT_USER = new UserId("000c03")
@@ -57,25 +49,17 @@ final class CodeWorkflow {
 
     private CodeWorkflow() {}
 
-    /**
-     * The code step as a release holding it declares it, taking the reply and giving back the receipt, doing
-     * {@code behaviour} each time it runs, after {@code gate} opens where there is one.
-     */
     static ScriptedCodeStep scripted(boolean mayRunAgain, Closure<JsonValue.JsonObject> behaviour,
                                      CountDownLatch gate = null) {
         new ScriptedCodeStep(CODE_STEP, [REPLY], [RECEIPT], mayRunAgain, behaviour, gate)
     }
 
-    /** What code gives back that fits: a receipt naming what it sent. */
     static JsonValue.JsonObject receipt(String said = "R-1") {
         new JsonValue.JsonObject([new JsonValue.JsonMember("receipt", new JsonValue.JsonString(said))])
     }
 
-    /**
-     * The group, its people and the workflow, {@code tries} declared on send, produced by {@code producer}. The code
-     * step's label is added to the store here, as a migration publishing it would.
-     */
     static void seed(LibraryStore store, int tries = 1, boolean twice = false, String producer = "code") {
+        // DB-SPECIFIC: PostgreSQL ALTER TYPE enum ADD VALUE.
         store.session.sql("alter type code_step add value if not exists '${CODE_STEP}'").update()
         store.person(ANN, "000c01", "Ann")
         store.person(CAT, "000c03", "Cat")
@@ -107,7 +91,6 @@ final class CodeWorkflow {
         StepRows.binding(store, "0000000d-0000-4000-8000-000000000c03", VERSION, null, "result", SEND, "receipt")
     }
 
-    /** Cat's run of the workflow, started with a ticket and nothing written about any step. */
     static void run(LibraryStore store) {
         StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, STARTED_WITH)
     }

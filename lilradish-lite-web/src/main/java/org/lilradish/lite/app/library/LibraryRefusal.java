@@ -25,7 +25,7 @@ enum LibraryRefusal {
             RefusalCode.CONSTANT_DOES_NOT_FIT,
             "A constant is written as a value is: a number in at most 38 digits either side of its point, no NUL"
                     + " character, no more than 8,192 characters of text in all, and no more than 1,048,576"
-                    + " characters written out."),
+                    + " characters written out. Text for a field of one line holds no line break."),
     DECLARATION_TOO_DEEP(
             RefusalCode.DECLARATION_TOO_DEEP,
             "A field is held more than 32 deep, or so deep that the names down to it, joined by dots, run past"
@@ -56,10 +56,24 @@ enum LibraryRefusal {
             RefusalCode.FIELD_WORDS_UNUSABLE,
             "A field's label is at most 128 characters and its help at most 512, each on one line with something"
                     + " in it that shows."),
+    FILE_SIZE_LIMIT_UNUSABLE(
+            RefusalCode.FILE_SIZE_LIMIT_UNUSABLE,
+            "A file field's maximum size is a whole number of bytes, at least 1 byte and less than 8,388,608 GB."),
+    FILE_TYPES_TOO_MANY(RefusalCode.FILE_TYPES_TOO_MANY, "A field of files takes at most 64 types."),
     INSTRUCTION_UNUSABLE(
             RefusalCode.INSTRUCTION_UNUSABLE,
             "An instruction is one to 8192 characters with something in it that shows; its lines end in a line"
                     + " feed, and a tab is the only other control it holds."),
+    DRAWING_UNUSABLE(
+            RefusalCode.DRAWING_UNUSABLE,
+            "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented"
+                    + " with tabs."),
+    DRAWING_TOO_DEEP(
+            RefusalCode.DRAWING_TOO_DEEP,
+            "A drawing holds lists and quotes at most 32 deep, counting on each line every marker it opens with and"
+                    + " every two spaces of indent before and between them, a tab as four; and emphasis at most 32 deep,"
+                    + " counting every two asterisks or underscores between blank lines, an underscore inside a word"
+                    + " aside."),
     LIST_TOO_LARGE(RefusalCode.LIST_TOO_LARGE, "A reference list holds at most 256 terms."),
     NOTE_UNUSABLE(
             RefusalCode.NOTE_UNUSABLE,
@@ -79,6 +93,12 @@ enum LibraryRefusal {
             RefusalCode.PROSE_TAG_CHARACTER,
             "What was written holds a tag character, which shows nothing and which text sent to a model may not"
                     + " hold."),
+    SEARCH_QUESTION_PARTS_TOO_MANY(
+            RefusalCode.SEARCH_QUESTION_PARTS_TOO_MANY, "A searching step's question holds at most 256 parts."),
+    SEARCH_TEXT_UNUSABLE(
+            RefusalCode.SEARCH_TEXT_UNUSABLE,
+            "A piece of written text is one to 8192 characters, and may be spaces alone. Lines may be broken, and"
+                    + " indented with tabs."),
     STEPS_TOO_MANY(RefusalCode.STEPS_TOO_MANY, "A workflow version holds at most 256 steps."),
     STEP_NAME_UNUSABLE(
             RefusalCode.STEP_NAME_UNUSABLE,

@@ -3,10 +3,19 @@ package org.lilradish.lite.app.library;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.app.filling.FillFieldAnswer;
+import org.lilradish.lite.app.group.GroupLists;
+import org.lilradish.lite.app.listing.ListParameters;
+import org.lilradish.lite.app.listing.PageAnswer;
 import org.lilradish.lite.domain.identity.GroupPermission;
+import org.lilradish.lite.domain.listing.ListCursor;
+import org.lilradish.lite.domain.listing.ListPage;
+import org.lilradish.lite.domain.listing.ListPosition;
+import org.lilradish.lite.domain.listing.ListQuery;
 import org.lilradish.lite.domain.registry.EntryPurpose;
 import org.lilradish.lite.web.ActAdmission;
 import org.lilradish.lite.web.GroupPermissionRequired;
@@ -23,7 +32,7 @@ final class OffersController {
 
     static final String OFFERED = ActAdmission.IN_A_GROUP + "/offered-workflows";
 
-    private static final String PARAMETER_REFUSED = "What may be started takes no parameter.";
+    private static final Set<String> PARAMETERS = Set.of("filter", "cursor");
 
     private final Offers offers;
 
@@ -33,11 +42,17 @@ final class OffersController {
 
     @GetMapping(OFFERED)
     @GroupPermissionRequired(GroupPermission.START_RUN)
-    OfferedAnswer offered(HttpServletRequest request) {
-        QueryParameters.requireNone(request, PARAMETER_REFUSED);
-        return new OfferedAnswer(offers.offeredIn(ActAdmission.admittedGroup(request)).stream()
-                .map(OffersController::answer)
-                .toList());
+    PageAnswer<WorkflowAnswer> offered(HttpServletRequest request) {
+        Map<String, String[]> sent = QueryParameters.sent(request, PARAMETERS, ListParameters.PARAMETER_REFUSED);
+        var shape = Offers.listed();
+        ListQuery<Offers.Column> query = ListParameters.spacedAsNames(
+                ListParameters.query(shape, GroupLists.within(ActAdmission.admittedGroup(request)), sent));
+        ListPosition after = ListParameters.after(shape, query, sent);
+        ListPage<Offers.Offered> page = offers.offeredIn(query, after);
+        ListPosition next = page.next();
+        return new PageAnswer<>(
+                page.rows().stream().map(OffersController::answer).toList(),
+                next == null ? null : ListCursor.mint(shape, query, next));
     }
 
     private static WorkflowAnswer answer(Offers.Offered offered) {
@@ -51,9 +66,6 @@ final class OffersController {
                                 version.version().value(), version.number(), FillFieldAnswer.of(version.takes())))
                         .toList());
     }
-
-    /** Workflows by name. */
-    record OfferedAnswer(List<WorkflowAnswer> workflows) {}
 
     /**
      * A purpose saying nothing of what it is for is left out.

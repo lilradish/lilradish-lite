@@ -12,6 +12,7 @@ import org.libprunus.core.error.ApiErrorException
 import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.run.Ceiling
@@ -31,27 +32,20 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Stopping a run, opening it again, renaming it, changing its ceiling and deciding a raise of it, on a real
- * server running the real baseline, one act at a time.
- */
 class RunChangesIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000f01"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000000f02"
 
-    /** An overseer: may start, read and stop every run, and approve a raise. */
     static final String ANN = "00000002-0000-4000-8000-000000000f01"
 
     static final UserId ANN_USER = new UserId("000f01")
 
-    /** An operator: may start a run and read their own, and approve nothing. */
     static final String CAT = "00000002-0000-4000-8000-000000000f03"
 
     static final UserId CAT_USER = new UserId("000f03")
 
-    /** In no role in the group. */
     static final UserId DAN_USER = new UserId("000f04")
 
     static final String WORKFLOW = "00000006-0000-4000-8000-000000000f01"
@@ -60,17 +54,14 @@ class RunChangesIntegrationSpec extends Specification {
 
     static final String APPROVED_WORKFLOW = "00000006-0000-4000-8000-000000000f02"
 
-    /** Declares a ceiling of a thousand, and that a raise of it waits on approval. */
     static final String APPROVED_VERSION = "00000007-0000-4000-8000-000000000f02"
 
     static final String OTHER_WORKFLOW = "00000006-0000-4000-8000-000000000f03"
 
     static final String OTHER_VERSION = "00000007-0000-4000-8000-000000000f03"
 
-    /** Cat's, of the version whose raises wait on approval. */
     static final String RUN = "00000008-0000-4000-8000-000000000f01"
 
-    /** Ann's, of the version whose raises hold at once. */
     static final String ANNS_RUN = "00000008-0000-4000-8000-000000000f02"
 
     static final String BENEATH = "00000008-0000-4000-8000-000000000f03"
@@ -123,9 +114,9 @@ class RunChangesIntegrationSpec extends Specification {
         StepRows.askingSomebody(store, VERSION, GROUP)
         StepRows.askingSomebody(store, APPROVED_VERSION, GROUP)
         StepRows.askingSomebody(store, OTHER_VERSION, OTHER_GROUP)
-        RunRows.run(store, RUN, GROUP, 1, "Claim from Ada", APPROVED_WORKFLOW, APPROVED_VERSION, CAT)
-        RunRows.run(store, ANNS_RUN, GROUP, 2, "Complaint from Grace", WORKFLOW, VERSION, ANN)
-        RunRows.run(store, OTHER_GROUPS_RUN, OTHER_GROUP, 1, "Refund for Alan", OTHER_WORKFLOW, OTHER_VERSION, ANN)
+        RunRows.run(store, RUN, GROUP, 1, "Claim from Ari", APPROVED_WORKFLOW, APPROVED_VERSION, CAT)
+        RunRows.run(store, ANNS_RUN, GROUP, 2, "Complaint from Greno", WORKFLOW, VERSION, ANN)
+        RunRows.run(store, OTHER_GROUPS_RUN, OTHER_GROUP, 1, "Refund for Arlo", OTHER_WORKFLOW, OTHER_VERSION, ANN)
     }
 
     def cleanup() {
@@ -134,13 +125,14 @@ class RunChangesIntegrationSpec extends Specification {
 
     private RunChanges changesOver(JdbcClient session, TransactionOperations transactions) {
         def tree = new RunTree(session)
-        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE)
+        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE, new SearchWays([]))
         def writes = new EngineWrites(session)
         def ceilings = new CeilingReach(session, DeployedModels.HELD, writes)
+        def heldFiles = EngineWiring.files(store)
         def engine = new RunEngine(session, transactions, tree, snapshots, writes, executor,
-                new EngineCalls(new ScriptedModelCalls(), transactions, tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), transactions, tree, snapshots, writes, executor),
-                DeployedModels.HELD, ceilings, new GroupRoles(session))
+                new EngineCalls(EngineWiring.withoutTools(), new ScriptedModelCalls(), transactions, tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), transactions, tree, snapshots, writes, executor, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(session), Deployments.DEEP_ENOUGH, heldFiles)
         new RunChanges(session, transactions, new GroupRoles(session), tree, snapshots, engine)
     }
 
@@ -152,13 +144,12 @@ class RunChangesIntegrationSpec extends Specification {
         new CeilingChangeId(UUID.fromString(spelled))
     }
 
-    /** Every row an act on a run can write, as one string per table. */
     private List<String> runRows() {
         ["runs", "run_stops", "run_ceiling_changes"].collect { store.digestOf(it) }
     }
 
-    /** Each change to a run's ceiling in the order made, as who asked it from what to what, and how it ended. */
     private List<String> changesOf(String run) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select created_by || ' ' || coalesce(from_ceiling::text, '-') || '>' || coalesce(to_ceiling::text, '-')
                        || ' ' || awaits_approval || ' ' || coalesce(outcome::text, '-') || ' '
@@ -175,6 +166,7 @@ class RunChangesIntegrationSpec extends Specification {
         changes.stop(groupId(GROUP), runId(RUN), CAT_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select run_id || ' ' || created_by || ' ' || created_by_kind || ' ' || coalesce(ceiling_run_id::text, '-')" +
                 " || ' ' || coalesce(opened_again_at::text, '-') from run_stops") == ["${RUN} ${CAT} person - -" as String]
 
@@ -226,6 +218,7 @@ class RunChangesIntegrationSpec extends Specification {
         changes.stop(groupId(GROUP), runId(RUN), CAT_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select created_by::text from run_stops where opened_again_at is null") == [CAT]
         store.count("""
                 select count(*) from run_stops later, run_stops earlier
@@ -241,12 +234,14 @@ class RunChangesIntegrationSpec extends Specification {
         changes.openAgain(groupId(GROUP), runId(RUN), ANN_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by_kind
                   from productions try where try.run_id = ?::uuid
                 """, RUN) == ["1 person system"]
 
         and: "and no other run gone on with it"
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from productions where run_id <> ?::uuid", RUN) == 0
     }
 
@@ -262,12 +257,10 @@ class RunChangesIntegrationSpec extends Specification {
         store.count("select count(*) from productions") == 0
     }
 
-    /**
-     * The stop is made after the opening began and before it held the tree; what the opening reads is what the
-     * stop left, and it opens the run no earlier than it was stopped, though it began before that.
-     */
+    // Read the stop after acquiring the tree lock, including stops committed while opening waited.
     def "a run opened by an act begun before the stop was made is opened, and no earlier than it was stopped"() {
         given:
+        // DB-SPECIFIC: PostgreSQL FOR NO KEY UPDATE.
         def holding = store.holding("select 1 from runs where run_id = '${RUN}' for no key update")
 
         when:
@@ -281,6 +274,7 @@ class RunChangesIntegrationSpec extends Specification {
 
         then:
         opening.get(10, TimeUnit.SECONDS) == null
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from run_stops where opened_again_at >= created_at and opened_again_by = ?::uuid",
                 ANN) == 1
     }
@@ -292,11 +286,12 @@ class RunChangesIntegrationSpec extends Specification {
         }
 
         when:
-        changes.rename(groupId(GROUP), runId(RUN), new RunName("Claim from Ada, again"), CAT_USER)
+        changes.rename(groupId(GROUP), runId(RUN), new RunName("Claim from Ari, again"), CAT_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.texts("select name || ' ' || updated_by from runs where run_id = ?::uuid", RUN) ==
-                ["Claim from Ada, again ${CAT}" as String]
+                ["Claim from Ari, again ${CAT}" as String]
         store.count("select count(*) from runs where updated_at >= created_at") == 1
 
         where:
@@ -308,13 +303,12 @@ class RunChangesIntegrationSpec extends Specification {
         def before = runRows()
 
         when:
-        changes.rename(groupId(GROUP), runId(RUN), new RunName("Claim from Ada"), CAT_USER)
+        changes.rename(groupId(GROUP), runId(RUN), new RunName("Claim from Ari"), CAT_USER)
 
         then:
         runRows() == before
     }
 
-    /** A lowering under what was already spent is taken as any other: it holds, and nothing is refused. */
     def "a lowering, or a ceiling given where there was none, holds at once from the ceiling in force"() {
         given:
         if (from == null) {
@@ -323,7 +317,7 @@ class RunChangesIntegrationSpec extends Specification {
         RunRows.called(store, RUN, "came_back", 900, 50)
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(to), CAT_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(to), CAT_USER)
 
         then:
         changesOf(RUN).last() == "${CAT} ${from ?: '-'}>${to} false - -" as String
@@ -335,9 +329,161 @@ class RunChangesIntegrationSpec extends Specification {
         null | 5000
     }
 
+    def "a ceiling lowered, or given, to what the run spent stops the run at once for that ceiling alone: #from to #to"() {
+        given:
+        if (from == null) {
+            RunRows.ceilingChanged(store, DECIDED, RUN, 1000L, null, false, ANN, 10)
+        }
+        RunRows.called(store, RUN, "came_back", 900, 50)
+        def calls = store.digestOf("model_calls")
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(to), CAT_USER)
+
+        then:
+        changesOf(RUN).last() == "${CAT} ${from ?: '-'}>${to} false - -" as String
+        RunRows.stops(store) == (stopped ? ["system ${RUN} 0" as String] : [])
+
+        and: "no call touched either way"
+        store.digestOf("model_calls") == calls
+
+        where:
+        from | to   || stopped
+        1000 | 950  || true
+        1000 | 951  || false
+        null | 950  || true
+        null | 951  || false
+    }
+
+    def "a ceiling beneath lowered from the top's address to what that run spent stops the top for that ceiling alone: #to"() {
+        given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("update workflow_versions set keeps_own_ceiling = true where entry_version_id = ?::uuid")
+                .param(VERSION).update()
+        RunRows.beneath(store, BENEATH, RUN, GROUP, 3, WORKFLOW, VERSION, "00000009-0000-4000-8000-000000000f01",
+                "0000000a-0000-4000-8000-000000000f01")
+        RunRows.called(store, BENEATH, "came_back", 900, 50)
+        RunRows.called(store, RUN, "came_back", 100, 0)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(BENEATH), new Ceiling(to), CAT_USER)
+
+        then:
+        changesOf(BENEATH).last() == "${CAT} 1000>${to} false - -" as String
+        changesOf(RUN) == []
+        RunRows.stops(store) == (stopped ? ["system ${BENEATH} 0" as String] : [])
+
+        where:
+        to  || stopped
+        950 || true
+        951 || false
+    }
+
+    def "a ceiling lowered under what was spent on a run stopped already leaves the stop as it was"() {
+        given:
+        RunRows.stopped(store, RUN, ANN)
+        RunRows.called(store, RUN, "came_back", 900, 50)
+        def before = store.digestOf("run_stops")
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(1), CAT_USER)
+
+        then:
+        changesOf(RUN).last() == "${CAT} 1000>1 false - -" as String
+        store.digestOf("run_stops") == before
+        store.count("select count(*) from run_stop_additional_ceilings") == 0
+    }
+
+    def "a ceiling given under what was spent on a run every step of which is done stops nothing"() {
+        given:
+        RunRows.workflow(store, "00000006-0000-4000-8000-000000000f09", "00000007-0000-4000-8000-000000000f09", GROUP,
+                "Acknowledge", null, false)
+        RunRows.run(store, NOBODYS_RUN, GROUP, 9, "Done already", "00000006-0000-4000-8000-000000000f09",
+                "00000007-0000-4000-8000-000000000f09", CAT)
+        RunRows.called(store, NOBODYS_RUN, "came_back", 10, 0)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(NOBODYS_RUN), runId(NOBODYS_RUN), new Ceiling(1), CAT_USER)
+
+        then:
+        changesOf(NOBODYS_RUN) == ["${CAT} ->1 false - -" as String]
+        RunRows.stops(store) == []
+    }
+
+    def "a ceiling lowered beneath to what that run spent stops the top only where that run is not done: done #done"() {
+        given:
+        def entry = done ? "00000006-0000-4000-8000-000000000f09" : WORKFLOW
+        def version = done ? "00000007-0000-4000-8000-000000000f09" : VERSION
+        if (done) {
+            RunRows.workflow(store, entry, version, GROUP, "Acknowledge", 1000L, false, true)
+        } else {
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
+            store.session.sql("update workflow_versions set keeps_own_ceiling = true where entry_version_id = ?::uuid")
+                    .param(VERSION).update()
+        }
+        RunRows.beneath(store, BENEATH, RUN, GROUP, 3, entry, version, "00000009-0000-4000-8000-000000000f01",
+                "0000000a-0000-4000-8000-000000000f01")
+        RunRows.called(store, BENEATH, "came_back", 900, 50)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(BENEATH), new Ceiling(950), CAT_USER)
+
+        then:
+        changesOf(BENEATH) == ["${CAT} 1000>950 false - -" as String]
+        RunBudget.inForceAsRead(store.session, runId(BENEATH)).ceiling() == new Ceiling(950)
+        RunRows.stops(store) == (done ? [] : ["system ${BENEATH} 0" as String])
+
+        where:
+        done << [true, false]
+    }
+
+    def "a change withdrawing a raise waiting stops the run only where it lowers the ceiling in force to what was spent: #to"() {
+        given:
+        RunRows.ceilingChanged(store, RAISE, RUN, 1000L, 2000L, true, CAT, 5)
+        RunRows.called(store, RUN, "came_back", spent, 0)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(to), ANN_USER)
+
+        then:
+        changesOf(RUN) == ["${CAT} 1000>2000 true superseded_by_change ${ANN}" as String,
+                           "${ANN} 1000>${to} ${awaits} - -" as String]
+        RunRows.stops(store) == (stopped ? ["system ${RUN} 0" as String] : [])
+
+        where:
+        to   | spent || awaits | stopped
+        950  | 950   || false  | true
+        951  | 950   || false  | false
+        1500 | 1500  || true   | false
+    }
+
+    def "a raise asked, a raise refused, a raise held at once and a taking away stop nothing: #run to #to"() {
+        given:
+        RunRows.called(store, run, "came_back", 1500, 0)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(run), runId(run), to == null ? null : new Ceiling(to), caller)
+        if (refused) {
+            // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+            def raise = store.texts("select run_ceiling_change_id::text from run_ceiling_changes where run_id = ?::uuid", run)[0]
+            changes.refuseRaise(groupId(GROUP), runId(run), changeId(raise), ANN_USER)
+        }
+
+        then:
+        changesOf(run) == ["${callerId} 1000>${to ?: '-'} ${awaits} ${refused ? 'refused' : '-'} ${refused ? ANN : '-'}" as String]
+        RunRows.stops(store) == []
+
+        where:
+        run      | to   | refused | caller   | callerId || awaits
+        RUN      | 1200 | false   | CAT_USER | CAT      || true
+        RUN      | 1200 | true    | CAT_USER | CAT      || true
+        ANNS_RUN | 1200 | false   | ANN_USER | ANN      || false
+        ANNS_RUN | null | false   | ANN_USER | ANN      || false
+    }
+
     def "a raise or a taking away waits on approval where the version asks it, and holds at once where it does not"() {
         when:
-        changes.changeCeiling(groupId(GROUP), runId(run), to == null ? null : new Ceiling(to), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(run), runId(run), to == null ? null : new Ceiling(to), ANN_USER)
 
         then:
         changesOf(run) == ["${ANN} 1000>${to ?: '-'} ${awaits} - -" as String]
@@ -356,22 +502,21 @@ class RunChangesIntegrationSpec extends Specification {
         def before = runRows()
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(1000), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(1000), ANN_USER)
 
         then:
         runRows() == before
     }
 
-    /** A raise waiting is not in force, so it is the ceiling it would replace that the next change starts from. */
     def "any other change withdraws a raise waiting, recording who did, and starts from the ceiling in force"() {
         given:
         RunRows.ceilingChanged(store, RAISE, RUN, 1000L, 2000L, true, CAT, 5)
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), to == null ? null : new Ceiling(to), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), to == null ? null : new Ceiling(to), ANN_USER)
 
         then:
-        changesOf(RUN) == ["${CAT} 1000>2000 true withdrawn ${ANN}" as String,
+        changesOf(RUN) == ["${CAT} 1000>2000 true superseded_by_change ${ANN}" as String,
                            "${ANN} 1000>${to ?: '-'} ${awaits} - -" as String]
 
         where:
@@ -381,52 +526,79 @@ class RunChangesIntegrationSpec extends Specification {
         null || true
     }
 
-    /** Refused, withdrawn and waiting changes are none in force; of those in force, the one made last holds. */
     def "the ceiling a change starts from is the one made last of those in force, an approved raise among them"() {
         given:
         RunRows.ceilingChanged(store, "0000000b-0000-4000-8000-000000000f11", RUN, 1000L, 800L, false, ANN, 1)
         RunRows.ceilingChanged(store, "0000000b-0000-4000-8000-000000000f12", RUN, 800L, 1500L, true, CAT, 30)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update run_ceiling_changes set outcome = 'approved', decided_by = ?::uuid, decided_at = now()
                  where run_ceiling_change_id = '0000000b-0000-4000-8000-000000000f12'
                 """).params(ANN).update()
         RunRows.ceilingChanged(store, "0000000b-0000-4000-8000-000000000f13", RUN, 1500L, 9000L, true, CAT, 20)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update run_ceiling_changes set outcome = 'refused', decided_by = ?::uuid, decided_at = now()
                  where run_ceiling_change_id = '0000000b-0000-4000-8000-000000000f13'
                 """).params(ANN).update()
         RunRows.ceilingChanged(store, "0000000b-0000-4000-8000-000000000f14", RUN, 1500L, 3000L, true, CAT, 15)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
-                update run_ceiling_changes set outcome = 'withdrawn', decided_by = ?::uuid, decided_at = now()
+                update run_ceiling_changes set outcome = 'superseded_by_change', decided_by = ?::uuid, decided_at = now()
                  where run_ceiling_change_id = '0000000b-0000-4000-8000-000000000f14'
                 """).params(CAT).update()
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(1400), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(1400), ANN_USER)
 
         then:
         changesOf(RUN).last() == "${ANN} 1500>1400 false - -" as String
     }
 
-    /** When a change was made orders nothing; the place it was given does, and no two of a run share one. */
+    // Order changes by their assigned position, not by their timestamp.
     def "a change takes the place after every change of its run, whatever the times say"() {
         given:
         RunRows.ceilingChanged(store, DECIDED, RUN, 1000L, 900L, false, ANN, -60)
         RunRows.ceilingChanged(store, "0000000b-0000-4000-8000-000000000f15", ANNS_RUN, 1000L, 700L, false, ANN, 1)
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(800), CAT_USER)
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(850), CAT_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(800), CAT_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(850), CAT_USER)
 
         then: "the second judged against the first, though the one before both is dated after them"
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select position || ' ' || coalesce(from_ceiling::text, '-') || '>' || to_ceiling
                   from run_ceiling_changes where run_id = ?::uuid order by position
                 """, RUN) == ["1 1000>900", "2 900>800", "3 800>850"]
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("select position::text from run_ceiling_changes where run_id = ?::uuid", ANNS_RUN) == ["1"]
     }
 
-    /** A raise a change was made after is settled by that change, whatever was left undone of it. */
+    def "a new ceiling event follows a legal later decision on an older position"() {
+        given:
+        RunRows.ceilingChanged(store, RAISE, RUN, 1000L, 2000L, true, CAT, 120)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, clock_timestamp().
+        store.session.sql("""
+                update run_ceiling_changes set outcome = 'approved', decided_by = ?::uuid,
+                                               decided_at = clock_timestamp() + interval '1 hour'
+                 where run_ceiling_change_id = ?::uuid
+                """).params(ANN, RAISE).update()
+        RunRows.ceilingChanged(store, DECIDED, RUN, 2000L, 900L, false, ANN, 60)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(800), CAT_USER)
+
+        then:
+        changesOf(RUN).last() == "${CAT} 900>800 false - -" as String
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        store.texts("""
+                select (max(created_at) filter (where position = 3) >=
+                        max(decided_at) filter (where position = 1))::text
+                  from run_ceiling_changes where run_id = ?::uuid
+                """, RUN) == ["true"]
+    }
+
     def "deciding a raise some change of the run was made after is refused as no raise waiting, changing nothing"() {
         given:
         RunRows.ceilingChanged(store, RAISE, RUN, 1000L, 2000L, true, CAT, 10)
@@ -465,7 +637,7 @@ class RunChangesIntegrationSpec extends Specification {
         store.digestOf("run_stops") == stops
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(1500), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(1500), ANN_USER)
 
         then:
         changesOf(RUN).last() == "${ANN} 2000>1500 false - -" as String
@@ -483,18 +655,18 @@ class RunChangesIntegrationSpec extends Specification {
         store.count("select count(*) from run_ceiling_changes where decided_at >= created_at") == 1
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(RUN), new Ceiling(900), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(RUN), new Ceiling(900), ANN_USER)
 
         then:
         changesOf(RUN).last() == "${ANN} 1000>900 false - -" as String
+        changesOf(RUN).first() == "${CAT} 1000>2000 true ${outcome} ${decider}" as String
 
         where:
         act             | caller   || outcome     | decider
         "refuseRaise"   | ANN_USER || "refused"   | ANN
-        "withdrawRaise" | CAT_USER || "withdrawn" | CAT
+        "withdrawRaise" | CAT_USER || "withdrawn_by_requester" | CAT
     }
 
-    /** A stopped run offers nothing but opening again, bar its name, its ceiling, and a raise of it asked or decided. */
     def "a raise waiting on a stopped run is decided as on one running, and the run stays as it was stopped"() {
         given:
         RunRows.ceilingChanged(store, RAISE, RUN, 1000L, 2000L, true, CAT, 5)
@@ -514,7 +686,6 @@ class RunChangesIntegrationSpec extends Specification {
         "refuseRaise"  || "refused"
     }
 
-    /** Whoever asked may withdraw it, and nobody decides a raise they asked for, whatever they hold. */
     def "a raise decided by whoever asked for it, or withdrawn by anybody else, is refused, changing nothing"() {
         given:
         RunRows.ceilingChanged(store, ANNS_RAISE, RUN, 1000L, 2000L, true, ANN, 5)
@@ -535,10 +706,10 @@ class RunChangesIntegrationSpec extends Specification {
         "withdrawRaise" | CAT_USER || RefusalCode.CEILING_RAISE_ASKED_BY_ANOTHER
     }
 
-    /** Decided already, never asked, or waiting on another run: none is a raise of this run waiting. */
     def "deciding a raise that is not this run's waiting raise is refused, changing nothing"() {
         given:
         RunRows.ceilingChanged(store, DECIDED, RUN, 1000L, 3000L, true, CAT, 10)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update run_ceiling_changes set outcome = 'refused', decided_by = ?::uuid, decided_at = now()")
                 .params(ANN).update()
         RunRows.ceilingChanged(store, RAISE, ANNS_RUN, 1000L, 2000L, true, CAT, 5)
@@ -557,7 +728,92 @@ class RunChangesIntegrationSpec extends Specification {
                 .combinations() + [["withdrawRaise", DECIDED, CAT_USER], ["withdrawRaise", RAISE, CAT_USER]]
     }
 
-    /** A run beneath another is stopped, opened and changed only with the run at the top. */
+    def "a root address changes a child that keeps its own ceiling and decides its raise"() {
+        given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("update workflow_versions set keeps_own_ceiling = true, raise_needs_approval = true " +
+                "where entry_version_id = ?::uuid").param(VERSION).update()
+        RunRows.beneath(store, BENEATH, RUN, GROUP, 3, WORKFLOW, VERSION, "00000009-0000-4000-8000-000000000f01",
+                "0000000a-0000-4000-8000-000000000f01")
+        def rootBefore = changesOf(RUN)
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(BENEATH), new Ceiling(500), CAT_USER)
+
+        then:
+        changesOf(BENEATH).last() == "${CAT} 1000>500 false - -" as String
+        changesOf(RUN) == rootBefore
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(BENEATH), new Ceiling(1500), CAT_USER)
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        def raised = store.texts("select run_ceiling_change_id::text from run_ceiling_changes " +
+                "where run_id = ?::uuid and awaits_approval", BENEATH)[0]
+        changes.approveRaise(groupId(GROUP), runId(RUN), changeId(raised), ANN_USER)
+
+        then:
+        changesOf(BENEATH).last() == "${CAT} 500>1500 true approved ${ANN}" as String
+        changesOf(RUN) == rootBefore
+        RunBudget.inForceAsRead(store.session, runId(BENEATH)).ceiling() == new Ceiling(1500)
+    }
+
+    def "a root address refuses a target outside its tree or without its own ceiling"() {
+        given:
+        RunRows.beneath(store, BENEATH, RUN, GROUP, 3, WORKFLOW, VERSION, "00000009-0000-4000-8000-000000000f01",
+                "0000000a-0000-4000-8000-000000000f01")
+        def before = runRows()
+
+        when:
+        changes.changeCeiling(groupId(GROUP), runId(RUN), runId(target), new Ceiling(500), ANN_USER)
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == RefusalCode.RUN_NOT_IN_VIEW
+        runRows() == before
+
+        where:
+        target << [BENEATH, ANNS_RUN]
+    }
+
+    def "a child raise is refused from a child address, another tree, or a child without its own ceiling"() {
+        given:
+        def otherTree = scenario == "otherTree"
+        def childVersion = otherTree ? APPROVED_VERSION : VERSION
+        if (scenario != "withoutOwn") {
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
+            store.session.sql("update workflow_versions set keeps_own_ceiling = true " +
+                    "where entry_version_id = ?::uuid").param(childVersion).update()
+        }
+        def above = otherTree ? ANNS_RUN : RUN
+        RunRows.beneath(store, BENEATH, above, GROUP, 3,
+                otherTree ? APPROVED_WORKFLOW : WORKFLOW, childVersion,
+                "00000009-0000-4000-8000-000000000f01", "0000000a-0000-4000-8000-000000000f01")
+        RunRows.ceilingChanged(store, RAISE, BENEATH, 1000L, 2000L, true, CAT, 5)
+        def before = runRows()
+
+        when:
+        changes."${act}"(groupId(GROUP), runId(scenario == "directChild" ? BENEATH : RUN),
+                changeId(RAISE), caller)
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == expected
+        runRows() == before
+        RunBudget.inForceAsRead(store.session, runId(BENEATH)).ceiling() == new Ceiling(1000)
+
+        where:
+        scenario      | act             | caller   || expected
+        "directChild" | "approveRaise"  | ANN_USER || RefusalCode.RUN_BENEATH_ANOTHER
+        "directChild" | "refuseRaise"   | ANN_USER || RefusalCode.RUN_BENEATH_ANOTHER
+        "directChild" | "withdrawRaise" | CAT_USER || RefusalCode.RUN_BENEATH_ANOTHER
+        "otherTree"   | "approveRaise"  | ANN_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+        "otherTree"   | "refuseRaise"   | ANN_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+        "otherTree"   | "withdrawRaise" | CAT_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+        "withoutOwn"  | "approveRaise"  | ANN_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+        "withoutOwn"  | "refuseRaise"   | ANN_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+        "withoutOwn"  | "withdrawRaise" | CAT_USER || RefusalCode.CEILING_RAISE_NOT_WAITING
+    }
+
     def "an act on a run beneath another is refused, changing nothing"() {
         given:
         RunRows.beneath(store, BENEATH, RUN, GROUP, 3, WORKFLOW, VERSION, "00000009-0000-4000-8000-000000000f01",
@@ -576,10 +832,7 @@ class RunChangesIntegrationSpec extends Specification {
         act << ["stop", "openAgain", "rename", "changeCeiling"]
     }
 
-    /**
-     * Another group's run, one nobody holds, and one the caller may not read are one refusal: telling them apart
-     * would say what runs somebody else started.
-     */
+    // Use the same refusal for missing, foreign, and unreadable runs to avoid revealing their existence.
     def "an act naming no run the caller may read in the group is refused as no run, changing nothing"() {
         given:
         def before = runRows()
@@ -598,7 +851,7 @@ class RunChangesIntegrationSpec extends Specification {
                          [ANNS_RUN, OTHER_GROUPS_RUN, NOBODYS_RUN]].combinations()
     }
 
-    /** Told apart by the statements it takes, a run the caller may not read would be one somebody else started. */
+    // Statement counts must not distinguish missing runs from runs the caller cannot read.
     def "an act on a run the caller may not read takes exactly the path of one nobody holds, and takes no lock"() {
         given:
         def asked = []
@@ -626,9 +879,10 @@ class RunChangesIntegrationSpec extends Specification {
         paths[2].any { it.contains("for no key update") }
     }
 
-    /** Waiting on another's lock would say the run is there; the refusal comes at once, whoever holds its tree. */
+    // Refuse an unreadable run without waiting for its tree lock to avoid revealing its existence.
     def "an act on a run the caller may not read is refused at once while somebody else holds its tree"() {
         given:
+        // DB-SPECIFIC: PostgreSQL FOR NO KEY UPDATE.
         def holding = store.holding("select 1 from runs where run_id = '${ANNS_RUN}' for no key update")
 
         when:
@@ -649,10 +903,10 @@ class RunChangesIntegrationSpec extends Specification {
         changes.stop(groupId(GROUP), runId(RUN), ANN_USER)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("select created_by::text from run_stops where run_id = ?::uuid", RUN) == [ANN]
     }
 
-    /** Somebody in no role here cannot see into the group at all, whether or not the run they name is there. */
     def "an act by somebody holding nothing in the group is refused as no group, whatever it names"() {
         given:
         def before = runRows()
@@ -693,7 +947,7 @@ class RunChangesIntegrationSpec extends Specification {
             case "rename":
                 return changes.rename(group, run, new RunName("Renamed"), caller)
             case "changeCeiling":
-                return changes.changeCeiling(group, run, new Ceiling(500), caller)
+                return changes.changeCeiling(group, run, run, new Ceiling(500), caller)
             case ["approveRaise", "refuseRaise", "withdrawRaise"]:
                 return changes."${act}"(group, run, changeId(ANNS_RAISE), caller)
             default:

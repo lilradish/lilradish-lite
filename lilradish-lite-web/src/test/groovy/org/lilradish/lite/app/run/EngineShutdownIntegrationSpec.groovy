@@ -24,11 +24,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A shutdown in order, on a real server running the real baseline: a call out and code under way, each on its own
- * pool, are waited for and written down before the pools are gone; what was only planned goes out no more, and reads
- * as still to be made for the next start to go on from.
- */
 class EngineShutdownIntegrationSpec extends Specification {
 
     static final String FITS = '{"values":{"summary":"A printer fire."},"confidences":{}}'
@@ -55,6 +50,7 @@ class EngineShutdownIntegrationSpec extends Specification {
     def setup() {
         store = LibraryStore.copied(server, "engine_shutdown_" + (++databasesMade))
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(TicketWorkflow.SUMMARISE).update()
@@ -98,8 +94,9 @@ class EngineShutdownIntegrationSpec extends Specification {
     }
 
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
-                select try.try_number || ' ' || try.producer || ' ' || try.created_by_kind || ' '
+                select coalesce(try.try_number::text, '-') || ' ' || try.producer || ' ' || try.created_by_kind || ' '
                        || case when try.ended_at is null then 'open'
                                else coalesce(try.lost_reason::text, 'yielded') end
                   from productions try join run_steps held on held.run_step_id = try.run_step_id
@@ -116,7 +113,7 @@ class EngineShutdownIntegrationSpec extends Specification {
         given:
         CodeWorkflow.seed(store, 1, true)
         def callOut = new Pause()
-        model.scripted.pausing(callOut, [], new CallOutcome.CameBack(FITS, 321, 12, true, false))
+        model.scripted.pausing(callOut, [], new CallOutcome.CameBack(FITS, 321, 12, true, false, null, null))
         def code = scripted(false, { receipt() }, codeGate)
         wiring = new EngineWiring(store, model, CodeStepsHeld.of(code))
         ticketStarted()
@@ -134,6 +131,7 @@ class EngineShutdownIntegrationSpec extends Specification {
         then:
         !shutting.alive
         triesOf(TicketWorkflow.SUMMARISE) == ["1 model system yielded"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text || ' ' || came_back_count from model_calls") == ["came_back 12"]
         triesOf(CodeWorkflow.SEND) == ["1 code system yielded"]
 
@@ -144,7 +142,6 @@ class EngineShutdownIntegrationSpec extends Specification {
         position(CodeWorkflow.GROUP, codeRun(), CodeWorkflow.CHECK) == new StepPosition.Running(RunningOn.NEXT_TRY)
     }
 
-    /** What code ended with is gone on from though stopping: a person's step after it is asked, nothing more is run. */
     def "code under way as the pools shut down ends before the shutdown returns, and the person's step after it is asked"() {
         given:
         CodeWorkflow.seed(store)
@@ -169,7 +166,6 @@ class EngineShutdownIntegrationSpec extends Specification {
         code.runs.get() == 1
     }
 
-    /** What is only planned once stopping has begun goes out no more, and is not written as though it had. */
     def "a model's try planned once stopping has begun is written but never sent, and reads as still to be sent"() {
         given:
         wiring = new EngineWiring(store, model, CodeStepsHeld.NONE)
@@ -180,7 +176,7 @@ class EngineShutdownIntegrationSpec extends Specification {
         wiring.executor.destroy()
 
         then:
-        triesOf(TicketWorkflow.SUMMARISE) == ["1 model system open"]
+        triesOf(TicketWorkflow.SUMMARISE) == ["- model system open"]
         position(TicketWorkflow.GROUP, ticketRun(), TicketWorkflow.SUMMARISE) ==
                 new StepPosition.Running(RunningOn.NEXT_TRY)
 

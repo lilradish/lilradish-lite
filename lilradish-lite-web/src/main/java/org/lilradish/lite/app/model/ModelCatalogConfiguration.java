@@ -18,6 +18,8 @@ final class ModelCatalogConfiguration {
     @Bean
     @Lazy(false)
     ModelCatalog modelCatalog(ModelDeployment deployment) {
-        return new ModelCatalog(deployment.models());
+        return new ModelCatalog(deployment.models().stream()
+                .map(ModelDeployment.ConfiguredModel::model)
+                .toList());
     }
 }

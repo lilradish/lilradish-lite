@@ -6,21 +6,10 @@ import java.nio.ByteBuffer
 import org.lilradish.lite.testutil.listing.SampleColumn
 import spock.lang.Specification
 
-/**
- * A cursor is read by the one query of the one list that minted it and refused by every other, and
- * whatever this system did not mint is refused the same way — by one exception type, which is what
- * lets the edge turn every such cursor into a refusal of the request rather than a fault of the
- * server. A position no row could have left is refused when minted too, as a fault of this system's,
- * so nothing is ever minted that resuming would refuse.
- *
- * <p>Some features below lay a cursor out by hand after a genuine cursor's binding. That is the
- * layout this class owns, written out here so that a cursor holding what no row can hold can be built
- * at all: nothing that mints one would produce it. Damage is done to bytes rather than to the text,
- * because more than one text decodes to the same bytes.
- */
+/** A cursor must resume only the query that minted it; invalid input must fail with IllegalArgumentException. */
 class ListCursorSpec extends Specification {
 
-    /** The same names, the size now held as text: a position laid out for one is not one for the other. */
+
     enum Resized implements ListColumn {
         KEY("key", ListValueKind.TEXT),
         NAME("name", ListValueKind.NULLABLE_TEXT),
@@ -46,7 +35,7 @@ class ListCursorSpec extends Specification {
         }
     }
 
-    /** The same names, the key now held as a count, and still what breaks every tie. */
+
     enum Rekeyed implements ListColumn {
         KEY("key", ListValueKind.LONG),
         NAME("name", ListValueKind.NULLABLE_TEXT),
@@ -72,7 +61,7 @@ class ListCursorSpec extends Specification {
         }
     }
 
-    /** A key breaking every tie, and a fact each row holds or does not. */
+
     enum Flagged implements ListColumn {
         KEY("key", ListValueKind.TEXT),
         FLAG("flag", ListValueKind.BOOLEAN)
@@ -135,7 +124,7 @@ class ListCursorSpec extends Specification {
     static final ListShape<Rekeyed> PEOPLE_REKEYED =
             new ListShape<>("people", Rekeyed.KEY, new ListOrder<>(Rekeyed.KEY, false))
 
-    static final ListFilter GRACE = new ListFilter("grace")
+    static final ListFilter GRACE = new ListFilter("greno")
 
     static final ListQuery<SampleColumn> BY_NAME_FOR_GRACE = new ListQuery<>("", BY_NAME, GRACE)
 
@@ -143,7 +132,7 @@ class ListCursorSpec extends Specification {
 
     static final ListQuery<SampleColumn> BY_KEY_WHOLE = new ListQuery<>("", BY_KEY, null)
 
-    static final ListPosition NAMED = new ListPosition("grace hopper", "000150")
+    static final ListPosition NAMED = new ListPosition("greno nockal", "000150")
 
     static final ListPosition NAMELESS = new ListPosition(null, "000130")
 
@@ -153,20 +142,15 @@ class ListCursorSpec extends Specification {
 
     static final String GRINNING_FACE = Character.toString(0x1F600)
 
-    /**
-     * The key, the name where one is held, and the size. Every kind of value a stored row can hand a
-     * position: a name outside the basic plane, one joined by a format character the store admits, one
-     * spaced by U+3000, a key outside ASCII and one with a space in front, both at their bound in
-     * characters four bytes long, and sizes at either end of what the store could count.
-     */
+
     static final List<List<Object>> ROWS = [
-            ["000150", "grace hopper", 1L],
+            ["000150", "greno nockal", 1L],
             ["000130", null, 1L],
             [Character.toString(0xC5) + "SA-7", null, 0L],
             [GRINNING_FACE * 256, GRINNING_FACE * 256, 0L],
-            ["000160", "Ada" + Character.toString(0x200D) + "Lovelace", 3L],
+            ["000160", "Ari" + Character.toString(0x200D) + "Mockvale", 3L],
             ["000180", "山田" + Character.toString(0x3000) + "太郎", Long.MAX_VALUE],
-            [" 000190", Character.toString(0xC9) + "mile", Long.MIN_VALUE],
+            [" 000190", Character.toString(0xC9) + "vren", Long.MIN_VALUE],
     ]
 
     static final List<Object> LONGEST_ROW = ROWS[3]
@@ -218,10 +202,7 @@ class ListCursorSpec extends Specification {
         PEOPLE | BY_NAME_FOR_GRACE | null     || "ListCursor position must not be null"
     }
 
-    /**
-     * Every one of these is a position no stored row could leave, so minting it is a fault of this
-     * system's and not a reader's, and a cursor minted from it would only be refused on its way back.
-     */
+
     def "a position no row could have left is refused when minted, as this system's fault"() {
         when:
         ListCursor.mint(PEOPLE, new ListQuery<>("", order, null), position)
@@ -238,11 +219,11 @@ class ListCursorSpec extends Specification {
         BY_NAME | new ListPosition("", "000150")                                        || UNHELD_TEXT
         BY_NAME | new ListPosition("a" * 257, "000150")                                 || UNHELD_TEXT
         BY_NAME | new ListPosition(GRINNING_FACE * 257, "000150")                       || UNHELD_TEXT
-        BY_NAME | new ListPosition("grace" + Character.toString(0) + "hopper", "000150") || UNHELD_TEXT
-        BY_NAME | new ListPosition("grace" + Character.toString(0x9F), "000150")        || UNHELD_TEXT
-        BY_NAME | new ListPosition("grace" + Character.toString(0xD800), "000150")      || UNHELD_TEXT
+        BY_NAME | new ListPosition("greno" + Character.toString(0) + "nockal", "000150") || UNHELD_TEXT
+        BY_NAME | new ListPosition("greno" + Character.toString(0x9F), "000150")        || UNHELD_TEXT
+        BY_NAME | new ListPosition("greno" + Character.toString(0xD800), "000150")      || UNHELD_TEXT
         BY_NAME | new ListPosition(5L, "000150")                                        || UNHELD_TEXT
-        BY_NAME | new ListPosition("grace hopper", 150L)                                || UNHELD_TEXT
+        BY_NAME | new ListPosition("greno nockal", 150L)                                || UNHELD_TEXT
         BY_SIZE | new ListPosition("1", "000150")                                       || UNHELD_COUNT
         BY_SIZE | new ListPosition(null, "000150")                                      || UNHELD_COUNT
         BY_SIZE | new ListPosition(1, "000150")                                         || UNHELD_COUNT
@@ -302,13 +283,7 @@ class ListCursorSpec extends Specification {
         order << EVERY_ORDER
     }
 
-    /**
-     * Filters differing only by case or by a space are two filters, being matched as typed. Lists
-     * sharing a column name, and one list read within two things, are as many queries; so is a list
-     * whose ties are broken by another column, or whose column of one name holds another kind of value,
-     * its positions being laid out differently. A name and a scope that spell one string between them
-     * are still two.
-     */
+
     def "a cursor minted by one query is refused by any other, and still honoured by its own"() {
         given:
         def cursor = ListCursor.mint(mintedShape, mintedQuery, position)
@@ -331,12 +306,12 @@ class ListCursorSpec extends Specification {
         PEOPLE              | BY_SIZE_FOR_GRACE                             | SIZED                                || PEOPLE         | new ListQuery<>("", BY_NAME, GRACE)
         PEOPLE              | BY_NAME_FOR_GRACE                             | NAMED                                || PEOPLE         | new ListQuery<>("", BY_NAME, null)
         PEOPLE              | new ListQuery<>("", BY_NAME, null)            | NAMED                                || PEOPLE         | BY_NAME_FOR_GRACE
-        PEOPLE              | BY_NAME_FOR_GRACE                             | NAMED                                || PEOPLE         | new ListQuery<>("", BY_NAME, new ListFilter("Grace"))
-        PEOPLE              | BY_NAME_FOR_GRACE                             | NAMED                                || PEOPLE         | new ListQuery<>("", BY_NAME, new ListFilter("grace "))
+        PEOPLE              | BY_NAME_FOR_GRACE                             | NAMED                                || PEOPLE         | new ListQuery<>("", BY_NAME, new ListFilter("Greno"))
+        PEOPLE              | BY_NAME_FOR_GRACE                             | NAMED                                || PEOPLE         | new ListQuery<>("", BY_NAME, new ListFilter("greno "))
         PEOPLE              | new ListQuery<>("group 7", BY_NAME, null)     | NAMED                                || PEOPLE         | new ListQuery<>("group 8", BY_NAME, null)
         PEOPLE              | new ListQuery<>("", BY_NAME, null)            | NAMED                                || PEOPLE         | new ListQuery<>("group 7", BY_NAME, null)
         PEOPLE              | new ListQuery<>("", BY_NAME, null)            | NAMED                                || MEMBERS        | new ListQuery<>("", BY_NAME, null)
-        PEOPLE_TIED_BY_SIZE | new ListQuery<>("", BY_NAME, null)            | new ListPosition("grace hopper", 1L) || PEOPLE         | new ListQuery<>("", BY_NAME, null)
+        PEOPLE_TIED_BY_SIZE | new ListQuery<>("", BY_NAME, null)            | new ListPosition("greno nockal", 1L) || PEOPLE         | new ListQuery<>("", BY_NAME, null)
         PEOPLE              | BY_SIZE_FOR_GRACE                             | SIZED                                || PEOPLE_RESIZED | new ListQuery<>("", new ListOrder<>(Resized.SIZE, false), GRACE)
         PEOPLE              | new ListQuery<>("", BY_NAME, null)            | NAMED                                || PEOPLE_REKEYED | new ListQuery<>("", new ListOrder<>(Rekeyed.NAME, false), null)
         NAMED_AB            | new ListQuery<>("c", BY_NAME, null)           | NAMED                                || NAMED_A        | new ListQuery<>("bc", BY_NAME, null)
@@ -357,13 +332,7 @@ class ListCursorSpec extends Specification {
         PEOPLE | BY_NAME_FOR_GRACE | null    || "ListCursor cursor must not be null"
     }
 
-    /**
-     * Each is read as far as the one thing wrong with it, and refused for that thing. A spelling of the
-     * right bytes that this system would not have written — padded, or with the unused low bits of its
-     * last character set — is refused as not minted here. The hand-laid ones follow the genuine
-     * binding, so what they hold is what refuses them; text that is empty, past its bound, or holding
-     * U+0000 or any other control character is a position no stored row could produce.
-     */
+
     def "whatever this query did not mint is refused as an argument, saying what was wrong with it"() {
         when:
         ListCursor.resume(PEOPLE, query, cursor)
@@ -386,11 +355,11 @@ class ListCursorSpec extends Specification {
         BY_NAME_FOR_GRACE | "A" * (LONGEST + 1)                                                                      || "ListCursor cursor is longer than any this system mints"
         BY_NAME_FOR_GRACE | cutShort(GENUINE, 3)                                                                     || CUT_SHORT
         BY_NAME_FOR_GRACE | GENUINE + "AAAA"                                                                         || "ListCursor cursor carries more than a position"
-        BY_NAME_FOR_GRACE | laidOut(GENUINE, [2 as byte], text("grace hopper"), text("000150"))                      || "ListCursor cursor says neither that a value is held nor not"
+        BY_NAME_FOR_GRACE | laidOut(GENUINE, [2 as byte], text("greno nockal"), text("000150"))                      || "ListCursor cursor says neither that a value is held nor not"
         BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], length(-1), text("000150"))                                || CUT_SHORT
-        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], length(4096) + bytes("grace hopper"), text("000150"))      || CUT_SHORT
-        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("grace" + Character.toString(0) + "hopper"), text("000150"))    || NO_STORED_TEXT
-        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("grace" + Character.toString(0x85) + "hopper"), text("000150")) || NO_STORED_TEXT
+        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], length(4096) + bytes("greno nockal"), text("000150"))      || CUT_SHORT
+        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("greno" + Character.toString(0) + "nockal"), text("000150"))    || NO_STORED_TEXT
+        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("greno" + Character.toString(0x85) + "nockal"), text("000150")) || NO_STORED_TEXT
         BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text(""), text("000150"))                                  || NO_STORED_TEXT
         BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("a" * 257), text("000150"))                           || NO_STORED_TEXT
         BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], length(2) + [0xC3 as byte, 0x28 as byte], text("000150")) || NOT_UTF_8
@@ -401,7 +370,7 @@ class ListCursorSpec extends Specification {
         BY_KEY_WHOLE      | laidOut(GENUINE_BY_KEY, text("000150"), text("000150"))                                  || "ListCursor cursor carries more than a position"
     }
 
-    /** A yes and a no are each one byte, and no other byte is either; the layout around it is genuine. */
+
     def "a cursor sorted by a yes or a no is refused where it holds neither"() {
         when:
         ListCursor.resume(FLAGS, BY_FLAG, laidOut(GENUINE_BY_FLAG, *parts))
@@ -428,17 +397,14 @@ class ListCursorSpec extends Specification {
         0    || false
     }
 
-    /**
-     * The store admits a key with a space in front, so a position holding one is read like any other:
-     * text is refused only on the terms the store refuses it.
-     */
+
     def "the same layout holding what a row can is read, so the refusals above are about what they hold"() {
         expect:
         ListCursor.resume(PEOPLE, query, cursor) == position
 
         where:
         query             | cursor                                                              || position
-        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("grace hopper"), text("000150")) || NAMED
+        BY_NAME_FOR_GRACE | laidOut(GENUINE, [1 as byte], text("greno nockal"), text("000150")) || NAMED
         BY_NAME_FOR_GRACE | laidOut(GENUINE, [0 as byte], text("000130"))                     || NAMELESS
         BY_SIZE_FOR_GRACE | laidOut(GENUINE_BY_SIZE, count(1), text("000150"))                || SIZED
         BY_KEY_WHOLE      | laidOut(GENUINE_BY_KEY, text("000150"))                           || BY_ITS_KEY
@@ -446,12 +412,7 @@ class ListCursorSpec extends Specification {
         BY_KEY_WHOLE      | TWO_OVER                                                          || new ListPosition("00", "00")
     }
 
-    /**
-     * Whatever arrives as a cursor, the edge has one exception type to turn into a refusal; any
-     * other reaching it is a fault of this server's and answers as one. Damaging a genuine cursor
-     * past its binding is what reaches every read the parse makes, where random bytes would stop
-     * at the first.
-     */
+    /** Mutate bytes to exercise position parsing; distinct Base64 text can decode to the same bytes. */
     def "a damaged cursor is refused as not minted here, or read as some other position, and fails no other way"() {
         given:
         def genuine = Base64.urlDecoder.decode(cursor)

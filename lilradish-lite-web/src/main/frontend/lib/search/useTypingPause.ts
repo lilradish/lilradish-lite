@@ -33,6 +33,7 @@ export function useTypingPause(
   });
 
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const composing = useRef(false);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   function handOnWhenQuiet(typed: string) {
@@ -40,7 +41,7 @@ export function useTypingPause(
     timer.current = setTimeout(() => {
       // Superseded while it waited: by text set from outside, or by a
       // composition begun since.
-      if (latestText.current !== typed) {
+      if (composing.current || latestText.current !== typed) {
         return;
       }
       latestOnPause.current(typed);
@@ -53,13 +54,23 @@ export function useTypingPause(
       value: text,
       onChange(event: ChangeEvent<HTMLInputElement>) {
         setText(event.target.value);
-        if (!(event.nativeEvent as InputEvent).isComposing) {
+        if (
+          composing.current ||
+          (event.nativeEvent as InputEvent).isComposing
+        ) {
+          clearTimeout(timer.current);
+        } else {
           handOnWhenQuiet(event.target.value);
         }
+      },
+      onCompositionStart() {
+        composing.current = true;
+        clearTimeout(timer.current);
       },
       // Handed on here as well, so it holds in whichever order a composition's
       // last input and its end arrive.
       onCompositionEnd(event: CompositionEvent) {
+        composing.current = false;
         if (event.target instanceof HTMLInputElement) {
           handOnWhenQuiet(event.target.value);
         }

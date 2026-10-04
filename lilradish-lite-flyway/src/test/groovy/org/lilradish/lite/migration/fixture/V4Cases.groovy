@@ -22,9 +22,11 @@ final class V4Cases {
         attack("groups_author_fk", "groups",
                 "insert into app.groups (group_id, key, name, created_by)" +
                         " values ('${SPARE_GROUP}', 'BILLING', 'Billing', '${ABSENT}')"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("groups_editor_person_fk", "groups",
                 "update app.groups set updated_at = now(), updated_by = '${SEEDER}'" +
                         " where group_id = '${GROUP}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("groups_editor_is_person", "groups",
                 "update app.groups set updated_at = now(), updated_by = '${WORKFLOW_RUNNER}'," +
                         " updated_by_kind = 'system' where group_id = '${GROUP}'"),
@@ -37,14 +39,18 @@ final class V4Cases {
         attack("groups_name_unique", "groups",
                 "insert into app.groups (group_id, key, name, created_by)" +
                         " values ('${SPARE_GROUP}', 'BILLING', 'CUSTOMER SUPPORT', '${STEWARD}')"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("groups_updated_together", "groups",
                 "update app.groups set updated_at = now() where group_id = '${GROUP}'"),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("groups_updated_after_created", "groups",
                 "update app.groups set updated_at = created_at - interval '1 day'," +
                         " updated_by = '${STEWARD}' where group_id = '${GROUP}'"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("groups_name_visible", "groups",
                 "insert into app.groups (group_id, key, name, created_by)" +
                         " values ('${SPARE_GROUP}', 'BILLING', 'Customer' || chr(10) || 'support', '${STEWARD}')"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("groups_name_bounded", "groups",
                 "insert into app.groups (group_id, key, name, created_by)" +
                         " values ('${SPARE_GROUP}', 'BILLING', repeat('F', 129), '${STEWARD}')"),
@@ -64,16 +70,20 @@ final class V4Cases {
         attack("group_members_author_fk", "group_members",
                 "insert into app.group_members (group_id, subject_id, role, created_by)" +
                         " values ('${GROUP}', '${MEMBER}', 'operator', '${ABSENT}')"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("group_members_remover_person_fk", "group_members",
                 "update app.group_members set removed_at = now(), removed_by = '${SEEDER}'," +
                         " removal = 'removed_from_group' where group_member_id = '${HOLDING}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("group_members_remover_is_person", "group_members",
                 "update app.group_members set removed_at = now(), removed_by = '${WORKFLOW_RUNNER}'," +
                         " removed_by_kind = 'system', removal = 'removed_from_group'" +
                         " where group_member_id = '${HOLDING}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("group_members_removed_together", "group_members",
                 "update app.group_members set removed_at = now(), removal = 'role_taken'" +
                         " where group_member_id = '${HOLDING}'"),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("group_members_removed_after_created", "group_members",
                 "update app.group_members set removed_at = created_at - interval '1 day'," +
                         " removed_by = '${STEWARD}', removal = 'role_taken' where group_member_id = '${HOLDING}'"),

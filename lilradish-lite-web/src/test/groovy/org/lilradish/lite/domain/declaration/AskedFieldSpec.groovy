@@ -22,7 +22,7 @@ class AskedFieldSpec extends Specification {
     def "what a model is told of a field is its name, kind, limits, terms, fields, whether it must be given and whether a confidence is asked"() {
         expect:
         AskedField.recordComponents*.name ==
-                ["name", "kind", "longest", "most", "terms", "fields", "mustBeGiven", "confidenceAsked"]
+                ["name", "kind", "longest", "most", "terms", "fields", "mustBeGiven", "confidenceAsked", "lines"]
     }
 
     def "each kind carries what that kind alone says of itself, and nothing another does"() {
@@ -35,6 +35,7 @@ class AskedFieldSpec extends Specification {
         field.most() == most
         field.terms() == terms
         field.fields() == fields
+        field.lines() == (kind == FieldKind.TEXT ? TextLines.SEVERAL : null)
 
         where:
         kind             | longest | most | terms   | fields

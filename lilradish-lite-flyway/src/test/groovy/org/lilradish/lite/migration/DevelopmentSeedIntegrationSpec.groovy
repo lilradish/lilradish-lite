@@ -26,7 +26,11 @@ class DevelopmentSeedIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
 
+    static final String SYSTEM = "00000000-0000-4000-8000-000000000001"
+
     static final String GRACE = "00000001-0000-4000-8000-000000000102"
+
+    static final String ALAN = "00000001-0000-4000-8000-000000000103"
 
     static final String HANDLING = "00000007-0000-4000-8000-000000000104"
 
@@ -74,6 +78,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
         /* The fixture qualifies no name, as every migration here does, so the session it is run
          * again on has to put the same schema in front of those names that Flyway put there. */
         execute("set search_path to app")
+        // DB-SPECIFIC: ::, pg_class and regnamespace use PostgreSQL's syntax and semantics.
         tables = valuesOf("""
                 select relname from pg_class
                  where relnamespace = 'app'::regnamespace and relkind = 'r' and relname <> 'flyway_schema_history'
@@ -164,6 +169,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
      */
     def "every version the library pins is in service"() {
         given:
+        // DB-SPECIFIC: ::, pg_constraint, pg_class, pg_attribute, regnamespace and regclass use PostgreSQL's syntax and semantics.
         def pins = rowsOf("""
                 select pinning_table.relname, pinning_column.attname
                   from pg_constraint pinning_key
@@ -200,11 +206,11 @@ class DevelopmentSeedIntegrationSpec extends Specification {
      * A run page has something to show only to somebody in the run's group, and the schema lets a run at the
      * top name a retired version and anybody as its starter, so both are held here.
      */
-    def "every run the fixture holds is at the top, of a version not retired, and started by a member of its group"() {
+    def "every run at the top the fixture holds is of a version not retired, and started by a member of its group"() {
         when:
         def shown = valuesOf("""
                 select case
-                         when run.parent_run_id is null and version.retired_at is null
+                         when version.retired_at is null
                               and exists (select 1 from group_members member
                                            where member.group_id = run.group_id and member.subject_id = run.created_by
                                              and member.removed_at is null) then 'shown'
@@ -212,10 +218,66 @@ class DevelopmentSeedIntegrationSpec extends Specification {
                        end
                   from runs run
                   join entry_versions version on version.entry_version_id = run.entry_version_id
+                 where run.parent_run_id is null
                 """)
 
         then:
         shown as Set == ["shown"] as Set
+
+        and: "judged over every run at the top, of which there are several"
+        shown.size() == 13
+    }
+
+    /** A list of runs is narrowed by workflow and by who started it, and dates a run by the day it started. */
+    def "the runs at the top differ in #listedBy, so a list of them has something to narrow and to date"() {
+        when:
+        def listed = valuesOf("""
+                select ${listing}
+                  from runs run
+                  join entries entry on entry.entry_id = run.entry_id
+                  join subjects person on person.subject_id = run.created_by
+                 where run.parent_run_id is null
+                """)
+
+        then:
+        listed as Set == held as Set
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+
+        where:
+        listedBy           | listing                                              || held
+        "workflow"         | "entry.name"                                         || ["Handle a complaint", "Escalate a complaint", "Stamp a complaint", "Demo Sample attachment research"]
+        "starter"          | "person.display_name"                                || ["Demo Sample Grace One", "Demo Sample Alan Two"]
+        "whole days begun" | "least(extract(day from now() - run.created_at), 2)" || ["0", "1", "2"]
+    }
+
+    def "the runs are numbered from one without a gap, each after every run started before it"() {
+        when:
+        def numbers = valuesOf("select number from runs order by number")
+        def byStart = valuesOf("select number from runs order by created_at")
+
+        then:
+        numbers == (1..numbers.size()).collect { it as String }
+        byStart == numbers
+
+        and: "judged over runs beneath as well as at the top"
+        valuesOf("select count(*) from runs where parent_run_id is not null") == ["2"]
+    }
+
+    def "a run beneath was started by its route on the case the category it was given names"() {
+        when:
+        // DB-SPECIFIC: #>> uses PostgreSQL's syntax and semantics.
+        def beneath = valuesOf("""
+                select concat_ws(' ', run.number, above.number, routed.term, given.value #>> '{}')
+                  from runs run
+                  join runs above on above.run_id = run.parent_run_id
+                  join route_cases routed on routed.route_case_id = run.parent_route_case_id
+                  join production_inputs taken on taken.branch_run_id = run.run_id
+                  join production_values given on given.production_value_id = taken.source_production_value_id
+                 order by run.number
+                """)
+
+        then:
+        beneath == ["3 2 Billing Billing", "9 8 Billing Billing"]
     }
 
     def "a run the fixture holds has a ceiling whose raise waits on approval, and none raised yet"() {
@@ -235,6 +297,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
     /** A database seeded before the flag was set takes it on a second run, unless somebody has edited the row since. */
     def "running the library seed again sets handling's raise approval on a row left without it, but not on an edited one"() {
         given:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def othersBefore = otherWorkflowVersions()
         execute("""
                 update workflow_versions
@@ -269,7 +332,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
      * Every column naming who did something, found by its name rather than listed, so one added later
      * is held to this as well. Flyway's own history names the database role that ran it, not a subject.
      */
-    def "no row the seed writes names anybody but the seeder as having done anything, but Grace starting a run"() {
+    def "no row the seed writes names anybody but the seeder as having done anything, but in a run's tree"() {
         given:
         def namingColumns = rowsOf("""
                 select table_name, column_name from information_schema.columns
@@ -281,8 +344,15 @@ class DevelopmentSeedIntegrationSpec extends Specification {
             valuesOf("select distinct '${table}.${column} ' || ${column} from ${table} where ${column} <> '${SEEDER}'")
         }
 
-        then: "a run at the top is refused the seeder, so its starter is a person"
-        named == ["runs.created_by ${GRACE}" as String]
+        then: "a run at the top is refused the seeder, so a person starts it, reviews it and stops it, and the system does the rest"
+        named as Set == ["runs.created_by ${GRACE}", "runs.created_by ${ALAN}", "runs.created_by ${SYSTEM}",
+                         "run_steps.created_by ${SYSTEM}",
+                         "productions.created_by ${SYSTEM}", "productions.ended_by ${SYSTEM}",
+                         "productions.ended_by ${ALAN}",
+                         "run_step_send_attempts.created_by ${SYSTEM}", "model_calls.created_by ${SYSTEM}",
+                         "reviews.created_by ${GRACE}", "reviews.created_by ${ALAN}",
+                         "reviews.production_ended_by ${SYSTEM}", "reviews.production_ended_by ${ALAN}",
+                         "run_stops.created_by ${GRACE}"].collect { it as String } as Set
 
         and: "judged over columns that exist, among them the one every table has"
         namingColumns.any { it[1] == "created_by" }
@@ -299,14 +369,40 @@ class DevelopmentSeedIntegrationSpec extends Specification {
         then:
         tables.collectEntries { [it, contentsOf(it)] } == before
 
-        and: "judged on tables holding something; left empty are those only a person writes, a run's once started and a check's"
+        and: "judged on tables holding something; left empty are those only a person writes, what no seeded run came to, and a check's"
         before.findAll { it.value == "empty" }.keySet() ==
                 ["entry_stops", "entry_version_writers", "group_currencies",
-                 "model_call_turnaways", "model_calls", "production_inputs", "production_values", "productions",
-                 "review_decisions",
-                 "reviews", "run_ceiling_changes", "run_help_exchanges", "run_step_failures", "run_step_holds",
-                 "run_step_send_attempts", "run_steps", "run_stops", "soundness_checks",
-                 "soundness_counts"] as Set
+                 "model_call_turnaways",
+                 "production_input_parts",
+                 "run_ceiling_changes", "run_help_exchanges", "run_step_failures", "run_step_holds",
+                 "run_stop_additional_ceilings", "soundness_checks", "soundness_counts",
+                 "errored_code_returned_files"] as Set
+    }
+
+    def "the three attachment runs hold nonempty bytes matching their input metadata and their own group"() {
+        when:
+        // DB-SPECIFIC: ->, ->>, uuid and octet_length() use PostgreSQL's syntax and semantics.
+        def attachments = rowsOf("""
+                select run.number,
+                       case when file.byte_size = octet_length(content.content) and file.byte_size > 0
+                             and file.file_id = cast(run.started_with -> 'attachment' ->> 'id' as uuid)
+                             and file.original_name = run.started_with -> 'attachment' ->> 'name'
+                             and file.media_type = run.started_with -> 'attachment' ->> 'type'
+                             and file.byte_size = cast(run.started_with -> 'attachment' ->> 'size' as bigint)
+                             and holder.group_id = run.group_id and file.group_id = run.group_id
+                            then 'consistent' else 'inconsistent' end
+                  from runs run
+                  join run_file_holders holder on holder.run_id = run.run_id
+                  join stored_files file on file.file_id = holder.file_id
+                  join file_contents content on content.file_id = file.file_id
+                 order by run.number
+                """)
+
+        then:
+        attachments == [["13", "consistent"], ["14", "consistent"], ["15", "consistent"]]
+        valuesOf("select count(*) from stored_files") == ["3"]
+        valuesOf("select count(*) from file_contents") == ["3"]
+        valuesOf("select count(*) from run_file_holders") == ["3"]
     }
 
     private List<String> valuesOf(String query) {
@@ -381,6 +477,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
      */
     private String contentsOf(String table) {
         session.createStatement().withCloseable { statement ->
+            // DB-SPECIFIC: ::, string_agg(), md5() and text use PostgreSQL's syntax and semantics.
             statement.executeQuery("select coalesce(md5(string_agg(stored::text, '|' order by stored::text)), 'empty')" +
                     " from ${table} stored").withCloseable { found ->
                 found.next()
@@ -391,6 +488,7 @@ class DevelopmentSeedIntegrationSpec extends Specification {
 
     /** Every workflow version but handling's, whole, for the reason contentsOf gives. */
     private String otherWorkflowVersions() {
+        // DB-SPECIFIC: ::, string_agg(), md5() and text use PostgreSQL's syntax and semantics.
         valuesOf("""
                 select md5(string_agg(stored::text, '|' order by stored::text))
                   from workflow_versions stored where stored.entry_version_id <> '${HANDLING}'

@@ -131,8 +131,8 @@ public final class JsonBody {
         ByteArrayOutputStream read =
                 new ByteArrayOutputStream(declaredLength < 0 ? CHUNK_BYTES : (int) Math.min(declaredLength, most));
         byte[] chunk = new byte[CHUNK_BYTES];
-        // A single blocking read is still bounded only by the container's connectionTimeout, so the worst
-        // case is the deadline plus one idle timeout.
+        // Tomcat bounds extensions and trailers; a chunk-size line can still drip within its
+        // digit limit, resetting the idle timeout, so this read is not an absolute deadline.
         int count;
         while (read.size() < most && (count = body.read(chunk, 0, Math.min(CHUNK_BYTES, most - read.size()))) >= 0) {
             if (deadline.passed()) {

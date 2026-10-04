@@ -54,6 +54,7 @@ final class RunsController {
     static RunAnswer answer(Runs.RunView run) {
         RunName name = run.name();
         RunId above = run.above();
+        Runs.From from = run.from();
         PersonRows.Person startedBy = run.startedBy();
         Runs.Stop stop = run.stop();
         Runs.At at = run.at();
@@ -63,6 +64,14 @@ final class RunsController {
                 run.number(),
                 name == null ? null : name.value(),
                 above == null ? null : above.value(),
+                from == null
+                        ? null
+                        : new FromAnswer(
+                                from.run().run().value(),
+                                from.run().number(),
+                                from.step().value(),
+                                from.name().value()),
+                run.runsAbove().stream().map(RunsController::aboveAnswer).toList(),
                 new WorkflowAnswer(
                         run.workflow().entryId().value(),
                         run.workflow().name().value(),
@@ -70,6 +79,11 @@ final class RunsController {
                 startedBy == null ? null : PersonAnswer.of(startedBy),
                 run.startedAt().toString(),
                 run.startedWith(),
+                run.startedWithFrom() == null
+                        ? null
+                        : run.startedWithFrom().stream()
+                                .map(source -> new StartedSourceAnswer(source.input(), source.from(), source.sources()))
+                                .toList(),
                 run.state().published(),
                 at == null ? null : new AtAnswer(at.step().value(), at.name().value()),
                 stop == null ? null : stopAnswer(stop),
@@ -78,17 +92,31 @@ final class RunsController {
                         Long.toString(spend.cameBack()),
                         Long.toString(spend.spent()),
                         spend.cameBackUnknown(),
-                        spend.measuredHere() ? Boolean.TRUE : null),
+                        spend.measuredHere() == null
+                                ? null
+                                : spend.measuredHere().published()),
                 ceilingAnswer(run.ceiling()),
-                run.acts().stream().map(RunAct::published).toList());
+                run.acts().stream().map(RunAct::published).toList(),
+                run.conversationEvents());
+    }
+
+    private static RunAboveAnswer aboveAnswer(Runs.RunAbove above) {
+        RunName name = above.name();
+        return new RunAboveAnswer(above.run().value(), above.number(), name == null ? null : name.value());
     }
 
     private static StopAnswer stopAnswer(Runs.Stop stop) {
         return switch (stop.by()) {
             case Runs.Stopper.ByPerson byPerson ->
-                new StopAnswer(stop.at().toString(), PersonAnswer.of(byPerson.person()), null);
+                new StopAnswer(stop.at().toString(), PersonAnswer.of(byPerson.person()), null, null);
             case Runs.Stopper.ByCeiling byCeiling ->
-                new StopAnswer(stop.at().toString(), null, numbered(byCeiling.reached()));
+                new StopAnswer(
+                        stop.at().toString(),
+                        null,
+                        numbered(byCeiling.reached().getFirst()),
+                        byCeiling.reached().stream()
+                                .map(RunsController::numbered)
+                                .toList());
         };
     }
 
@@ -122,7 +150,8 @@ final class RunsController {
 
     /**
      * @param name absent beneath another run, which the run above started rather than anybody
-     * @param startedWith absent beneath another run; each value as the start request sends it
+     * @param runsAbove every run above it, from the top down; empty for a run at the top
+     * @param startedWith each value as the start request or parent binding sends it
      * @param state where it is: running, stopped, failed or done
      * @param at the step it is on, only while it is running
      * @param acts what the caller may do to it now, by their published spellings
@@ -133,34 +162,56 @@ final class RunsController {
             int number,
             @Nullable String name,
             @Nullable UUID above,
+            @Nullable FromAnswer from,
+            List<RunAboveAnswer> runsAbove,
             WorkflowAnswer workflow,
             @Nullable PersonAnswer startedBy,
             String startedAt,
             @Nullable JsonNode startedWith,
+            @Nullable List<StartedSourceAnswer> startedWithFrom,
             String state,
             @Nullable AtAnswer at,
             @Nullable StopAnswer stopped,
             SpendAnswer spend,
             CeilingAnswer ceiling,
-            List<String> acts) {}
+            List<String> acts,
+            List<RunActs.Event> conversationEvents) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record StartedSourceAnswer(
+            String input,
+            StepAnswers.@Nullable FromAnswer from,
+            @Nullable List<StepAnswers.SourceAnswer> sources) {}
 
     /** @param version the number of the version that ran */
     record WorkflowAnswer(UUID entryId, String name, int version) {}
 
+    record FromAnswer(UUID runId, int number, UUID stepId, String stepName) {}
+
+    /** @param name absent beneath the top of the tree, where nobody names a run */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record RunAboveAnswer(UUID runId, int number, @Nullable String name) {}
+
     /** @param name what the workflow calls the step */
     record AtAnswer(UUID stepId, String name) {}
 
-    /** @param ceilingOf absent where somebody stopped it, whom {@code by} names */
+    /**
+     * @param ceilingOf absent where somebody stopped it, whom {@code by} names; otherwise the first of {@code ceilings}
+     * @param ceilings every run whose ceiling stopped it, from the top down and by number at one depth; absent where
+     *     somebody stopped it
+     */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record StopAnswer(
-            String at, @Nullable PersonAnswer by, @Nullable NumberedRunAnswer ceilingOf) {}
+            String at,
+            @Nullable PersonAnswer by,
+            @Nullable NumberedRunAnswer ceilingOf,
+            @Nullable List<NumberedRunAnswer> ceilings) {}
 
     record NumberedRunAnswer(UUID runId, int number) {}
 
     /**
      * @param cameBackUnknown whether a call counted came back saying nothing, or is not back yet
-     * @param measuredHere present where any of it is what this system measured, the model having counted none of
-     *     that call; absent where the model counted all of it
+     * @param measuredHere wholly or partly measured here; absent where no call was measured here
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record SpendAnswer(
@@ -168,7 +219,7 @@ final class RunsController {
             String cameBack,
             String spent,
             boolean cameBackUnknown,
-            @Nullable Boolean measuredHere) {}
+            @Nullable String measuredHere) {}
 
     /**
      * @param inForce absent where the run may spend without limit, or is held to the ceiling at the top

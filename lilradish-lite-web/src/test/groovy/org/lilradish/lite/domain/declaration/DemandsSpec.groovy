@@ -7,13 +7,13 @@ import spock.lang.Specification
 
 class DemandsSpec extends Specification {
 
-    def "a question's halves are asked as the story lays them down"() {
+    def "a question requires given inputs and standing outputs"() {
         expect:
         Demands.ofQuestion(DeclarationSide.TAKES) == new Demands(GIVEN, GIVEN)
         Demands.ofQuestion(DeclarationSide.GIVES) == new Demands(STANDS, GIVEN)
     }
 
-    /** What a workflow or a route gives back stood where it was made, so nothing of it is asked to stand again. */
+
     def "a workflow's halves ask every field only whether it must be given"() {
         expect:
         Demands.ofWorkflow(DeclarationSide.TAKES) == new Demands(GIVEN, GIVEN)
@@ -58,7 +58,7 @@ class DemandsSpec extends Specification {
         new Demand.Stands(true, null, null)  || STANDS
     }
 
-    /** What a depth does not ask is never read, whatever was stored or sent for it. */
+
     def "a demand is built as its depth asks it, from only what that depth reads"() {
         expect:
         new Demands(first, below).demandAt(atFirst, false, FieldStanding.ABOVE_CONFIDENCE, 80) == built

@@ -1,21 +1,24 @@
 import {
+  isBareMediaType,
+  isFileValue,
   pathKey,
+  type FileValue,
   type FillField,
   type FillPath,
   type FillProblem,
   type FillReason,
   type FillValue,
   type FillValues,
+  type FillSubmissionValue,
+  type FillSubmissionValues,
 } from "../../../api/filling";
 import {
-  holdsNothing,
+  holdsNothingFor,
   momentParts,
   valueRefused,
   type WrittenField,
 } from "../../../lib/filling/writing";
-import { runNameFits } from "../runName";
-
-const TIME_BOX_DIGITS = 3;
+import { oneLineWithin, showsInProse } from "../../../lib/text/legibility";
 
 /** A moment as its controls hold it; an offset of none follows the reader's own at the date and time chosen. */
 export interface MomentDraft {
@@ -24,8 +27,15 @@ export interface MomentDraft {
   readonly offset: string | null;
 }
 
-/** What is typed or chosen for one value, shaped by the field it drafts: text, a moment, or fields. */
-export type OneDraft = string | MomentDraft | LevelDraft;
+export type FileDraft =
+  | { readonly pending: File }
+  | { readonly kept: FileValue; readonly originalIndex: number }
+  | null;
+
+export type FileIssue =
+  "name" | "type_missing" | "type_malformed" | "type_not_taken" | "too_large";
+
+export type OneDraft = string | MomentDraft | LevelDraft | FileDraft;
 
 /** One value, or many where the field holds many. */
 export type FieldDraft = OneDraft | readonly OneDraft[];
@@ -37,7 +47,9 @@ export interface LevelDraft {
 
 /** Everything filled as the server would read it: each value as it is sent, and every one that does not fit. */
 interface DraftRead {
-  readonly values: FillValues;
+  readonly values: FillSubmissionValues;
+  readonly uploads: readonly File[];
+  readonly hasFilePositions: boolean;
   /** In the order the server names them, so a place is named once whoever finds it. */
   readonly problems: readonly FillProblem[];
 }
@@ -64,11 +76,12 @@ interface Verdict {
 /** Everything a reader carries from one reading to the next. */
 interface Reading {
   readonly unreadable: ReadonlySet<string>;
+  readonly allowKept: boolean;
+  readonly uploads: File[];
+  hasFilePositions: boolean;
   readonly verdicts: Map<string, Verdict>;
   readonly problems: FillProblem[];
 }
-
-const MOST_IN_A_SUGGESTED_NAME = 60;
 
 const HOURS_AND_MINUTES = /^[0-9]{2}:[0-9]{2}$/;
 
@@ -76,8 +89,8 @@ const DAY = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 
 const TIME = /^([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?/;
 
-// Where one line of text ends: a control of any kind, a tab included, a line or paragraph separator, half a pair.
-const LINE_ENDS = /[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]/u;
+const MIME_PARAMETERS =
+  /^(?:[ \t]*;[ \t]*[!#$%&'*+.^_`|~A-Za-z0-9-]+=(?:[!#$%&'*+.^_`|~A-Za-z0-9-]+|"(?:[\t !#-[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))*[ \t]*$/;
 
 /** Every field as nothing has been filled yet: many hold none, and fields hold their own fields empty. */
 export function draftOf(fields: readonly FillField[]): LevelDraft {
@@ -94,6 +107,9 @@ export function oneDraftOf(field: FillField): OneDraft {
   if (field.kind === "fields") {
     return draftOf(field.fields ?? []);
   }
+  if (field.kind === "file") {
+    return null;
+  }
   return field.kind === "moment" ? { date: "", time: "", offset: null } : "";
 }
 
@@ -109,12 +125,14 @@ export function draftFrom(
     fields.map((field) => {
       const given = values[field.name];
       if (field.most === undefined) {
-        return [field.name, oneDraftFrom(field, given)];
+        return [field.name, oneDraftFrom(field, given, 0)];
       }
       return [
         field.name,
         Array.isArray(given)
-          ? given.map((each: FillValue) => oneDraftFrom(field, each))
+          ? given.map((each: FillValue, index: number) =>
+              oneDraftFrom(field, each, index),
+            )
           : [],
       ];
     }),
@@ -124,11 +142,15 @@ export function draftFrom(
 function oneDraftFrom(
   field: FillField,
   given: FillValue | undefined,
+  originalIndex: number,
 ): OneDraft {
   if (field.kind === "fields") {
     return typeof given === "object" && given !== null && !Array.isArray(given)
       ? draftFrom(field.fields ?? [], given as FillValues)
       : oneDraftOf(field);
+  }
+  if (field.kind === "file") {
+    return isFileValue(given) ? { kept: given, originalIndex } : null;
   }
   if (typeof given !== "string") {
     return oneDraftOf(field);
@@ -137,8 +159,7 @@ function oneDraftFrom(
     return given;
   }
   const parts = momentParts(given);
-  // A time box holds at most three digits of a second (whatwg/html "valid time string") and empties any more.
-  if (parts === null || (parts.fraction?.length ?? 0) > TIME_BOX_DIGITS) {
+  if (parts === null) {
     return oneDraftOf(field);
   }
   const fraction = parts.fraction === undefined ? "" : `.${parts.fraction}`;
@@ -163,12 +184,23 @@ export function placedAt(
  * holding nothing, are no value; each place is named for the first reason found there, a field before what it
  * holds. A place holding what it held when last read is not judged again.
  */
-export function draftReader(): DraftReader {
+export function draftReader(allowKept = false): DraftReader {
   const verdicts = new Map<string, Verdict>();
   return (fields, draft, unreadable) => {
     const problems: FillProblem[] = [];
+    const reading: Reading = {
+      unreadable,
+      allowKept,
+      uploads: [],
+      hasFilePositions: false,
+      verdicts,
+      problems,
+    };
+    const values = level(fields, draft, [], reading);
     return {
-      values: level(fields, draft, [], { unreadable, verdicts, problems }),
+      values,
+      uploads: reading.uploads,
+      hasFilePositions: reading.hasFilePositions,
       problems,
     };
   };
@@ -177,18 +209,6 @@ export function draftReader(): DraftReader {
 /** The offset a moment is written with: the one chosen, or the reader's own at the date and time chosen. */
 export function offsetOf(moment: MomentDraft): string {
   return moment.offset ?? ownOffsetAt(moment.date, moment.time);
-}
-
-/**
- * The first line of the first text field, depth first in declared order and the first of many, cut to 60
- * characters; null where that line is none a run could be called. No later field or line is tried in its place.
- */
-export function suggestedName(
-  fields: readonly FillField[],
-  draft: LevelDraft,
-): string | null {
-  const line = firstTextLine(fields, draft);
-  return line !== undefined && runNameFits(line) ? line : null;
 }
 
 /** An offset as a moment is written with it, of a whole number of minutes east of UTC. */
@@ -228,7 +248,7 @@ function level(
   draft: LevelDraft,
   at: FillPath,
   reading: Reading,
-): FillValues {
+): FillSubmissionValues {
   return Object.fromEntries(
     fields.map((field) => {
       const path = [...at, field.name];
@@ -248,7 +268,7 @@ function one(
   held: OneDraft,
   path: FillPath,
   reading: Reading,
-): FillValue {
+): FillSubmissionValue {
   const read = element(field, held, path, reading);
   if (read === undefined) {
     if (field.mustBeGiven) {
@@ -264,8 +284,12 @@ function many(
   items: readonly OneDraft[],
   path: FillPath,
   reading: Reading,
-): FillValue {
+): FillSubmissionValue {
   const { problems } = reading;
+  if (field.kind === "file" && reading.unreadable.has(pathKey(path))) {
+    problems.push({ path, reason: "malformed" });
+    return null;
+  }
   if (items.length === 0 && field.mustBeGiven) {
     problems.push({ path, reason: "missing" });
   } else if (items.length > (field.most ?? 0)) {
@@ -290,12 +314,43 @@ function element(
   held: OneDraft,
   path: FillPath,
   reading: Reading,
-): FillValue | undefined {
+): FillSubmissionValue | undefined {
   const { problems } = reading;
   if (field.kind === "fields") {
     const before = problems.length;
     const read = level(field.fields ?? [], held as LevelDraft, path, reading);
     return heldNothing(read, problems, before) ? undefined : read;
+  }
+  if (field.kind === "file") {
+    if (held === null) {
+      return undefined;
+    }
+    const pending =
+      typeof held === "object" && "pending" in held ? held.pending : undefined;
+    if (pending instanceof File && fileIssueOf(field, pending) === null) {
+      const upload = reading.uploads.length;
+      reading.uploads.push(pending);
+      reading.hasFilePositions = true;
+      return { upload, name: pending.name };
+    }
+    const kept =
+      typeof held === "object" && "kept" in held ? held.kept : undefined;
+    const originalIndex =
+      typeof held === "object" && "originalIndex" in held
+        ? held.originalIndex
+        : undefined;
+    if (
+      reading.allowKept &&
+      isFileValue(kept) &&
+      typeof originalIndex === "number" &&
+      Number.isSafeInteger(originalIndex) &&
+      originalIndex >= 0
+    ) {
+      reading.hasFilePositions = true;
+      return { keep: originalIndex };
+    }
+    problems.push({ path, reason: "malformed" });
+    return null;
   }
   const key = pathKey(path);
   if (reading.unreadable.has(key)) {
@@ -323,7 +378,7 @@ function judged(field: FillField, held: OneDraft): Verdict {
   if (typed === null) {
     return { field, held, read: undefined, reason: "malformed" };
   }
-  if (holdsNothing(typed)) {
+  if (holdsNothingFor(field as WrittenField, typed)) {
     return { field, held, read: undefined, reason: null };
   }
   const reason = valueRefused(
@@ -333,9 +388,38 @@ function judged(field: FillField, held: OneDraft): Verdict {
   return { field, held, read: typed, reason };
 }
 
+function mediaTypeEssence(type: string): string | null {
+  const separator = type.indexOf(";");
+  const bare = (separator < 0 ? type : type.slice(0, separator)).replace(
+    /^[ \t]+|[ \t]+$/g,
+    "",
+  );
+  const parameters = separator < 0 ? "" : type.slice(separator);
+  return isBareMediaType(bare) && MIME_PARAMETERS.test(parameters)
+    ? bare.toLowerCase()
+    : null;
+}
+
+export function fileIssueOf(field: FillField, file: File): FileIssue | null {
+  if (!oneLineWithin(file.name, 255) || !showsInProse(file.name)) {
+    return "name";
+  }
+  if (file.type === "") {
+    return "type_missing";
+  }
+  const essence = mediaTypeEssence(file.type);
+  if (essence === null) {
+    return "type_malformed";
+  }
+  if (!field.types?.some((type) => type.toLowerCase() === essence)) {
+    return "type_not_taken";
+  }
+  return file.size > (field.maximumBytes ?? 0) ? "too_large" : null;
+}
+
 /** Fields holding nothing are no value, so what is missing within them is dropped for their own demand. */
 function heldNothing(
-  read: FillValues,
+  read: FillSubmissionValues,
   problems: FillProblem[],
   before: number,
 ): boolean {
@@ -396,39 +480,4 @@ function onTheClock(date: string, time: string): Date | null {
   at.setFullYear(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
   at.setHours(Number(clock[1]), Number(clock[2]), Number(clock[3] ?? 0), 0);
   return at;
-}
-
-/** Undefined where no text field is declared here; empty where the first one holds nothing, as none of many does. */
-function firstTextLine(
-  fields: readonly FillField[],
-  draft: LevelDraft | undefined,
-): string | undefined {
-  for (const field of fields) {
-    const held = draft?.[field.name];
-    const first = Array.isArray(held) ? held[0] : held;
-    const line =
-      field.kind === "text"
-        ? firstLine((first as string | undefined) ?? "")
-        : field.kind === "fields"
-          ? firstTextLine(field.fields ?? [], first as LevelDraft | undefined)
-          : undefined;
-    if (line !== undefined) {
-      return line;
-    }
-  }
-  return undefined;
-}
-
-function firstLine(text: string): string {
-  const end = text.search(LINE_ENDS);
-  let line = "";
-  let counted = 0;
-  for (const character of end < 0 ? text : text.slice(0, end)) {
-    if (counted === MOST_IN_A_SUGGESTED_NAME) {
-      break;
-    }
-    line += character;
-    counted += 1;
-  }
-  return line;
 }

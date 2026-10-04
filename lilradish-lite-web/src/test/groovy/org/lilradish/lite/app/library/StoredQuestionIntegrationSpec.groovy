@@ -5,6 +5,7 @@ import static org.lilradish.lite.testutil.library.LibraryStore.versionId
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import org.lilradish.lite.domain.declaration.FieldName
+import org.lilradish.lite.domain.registry.EntryKind
 import org.lilradish.lite.testutil.library.LibraryStore
 import spock.lang.AutoCleanup
 import spock.lang.Shared
@@ -47,6 +48,7 @@ class StoredQuestionIntegrationSpec extends Specification {
         store.entry(QUESTION, GROUP, "question", "Summarise a complaint")
         store.seeded(VERSION, QUESTION, 1)
         store.content(VERSION, "question", "Say what it names.")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side,
                                                 parent_field_id, position, name, kind, text_limit, must_be_given,
@@ -58,6 +60,26 @@ class StoredQuestionIntegrationSpec extends Specification {
                        (?::uuid, ?::uuid, 'question', 'gives', ?::uuid, 1, 'sku', 'text', 32, false, null, ?::uuid)
                 """).params(DETAILS, VERSION, SEEDER, PRODUCT, VERSION, DETAILS, SEEDER, SKU, VERSION, PRODUCT, SEEDER)
                 .update()
+    }
+
+    def "the version reads its raw drawing while bulk run preparation leaves it out"() {
+        given:
+        def drawing = "## Case\n{{complaint}}"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.session.sql("update question_versions set drawing = ? where entry_version_id = ?::uuid")
+                .params(drawing, VERSION).update()
+
+        when:
+        def single = StoredQuestion.read(store.session, versionId(VERSION)).get()
+        def bulk = StoredQuestion.readAll(store.session, StoredDeclarations.ofVersions(
+                store.session, [(versionId(VERSION)): EntryKind.QUESTION]))[versionId(VERSION)]
+
+        then:
+        single.drawing() == drawing
+        bulk.drawing() == null
+        bulk.instruction() == single.instruction()
+        bulk.takes() == single.takes()
+        bulk.gives() == single.gives()
     }
 
     def "a field held inside others is found by where it sits, by its key"() {
@@ -77,8 +99,10 @@ class StoredQuestionIntegrationSpec extends Specification {
      */
     def "fields holding each other round a cycle fail the read rather than being walked or left out"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update declaration_fields set standing = null where declaration_field_id = ?::uuid")
                 .param(DETAILS).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 update declaration_fields set parent_field_id = ?::uuid, position = 2 where declaration_field_id = ?::uuid
                 """).params(PRODUCT, DETAILS).update()
@@ -106,7 +130,9 @@ class StoredQuestionIntegrationSpec extends Specification {
 
         where:
         change                                                                                        || what
+        // DB-SPECIFIC: PostgreSQL chr().
         "update declaration_fields set label = 'Two' || chr(8232) || 'lines' where name = 'sku'"     || "a field"
+        // DB-SPECIFIC: PostgreSQL chr().
         "update question_versions set instruction = 'Two' || chr(8232) || 'lines'"                    || "an instruction"
     }
 

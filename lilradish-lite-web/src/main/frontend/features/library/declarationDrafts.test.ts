@@ -5,8 +5,12 @@ import {
   addedUnder,
   changedAt,
   draftOf,
+  fileBytesOf,
+  fileSizeFits,
+  fileTypesOf,
   floorFits,
   freshDraft,
+  fileTypesTooMany,
   heldFor,
   limitFits,
   movedAt,
@@ -81,6 +85,18 @@ function nested(depth: number): DraftField {
 }
 
 describe("draftOf and sentOf", () => {
+  it("keeps a text field's line choice through drafting and omits it only while another kind is sent", () => {
+    const one = draftOf({ ...DETAILS.fields![0]!, lines: "one" });
+    const older = draftOf(DETAILS.fields![0]!);
+
+    expect(one.lines).toBe("one");
+    expect(older.lines).toBe("several");
+    expect(sentOf(one, TAKES).lines).toBe("one");
+    expect(sentOf(older, TAKES).lines).toBe("several");
+    expect("lines" in sentOf({ ...one, kind: "number" }, TAKES)).toBe(false);
+    expect(sentOf({ ...one, kind: "text" }, TAKES).lines).toBe("one");
+  });
+
   /** Held as typed and sent back as read: nothing is lost on the way through a builder. */
   it("sends a field read and left alone exactly as it was read, members its kind and depth take and no others", () => {
     expect(sentOf(draftOf(DETAILS), GIVES)).toEqual({
@@ -101,6 +117,7 @@ describe("draftOf and sentOf", () => {
           many: true,
           most: 3,
           longest: 128,
+          lines: "several",
           mustBeGiven: false,
         },
         {
@@ -166,6 +183,7 @@ describe("draftOf and sentOf", () => {
       "many",
       "most",
       "longest",
+      "lines",
       "mustBeGiven",
     ]);
   });
@@ -221,6 +239,7 @@ describe("draftOf and sentOf", () => {
       many: false,
       most: null,
       longest: null,
+      lines: "one",
       mustBeGiven: true,
     });
     expect(sentOf(drafted({ kind: "term", stands: "" }), GIVES)).toMatchObject({
@@ -229,6 +248,121 @@ describe("draftOf and sentOf", () => {
       floor: null,
     });
   });
+
+  it("reads file constraints in their order and sends their byte value back", () => {
+    const field = {
+      fieldId: "file-1",
+      name: "documents",
+      kind: "file" as const,
+      types: ["application/pdf", "image/png"],
+      maximumBytes: 10 * 1024 * 1024,
+      many: true,
+      most: 3,
+      mustBeGiven: true,
+    };
+
+    const draft = draftOf(field);
+    const sent = sentOf(draft, TAKES);
+
+    expect(draft.fileTypes).toBe("application/pdf\nimage/png");
+    expect(draft.fileSize).toBe("10");
+    expect(draft.fileSizeUnit).toBe("MB");
+    expect(sent).toMatchObject({
+      kind: "file",
+      types: ["application/pdf", "image/png"],
+      maximumBytes: 10485760,
+      most: 3,
+    });
+    expect("longest" in sent).toBe(false);
+    expect("list" in sent).toBe(false);
+    expect("fields" in sent).toBe(false);
+    expect(heldFor([draft], TAKES)).toBeNull();
+  });
+
+  it("keeps file input while another kind is sent without file members", () => {
+    const file = drafted({
+      kind: "file",
+      fileTypes: "application/pdf",
+      fileSize: "2",
+      fileSizeUnit: "GB",
+    });
+    const other = { ...file, kind: "number" as const };
+
+    expect(sentOf(file, TAKES)).toMatchObject({
+      types: ["application/pdf"],
+      maximumBytes: 2147483648,
+    });
+    expect("types" in sentOf(other, TAKES)).toBe(false);
+    expect("maximumBytes" in sentOf(other, TAKES)).toBe(false);
+    expect(sentOf({ ...other, kind: "file" }, TAKES).maximumBytes).toBe(
+      2147483648,
+    );
+  });
+
+  it.each([
+    ["1", "bytes", 1],
+    ["2", "KB", 2048],
+    ["3", "MB", 3145728],
+    ["4", "GB", 4294967296],
+    ["9007199254740991", "bytes", Number.MAX_SAFE_INTEGER],
+    ["8796093022207", "KB", 9007199254739968],
+    ["8589934591", "MB", 9007199253692416],
+    ["8388607", "GB", 9007198180999168],
+  ] as const)(
+    "projects and sends a valid file size of %s %s as bytes",
+    (fileSize, fileSizeUnit, bytes) => {
+      const draft = drafted({
+        kind: "file",
+        fileTypes: " APPLICATION/PDF \n image/png ",
+        fileSize,
+        fileSizeUnit,
+      });
+
+      expect(fileBytesOf(fileSize, fileSizeUnit)).toBe(bytes);
+      expect(fileTypesOf(draft.fileTypes)).toEqual([
+        "application/pdf",
+        "image/png",
+      ]);
+      expect(heldFor([draft], TAKES)).toBeNull();
+      expect(sentOf(draft, TAKES)).toMatchObject({
+        types: ["application/pdf", "image/png"],
+        maximumBytes: bytes,
+      });
+      expect(sentOf(draft, TAKES)).not.toHaveProperty("longest");
+    },
+  );
+
+  it.each([
+    ["", "bytes", true],
+    ["0", "bytes", false],
+    ["01", "bytes", false],
+    ["-1", "KB", false],
+    ["1.5", "MB", false],
+    ["1e3", "bytes", false],
+    ["9007199254740992", "bytes", false],
+    ["8796093022208", "KB", false],
+    ["8589934592", "MB", false],
+    ["8388608", "GB", false],
+  ] as const)(
+    "keeps an unchosen or invalid file size %s %s out of the byte projection",
+    (fileSize, fileSizeUnit, valid) => {
+      const draft = drafted({
+        kind: "file",
+        fileTypes: "application/pdf",
+        fileSize,
+        fileSizeUnit,
+      });
+
+      expect(fileBytesOf(fileSize, fileSizeUnit)).toBeNull();
+      expect(fileSizeFits(fileSize, fileSizeUnit)).toBe(valid);
+      expect(heldFor([draft], TAKES)).toEqual(
+        valid ? null : { why: "refusal.FILE_SIZE_LIMIT_UNUSABLE", place: [0] },
+      );
+      if (valid) {
+        expect(sentOf(draft, TAKES).maximumBytes).toBeNull();
+      }
+    },
+  );
 
   it("starts a field nothing is typed in as text holding one, to be given", () => {
     expect(freshDraft("new-1")).toEqual({
@@ -239,7 +373,11 @@ describe("draftOf and sentOf", () => {
       help: "",
       kind: "text",
       longest: "",
+      lines: "one",
       list: "",
+      fileTypes: "",
+      fileSize: "",
+      fileSizeUnit: "bytes",
       many: false,
       most: "",
       mustBeGiven: true,
@@ -328,6 +466,96 @@ describe("heldFor", () => {
         GIVES,
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    ["", "1", "bytes", "declaration.fileTypesInvalid"],
+    ["image/png\nIMAGE/PNG", "1", "bytes", "declaration.fileTypesInvalid"],
+    ["image/*", "1", "bytes", "declaration.fileTypesInvalid"],
+    ["image/png; charset=utf-8", "1", "bytes", "declaration.fileTypesInvalid"],
+    ["image/png", "0", "bytes", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+    ["image/png", "1.5", "KB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+    ["image/png", "8388608", "GB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+  ] as const)(
+    "holds an invalid file constraint at its row for %s and %s %s",
+    (fileTypes, fileSize, fileSizeUnit, why) => {
+      const file = drafted({ kind: "file", fileTypes, fileSize, fileSizeUnit });
+
+      expect(heldFor([drafted({ name: "first" }), file], TAKES)).toEqual({
+        why,
+        place: [1],
+      });
+      expect(heldFor([{ ...file, kind: "number" }], TAKES)).toBeNull();
+    },
+  );
+
+  it("accepts sixty-four file types and refuses the next before checking their spelling", () => {
+    const types = Array.from(
+      { length: 64 },
+      (_, index) => `application/x${index}`,
+    );
+    const accepted = drafted({
+      kind: "file",
+      fileTypes: types.join("\n"),
+      fileSize: "1",
+    });
+    const tooMany = {
+      ...accepted,
+      fileTypes: `bad;type\n${types.join("\n")}`,
+    };
+
+    expect(fileTypesTooMany(accepted.fileTypes)).toBe(false);
+    expect(heldFor([accepted], TAKES)).toBeNull();
+    expect(sentOf(accepted, TAKES).types).toEqual(types);
+    expect(fileTypesTooMany(tooMany.fileTypes)).toBe(true);
+    expect(heldFor([tooMany], TAKES)).toEqual({
+      why: "refusal.FILE_TYPES_TOO_MANY",
+      place: [0],
+    });
+  });
+
+  it("accepts the largest safe byte count and rejects one more across units", () => {
+    const file = drafted({
+      kind: "file",
+      fileTypes: "APPLICATION/PDF\nimage/png",
+      fileSize: String(Number.MAX_SAFE_INTEGER),
+      fileSizeUnit: "bytes",
+    });
+
+    expect(heldFor([file], TAKES)).toBeNull();
+    expect(sentOf(file, TAKES).types).toEqual(["application/pdf", "image/png"]);
+    expect(sentOf(file, TAKES).maximumBytes).toBe(Number.MAX_SAFE_INTEGER);
+    expect(
+      heldFor(
+        [{ ...file, fileSize: String(Number.MAX_SAFE_INTEGER + 1) }],
+        TAKES,
+      ),
+    ).toEqual({ why: "refusal.FILE_SIZE_LIMIT_UNUSABLE", place: [0] });
+  });
+
+  it("keeps an unchosen file size empty when a draft is read and sends none until a valid size is entered", () => {
+    const file = drafted({
+      kind: "file",
+      fileTypes: "application/pdf",
+      fileSize: "",
+      fileSizeUnit: "bytes",
+    });
+    expect(heldFor([file], TAKES)).toBeNull();
+    expect(sentOf(file, TAKES).maximumBytes).toBeNull();
+    expect(
+      draftOf({
+        fieldId: "file-1",
+        name: "documents",
+        kind: "file",
+        types: ["application/pdf"],
+        many: false,
+        mustBeGiven: false,
+      }).fileSize,
+    ).toBe("");
+    expect(heldFor([{ ...file, fileSize: "0" }], TAKES)).toEqual({
+      why: "refusal.FILE_SIZE_LIMIT_UNUSABLE",
+      place: [0],
+    });
   });
 
   it("judges a field held inside another, and names the first in the order the half reads, where it is", () => {

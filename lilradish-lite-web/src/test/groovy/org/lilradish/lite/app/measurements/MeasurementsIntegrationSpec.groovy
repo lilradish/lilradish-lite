@@ -16,18 +16,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * The measurements as the store counts them, asked of a real server running the real baseline. Every
- * row a feature arranges is one the schema admits, so a case the schema cannot hold is never one this
- * counts; the one row written round the schema is written so on purpose, and says so.
- *
- * <p>Each feature reads a database of its own holding a run of a workflow whose steps the feature adds
- * as it needs them. A step names the model and mode producing on it and the one reviewing it, or none,
- * and the schema holds every call made for the step to those.
- *
- * <p>Every read is compared whole, so a count put on the wrong row, or a row nobody arranged, fails as
- * surely as a count that is wrong.
- */
+
 class MeasurementsIntegrationSpec extends Specification {
 
     static final String WORKFLOW_RUNNER = "00000000-0000-4000-8000-000000000001"
@@ -40,19 +29,19 @@ class MeasurementsIntegrationSpec extends Specification {
 
     static final String QUESTION_VERSION = "00000007-0000-4000-8000-000000000b01"
 
-    /** Helped by the helper model in research mode, which is the only model a call to help reaches. */
+
     static final String WORKFLOW_VERSION = "00000007-0000-4000-8000-000000000b02"
 
     static final String RUN = "00000011-0000-4000-8000-000000000b01"
 
-    /** What the question gives back: two fields always needing a review, and one standing as given. */
+
     static final String DETAILS = "0000000b-0000-4000-8000-000000000b01"
 
     static final String NOTE = "0000000b-0000-4000-8000-000000000b02"
 
     static final String SUMMARY = "0000000b-0000-4000-8000-000000000b03"
 
-    /** What a code step gives back, named rather than declared, and always needing a review. */
+
     static final String RECEIPT = "receipt"
 
     static final String CODE_STEP = "send_reply"
@@ -61,7 +50,7 @@ class MeasurementsIntegrationSpec extends Specification {
 
     static final int TRIES = 20
 
-    /** No mode: the model run as it is. */
+
     static final ModelMode AS_IT_IS = null
 
     static final ModelMode RESEARCH = new ModelMode("research")
@@ -217,10 +206,7 @@ class MeasurementsIntegrationSpec extends Specification {
         "aStepNeverSent"       || []                                | []
     }
 
-    /**
-     * Written round the schema, which holds every name a call can be made under, as only a restore could. A
-     * check outlasts switching the keys off, so the one on a call's mode is dropped from this database first.
-     */
+    /** Invalid stored model or mode names must fail the whole read without exposing either name. */
     def "fails the whole read where a call names a model or a mode this system will not show"() {
         given:
         measuring()
@@ -256,6 +242,7 @@ class MeasurementsIntegrationSpec extends Specification {
         def late = step("gamma", AS_IT_IS)
         def production = tryOf(late)
         def attempt = attempted(late, "produce", production)
+        // DB-SPECIFIC: PostgreSQL now().
         def between = new CommittedBetweenReads(store.database, """
                 insert into model_calls (run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id,
                                          production_id, model, mode, envelope_version, sent_count, outcome, error_detail,
@@ -279,11 +266,12 @@ class MeasurementsIntegrationSpec extends Specification {
         afterwards.system()*.model()*.value() == ["alpha", "gamma"]
     }
 
-    /** Every mode here orders before the word the store keeps for no mode, which still comes first. */
+
     def "orders models by code point and under each the model run as it is, then its modes by code point, whatever the database defaults to"() {
         given:
         using(underLocales[locale])
         assert defaultProvider() == provider
+        // DB-SPECIFIC: PostgreSQL pg_database; current_database().
         assert session.sql("select datcollate from pg_database where datname = current_database()")
                 .query(String).single() == "C"
 
@@ -311,7 +299,7 @@ class MeasurementsIntegrationSpec extends Specification {
         "icu"  | "i"      | ["a_b", "a1", "ab"]
     }
 
-    // ---------------------------------------------------------------- what each case arranges
+
 
     private void nothingEverCalled() {}
 
@@ -337,14 +325,15 @@ class MeasurementsIntegrationSpec extends Specification {
         called(step, "produce", attempted(step, "produce", production), production, null)
     }
 
-    /** Measured too long to send, so nothing was, and the step waits. */
+
     private void aStepNeverSent() {
         heldOnLength()
     }
 
-    /** Answered by a person on a step a model produces for, which the model reviewing it then refuses. */
+
     private void aPersonsProductionTheModelRefused() {
         def step = step("alpha", AS_IT_IS, "beta", RESEARCH)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now(); RETURNING.
         def production = session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, pinned_version_id, try_number, producer, explanation,
@@ -374,7 +363,7 @@ class MeasurementsIntegrationSpec extends Specification {
         refusedForLength(production, SUMMARY)
     }
 
-    /** A value that needed a review, assured on it, then refused for length naming that assurance. */
+
     private void aValueAssuredThenRefusedForLength() {
         def production = produced(step("alpha", AS_IT_IS), "came_back")
         def assurance = reviewedByAPerson(production, [(DETAILS): "assured", (NOTE): "assured"])
@@ -391,11 +380,12 @@ class MeasurementsIntegrationSpec extends Specification {
         refusedForLength(production, SUMMARY)
     }
 
-    /** Too long for the model reviewing the step, so a person reviews in its place, and refuses. */
+
     private void aReviewNeverSentAndMadeByAPerson() {
         def step = step("alpha", AS_IT_IS, "beta", RESEARCH)
         def production = produced(step, "came_back")
         def tooLong = attempted(step, "review", production, true)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def review = session.sql("""
                 insert into reviews (production_id, run_step_id, root_run_id, production_ended_by, reviewed_by_model,
                                      too_long_attempt_id, created_by)
@@ -427,7 +417,7 @@ class MeasurementsIntegrationSpec extends Specification {
         refusedForLength(production, SUMMARY)
     }
 
-    /** A refusal the model gave no reason for is held so too. */
+
     private void aReviewThatDidNotFit() {
         def step = step("alpha", AS_IT_IS, "beta", RESEARCH)
         reviewedByTheModel(step, produced(step, "came_back"), "came_back", "did_not_fit", [:])
@@ -443,7 +433,7 @@ class MeasurementsIntegrationSpec extends Specification {
         reviewedByTheModel(step, produced(step, "came_back"), "nothing_came_back", "nothing_came_back", [:])
     }
 
-    /** Sent to review and not yet ended, so there is no review for it yet. */
+
     private void aReviewStillOut() {
         def step = step("alpha", AS_IT_IS, "beta", RESEARCH)
         def production = produced(step, "came_back")
@@ -462,14 +452,14 @@ class MeasurementsIntegrationSpec extends Specification {
                 [(DETAILS): "refused", (NOTE): "assured"])
     }
 
-    /** Only a production taken is reviewed, so the one that did not fit is a try before it. */
+
     private void oneModelsProductionAndReviewDidNotFit() {
         def step = step("alpha", AS_IT_IS, "alpha", AS_IT_IS)
         produced(step, "came_back", "did_not_fit")
         reviewedByTheModel(step, produced(step, "came_back"), "came_back", "did_not_fit", [:])
     }
 
-    /** Code gone wrong, what it gave back kept, is neither an answer nor a call; only the try beside it is reviewed. */
+
     private void aCodeTryErroredBesideOneReviewed() {
         def step = codeStep("beta", RESEARCH)
         codeTry(step, true)
@@ -489,10 +479,7 @@ class MeasurementsIntegrationSpec extends Specification {
         helped(null)
     }
 
-    /**
-     * Turned away once, then again as what may be spent with it was used up, and never sent again: the
-     * step is held back on it, as a call turned away every time holds its step.
-     */
+
     private void aCallOnlyEverTurnedAway() {
         def step = step("delta", AS_IT_IS)
         def production = tryOf(step)
@@ -500,6 +487,9 @@ class MeasurementsIntegrationSpec extends Specification {
         def call = called(step, "produce", attempt, production, "turned_away")
         turnedAway(call, false)
         turnedAway(call, true)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        session.sql("update productions set try_number = null where production_id = ?::uuid").param(production).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("""
                 insert into run_step_holds (run_step_id, run_id, run_step_kind, calls_a_model, reason,
                                             run_step_send_attempt_id, created_by)
@@ -517,7 +507,7 @@ class MeasurementsIntegrationSpec extends Specification {
         turnedAway(callOf(produced(step("alpha", RESEARCH), "errored", "errored")), false)
     }
 
-    /** Taken three times, one of them refused on two values; beside them one that did not fit, and two lost. */
+
     private void manyTriesOfOneModel() {
         def step = step("alpha", AS_IT_IS)
         reviewedByAPerson(produced(step, "came_back"), [(DETAILS): "refused", (NOTE): "refused"])
@@ -528,16 +518,17 @@ class MeasurementsIntegrationSpec extends Specification {
         produced(step, "nothing_came_back", "nothing_came_back")
     }
 
-    // ---------------------------------------------------------------- how a row is written
 
-    /** A step of the workflow answering the question that no model reviews, reached in the run. */
+
+
     private Map step(String model, ModelMode mode) {
         step(model, mode, null, null)
     }
 
-    /** A step of the workflow answering the question, reached in the run. */
+
     private Map step(String model, ModelMode mode, String reviewer, ModelMode reviewerMode) {
         def position = ++positions
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def workflowStep = session.sql("""
                 insert into workflow_steps (entry_version_id, position, name, kind, pinned_version_id, pinned_kind,
                                             producer, producer_model, producer_mode, tries, reviewer_model,
@@ -546,6 +537,7 @@ class MeasurementsIntegrationSpec extends Specification {
                 returning cast(workflow_step_id as text)
                 """).params(WORKFLOW_VERSION, position, "step_" + position, QUESTION_VERSION, model, stored(mode), TRIES,
                 reviewer, reviewer == null ? null : stored(reviewerMode), SEEDER).query(String).single()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def runStep = session.sql("""
                 insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, pinned_version_id,
                                        pinned_kind, producer, reviewed_by_model, tries, created_by)
@@ -557,9 +549,10 @@ class MeasurementsIntegrationSpec extends Specification {
          reviewerMode: reviewerMode, reviewed: reviewer != null, tries: 0]
     }
 
-    /** A step of the workflow running code, reviewed by the model named, reached in the run. */
+
     private Map codeStep(String reviewer, ModelMode reviewerMode) {
         def position = ++positions
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def workflowStep = session.sql("""
                 insert into workflow_steps (entry_version_id, position, name, kind, code_step, producer, tries,
                                             reviewer_model, reviewer_mode, created_by)
@@ -567,6 +560,7 @@ class MeasurementsIntegrationSpec extends Specification {
                 returning cast(workflow_step_id as text)
                 """).params(WORKFLOW_VERSION, position, "step_" + position, CODE_STEP, TRIES, reviewer,
                 stored(reviewerMode), SEEDER).query(String).single()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def runStep = session.sql("""
                 insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, producer,
                                        reviewed_by_model, tries, created_by)
@@ -577,19 +571,23 @@ class MeasurementsIntegrationSpec extends Specification {
          reviewerMode: reviewerMode, reviewed: true, tries: 0]
     }
 
-    /** The code's next try of the step, ended, giving back a receipt, or errored with what it gave back kept. */
+
     private String codeTry(Map step, boolean errored) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now(); stored enum types; RETURNING.
         def production = session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, may_run_again, try_number, producer, lost_reason,
-                                         lost_detail, returned_by_code, created_by, ended_at, ended_by)
+                                         code_error_reason, code_error_path, code_error_member, returned_by_code,
+                                         created_by, ended_at, ended_by)
                 values (?::uuid, ?::uuid, ?::uuid, 'code_step', 'code', true, ?, true, ?, 'code',
-                        cast(? as try_lost_reason), ?, ?, ?::uuid, now(), ?::uuid)
+                        cast(? as try_lost_reason), cast(? as code_error_reason), null, ?, ?, ?::uuid, now(), ?::uuid)
                 returning cast(production_id as text)
                 """).params(step.runStep, RUN, RUN, TRIES, ++step.tries, errored ? "errored" : null,
-                errored ? "Code step gave back a field it does not declare." : null, errored ? "{}" : null,
+                errored ? "not_declared" : null, errored ? "extra" : null,
+                errored ? '{"receipt":"sent","extra":true}' : null,
                 WORKFLOW_RUNNER, WORKFLOW_RUNNER).query(String).single()
         if (!errored) {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("""
                     insert into production_values (production_id, run_step_kind, producer, field_name, field_standing,
                                                    value)
@@ -599,10 +597,11 @@ class MeasurementsIntegrationSpec extends Specification {
         production
     }
 
-    /** The model's next try of the step, ended as its call did, with what it gave back where it was taken. */
+
     private String produced(Map step, String outcome, String lostReason = null) {
         def production = tryOf(step)
         called(step, "produce", attempted(step, "produce", production), production, outcome)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, did_not_fit_reason; now(); stored enum types.
         session.sql("""
                 update productions
                    set model_call_id = (select call.model_call_id from model_calls call
@@ -624,6 +623,7 @@ class MeasurementsIntegrationSpec extends Specification {
 
     private void valued(String production, String producer) {
         [(DETAILS): "never", (NOTE): "never", (SUMMARY): "always"].each { field, standing ->
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid; stored enum types.
             session.sql("""
                     insert into production_values (production_id, run_step_kind, producer, pinned_version_id,
                                                    declaration_field_id, field_standing, value)
@@ -633,19 +633,21 @@ class MeasurementsIntegrationSpec extends Specification {
         }
     }
 
-    private String tryOf(Map step) {
+    private String tryOf(Map step, boolean numbered = true) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, pinned_version_id, try_number, producer, created_by)
                 values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', ?, ?, ?::uuid, ?, 'model', ?::uuid)
                 returning cast(production_id as text)
-                """).params(step.runStep, RUN, RUN, step.reviewed, TRIES, QUESTION_VERSION, ++step.tries, WORKFLOW_RUNNER)
+                """).params(step.runStep, RUN, RUN, step.reviewed, TRIES, QUESTION_VERSION, numbered ? ++step.tries : null, WORKFLOW_RUNNER)
                 .query(String).single()
     }
 
-    /** What would be sent, to the model the step names for the purpose. */
+
     private String attempted(Map step, String purpose, String production, boolean tooLong = false) {
         def producing = purpose == "produce"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         session.sql("""
                 insert into run_step_send_attempts (run_step_id, run_id, run_step_kind, workflow_step_id, purpose, model,
                                                     mode, production_id, too_long, payload, created_by, created_by_kind)
@@ -657,9 +659,10 @@ class MeasurementsIntegrationSpec extends Specification {
                 tooLong, WORKFLOW_RUNNER).query(String).single()
     }
 
-    /** The call sending an attempt, ended as it came to, or still out where it has not. */
+
     private String called(Map step, String purpose, String attempt, String production, String outcome) {
         def producing = purpose == "produce"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         session.sql("""
                 insert into model_calls (run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id,
                                          production_id, model, mode, envelope_version, sent_count, came_back_count,
@@ -672,6 +675,7 @@ class MeasurementsIntegrationSpec extends Specification {
     }
 
     private void helped(String outcome) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("""
                 insert into model_calls (run_id, root_run_id, purpose, root_version_id, request, model, mode,
                                          envelope_version, sent_count, came_back_count, outcome, answer, error_detail,
@@ -681,7 +685,8 @@ class MeasurementsIntegrationSpec extends Specification {
                 """).params(RUN, RUN, WORKFLOW_VERSION, WORKFLOW_RUNNER).update()
     }
 
-    /** What a call carries once it ended as {@code outcome}: counted back, answered, gone wrong and when. */
+
+    // DB-SPECIFIC: PostgreSQL now() in SQL value fragments.
     private static String ended(String outcome) {
         switch (outcome) {
             case "came_back": return "40, 'came_back', '{}', null, now()"
@@ -692,19 +697,22 @@ class MeasurementsIntegrationSpec extends Specification {
     }
 
     private String callOf(String production) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("select cast(model_call_id as text) from productions where production_id = ?::uuid")
                 .param(production).query(String).single()
     }
 
     private void turnedAway(String call, boolean spentUp) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, model_call_outcome.
         session.sql("""
                 insert into model_call_turnaways (model_call_id, said, spent_up, model_call_outcome, created_by)
                 values (?::uuid, 'Busy.', ?, case when ? then 'turned_away'::model_call_outcome end, ?::uuid)
                 """).params(call, spentUp, spentUp, WORKFLOW_RUNNER).update()
     }
 
-    /** A person reviewing a production of a step no model reviews, and deciding each value as named. */
+
     private String reviewedByAPerson(String production, Map<String, String> decisions) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def review = session.sql("""
                 insert into reviews (production_id, run_step_id, root_run_id, production_ended_by, reviewed_by_model,
                                      created_by)
@@ -718,10 +726,11 @@ class MeasurementsIntegrationSpec extends Specification {
         review
     }
 
-    /** A review that did not fit says why, as the store requires; which way is no concern of what is measured. */
+
     private void reviewedByTheModel(
             Map step, String production, String outcome, String lostReason, Map<String, String> decisions) {
         def call = called(step, "review", attempted(step, "review", production), production, outcome)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, did_not_fit_reason; stored enum types; RETURNING.
         def review = session.sql("""
                 insert into reviews (production_id, run_step_id, root_run_id, production_ended_by, reviewed_by_model,
                                      model_call_id, model_call_outcome, lost_reason, did_not_fit_reason, created_by,
@@ -737,8 +746,9 @@ class MeasurementsIntegrationSpec extends Specification {
         decided(review, false, decisions)
     }
 
-    /** A person refusing one value for the hold on length in the run, naming where it was assured if it was. */
+
     private void refusedForLength(String production, String field, String assuredIn = null) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         def review = session.sql("""
                 insert into reviews (production_id, run_step_id, root_run_id, production_ended_by, reviewed_by_model,
                                      run_step_hold_id, hold_run_id, created_by)
@@ -751,11 +761,12 @@ class MeasurementsIntegrationSpec extends Specification {
         decided(review, true, [(field): "refused"], assuredIn)
     }
 
-    /** A step of its own held back, what it would send being too long, which calls nobody. */
+
     private String heldOnLength() {
         if (hold == null) {
             def held = step("alpha", AS_IT_IS)
-            def tooLong = attempted(held, "produce", tryOf(held), true)
+            def tooLong = attempted(held, "produce", tryOf(held, false), true)
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
             hold = session.sql("""
                     insert into run_step_holds (run_step_id, run_id, run_step_kind, calls_a_model, reason,
                                                 run_step_send_attempt_id, created_by)
@@ -766,9 +777,10 @@ class MeasurementsIntegrationSpec extends Specification {
         hold
     }
 
-    /** Each value of the production reviewed, named by its field, decided as named. */
+
     private void decided(String review, boolean forLength, Map<String, String> decisions, String assuredIn = null) {
         decisions.each { field, outcome ->
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             def written = session.sql("""
                     insert into review_decisions (review_id, production_value_id, production_id, for_length,
                                                   value_needs_review, outcome, explanation, assured_in_review_id)
@@ -784,9 +796,9 @@ class MeasurementsIntegrationSpec extends Specification {
         }
     }
 
-    // ---------------------------------------------------------------- the store
 
-    /** The group, the question and the workflow in service, what the question gives back, and one run. */
+
+
     private static void populate(LibraryStore store) {
         store.group(GROUP, "MEASURED", "Measured")
         store.entry(QUESTION, GROUP, "question", "Summarise a complaint")
@@ -798,6 +810,7 @@ class MeasurementsIntegrationSpec extends Specification {
         [
             "update workflow_versions set may_be_helped = true, helper_model = 'helper', helper_mode = '${RESEARCH.value()}'" +
                     " where entry_version_id = '${WORKFLOW_VERSION}'",
+            // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
             "alter type code_step add value '${CODE_STEP}'",
             "insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side, position, name," +
                     " kind, must_be_given, standing, created_by) values" +
@@ -805,7 +818,7 @@ class MeasurementsIntegrationSpec extends Specification {
                     " ('${NOTE}', '${QUESTION_VERSION}', 'question', 'gives', 2, 'note', 'text', true, 'never', '${SEEDER}')," +
                     " ('${SUMMARY}', '${QUESTION_VERSION}', 'question', 'gives', 3, 'summary', 'text', true, 'always', '${SEEDER}')",
             "insert into runs (run_id, group_id, number, name, entry_id, entry_version_id, root_run_id, depth," +
-                    " started_with, created_by) values ('${RUN}', '${GROUP}', 1, 'Complaint from Ada', '${WORKFLOW}'," +
+                    " started_with, created_by) values ('${RUN}', '${GROUP}', 1, 'Complaint from Ari', '${WORKFLOW}'," +
                     " '${WORKFLOW_VERSION}', '${RUN}', 0, '{}', '${FIRST_STEWARD}')",
         ].each { store.session.sql(it as String).update() }
     }
@@ -824,10 +837,11 @@ class MeasurementsIntegrationSpec extends Specification {
         hold = null
     }
 
-    /** One statement on a connection of its own, with every foreign key and trigger switched off. */
+
     private void writtenRoundTheSchema(String statement) {
         store.database.connection.withCloseable { Connection connection ->
             connection.createStatement().withCloseable {
+                // DB-SPECIFIC: PostgreSQL session_replication_role setting.
                 it.execute("set session_replication_role = replica")
                 it.execute(statement)
             }
@@ -835,11 +849,13 @@ class MeasurementsIntegrationSpec extends Specification {
     }
 
     private String defaultProvider() {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; pg_database; current_database().
         session.sql("select datlocprovider::text from pg_database where datname = current_database()")
                 .query(String).single()
     }
 
     private List<String> defaultOrderOf(List<String> names) {
+        // DB-SPECIFIC: PostgreSQL array type [] syntax.
         session.sql("select name from unnest(cast(? as text[])) name order by name")
                 .param(names as String[]).query(String).list()
     }
@@ -852,13 +868,13 @@ class MeasurementsIntegrationSpec extends Specification {
         }, measured.system().collect { [it.model().value(), it.wentWrong(), it.neverCameBack(), it.turnedAway()] }]
     }
 
-    /** A row of the models' table, every count not named being none. */
+
     static List modelRow(Map counts = [:], String name, ModelMode mode) {
         assert MODEL_COUNTS.containsAll(counts.keySet())
         [name, mode] + MODEL_COUNTS.collect { counts[it] ?: 0 }
     }
 
-    /** A row of this system's table, every count not named being none. */
+
     static List systemRow(Map counts = [:], String name) {
         assert SYSTEM_COUNTS.containsAll(counts.keySet())
         [name] + SYSTEM_COUNTS.collect { counts[it] ?: 0 }
@@ -872,10 +888,7 @@ class MeasurementsIntegrationSpec extends Specification {
         mode == null ? ModelMode.RESERVED_FOR_AS_IT_IS : mode.value()
     }
 
-    /**
-     * Commits one statement from a connection of its own the moment the second statement of a read is
-     * prepared, which is between the two reads a measurement makes.
-     */
+
     private static final class CommittedBetweenReads extends DelegatingDataSource {
 
         private final String statement

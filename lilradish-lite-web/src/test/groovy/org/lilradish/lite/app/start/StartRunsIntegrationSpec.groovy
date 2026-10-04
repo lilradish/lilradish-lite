@@ -13,17 +13,25 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Supplier
 import javax.sql.DataSource
 import org.libprunus.core.error.ApiErrorException
+import org.lilradish.lite.app.files.ContentTypeRecognition
+import org.lilradish.lite.app.files.DatabaseFileContentStore
+import org.lilradish.lite.app.files.FileDeployment
+import org.lilradish.lite.app.files.RunFiles
 import org.lilradish.lite.app.filling.ValueProblemsRefusal
 import org.lilradish.lite.app.group.GroupRoles
+import org.lilradish.lite.app.inference.ToolModelCalls
 import org.lilradish.lite.app.library.ConstantJson
 import org.lilradish.lite.app.run.EngineCalls
 import org.lilradish.lite.app.run.EngineExecutor
+import org.lilradish.lite.app.run.EngineWiring
 import org.lilradish.lite.app.run.EngineWrites
 import org.lilradish.lite.app.run.RunEngine
+import org.lilradish.lite.app.run.RunNumbering
 import org.lilradish.lite.app.run.RunSnapshots
 import org.lilradish.lite.app.run.RunTree
 import org.lilradish.lite.app.run.Runs
 import org.lilradish.lite.app.run.fixture.StepRows
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.filling.FillPath
 import org.lilradish.lite.domain.identity.UserId
@@ -36,55 +44,56 @@ import org.lilradish.lite.testutil.run.Blocking
 import org.lilradish.lite.testutil.run.EngineModels
 import org.lilradish.lite.testutil.run.RecordedModelCalls
 import org.lilradish.lite.testutil.run.RunRows
+import org.mockito.Mockito
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.simple.JdbcClient
+import org.springframework.jdbc.datasource.SingleConnectionDataSource
 import org.springframework.transaction.support.TransactionCallback
 import org.springframework.transaction.support.TransactionOperations
+import org.springframework.util.unit.DataSize
 import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * Starting a run against a real store: the row written at the group's next number with what was filled in as it is
- * kept, every refusal writing nothing, and a start meeting another change in flight deciding on what it landed.
- */
+
 class StartRunsIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000001601"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000001602"
 
-    /** An operator here, and in no role in the other group. */
+
     static final String ANN = "00000002-0000-4000-8000-000000001601"
 
     static final UserId ANN_USER = new UserId("001601")
 
-    /** In no role anywhere. */
+
     static final String BEN = "00000002-0000-4000-8000-000000001602"
 
     static final UserId BEN_USER = new UserId("001602")
 
-    /** An overseer here, reading every run of the group rather than only those she started. */
+
     static final String CAL = "00000002-0000-4000-8000-000000001603"
 
     static final UserId CAL_USER = new UserId("001603")
 
     static final String CLAIM = "00000006-0000-4000-8000-000000001601"
 
-    /** Takes what {@link TakingWorkflow#takes} declares; a run of it numbered one stands already. */
+
     static final String CLAIM_VERSION = "00000007-0000-4000-8000-000000001601"
 
     static final String HELLO = "00000006-0000-4000-8000-000000001602"
 
-    /** Takes nothing at all. */
+
     static final String HELLO_VERSION = "00000007-0000-4000-8000-000000001602"
 
     static final String LETTER = "00000006-0000-4000-8000-000000001603"
 
-    /** Takes one letter of up to two million characters. */
+
     static final String LETTER_VERSION = "00000007-0000-4000-8000-000000001603"
 
     static final String RETIRED_VERSION = "00000007-0000-4000-8000-000000001604"
@@ -103,10 +112,10 @@ class StartRunsIntegrationSpec extends Specification {
 
     static final String LIST_VERSION = "00000007-0000-4000-8000-000000001610"
 
-    /** Its first step asks somebody a question taking nothing. */
+
     static final String ASK_VERSION = "00000007-0000-4000-8000-000000001611"
 
-    /** Its one step asks a model, once; only the features that call on it write it. */
+
     static final String MODEL_FIRST_VERSION = "00000007-0000-4000-8000-000000001612"
 
     static final String FIRST_RUN = "00000008-0000-4000-8000-000000001601"
@@ -128,10 +137,10 @@ class StartRunsIntegrationSpec extends Specification {
 
     CountingTransactions transactions
 
-    /** Asked of no feature but one, which consumes the one call it makes; every other finds it never called. */
+
     RecordedModelCalls modelCalls
 
-    /** Every collaborator real: the engine's classes are its package's own, so they are found by Spring alone. */
+
     AnnotationConfigApplicationContext context
 
     @AutoCleanup("shutdownNow")
@@ -153,8 +162,13 @@ class StartRunsIntegrationSpec extends Specification {
         context.registerBean(JdbcClient, { store.session } as Supplier)
         context.registerBean(DataSource, { store.database } as Supplier)
         context.registerBean(TransactionOperations, { transactions } as Supplier)
+        context.registerBean(ToolModelCalls, { EngineWiring.withoutTools() } as Supplier)
+        context.registerBean(FileDeployment, { new FileDeployment(DataSize.ofMegabytes(10), 10, DataSize.ofGigabytes(1)) } as Supplier)
+        context.registerBean(RunFiles, { new RunFiles(store.session, new DatabaseFileContentStore(store.database),
+                context.getBean(FileDeployment), Mockito.mock(ObjectProvider)) } as Supplier)
         context.environment.propertySources.addFirst(new org.springframework.core.env.MapPropertySource(
-                "codeSteps", ["lilradish.code-steps.longest-run": "1m"] as Map<String, Object>))
+                "deployment", ["lilradish.code-steps.longest-run": "1m", "lilradish.runs.maximum-depth": "32"]
+                as Map<String, Object>))
         context.register(Starting)
         context.refresh()
         starts = context.getBean(StartRuns)
@@ -187,7 +201,7 @@ class StartRunsIntegrationSpec extends Specification {
                 "Elsewhere")
         StepRows.workflow(store, "00000006-0000-4000-8000-000000001611", ASK_VERSION, GROUP, "Ask somebody")
         StepRows.askingSomebody(store, ASK_VERSION, GROUP)
-        RunRows.run(store, FIRST_RUN, GROUP, 1, "Claim from Ada", CLAIM, CLAIM_VERSION, ANN)
+        RunRows.run(store, FIRST_RUN, GROUP, 1, "Claim from Ari", CLAIM, CLAIM_VERSION, ANN)
     }
 
     private StartRuns.Started starting(String version, String values, UserId caller = ANN_USER) {
@@ -200,15 +214,16 @@ class StartRunsIntegrationSpec extends Specification {
     }
 
     private List<String> startedWith(StartRuns.Started started) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select started_with::text from runs where run_id = ?::uuid", started.run().value().toString())
     }
 
-    /** A change of the spec's own in flight: {@code statements} run and left uncommitted. */
+
     private Connection inFlight(Object... statements) {
         store.holding(statements.collect { it.toString() } as String[])
     }
 
-    /** The start asked while {@code other} is in flight, once it is seen waiting on it and the other has landed. */
+
     private Object afterLanding(Connection other, Closure start) {
         def asked = attempting(racing, start)
         Blocking.untilBlockedBy(store, other)
@@ -230,6 +245,7 @@ class StartRunsIntegrationSpec extends Specification {
 
         then:
         started.number() == 2
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; concat_ws().
         store.texts("""
                 select concat_ws(' ', group_id, number, name, entry_id, entry_version_id, root_run_id = run_id, depth,
                                  parent_run_id is null, created_by, created_by_kind)
@@ -241,15 +257,15 @@ class StartRunsIntegrationSpec extends Specification {
                          '"category": "damaged", "complaint": "Kettle broken"}']
 
         and: "one run written, and nothing planned on it, its workflow having no step"
-        runsWritten() == ["1 Claim from Ada", "2 Kettle arrived broken"]
+        runsWritten() == ["1 Claim from Ari", "2 Kettle arrived broken"]
         store.count("select count(*) from run_steps") == 0
     }
 
-    /** Sent in an order of its own, so only the declared order read back proves neither it nor the store's is kept. */
+
     def "a run started reads back as started with exactly what was sent, in declared order at every level"() {
         given:
         def runs = new Runs(store.session, new GroupRoles(store.session), store.transactionManager(),
-                new RunSnapshots(store.session, CodeStepsHeld.NONE))
+                new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([])))
         def sent = '''
                 {"contact": {"phone": null, "email": "a@example.org"}, "tags": ["box", "lid"], "category": "damaged",
                  "amount": "12.50", "complaint": "Kettle broken"}'''
@@ -269,9 +285,10 @@ class StartRunsIntegrationSpec extends Specification {
 
         then:
         started.readable()
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select created_by::text from runs where run_id = ?::uuid", started.run().value().toString()) ==
                 [starter]
-        runsWritten() == ["1 Claim from Ada", "2 Kettle arrived broken"]
+        runsWritten() == ["1 Claim from Ari", "2 Kettle arrived broken"]
 
         where:
         caller   | starter | role
@@ -306,9 +323,10 @@ class StartRunsIntegrationSpec extends Specification {
         def started = starting(LETTER_VERSION, """{"letter": "${letter}"}""")
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid; JSON ->> operator.
         store.texts("select (started_with ->> 'letter' = ?)::text from runs where run_id = ?::uuid",
                 letter, started.run().value().toString()) == ["true"]
-        runsWritten() == ["1 Claim from Ada", "2 Kettle arrived broken"]
+        runsWritten() == ["1 Claim from Ari", "2 Kettle arrived broken"]
     }
 
     def "a run started has its first step planned before the start ends: a question asked of somebody opens a try"() {
@@ -317,13 +335,16 @@ class StartRunsIntegrationSpec extends Specification {
 
         then:
         def run = started.run().value().toString()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from run_steps where run_id = ?::uuid", run) == 1
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("""
                 select count(*) from productions try join run_steps step on step.run_step_id = try.run_step_id
                  where step.run_id = ?::uuid and try.ended_at is null
                 """, run) == 1
 
         and: "nothing planned on any run but the one started"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from run_steps where run_id <> ?::uuid", run) == 0
     }
 
@@ -335,7 +356,7 @@ class StartRunsIntegrationSpec extends Specification {
         def refused = thrown(ApiErrorException)
         refused.errorCode() == RefusalCode.WORKFLOW_NOT_OFFERED
         refused.message == "Only a version in service of a workflow of this group's, not stopped, may be started."
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
 
         where:
         reason                              | version
@@ -354,7 +375,7 @@ class StartRunsIntegrationSpec extends Specification {
         then:
         def refused = thrown(ApiErrorException)
         refused.errorCode() == RefusalCode.GROUP_NOT_IN_VIEW
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
     }
 
     def "values not of the shape the version takes are refused as a body it does not take, writing nothing: #shape"() {
@@ -365,7 +386,7 @@ class StartRunsIntegrationSpec extends Specification {
         def refused = thrown(ApiErrorException)
         refused.errorCode() == RefusalCode.BODY_UNUSABLE
         !(refused instanceof ValueProblemsRefusal)
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
 
         where:
         shape                         | values
@@ -393,14 +414,17 @@ class StartRunsIntegrationSpec extends Specification {
         } == [[["complaint"], "too_long"], [["amount"], "malformed"], [["category"], "not_a_term"],
               [["tags", 1], "too_long"], [["contact", "email"], "missing"]]
         refused.found() == 5
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
     }
 
-    /** The other is a start of the same group holding its numbering, its run written and not yet committed. */
+
     def "a start asked while another in its group holds the numbering waits for it, and takes the number after"() {
         given:
-        def other = inFlight("select pg_advisory_xact_lock(${StartRuns.NUMBERING}, hashtext('${GROUP}'))",
-                takenFirst("00000008-0000-4000-8000-000000001602", 2, "Taken first"))
+        def other = store.holding()
+        RunNumbering.hold(JdbcClient.create(new SingleConnectionDataSource(other, true)), groupId(GROUP))
+        other.createStatement().withCloseable {
+            it.execute(takenFirst("00000008-0000-4000-8000-000000001602", 2, "Taken first"))
+        }
 
         when:
         def started = afterLanding(other) { starting(CLAIM_VERSION, FILLED) }
@@ -408,7 +432,7 @@ class StartRunsIntegrationSpec extends Specification {
         then:
         started instanceof StartRuns.Started
         started.number() == 3
-        runsWritten() == ["1 Claim from Ada", "2 Taken first", "3 Kettle arrived broken"]
+        runsWritten() == ["1 Claim from Ari", "2 Taken first", "3 Kettle arrived broken"]
     }
 
     /** The context closed drains the engine's threads, so every hand-over the start made has run. */
@@ -426,7 +450,7 @@ class StartRunsIntegrationSpec extends Specification {
     def "a run whose first step a model produces sends it once after the start, on the engine's thread, and hands over nothing else"() {
         given:
         modelFirst()
-        modelCalls.scripted.answering(new CallOutcome.Errored("Gone."))
+        modelCalls.scripted.answering(new CallOutcome.Errored("Gone.", null))
 
         when: "closed once the call has ended: one not yet written down as sent when closing began is never sent"
         def started = starting(MODEL_FIRST_VERSION, "{}")
@@ -453,7 +477,7 @@ class StartRunsIntegrationSpec extends Specification {
     def "a start whose transaction rolls back hands over nothing, so no model is called"() {
         given:
         modelFirst()
-        modelCalls.scripted.answering(new CallOutcome.Errored("Gone."))
+        modelCalls.scripted.answering(new CallOutcome.Errored("Gone.", null))
 
         when:
         transactions.executeWithoutResult { status ->
@@ -465,10 +489,11 @@ class StartRunsIntegrationSpec extends Specification {
         then:
         modelCalls.madeOn == []
         transactions.handedOver.get() == 0
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from runs where entry_version_id = ?::uuid", MODEL_FIRST_VERSION) == 0
     }
 
-    /** A workflow taking nothing whose one step asks a model to sort something, once. */
+
     private void modelFirst() {
         def question = "00000006-0000-4000-8000-000000001613"
         def questionVersion = "00000007-0000-4000-8000-000000001613"
@@ -493,7 +518,7 @@ class StartRunsIntegrationSpec extends Specification {
         def refused = thrown(ApiErrorException)
         refused.errorCode() == RefusalCode.WORKFLOW_NOT_OFFERED
         transactions.handedOver.get() == 0
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
     }
 
     /** Decided before either lock was held, the start would run a version nothing may start any longer. */
@@ -507,11 +532,13 @@ class StartRunsIntegrationSpec extends Specification {
         then:
         refused instanceof ApiErrorException
         refused.errorCode() == RefusalCode.WORKFLOW_NOT_OFFERED
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
 
         where:
         change         | held                                                                                            | changed
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         "a stop"       | "select 1 from entries where entry_id = '${CLAIM}' for no key update"                           | "insert into entry_stops (entry_id, created_by) values ('${CLAIM}', '${ANN}')"
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE; now().
         "a retirement" | "select 1 from entry_versions where entry_version_id = '${CLAIM_VERSION}' for no key update" | "update entry_versions set retired_at = now(), retired_by = '${ANN}' where entry_version_id = '${CLAIM_VERSION}'"
     }
 
@@ -525,21 +552,22 @@ class StartRunsIntegrationSpec extends Specification {
         then:
         refused instanceof ApiErrorException
         refused.errorCode() == RefusalCode.GROUP_NOT_IN_VIEW
-        runsWritten() == ["1 Claim from Ada"]
+        runsWritten() == ["1 Claim from Ari"]
     }
 
     @TestConfiguration(proxyBeanMethods = false)
-    @Import([StartRuns, GroupRoles, RunTree, RunEngine, RunSnapshots, EngineWrites, EngineExecutor, EngineCalls,
+    @Import([StartRuns, GroupRoles, RunTree, RunEngine, RunSnapshots, SearchWays, EngineWrites, EngineExecutor, EngineCalls,
             org.lilradish.lite.app.run.EngineCodes, org.lilradish.lite.app.run.CeilingReach,
-            org.lilradish.lite.app.run.OneProcess, org.lilradish.lite.testutil.run.EngineCodeSteps, EngineModels])
+            org.lilradish.lite.app.run.OneProcess, org.lilradish.lite.app.run.RunConfiguration,
+            org.lilradish.lite.testutil.run.EngineCodeSteps, EngineModels])
     static class Starting {}
 
-    /** The store's transactions, counting those the engine's own threads run: each is a run handed over going on. */
+
     static final class CountingTransactions implements TransactionOperations {
 
         final AtomicInteger handedOver = new AtomicInteger()
 
-        /** Which of the engine's methods began each, in the order they began, as its class and method name. */
+
         final List<String> madeBy = Collections.synchronizedList([])
 
         private final TransactionOperations transactions

@@ -71,7 +71,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
     static final UUID NAMELESS_SUBJECT = UUID.fromString("00000002-0000-4000-8000-000000000130")
 
     static final PoolPeople.PoolPerson NAMED = new PoolPeople.PoolPerson(new SubjectId(NAMED_SUBJECT),
-            new UserId("000140"), new PersonName("Grace Hopper"), EnumSet.allOf(EstateRole), 2)
+            new UserId("000140"), new PersonName("Greno Nockal"), EnumSet.allOf(EstateRole), 2)
 
     static final PoolPeople.PoolPerson NAMELESS = new PoolPeople.PoolPerson(new SubjectId(NAMELESS_SUBJECT),
             new UserId("000130"), null, EnumSet.noneOf(EstateRole), 0)
@@ -82,7 +82,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
             ListCursor.mint(PoolPeople.LISTED, query(BY_NAME, null), new ListPosition(null, "000130"))
 
     static final String MINTED_UNDER_ANOTHER_FILTER =
-            ListCursor.mint(PoolPeople.LISTED, query(BY_USER, new ListFilter("grace")), ENDED_ON)
+            ListCursor.mint(PoolPeople.LISTED, query(BY_USER, new ListFilter("greno")), ENDED_ON)
 
     static final String MINTED_WITHIN_ANOTHER_SCOPE =
             ListCursor.mint(PoolPeople.LISTED, new ListQuery<>("group 7", BY_USER, null), ENDED_ON)
@@ -158,7 +158,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         and:
         items.get(0).get("subjectId").asString() == NAMED_SUBJECT.toString()
         items.get(0).get("userId").asString() == "000140"
-        items.get(0).get("displayName").asString() == "Grace Hopper"
+        items.get(0).get("displayName").asString() == "Greno Nockal"
         items.get(0).get("estateRoles").collect { it.asString() } == ["steward", "watcher"]
         items.get(0).get("groupCount").asLong() == 2
         items.get(1).get("estateRoles").isEmpty()
@@ -210,7 +210,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         [["sort", "-groupCount"]]                          || query(BY_COUNT_DESCENDING, null)
         [["sort", "displayName"], ["filter", " Gr%_\\ "]]  || query(BY_NAME, new ListFilter(" Gr%_\\ "))
         [["filter", "山田" + IDEOGRAPHIC_SPACE + "太郎"]]      || query(BY_USER, new ListFilter("山田 太郎"))
-        [["filter", "ADA" + IDEOGRAPHIC_SPACE + " "]]      || query(BY_USER, new ListFilter("ADA "))
+        [["filter", "ARI" + IDEOGRAPHIC_SPACE + " "]]      || query(BY_USER, new ListFilter("ARI "))
         [["filter", ""]]                                   || query(BY_USER, null)
     }
 
@@ -246,7 +246,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         [["sort", "userId,displayName"]]                  || "LIST_SORT_UNUSABLE"     | SORT_REFUSED
         [["sort", ""]]                                    || "LIST_SORT_UNUSABLE"     | SORT_REFUSED
         [["sort", "userId"], ["sort", "userId"]]          || "LIST_SORT_UNUSABLE"     | SORT_REFUSED
-        [["filter", "Ada" + Character.toString(0x2028)]]  || "LIST_FILTER_UNUSABLE"   | FILTER_REFUSED
+        [["filter", "Ari" + Character.toString(0x2028)]]  || "LIST_FILTER_UNUSABLE"   | FILTER_REFUSED
         [["filter", "a" * 257]]                           || "LIST_FILTER_UNUSABLE"   | FILTER_REFUSED
         [["filter", "a"], ["filter", "b"]]                || "LIST_FILTER_UNUSABLE"   | FILTER_REFUSED
         [["sort", "estateRoles"], ["filter", "a"], ["filter", "b"]] || "LIST_SORT_UNUSABLE" | SORT_REFUSED
@@ -376,7 +376,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         given:
         arriving(EnumSet.of(EstateRole.STEWARD))
         given(people.person(new SubjectId(NAMED_SUBJECT))).willReturn(Optional.of(new PoolPeople.PoolPersonPanel(
-                new SubjectId(NAMED_SUBJECT), new UserId("000140"), new PersonName("Grace Hopper"), EnumSet.of(EstateRole.WATCHER),
+                new SubjectId(NAMED_SUBJECT), new UserId("000140"), new PersonName("Greno Nockal"), EnumSet.of(EstateRole.WATCHER),
                 EnumSet.noneOf(EstateRole), [new GroupName("Payroll"), new GroupName("finance")], true)))
 
         when:
@@ -388,7 +388,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         membersOf(document) == ["subjectId", "userId", "displayName", "estateRoles", "lastGrantingRoles", "groups", "seeded"]
         document.get("subjectId").asString() == NAMED_SUBJECT.toString()
         document.get("userId").asString() == "000140"
-        document.get("displayName").asString() == "Grace Hopper"
+        document.get("displayName").asString() == "Greno Nockal"
         document.get("estateRoles").collect { it.asString() } == ["watcher"]
         document.get("lastGrantingRoles").isEmpty()
         document.get("groups").collect { it.asString() } == ["Payroll", "finance"]
@@ -425,7 +425,7 @@ class PoolPeopleControllerIntegrationSpec extends Specification {
         given:
         arriving(EnumSet.of(EstateRole.STEWARD))
         given(people.person(new SubjectId(NAMED_SUBJECT))).willReturn(Optional.of(new PoolPeople.PoolPersonPanel(
-                new SubjectId(NAMED_SUBJECT), new UserId("000140"), new PersonName("Grace Hopper"),
+                new SubjectId(NAMED_SUBJECT), new UserId("000140"), new PersonName("Greno Nockal"),
                 EnumSet.of(EstateRole.STEWARD, EstateRole.WATCHER), EnumSet.of(EstateRole.STEWARD), [], false)))
 
         when:

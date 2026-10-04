@@ -65,6 +65,10 @@ final class DeclarationAnswers {
         }
         List<FieldAnswer> held =
                 field.shape() instanceof FieldShape.Nested nested ? fields(nested.fields(), key.fields(), pins) : null;
+        List<String> types = field.shape() instanceof FieldShape.File file
+                ? file.types().stream().map(type -> type.value()).toList()
+                : null;
+        Long maximumBytes = field.shape() instanceof FieldShape.File file ? file.maximumBytes() : null;
         String stands = null;
         Integer floor = null;
         if (field.demand() instanceof Demand.Stands standsSo) {
@@ -79,13 +83,16 @@ final class DeclarationAnswers {
                 help == null ? null : help.value(),
                 field.shape().kind().published(),
                 longest,
+                field.shape() instanceof FieldShape.Text text ? text.lines().published() : null,
                 list,
                 field.howMany() instanceof HowMany.Many,
                 field.howMany() instanceof HowMany.Many many ? many.most() : null,
                 field.demand().mustBe(),
                 stands,
                 floor,
-                held);
+                held,
+                types,
+                maximumBytes);
     }
 
     /**
@@ -95,6 +102,8 @@ final class DeclarationAnswers {
      * @param stands only on what a question gives back where no other field holds it
      * @param floor only where it stands above a confidence
      * @param fields only on a field holding fields, in declared order
+     * @param types only on a file field, in declared order
+     * @param maximumBytes only on a file field with a declared limit
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record FieldAnswer(
@@ -104,13 +113,16 @@ final class DeclarationAnswers {
             @Nullable String help,
             String kind,
             @Nullable Integer longest,
+            @Nullable String lines,
             @Nullable PinnedAnswer list,
             boolean many,
             @Nullable Integer most,
             boolean mustBeGiven,
             @Nullable String stands,
             @Nullable Integer floor,
-            @Nullable List<FieldAnswer> fields) {}
+            @Nullable List<FieldAnswer> fields,
+            @Nullable List<String> types,
+            @Nullable Long maximumBytes) {}
 
     /**
      * @param standing the pinned version's own

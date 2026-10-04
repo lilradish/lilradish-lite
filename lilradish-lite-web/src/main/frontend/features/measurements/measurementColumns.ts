@@ -105,5 +105,6 @@ function countColumn<T>(label: MessageId, key: CountOf<T>) {
     label: say(label),
     cell: (row: T) => readersIntl.formatNumber(row[key] as number),
     sortKey: key,
+    numeric: true,
   } as const;
 }

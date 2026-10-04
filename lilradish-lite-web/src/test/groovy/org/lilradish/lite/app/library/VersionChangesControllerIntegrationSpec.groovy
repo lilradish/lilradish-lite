@@ -277,23 +277,23 @@ class VersionChangesControllerIntegrationSpec extends Specification {
         def step = UUID.fromString("0000000c-0000-4000-8000-000000000e21")
         def routeCase = UUID.fromString("0000000d-0000-4000-8000-000000000e21")
         def binding = UUID.fromString("0000000e-0000-4000-8000-000000000e21")
-        willThrow(new ContentProblemsRefusal([
+        willThrow(new ContentProblemsRefusal(new ContentProblemReport.Result([
                 new ContentProblem(
-                        ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null),
+                        ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null, null),
                 new ContentProblem(
-                        ContentProblemCode.LONGEST_MISSING, new ContentPlace.AtField(ContentPart.GIVES, field), null),
-                new ContentProblem(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(term), null),
+                        ContentProblemCode.LONGEST_MISSING, new ContentPlace.AtField(ContentPart.GIVES, field), null, null),
+                new ContentProblem(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(term), null, null),
                 new ContentProblem(
-                        ContentProblemCode.LIMIT_PAST_LARGEST, new ContentPlace.AtField(ContentPart.GIVES, field), 12L),
-                new ContentProblem(ContentProblemCode.RUNS_MISSING, new ContentPlace.AtStep(step), null),
-                new ContentProblem(ContentProblemCode.CASE_REPEATED, new ContentPlace.AtCase(step, routeCase), null),
+                        ContentProblemCode.LIMIT_PAST_LARGEST, new ContentPlace.AtField(ContentPart.GIVES, field), 12L, null),
+                new ContentProblem(ContentProblemCode.RUNS_MISSING, new ContentPlace.AtStep(step), null, null),
+                new ContentProblem(ContentProblemCode.CASE_REPEATED, new ContentPlace.AtCase(step, routeCase), null, null),
                 new ContentProblem(
-                        ContentProblemCode.INPUT_UNBOUND, new ContentPlace.AtInput(step, routeCase, field), null),
+                        ContentProblemCode.INPUT_UNBOUND, new ContentPlace.AtInput(step, routeCase, field), null, null),
                 new ContentProblem(
-                        ContentProblemCode.SOURCE_UNKNOWN, new ContentPlace.AtBinding(ContentPart.GIVES, binding), null),
+                        ContentProblemCode.SOURCE_UNKNOWN, new ContentPlace.AtBinding(ContentPart.GIVES, binding), null, null),
                 new ContentProblem(ContentProblemCode.ASKING_PAST_LARGEST,
-                        new ContentPlace.Whole(ContentPart.GIVES), 9_007_199_254_740_993L)
-        ], [])).given(versions).submit(
+                        new ContentPlace.Whole(ContentPart.GIVES), 9_007_199_254_740_993L, null)
+        ], 12), [])).given(versions).submit(
                 new GroupId(GROUP), EntryKind.WORKFLOW, new EntryId(ENTRY), new EntryVersionId(VERSION), READER)
 
         when:
@@ -304,6 +304,7 @@ class VersionChangesControllerIntegrationSpec extends Specification {
         answered.response.status == 409
         document.get("code").asString() == "VERSION_CONTENT_DOES_NOT_HOLD"
         document.get("detail").asString() == "Some of what this version holds does not hold yet, and each place is named."
+        document.get("problemTotal").asLong() == 12
         JSON.convertValue(document.get("problems"), List) == [
                 [code: "instruction_missing", part: "instruction"],
                 [code: "longest_missing", part: "gives", fieldId: field.toString()],
@@ -326,8 +327,8 @@ class VersionChangesControllerIntegrationSpec extends Specification {
         given:
         holding(EnumSet.of(GroupRole.OWNER))
         willThrow(new ContentProblemsRefusal(
-                [new ContentProblem(
-                        ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null)],
+                new ContentProblemReport.Result([new ContentProblem(
+                        ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null, null)], 1),
                 [new RetiredPinsRefusal.RetiredPin(new EntryId(UNREPLACED_ENTRY), EntryKind.REFERENCE_LIST,
                         new EntryName("Regions"),
                         new RetiredPinsRefusal.NumberedVersion(new EntryVersionId(UNREPLACED), 2), null)]
@@ -339,6 +340,7 @@ class VersionChangesControllerIntegrationSpec extends Specification {
 
         then:
         document.get("code").asString() == "VERSION_CONTENT_DOES_NOT_HOLD"
+        document.get("problemTotal").asLong() == 1
         JSON.convertValue(document.get("problems"), List) == [[code: "instruction_missing", part: "instruction"]]
         JSON.convertValue(document.get("pins"), List) == [
                 [entryId: UNREPLACED_ENTRY.toString(), kind: "reference_list", name: "Regions",

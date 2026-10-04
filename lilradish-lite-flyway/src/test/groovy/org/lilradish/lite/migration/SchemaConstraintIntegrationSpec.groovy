@@ -6,6 +6,8 @@ import static org.lilradish.lite.migration.fixture.V10Cases.*
 import static org.lilradish.lite.migration.fixture.V11Cases.*
 import static org.lilradish.lite.migration.fixture.V12Cases.*
 import static org.lilradish.lite.migration.fixture.V13Cases.*
+import static org.lilradish.lite.migration.fixture.V15Cases.*
+import static org.lilradish.lite.migration.fixture.V16Cases.*
 import static org.lilradish.lite.migration.fixture.V8Cases.*
 import static org.lilradish.lite.migration.fixture.V9Cases.*
 
@@ -17,6 +19,8 @@ import org.lilradish.lite.migration.fixture.V10Cases
 import org.lilradish.lite.migration.fixture.V11Cases
 import org.lilradish.lite.migration.fixture.V12Cases
 import org.lilradish.lite.migration.fixture.V13Cases
+import org.lilradish.lite.migration.fixture.V15Cases
+import org.lilradish.lite.migration.fixture.V16Cases
 import org.lilradish.lite.migration.fixture.V1Cases
 import org.lilradish.lite.migration.fixture.V2Cases
 import org.lilradish.lite.migration.fixture.V3Cases
@@ -31,7 +35,7 @@ import spock.lang.Shared
 import spock.lang.Specification
 
 /**
- * What the baseline's rules refuse is proved here and nowhere else. Its migrations compile nothing and
+ * What the baseline's named rules refuse is proved here. Its migrations compile nothing and
  * are covered by nothing a unit test can reach, so what a constraint refuses is only known by asking a
  * server to refuse it — and the server asked is pinned to the version production runs, because a rule
  * proved on a different engine has been proved about a different engine.
@@ -39,7 +43,11 @@ import spock.lang.Specification
  * <p>A list of cases somebody wrote out is the migration copied into a second file and catches
  * nothing added after it. What makes this a check is that the population is discovered from the
  * catalogue and the cases are asserted to cover it exactly: a constraint added without a case here
- * reddens, and so does a case naming a constraint that was removed.
+ * reddens, and so does a case naming a constraint that was removed. NOT NULL is checked separately
+ * for file_contents, model_call_tool_uses and model_call_tool_prices, and for model_calls'
+ * answer_truncated, declined_words_altered, declined_words_truncated, unreadable_response_altered
+ * and unreadable_response_truncated flags. Other required
+ * columns are outside this coverage.
  *
  * <p>Each case asserts the name the refusal carries rather than that something was refused. Two
  * defences stand behind several of these rows — a check on what the row claims about a subject, and
@@ -50,11 +58,41 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     static final List<String> FIXTURE = [*V1Cases.FIXTURE, *V2Cases.FIXTURE, *V3Cases.FIXTURE, *V4Cases.FIXTURE,
                                          *V6Cases.FIXTURE, *V7Cases.FIXTURE, *V8Cases.FIXTURE, *V9Cases.FIXTURE,
-                                         *V10Cases.FIXTURE, *V11Cases.FIXTURE, *V12Cases.FIXTURE, *V13Cases.FIXTURE]
+                                         *V10Cases.FIXTURE, *V11Cases.FIXTURE, *V12Cases.FIXTURE, *V13Cases.FIXTURE, *V15Cases.FIXTURE]
 
     static final List<Map<String, String>> CASES = [*V1Cases.CASES, *V2Cases.CASES, *V3Cases.CASES, *V4Cases.CASES,
                                                     *V6Cases.CASES, *V7Cases.CASES, *V8Cases.CASES, *V9Cases.CASES,
-                                                    *V10Cases.CASES, *V11Cases.CASES, *V12Cases.CASES, *V13Cases.CASES]
+                                                    *V10Cases.CASES, *V11Cases.CASES, *V12Cases.CASES, *V13Cases.CASES, *V15Cases.CASES,
+                                                    *V16Cases.CASES,
+                                                    [table: "declaration_fields", constraint: "declaration_fields_text_lines_known",
+                                                     statement: insertInto("declaration_fields", A_FIELD + [text_lines: "'later'"])],
+                                                    [table: "declaration_fields", constraint: "declaration_fields_text_lines_only_for_text",
+                                                     statement: insertInto("declaration_fields", A_FIELD + [kind: "'number'", text_lines: "'one'"])]]
+
+    static final List<Map<String, String>> SEARCH_NOT_NULL_CASES = [
+        [table: "model_call_tool_uses", column: "model_call_id",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_id: "null"])],
+        [table: "model_call_tool_uses", column: "run_id",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [run_id: "null"])],
+        [table: "model_call_tool_uses", column: "model_call_purpose",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_purpose: "null"])],
+        [table: "model_call_tool_uses", column: "tool",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [tool: "null"])],
+        [table: "model_call_tool_uses", column: "most_uses",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [most_uses: "null"])],
+        [table: "model_call_tool_uses", column: "searches_cut",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [searches_cut: "null"])],
+        [table: "model_call_tool_uses", column: "searches_not_as_it_came",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [searches_not_as_it_came: "null"])],
+        [table: "model_call_tool_uses", column: "searches_left_out",
+         statement: insertInto("model_call_tool_uses", A_TOOL_USE + [searches_left_out: "null"])],
+        [table: "model_call_tool_prices", column: "model_call_id",
+         statement: insertInto("model_call_tool_prices", A_TOOL_PRICE + [model_call_id: "null"])],
+        [table: "model_call_tool_prices", column: "currency",
+         statement: insertInto("model_call_tool_prices", A_TOOL_PRICE + [currency: "null"])],
+        [table: "model_call_tool_prices", column: "per_use",
+         statement: insertInto("model_call_tool_prices", A_TOOL_PRICE + [per_use: "null"])],
+    ]
 
     /**
      * A unique key whose columns are a proper superset of its table's primary key cannot be broken
@@ -76,9 +114,11 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "model_calls.model_calls_outcome_unique",
         "model_calls.model_calls_production_outcome_unique",
         "model_calls.model_calls_run_purpose_unique",
+        "production_inputs.production_inputs_root_unique",
         "production_values.production_values_needs_review_unique",
         "production_values.production_values_production_unique",
         "productions.productions_ender_yielded_unique",
+        "productions.productions_errored_code_file_parent_unique",
         "productions.productions_pinned_unique",
         "productions.productions_root_unique",
         "productions.productions_run_step_unique",
@@ -101,12 +141,15 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "run_steps.run_steps_pinned_unique",
         "run_steps.run_steps_producer_unique",
         "run_steps.run_steps_workflow_step_kind_unique",
+        "run_stops.run_stops_ceiling_unique",
         "runs.runs_depth_unique",
         "runs.runs_group_unique",
         "runs.runs_parent_workflow_step_unique",
         "runs.runs_root_unique",
         "runs.runs_version_unique",
+        "search_question_parts.search_question_parts_step_unique",
         "soundness_checks.soundness_checks_outcome_unique",
+        "stored_files.stored_files_group_unique",
         "subjects.subjects_kind_unique",
         "workflow_steps.workflow_steps_kind_unique",
         "workflow_steps.workflow_steps_pinned_unique",
@@ -199,12 +242,14 @@ class SchemaConstraintIntegrationSpec extends Specification {
     ]
 
     /** Each reason code gone wrong may be given for that is about a field of the code step. */
-    static final List<String> ABOUT_A_FIELD = ["nothing_given", "not_its_kind", "too_long", "too_many", "not_a_term",
-                                               "unkeepable", "too_long_to_keep", "takes_a_list_not_here",
+    static final List<String> ABOUT_A_FIELD = ["nothing_given", "not_its_kind", "line_break", "too_long", "too_many", "not_a_term",
+                                               "unkeepable", "too_long_to_keep", "file_type_unusable",
+                                               "file_name_unusable", "file_too_large", "takes_a_list_not_here",
                                                "gives_a_list_not_here", "takes_otherwise", "gives_otherwise"]
 
     /** Each reason about no field at all; the one left, a member nothing declares, may be about either. */
-    static final List<String> ABOUT_NO_FIELD = ["gave_nothing", "failed_on_this_side", "said_nothing"]
+    static final List<String> ABOUT_NO_FIELD = ["gave_nothing", "failed_on_this_side", "said_nothing",
+                                              "file_total_too_large"]
 
     /** Where a try names a field by path: the column, and the rule holding it to a path's shape and length. */
     static final List<List<String>> PATHS_IN_PRODUCTIONS = [
@@ -262,6 +307,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "run_step_failures.run_step_failures_produced_fk",
         "run_step_holds.run_step_holds_attempt_fk",
         "run_step_send_attempts.run_step_send_attempts_repeats_fk",
+        "run_stop_additional_ceilings.run_stop_additional_ceilings_ceiling_run_fk",
         "run_stops.run_stops_ceiling_run_fk",
         "runs.runs_parent_pinned_version_fk",
         "runs.runs_top_level_entry_fk",
@@ -303,11 +349,12 @@ class SchemaConstraintIntegrationSpec extends Specification {
         session = database.connection
         /* Committed before any fixture names them: a label added to a type that already exists cannot
          * be used in the transaction that added it. */
+        // DB-SPECIFIC: alter type uses PostgreSQL's syntax and semantics.
         [CODE_STEP, OTHER_CODE_STEP].each { execute("alter type app.code_step add value '${it}'") }
         FIXTURE.each { execute(it) }
     }
 
-    def "every rule the schema enforces has a case that attacks it"() {
+    def "every named rule the schema enforces has a case that attacks it"() {
         given:
         def discovered = enforceableRules()
 
@@ -348,6 +395,339 @@ class SchemaConstraintIntegrationSpec extends Specification {
         [rule, constraint, table, statement] << CASES.collect { [ruleOf(it), it.constraint, it.table, it.statement] }
     }
 
+    def "a file name refuses representable control character #codePoint without changing metadata"() {
+        given:
+        def before = contentsOf("stored_files")
+        def oldName = queryForStrings("select original_name from app.stored_files where file_id = '${FILE}'")
+        assert oldName.size() == 1
+
+        when:
+        // DB-SPECIFIC: chr() uses PostgreSQL's character-code semantics.
+        execute("update app.stored_files set original_name = 'Demo Sample' || chr(${codePoint})" +
+                " where file_id = '${FILE}'")
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23514"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == "stored_files"
+        refused.serverErrorMessage.constraint == "stored_files_name_one_line"
+        contentsOf("stored_files") == before
+
+        where:
+        codePoint << ((1..31) + (127..159))
+    }
+
+    def "a visible file name is kept whole at its permitted length"() {
+        given:
+        def before = contentsOf("stored_files")
+
+        when:
+        def kept = readInside("update app.stored_files set original_name = '${name}' where file_id = '${FILE}'",
+                "select original_name from app.stored_files where file_id = '${FILE}'")
+
+        then:
+        kept == name
+        contentsOf("stored_files") == before
+
+        where:
+        name << ["Demo Sample É 山田", "Demo Sample " + ("a" * 243)]
+    }
+
+    def "every required file content column has one actual null rejection case"() {
+        when:
+        // DB-SPECIFIC: pg_attribute and regclass use PostgreSQL's catalogue and relation lookup.
+        def required = queryForStrings("""
+            select attname
+              from pg_attribute
+             where attrelid = 'app.file_contents'::regclass
+               and attnum > 0 and not attisdropped and attnotnull
+            """)
+        def registered = V15Cases.NOT_NULL_CASES.collect { it.column }
+
+        then:
+        !required.isEmpty()
+        !registered.isEmpty()
+        registered.toSet() == required
+        registered.size() == required.size()
+        registered.toSet().size() == registered.size()
+        V15Cases.NOT_NULL_CASES.every { it.table == "file_contents" }
+    }
+
+    def "file content refuses null in #column without storing any part of the row"() {
+        given:
+        def beforeContents = contentsOf(table)
+        def beforeMetadata = contentsOf("stored_files")
+
+        when:
+        execute(statement)
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23502"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == table
+        refused.serverErrorMessage.column == column
+        contentsOf(table) == beforeContents
+        contentsOf("stored_files") == beforeMetadata
+
+        where:
+        [table, column, statement] << V15Cases.NOT_NULL_CASES.collect { [it.table, it.column, it.statement] }
+    }
+
+    def "empty file content is kept with zero size and its holder, then rolled back"() {
+        given:
+        def before = ["file_contents", "stored_files", "run_file_holders"].collectEntries { [(it): contentsOf(it)] }
+
+        when:
+        // DB-SPECIFIC: data-modifying WITH, returning and decode() use PostgreSQL's syntax and semantics.
+        def kept = readInside("""
+            with contents as (
+                insert into app.file_contents (file_id, content) values ('${OTHER_FILE}', decode('', 'hex'))
+                returning file_id
+            ), metadata as (
+                insert into app.stored_files (file_id, group_id, original_name, media_type, byte_size)
+                select file_id, '${GROUP}', 'Demo Sample', 'application/pdf', 0 from contents
+                returning file_id
+            )
+            insert into app.run_file_holders (run_id, file_id, group_id)
+            select '${RUN}', file_id, '${GROUP}' from metadata;
+            set constraints all immediate
+            """,
+                // DB-SPECIFIC: octet_length(bytea) and ::text use PostgreSQL's binary and cast semantics.
+                """select octet_length(content)::text || '|' || byte_size::text || '|' || original_name
+                     from app.file_contents join app.stored_files using (file_id)
+                    where file_id = '${OTHER_FILE}'
+                      and exists (select 1 from app.run_file_holders
+                                   where run_id = '${RUN}' and file_id = '${OTHER_FILE}')""")
+
+        then:
+        kept == "0|0|Demo Sample"
+        before.every { table, contents -> contentsOf(table) == contents }
+        session.autoCommit
+    }
+
+    def "every required search accounting and price column has one actual null insert rejection case"() {
+        when:
+        // DB-SPECIFIC: pg_attribute, pg_class and ::regnamespace use PostgreSQL's catalogue and namespace lookup.
+        def required = queryForStrings("""
+            select c.relname || '.' || a.attname
+              from pg_attribute a join pg_class c on c.oid = a.attrelid
+             where c.relnamespace = 'app'::regnamespace
+               and c.relname in ('model_call_tool_uses', 'model_call_tool_prices')
+               and a.attnum > 0 and not a.attisdropped and a.attnotnull
+            """)
+        def registered = SEARCH_NOT_NULL_CASES.collect { "${it.table}.${it.column}" }
+
+        then:
+        !required.isEmpty()
+        !registered.isEmpty()
+        registered.toSet() == required
+        registered.size() == required.size()
+        registered.toSet().size() == registered.size()
+        SEARCH_NOT_NULL_CASES.collect { it.table }.toSet() ==
+                ["model_call_tool_uses", "model_call_tool_prices"].toSet()
+    }
+
+    def "search accounting or price refuses null in #table.#column on insert without changing the table"() {
+        given:
+        def before = contentsOf(table)
+
+        when:
+        execute(statement)
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23502"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == table
+        refused.serverErrorMessage.column == column
+        contentsOf(table) == before
+
+        where:
+        [table, column, statement] << SEARCH_NOT_NULL_CASES.collect { [it.table, it.column, it.statement] }
+    }
+
+    def "search accounting or price refuses null in #column on update without changing the table"() {
+        given:
+        def before = contentsOf(table)
+        assert queryForStrings("select model_call_id from app.${table} where ${row}").size() == 1
+
+        when:
+        execute("update app.${table} set ${column} = null where ${row}")
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23502"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == table
+        refused.serverErrorMessage.column == column
+        contentsOf(table) == before
+
+        where:
+        table                    | column      | row
+        "model_call_tool_uses"    | "most_uses" | "model_call_id = '${SEARCH_CALL}'"
+        "model_call_tool_prices"  | "per_use"   | "model_call_id = '${SEARCH_CALL}' and currency = 'USD'"
+    }
+
+    def "search accounting and price keep a nonnull amount on #operation and roll it back"() {
+        given:
+        def before = contentsOf(table)
+
+        when:
+        def kept = readInside(statement + "; set constraints all immediate", query)
+
+        then:
+        kept == expected
+        contentsOf(table) == before
+        session.autoCommit
+
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        where:
+        table                    | operation | statement                                                                                           | query                                                                                                                             || expected
+        "model_call_tool_uses"    | "insert"  | WITH_PENDING_TOOL_USE                                                                               | "select most_uses::text from app.model_call_tool_uses where model_call_id = '${SPARE_CALL}'"                                         || "5"
+        "model_call_tool_uses"    | "update"  | "update app.model_call_tool_uses set most_uses = 7 where model_call_id = '${SEARCH_CALL}'"            | "select most_uses::text from app.model_call_tool_uses where model_call_id = '${SEARCH_CALL}'"                                        || "7"
+        "model_call_tool_prices"  | "insert"  | insertInto("model_call_tool_prices", A_TOOL_PRICE)                                                    | "select per_use::text from app.model_call_tool_prices where model_call_id = '${SEARCH_CALL}' and currency = 'EUR'"                    || "0.0040"
+        "model_call_tool_prices"  | "update"  | "update app.model_call_tool_prices set per_use = 0.0040 where model_call_id = '${SEARCH_CALL}' and currency = 'USD'" | "select per_use::text from app.model_call_tool_prices where model_call_id = '${SEARCH_CALL}' and currency = 'USD'"        || "0.0040"
+    }
+
+    def "a search refuses confidence-dependent standing in #column without changing any step"() {
+        given:
+        def before = contentsOf("workflow_steps")
+        assert queryForStrings("select kind from app.workflow_steps where workflow_step_id = '${SEARCH_STEP}'") ==
+                ["search"].toSet()
+
+        when:
+        execute("update app.workflow_steps set ${column} = 'above_confidence' where workflow_step_id = '${SEARCH_STEP}'")
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23514"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == "workflow_steps"
+        refused.serverErrorMessage.constraint == "workflow_steps_search_standing_without_confidence"
+        contentsOf("workflow_steps") == before
+
+        where:
+        column << ["search_title_standing", "search_body_standing", "search_references_standing", "search_other_standing"]
+    }
+
+    def "a search keeps #standing standing in #column and rolls the change back"() {
+        given:
+        def before = contentsOf("workflow_steps")
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def kept = readInside("update app.workflow_steps set ${column} = ${standing} where workflow_step_id = '${SEARCH_STEP}'",
+                "select coalesce(${column}::text, 'null') from app.workflow_steps where workflow_step_id = '${SEARCH_STEP}'")
+
+        then:
+        kept == standing.replace("'", "")
+        contentsOf("workflow_steps") == before
+        session.autoCommit
+
+        where:
+        [column, standing] << [
+            ["search_title_standing", "search_body_standing", "search_references_standing", "search_other_standing"],
+            ["'always'", "'never'", "null"],
+        ].combinations()
+    }
+
+    def "a nonsearch step refuses nonnull #column without changing any step"() {
+        given:
+        def before = contentsOf("workflow_steps")
+        assert queryForStrings("select kind from app.workflow_steps where workflow_step_id = '${STEP}'") ==
+                ["entry"].toSet()
+
+        when:
+        execute("update app.workflow_steps set ${column} = ${value} where workflow_step_id = '${STEP}'")
+
+        then:
+        def refused = thrown(PSQLException)
+        refused.getSQLState() == "23514"
+        refused.serverErrorMessage.schema == "app"
+        refused.serverErrorMessage.table == "workflow_steps"
+        refused.serverErrorMessage.constraint == "workflow_steps_search_only_for_search"
+        contentsOf("workflow_steps") == before
+
+        where:
+        column                       | value
+        "search_way"                 | "'web'"
+        "search_title_standing"       | "'always'"
+        "search_body_standing"        | "'always'"
+        "search_references_standing"  | "'always'"
+        "search_other_standing"       | "'always'"
+    }
+
+    def "only a step that calls a model may be held by a code source in its own tree"() {
+        when:
+        def refusedBy = attempt("run_step_holds", first + insertInto("run_step_holds", row))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        first            | row                                                                                         || refusal
+        ""               | A_SOURCE_HOLD                                                                               || null
+        REACH_SOURCE     | A_LATER_SOURCE_HOLD                                                                         || null
+        RELEASE_QUESTION + REACH_SOURCE | A_LATER_SOURCE_HOLD + [run_step_id: literal(RUN_STEP), run_step_kind: "'question'"] || null
+        ""               | A_CURRENT_CODE_HOLD                                                                         || null
+        ""               | A_CURRENT_CODE_HOLD + [root_run_id: literal(CODE_RUN), source_run_id: literal(CODE_RUN),
+                                             source_run_step_id: literal(CODE_RUN_STEP), source_workflow_step_id: literal(SUB_STEP)] || "run_step_holds_source_only_for_code_step_not_held"
+        ""               | A_LATER_SOURCE_HOLD + [source_run_id: literal(RUN), source_run_step_id: literal(RUN_STEP),
+                                      source_workflow_step_id: literal(STEP)]                                               || "run_step_holds_source_step_fk"
+    }
+
+    def "search rows hold a question, its tool accounting, and the values read into it"() {
+        when:
+        def refusedBy = attempt(table, statement)
+
+        then:
+        refusedBy == null
+
+        where:
+        table                    | statement
+        "run_step_holds"         | insertInto("run_step_holds", A_SEARCH_HOLD)
+        "run_step_failures"      | insertInto("run_step_failures", A_SEARCH_FAILURE)
+        "run_step_send_attempts" | insertInto("run_step_send_attempts", A_SEARCH_ATTEMPT)
+        "run_step_send_attempts" | insertInto("run_step_send_attempts", A_SEARCH_ATTEMPT +
+                [payload: "null", search_question: "null", repeats_attempt_id: literal(SEARCH_ATTEMPT)])
+        "model_call_tool_uses"  | WITH_PENDING_TOOL_USE
+        "model_call_tool_prices"| insertInto("model_call_tool_prices", A_TOOL_PRICE)
+        "model_call_searches"   | insertInto("model_call_searches", A_SEARCH_RECORD)
+        "production_values"    | insertInto("production_values", A_SEARCH_VALUE)
+        "production_inputs"    | insertInto("production_inputs", A_SEARCH_USE + FROM_NO_VALUE +
+                [search_question_part_id: "(select search_question_part_id from app.search_question_parts" +
+                        " where workflow_step_id = '${SEARCH_STEP}' and position = 2)"])
+    }
+
+    def "tool prices keep their written scale and refuse nonfinite or negative amounts"() {
+        when:
+        def refusedBy = attempt("model_call_tool_prices", insertInto("model_call_tool_prices",
+                A_TOOL_PRICE + [per_use: amount]))
+
+        then:
+        refusedBy == refusal
+        // DB-SPECIFIC: ::, 'Infinity', numeric, '-Infinity' and 'NaN' use PostgreSQL's syntax and semantics.
+
+        where:
+        amount               || refusal
+        "0"                  || null
+        "0.0040"             || null
+        "-0.01"              || "model_call_tool_prices_per_use_not_negative_and_finite"
+        "'Infinity'::numeric" || "model_call_tool_prices_per_use_not_negative_and_finite"
+        "'-Infinity'::numeric"|| "model_call_tool_prices_per_use_not_negative_and_finite"
+        "'NaN'::numeric"      || "model_call_tool_prices_per_use_not_negative_and_finite"
+    }
+
+    def "tool price keeps the decimal places given at send time"() {
+        expect:
+        readInside(insertInto("model_call_tool_prices", A_TOOL_PRICE),
+                // DB-SPECIFIC: :: and text use PostgreSQL's syntax and semantics.
+                "select per_use::text from app.model_call_tool_prices" +
+                        " where model_call_id = '${SEARCH_CALL}' and currency = 'EUR'") == "0.0040"
+    }
+
     def "a membership closes with its time, who closed it and how, all three or none of them"() {
         when:
         def refusedBy = attempt("group_members",
@@ -355,6 +735,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         assignments                                                               || refusal
@@ -366,6 +747,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "a role once closed may be held again"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("group_members",
                 "update app.group_members set removed_at = now(), removed_by = '${STEWARD}', removal = 'role_taken'" +
                         " where group_member_id = '${HOLDING}';" +
@@ -399,6 +781,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
 
         where:
         nameAsWritten                  || refusal
@@ -457,6 +840,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "a version opens at revision one when none is named"() {
         when:
+        // DB-SPECIFIC: :: and text use PostgreSQL's syntax and semantics.
         def stored = readInside(OPEN_A_LIST_VERSION, "select revision::text || '|' || count(*) over ()" +
                 " from app.entry_versions where entry_id = '${LIST_ENTRY}' and number = 3")
 
@@ -482,6 +866,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "the seeder approves only a version it opened, and a person never one they opened"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("entry_versions", "insert into app.entry_versions" +
                 " (entry_id, entry_kind, number, created_by, approved_at, approved_by, approved_by_kind)" +
                 " values ('${ENTRY}', 'question', 3, '${opener}', now(), '${approver}', '${kind}')")
@@ -500,12 +885,14 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "the seeder approves a version only as it opens it"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("entry_versions", "insert into app.entry_versions" +
                 " (entry_id, entry_kind, number, created_at, created_by, approved_at, approved_by, approved_by_kind)" +
                 " values ('${ENTRY}', 'question', 3, ${openedAt}, '${SEEDER}', now(), '${SEEDER}', 'seeder')")
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: interval literals and now() use PostgreSQL's syntax and semantics.
 
         where:
         openedAt                   || refusal
@@ -515,6 +902,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "the seeder retires only a version it opened, and only as it opens it"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("entry_versions", "insert into app.entry_versions (entry_id, entry_kind, number," +
                 " created_at, created_by, approved_at, approved_by, approved_by_kind, retired_at, retired_by, retired_by_kind)" +
                 " values ('${ENTRY}', 'question', 3, ${openedAt}, '${opener}', now(), '${approver}', '${approverKind}'," +
@@ -522,6 +910,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: interval literals and now() use PostgreSQL's syntax and semantics.
 
         where:
         opener  | openedAt                   | approver | approverKind || refusal
@@ -537,6 +926,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
 
         where:
         retiredAt                                || refusal
@@ -569,6 +959,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "an entry whose stop was let go may be stopped again"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("entry_stops",
                 "update app.entry_stops set let_go_at = now(), let_go_by = '${STEWARD}' where entry_stop_id = '${STOP}';" +
                         " insert into app.entry_stops (entry_id, created_by) values ('${ENTRY}', '${STEWARD}')")
@@ -579,6 +970,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "every code step is named in lower-case English letters, digits and underscores, starting with a letter"() {
         when:
+        // DB-SPECIFIC: ::, pg_enum and regtype use PostgreSQL's syntax and semantics.
         def labels = queryForStrings("select enumlabel from pg_enum where enumtypid = 'app.code_step'::regtype")
 
         then:
@@ -945,6 +1337,24 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "text"   | "false" | null      | null      | LIST_VERSION || "declaration_fields_term_list_only_for_term"
     }
 
+    def "text says whether it holds one line or several, while old rows keep no choice and other kinds carry none"() {
+        when:
+        def refusedBy = attempt("declaration_fields", insertInto("declaration_fields", A_FIELD + [
+                kind: literal(kind), text_limit: kind == "text" ? "100" : "null", text_lines: literal(lines)]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        kind     | lines     || refusal
+        "text"   | "one"     || null
+        "text"   | "several" || null
+        "text"   | null      || null
+        "text"   | "later"   || "declaration_fields_text_lines_known"
+        "number" | null      || null
+        "number" | "one"     || "declaration_fields_text_lines_only_for_text"
+    }
+
     def "every field, taken or given back, at every level, says whether it must be given"() {
         when:
         def refusedBy = attempt("declaration_fields", insertInto("declaration_fields", A_FIELD + [
@@ -1068,6 +1478,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: to_jsonb(), jsonb_build_object(), jsonb_agg(), repeat(), chr() and generate_series() use PostgreSQL's syntax and semantics.
 
         where:
         constant                                                           || refusal
@@ -1076,6 +1487,70 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "to_jsonb(repeat('a', 1048575))"                                   || "bindings_constant_bounded"
         "jsonb_build_object(repeat('k', 1100000), 1)"                      || "bindings_constant_bounded"
         "(select jsonb_agg(12345) from generate_series(1, 200000))"        || "bindings_constant_bounded"
+    }
+
+    def "a searching step's question part is written text, or reads this workflow's input or another step"() {
+        when:
+        def refusedBy = attempt("search_question_parts", insertInto("search_question_parts", A_SEARCH_PART + [
+                literal_text: literal(text), source_step_id: literal(sourceStep), source_path: literal(sourcePath)]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        text  | sourceStep  | sourcePath  || refusal
+        "and" | null        | null        || null
+        null  | null        | "complaint" || null
+        null  | STEP        | "details"   || null
+        null  | null        | null        || "search_question_parts_exactly_one_source"
+        "and" | null        | "complaint" || "search_question_parts_exactly_one_source"
+        "and" | STEP        | null        || "search_question_parts_exactly_one_source"
+        "and" | STEP        | "details"   || "search_question_parts_exactly_one_source"
+        null  | STEP        | null        || "search_question_parts_exactly_one_source"
+        null  | SEARCH_STEP | "details"   || "search_question_parts_not_from_itself"
+    }
+
+    def "written text in a searching step's question is prose that is not empty, up to the length of one piece"() {
+        when:
+        def refusedBy = attempt("search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [literal_text: text]))
+
+        then:
+        refusedBy == refusal
+        // DB-SPECIFIC: chr() and repeat() use PostgreSQL's syntax and semantics.
+
+        where:
+        text                              || refusal
+        "' '"                             || null
+        "chr(9)"                          || null
+        "'a' || chr(10) || chr(9) || 'b'" || null
+        "'a' || chr(8238) || 'b'"         || null
+        "'a' || chr(160) || 'b'"          || null
+        "repeat('a', 8192)"            || null
+        "''"                              || "search_question_parts_literal_visible"
+        "'a' || chr(8) || 'b'"            || "search_question_parts_literal_visible"
+        "'a' || chr(11) || 'b'"           || "search_question_parts_literal_visible"
+        "'a' || chr(13) || 'b'"           || "search_question_parts_literal_visible"
+        "'a' || chr(127) || 'b'"          || "search_question_parts_literal_visible"
+        "'a' || chr(133) || 'b'"          || "search_question_parts_literal_visible"
+        "'a' || chr(159) || 'b'"          || "search_question_parts_literal_visible"
+        "repeat('a', 8193)"            || "search_question_parts_literal_bounded"
+    }
+
+    def "a searching step's question holds its parts at places from 0 to 255"() {
+        when:
+        def refusedBy = attempt("search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [position: position]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        position || refusal
+        "3"      || null
+        "255"    || null
+        "-1"     || "search_question_parts_position_not_negative"
+        "256"    || "search_question_parts_position_bounded"
     }
 
     def "a group key and the key a code step is published to are two to sixteen capital English letters"() {
@@ -1089,12 +1564,23 @@ class SchemaConstraintIntegrationSpec extends Specification {
         [table, statement, rule, key, holds] << [GROUP_KEYED, GROUP_KEYS].combinations().collect { it.flatten() }
     }
 
+    def "an optional question drawing keeps its Markdown text without changing its instruction"() {
+        expect:
+        readInside(setting("question_versions", "drawing = '## {{complaint}}'"),
+                "select drawing || '|' || instruction from app.question_versions where entry_version_id = '${VERSION}'") ==
+                "## {{complaint}}|Say which category the complaint falls under."
+        readInside(setting("question_versions", "drawing = null"),
+                "select coalesce(drawing, 'absent') from app.question_versions where entry_version_id = '${VERSION}'") ==
+                "absent"
+    }
+
     def "text is held to its length"() {
         when:
         def refusedBy = attempt(table, setting(table, assignment))
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
 
         where:
         table                     | assignment                        || refusal
@@ -1104,6 +1590,8 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "question_versions"       | "instruction = repeat('a', 8192)" || null
         "question_versions"       | "instruction = null"              || null
         "question_versions"       | "instruction = ''"                || "question_versions_instruction_visible"
+        "question_versions"       | "drawing = repeat('a', 8192)"     || null
+        "question_versions"       | "drawing = ''"                    || "question_versions_drawing_visible"
         "reference_list_terms"    | "term = repeat('a', 128)"         || null
         "reference_list_terms"    | "term = ''"                       || "reference_list_terms_term_visible"
         "reference_list_terms"    | "meaning = repeat('a', 512)"      || null
@@ -1138,12 +1626,15 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
 
         where:
         table                     | assignment                                      || refusal
         "reference_list_versions" | "note = 'a' || chr(9) || chr(10) || 'b'"        || null
         "reference_list_versions" | "note = 'a' || chr(133) || 'b'"                 || "reference_list_versions_note_visible"
         "question_versions"       | "instruction = 'a' || chr(10) || chr(9) || 'b'" || null
+        "question_versions"       | "drawing = 'a' || chr(10) || chr(9) || 'b'"     || null
+        "question_versions"       | "drawing = 'a' || chr(13) || 'b'"             || "question_versions_drawing_visible"
         "question_versions"       | "instruction = 'a' || chr(8) || 'b'"            || "question_versions_instruction_visible"
         "question_versions"       | "instruction = 'a' || chr(11) || 'b'"           || "question_versions_instruction_visible"
         "reference_list_terms"    | "meaning = 'a' || chr(9) || 'b'"                || "reference_list_terms_meaning_visible"
@@ -1350,6 +1841,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "only a run at the top is renamed"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("runs", "update app.runs set name = ${literal(name)}, updated_at = now()," +
                 " updated_by = '${STEWARD}' where run_id = '${run}'")
 
@@ -1369,6 +1861,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: jsonb_build_object(), repeat() and chr() use PostgreSQL's syntax and semantics.
 
         where:
         run     | startedWith                                                          || refusal
@@ -1462,12 +1955,13 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         where:
         step  | kind    | pinned  | pinnedKind | producer | reviewed | tries || refusal
-        STEP  | "entry" | VERSION | "question" | "model"  | "false"  | 3     || null
-        ROUTE | "route" | null    | null       | null     | "false"  | null  || null
+        STEP        | "entry"  | VERSION | "question" | "model"  | "false"  | 3     || null
+        SEARCH_STEP | "search" | null    | null       | "model"  | "true"   | 3     || null
+        ROUTE       | "route"  | null    | null       | null     | "false"  | null  || null
         STEP  | "entry" | VERSION | "question" | "person" | "false"  | 3     || "run_steps_producer_fk"
         STEP  | "entry" | VERSION | "question" | "model"  | "true"   | 3     || "run_steps_producer_fk"
-        STEP  | "entry" | VERSION | "question" | null     | "false"  | null  || "run_steps_producer_exactly_for_question_or_code_step"
-        ROUTE | "route" | null    | null       | "model"  | "false"  | 3     || "run_steps_producer_exactly_for_question_or_code_step"
+        STEP  | "entry" | VERSION | "question" | null     | "false"  | null  || "run_steps_producer_exactly_for_a_producing_step"
+        ROUTE | "route" | null    | null       | "model"  | "false"  | 3     || "run_steps_producer_exactly_for_a_producing_step"
     }
 
     def "a step run carries how many tries its step declares, as the step says"() {
@@ -1591,9 +2085,9 @@ class SchemaConstraintIntegrationSpec extends Specification {
         where:
         first             | step              | run     | kind        | calls   || refusal
         RUN_THE_CODE_STEP | SPARE_RUN_STEP    | SUB_RUN | "code_step" | "false" || null
-        RELEASE_THE_HOLD  | RUN_STEP          | RUN     | "question"  | "true"  || "run_step_holds_code_step_not_held_only_for_code_step"
-        ""                | ESCALATE_RUN_STEP | RUN     | "workflow"  | "false" || "run_step_holds_code_step_not_held_only_for_code_step"
-        ""                | ROUTE_RUN_STEP    | RUN     | "route"     | "false" || "run_step_holds_code_step_not_held_only_for_code_step"
+        RELEASE_THE_HOLD  | RUN_STEP          | RUN     | "question"  | "true"  || "run_step_holds_code_step_not_held_for_current_or_source_code"
+        ""                | ESCALATE_RUN_STEP | RUN     | "workflow"  | "false" || "run_step_holds_code_step_not_held_for_current_or_source_code"
+        ""                | ROUTE_RUN_STEP    | RUN     | "route"     | "false" || "run_step_holds_code_step_not_held_for_current_or_source_code"
     }
 
     def "a step is held back on length or on being turned away naming the attempt that was, and on nothing else naming one"() {
@@ -1652,9 +2146,9 @@ class SchemaConstraintIntegrationSpec extends Specification {
         ""                | RUN_STEP               | RUN      | "question"  | "true"  | "uncuttable_length"  | PRODUCTION       | "produce" || null
         ""                | RUN_STEP               | RUN      | "question"  | "true"  | "model_not_deployed" | PRODUCTION       | "produce" || null
         ""                | REVIEWED_CODE_RUN_STEP | CODE_RUN | "code_step" | "true"  | "model_not_deployed" | CLOSED           | "review"  || null
-        TRY_THE_CODE_STEP | SPARE_RUN_STEP         | SUB_RUN  | "code_step" | "false" | "model_not_deployed" | SPARE_PRODUCTION | "review"  || "run_step_failures_length_or_undeployed_only_for_calls_a_model"
-        ""                | ROUTE_RUN_STEP         | RUN      | "route"     | "false" | "model_not_deployed" | PRODUCTION       | "produce" || "run_step_failures_length_or_undeployed_only_for_calls_a_model"
-        ""                | ESCALATE_RUN_STEP      | RUN      | "workflow"  | "false" | "uncuttable_length"  | PRODUCTION       | "produce" || "run_step_failures_length_or_undeployed_only_for_calls_a_model"
+        TRY_THE_CODE_STEP | SPARE_RUN_STEP         | SUB_RUN  | "code_step" | "false" | "model_not_deployed" | SPARE_PRODUCTION | "review"  || "run_step_failures_sending_failure_only_for_calls_a_model"
+        ""                | ROUTE_RUN_STEP         | RUN      | "route"     | "false" | "model_not_deployed" | PRODUCTION       | "produce" || "run_step_failures_sending_failure_only_for_calls_a_model"
+        ""                | ESCALATE_RUN_STEP      | RUN      | "workflow"  | "false" | "uncuttable_length"  | PRODUCTION       | "produce" || "run_step_failures_sending_failure_only_for_calls_a_model"
     }
 
     /**
@@ -1676,9 +2170,9 @@ class SchemaConstraintIntegrationSpec extends Specification {
         RUN_STEP               | RUN      | "question"  | "true"  | "uncuttable_length"  | PRODUCTION      | "produce" || null
         REVIEWED_RUN_STEP      | RUN      | "question"  | "true"  | "model_not_deployed" | REVIEWED_ANSWER | "review"  || null
         ROUTE_RUN_STEP         | RUN      | "route"     | "false" | "unclaimed_value"    | null            | null      || null
-        RUN_STEP               | RUN      | "question"  | "true"  | "model_not_deployed" | null            | null      || "run_step_failures_production_exactly_for_length_or_undeployed"
-        RUN_STEP               | RUN      | "question"  | "true"  | "uncuttable_length"  | null            | null      || "run_step_failures_production_exactly_for_length_or_undeployed"
-        ROUTE_RUN_STEP         | RUN      | "route"     | "false" | "unclaimed_value"    | PRODUCTION      | "produce" || "run_step_failures_production_exactly_for_length_or_undeployed"
+        RUN_STEP               | RUN      | "question"  | "true"  | "model_not_deployed" | null            | null      || "run_step_failures_production_exactly_for_a_sending_failure"
+        RUN_STEP               | RUN      | "question"  | "true"  | "uncuttable_length"  | null            | null      || "run_step_failures_production_exactly_for_a_sending_failure"
+        ROUTE_RUN_STEP         | RUN      | "route"     | "false" | "unclaimed_value"    | PRODUCTION      | "produce" || "run_step_failures_production_exactly_for_a_sending_failure"
         RUN_STEP               | RUN      | "question"  | "true"  | "model_not_deployed" | PRODUCTION      | null      || "run_step_failures_purpose_together"
         RUN_STEP               | RUN      | "question"  | "true"  | "model_not_deployed" | PRODUCTION      | "help"    || "run_step_failures_purpose_is_produce_or_review"
         REVIEWED_RUN_STEP      | RUN      | "question"  | "true"  | "uncuttable_length"  | REVIEWED_ANSWER | "review"  || "run_step_failures_uncuttable_length_only_for_produce"
@@ -1705,7 +2199,44 @@ class SchemaConstraintIntegrationSpec extends Specification {
         ESCALATE_RUN_STEP | "workflow" | "false" || "run_step_failures_unclaimed_value_only_for_route"
     }
 
-    def "only a question or a code step is tried sending, and a code step only for a model to review"() {
+    def "a step fails too deep only where it would start a run beneath, and says nothing more"() {
+        when:
+        def refusedBy = attempt("run_step_failures", insertInto("run_step_failures", A_FAILURE + [
+                run_step_id: literal(step), run_id: literal(RUN), run_step_kind: literal(kind), calls_a_model: calls,
+                reason: "'too_deep'", production_id: "null", purpose: "null", detail: detail]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        step              | kind       | calls   | detail  || refusal
+        ROUTE_RUN_STEP    | "route"    | "false" | "null"  || null
+        ESCALATE_RUN_STEP | "workflow" | "false" | "null"  || null
+        RUN_STEP          | "question" | "true"  | "null"  || "run_step_failures_too_deep_only_for_workflow_or_route"
+        ESCALATE_RUN_STEP | "workflow" | "false" | "'Deep'" || "run_step_failures_no_detail_for_too_deep"
+        ROUTE_RUN_STEP    | "route"    | "false" | "'Deep'" || "run_step_failures_no_detail_for_too_deep"
+    }
+
+    /** What a person reads of a failure on a try is written down; a value no case claimed is that value or none. */
+    def "a failure on a try says what went wrong, and a value no case claimed is written as it was or as nothing"() {
+        when:
+        def refusedBy = attempt("run_step_failures", insertInto("run_step_failures", A_FAILURE + [
+                run_step_id: literal(step), run_step_kind: literal(kind), calls_a_model: calls, reason: literal(reason),
+                production_id: literal(production), purpose: literal(purpose), detail: detail]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        step           | kind       | calls   | reason               | production | purpose   | detail || refusal
+        ROUTE_RUN_STEP | "route"    | "false" | "unclaimed_value"    | null       | null      | "'go'" || null
+        ROUTE_RUN_STEP | "route"    | "false" | "unclaimed_value"    | null       | null      | "null" || null
+        RUN_STEP       | "question" | "true"  | "model_not_deployed" | PRODUCTION | "produce" | "'general'" || null
+        RUN_STEP       | "question" | "true"  | "model_not_deployed" | PRODUCTION | "produce" | "null" || "run_step_failures_detail_for_length_or_undeployed"
+        RUN_STEP       | "question" | "true"  | "uncuttable_length"  | PRODUCTION | "produce" | "null" || "run_step_failures_detail_for_length_or_undeployed"
+    }
+
+    def "only a producing step is tried sending, and code is sent only to review"() {
         when:
         def refusedBy = attempt("run_step_send_attempts", insertInto("run_step_send_attempts", A_SEND_ATTEMPT + [
                 run_step_id: literal(step), run_id: literal(run), run_step_kind: literal(kind),
@@ -1718,9 +2249,9 @@ class SchemaConstraintIntegrationSpec extends Specification {
         step                   | run      | kind        | workflowStep  | purpose   | production || refusal
         RUN_STEP               | RUN      | "question"  | STEP          | "produce" | PRODUCTION || null
         REVIEWED_CODE_RUN_STEP | CODE_RUN | "code_step" | REVIEWED_CODE | "review"  | CLOSED     || null
-        REVIEWED_CODE_RUN_STEP | CODE_RUN | "code_step" | REVIEWED_CODE | "produce" | CLOSED     || "run_step_send_attempts_produce_only_for_question"
-        ESCALATE_RUN_STEP      | RUN      | "workflow"  | ESCALATE      | "produce" | PRODUCTION || "run_step_send_attempts_only_for_question_or_code_step"
-        ROUTE_RUN_STEP         | RUN      | "route"     | ROUTE         | "produce" | PRODUCTION || "run_step_send_attempts_only_for_question_or_code_step"
+        REVIEWED_CODE_RUN_STEP | CODE_RUN | "code_step" | REVIEWED_CODE | "produce" | CLOSED     || "run_step_send_attempts_produce_only_for_question_or_search"
+        ESCALATE_RUN_STEP      | RUN      | "workflow"  | ESCALATE      | "produce" | PRODUCTION || "run_step_send_attempts_only_for_a_producing_step"
+        ROUTE_RUN_STEP         | RUN      | "route"     | ROUTE         | "produce" | PRODUCTION || "run_step_send_attempts_only_for_a_producing_step"
     }
 
     def "a run at the top is stopped by a person, or by a system subject naming the run in its tree whose ceiling was reached"() {
@@ -1757,6 +2288,24 @@ class SchemaConstraintIntegrationSpec extends Specification {
         ""                 | RUN       || "run_stops_one_in_force"
         OPEN_THE_RUN_AGAIN | RUN       || null
         ""                 | OTHER_RUN || null
+    }
+
+    def "a stop by the system names further ceilings only of runs in its tree, never the one it names, and a person's stop none"() {
+        when:
+        def refusedBy = attempt("run_stop_additional_ceilings", STOP_BY_THE_SUB_RUNS_CEILING +
+                insertInto("run_stop_additional_ceilings", A_FURTHER_CEILING + [run_stop_id: literal(stop),
+                        stop_ceiling_run_id: literal(named), ceiling_run_id: literal(further)]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        stop             | named   | further   || refusal
+        SUB_CEILING_STOP | SUB_RUN | RUN       || null
+        RUN_STOP         | RUN     | SUB_RUN   || "run_stop_additional_ceilings_stop_fk"
+        SUB_CEILING_STOP | RUN     | SUB_RUN   || "run_stop_additional_ceilings_stop_fk"
+        SUB_CEILING_STOP | SUB_RUN | OTHER_RUN || "run_stop_additional_ceilings_ceiling_run_fk"
+        SUB_CEILING_STOP | SUB_RUN | SUB_RUN   || "run_stop_additional_ceilings_not_the_stops_own"
     }
 
     /** Order comes from the position, which is why two changes to one run never share one. */
@@ -1822,13 +2371,14 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         awaits  | outcome     | decidedAt | decider || refusal
         "true"  | null        | "null"    | null    || null
-        "true"  | "withdrawn" | "now()"   | STEWARD || null
+        "true"  | "withdrawn_by_requester" | "now()"   | STEWARD || null
         "false" | null        | "null"    | null    || null
-        "false" | "withdrawn" | "now()"   | STEWARD || "run_ceiling_changes_outcome_only_for_awaiting"
+        "false" | "withdrawn_by_requester" | "now()"   | STEWARD || "run_ceiling_changes_outcome_only_for_awaiting"
     }
 
     def "a change is decided with its outcome, when and by whom, all three or none of them"() {
@@ -1839,6 +2389,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         outcome    | decidedAt | decider || refusal
@@ -1849,10 +2400,11 @@ class SchemaConstraintIntegrationSpec extends Specification {
         null       | "now()"   | MEMBER  || "run_ceiling_changes_decided_together"
     }
 
-    def "a change is never approved or refused by who asked for it, and may be withdrawn by them"() {
+    def "a change is approved or refused by another, withdrawn by its requester, or superseded by either"() {
         when:
         def refusedBy = attempt("run_ceiling_changes", insertInto("run_ceiling_changes", A_CHANGE + [
                 run_id: literal(OTHER_RUN), to_ceiling: "2000", awaits_approval: "true", outcome: literal(outcome),
+                // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
                 decided_at: "now()", decided_by: literal(decider)]))
 
         then:
@@ -1862,10 +2414,12 @@ class SchemaConstraintIntegrationSpec extends Specification {
         outcome     | decider || refusal
         "approved"  | MEMBER  || null
         "refused"   | MEMBER  || null
-        "withdrawn" | STEWARD || null
-        "withdrawn" | MEMBER  || null
-        "approved"  | STEWARD || "run_ceiling_changes_decider_is_not_requester"
-        "refused"   | STEWARD || "run_ceiling_changes_decider_is_not_requester"
+        "withdrawn_by_requester" | STEWARD || null
+        "superseded_by_change" | STEWARD || null
+        "superseded_by_change" | MEMBER  || null
+        "withdrawn_by_requester" | MEMBER  || "run_ceiling_changes_decider_matches_outcome"
+        "approved"  | STEWARD || "run_ceiling_changes_decider_matches_outcome"
+        "refused"   | STEWARD || "run_ceiling_changes_decider_matches_outcome"
     }
 
     def "a run has one change awaiting at most, and any number decided or never awaiting beside it"() {
@@ -1876,26 +2430,32 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         awaits  | outcome     | decidedAt | decider || refusal
         "true"  | null        | "null"    | null    || "run_ceiling_changes_one_awaiting"
         "true"  | "refused"   | "now()"   | MEMBER  || null
-        "true"  | "withdrawn" | "now()"   | MEMBER  || null
+        "true"  | "withdrawn_by_requester" | "now()"   | STEWARD || null
         "false" | null        | "null"    | null    || null
     }
 
     def "a change once decided lets the next one await"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("run_ceiling_changes", "update app.run_ceiling_changes set outcome = '${outcome}'," +
-                " decided_at = now(), decided_by = '${MEMBER}' where run_ceiling_change_id = '${CHANGE}'; " +
+                " decided_at = now(), decided_by = '${decider}' where run_ceiling_change_id = '${CHANGE}'; " +
                 insertInto("run_ceiling_changes", A_CHANGE + [to_ceiling: "3000", awaits_approval: "true"]))
 
         then:
         refusedBy == null
 
         where:
-        outcome << ["approved", "refused", "withdrawn"]
+        outcome                  | decider
+        "approved"               | MEMBER
+        "refused"                | MEMBER
+        "withdrawn_by_requester" | STEWARD
+        "superseded_by_change"   | MEMBER
     }
 
     def "a step has one unreleased hold at most, and one released lets it be held again"() {
@@ -1906,6 +2466,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         first            | step              | kind       | calls   | releasedAt | releaser        || refusal
@@ -1918,6 +2479,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
     /** What a person does to have a hold released is recorded as their own act, never as the release. */
     def "a hold is released by a system subject and by nobody else"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("run_step_holds", setting("run_step_holds",
                 "released_at = now(), released_by = '${releaser}', released_by_kind = '${kind}'"))
 
@@ -2060,6 +2622,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: chr() and repeat() use PostgreSQL's syntax and semantics.
 
         where:
         payload                                                     || refusal
@@ -2302,6 +2865,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         outcome             | cameBack | answer | detail       | endedAt || refusal
@@ -2317,6 +2881,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "a call says what went wrong only where it went wrong"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("model_calls", insertInto("model_calls", A_HELP_CALL + [outcome: literal(outcome),
                 came_back_count: literal(cameBack), answer: answer, error_detail: literal(detail), ended_at: "now()"]))
 
@@ -2335,6 +2900,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
         when:
         def refusedBy = attempt("model_calls", insertInto("model_calls", A_HELP_CALL + [outcome: literal(outcome),
                 came_back_count: literal(cameBack), answer: answer, error_detail: literal(detail),
+                // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
                 error_detail_truncated: truncated, ended_at: "now()"]))
 
         then:
@@ -2351,6 +2917,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
         when:
         def refusedBy = attempt("model_calls", insertInto("model_calls", A_HELP_CALL + [outcome: literal(outcome),
                 came_back_count: literal(cameBack), answer: answer, error_detail: literal(detail),
+                // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
                 answer_altered: altered, ended_at: "now()"]))
 
         then:
@@ -2364,6 +2931,363 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "nothing_came_back" | null     | "null" | null         | "true"  || "model_calls_answer_altered_only_for_answer"
     }
 
+    def "the stored answer and refusal flags have their declared types, nullability and defaults"() {
+        expect:
+        // DB-SPECIFIC: pg_attribute, pg_attrdef, pg_get_expr() and format_type() expose PostgreSQL's column definitions.
+        // DB-SPECIFIC: ::text and ::regclass use PostgreSQL's cast syntax and relation lookup.
+        queryForStrings("""
+            select a.attname || '|' || format_type(a.atttypid, a.atttypmod) || '|' ||
+                   a.attnotnull::text || '|' || coalesce(pg_get_expr(d.adbin, d.adrelid), 'none')
+              from pg_attribute a
+              left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+             where a.attrelid = 'app.model_calls'::regclass
+               and a.attname in ('answer_truncated', 'declined_words',
+                                'declined_words_altered', 'declined_words_truncated')
+            """) == [
+                "answer_truncated|boolean|true|false",
+                "declined_words|text|false|none",
+                "declined_words_altered|boolean|true|false",
+                "declined_words_truncated|boolean|true|false"
+        ] as Set
+    }
+
+    def "an omitted refusal and an explicit empty refusal stay different while new flags default to false"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(wordsCallStatement(operation, fields), """
+            select (declined_words is null)::text || '|' ||
+                   coalesce(length(declined_words)::text, 'none') || '|' ||
+                   answer_truncated::text || '|' || declined_words_altered::text || '|' ||
+                   declined_words_truncated::text
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == expected
+        contentsOf("model_calls") == before
+
+        where:
+        operation | fields                  || expected
+        "insert"  | [:]                     || "true|none|false|false|false"
+        "insert"  | [declined_words: "''"]   || "false|0|false|false|false"
+        "update"  | [declined_words: "null"] || "true|none|false|false|false"
+        "update"  | [declined_words: "''"]   || "false|0|false|false|false"
+    }
+
+    def "each call outcome keeps the appropriate nullable refusal without tightening its text"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(wordsCallStatement(operation, fields), """
+            select coalesce(outcome::text, 'unfinished') || '|' ||
+                   coalesce(length(declined_words)::text, 'none')
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == expected
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, row] << [
+                ["insert", "update"],
+                [
+                        [fields: [outcome: "null", ended_at: "null", came_back_count: "null", answer: "null"],
+                         expected: "unfinished|none"],
+                        [fields: [outcome: "'nothing_came_back'", came_back_count: "null", answer: "null"],
+                         expected: "nothing_came_back|none"],
+                        [fields: [outcome: "'turned_away'", came_back_count: "null", answer: "null"],
+                         expected: "turned_away|none"],
+                        [fields: [outcome: "'errored'", came_back_count: "null", answer: "null",
+                                  error_detail: "'Demo Sample error'"], expected: "errored|none"],
+                        [fields: [:], expected: "came_back|none"],
+                        [fields: [answer: "''", declined_words: "''"], expected: "came_back|0"],
+                        // DB-SPECIFIC: chr() constructs the character on PostgreSQL's server.
+                        [fields: [answer: "chr(1)", declined_words: "chr(1)"], expected: "came_back|1"]
+                ]
+        ].combinations()
+        fields = row.fields
+        expected = row.expected
+    }
+
+    def "altered text may be short or empty and truncation also declares alteration"() {
+        given:
+        def before = contentsOf("model_calls")
+        def fields = [answer: "''", declined_words: "''", answer_altered: altered,
+                      answer_truncated: truncated, declined_words_altered: altered,
+                      declined_words_truncated: truncated]
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(wordsCallStatement(operation, fields), """
+            select length(answer)::text || '|' || length(declined_words)::text || '|' ||
+                   answer_altered::text || '|' || answer_truncated::text || '|' ||
+                   declined_words_altered::text || '|' || declined_words_truncated::text
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == "0|0|${altered}|${truncated}|${altered}|${truncated}"
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, flags] << [["insert", "update"],
+                               [["false", "false"], ["true", "false"], ["true", "true"]]].combinations()
+        altered = flags[0]
+        truncated = flags[1]
+    }
+
+    def "answer and refusal shape rules reject #operation with the precise rule and leave the table unchanged"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        execute(wordsCallStatement(operation, row.fields))
+
+        then:
+        def failure = thrown(PSQLException)
+        failure.getSQLState() == "23514"
+        failure.serverErrorMessage.schema == "app"
+        failure.serverErrorMessage.table == "model_calls"
+        failure.serverErrorMessage.constraint == row.rule
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, row] << [
+                ["insert", "update"],
+                [
+                        [fields: [answer_truncated: "true"],
+                         rule: "model_calls_answer_truncated_only_for_altered_answer"],
+                        [fields: [outcome: "null", ended_at: "null", came_back_count: "null", answer: "null",
+                                  declined_words: "'Demo Sample'"], rule: "model_calls_declined_words_only_for_came_back"],
+                        [fields: [outcome: "'nothing_came_back'", came_back_count: "null", answer: "null",
+                                  declined_words: "''"], rule: "model_calls_declined_words_only_for_came_back"],
+                        [fields: [outcome: "'turned_away'", came_back_count: "null", answer: "null",
+                                  declined_words: "''"], rule: "model_calls_declined_words_only_for_came_back"],
+                        [fields: [outcome: "'errored'", came_back_count: "null", answer: "null",
+                                  error_detail: "'Demo Sample error'", declined_words: "''"],
+                         rule: "model_calls_declined_words_only_for_came_back"],
+                        [fields: [declined_words_altered: "true"],
+                         rule: "model_calls_declined_words_altered_only_for_declined_words"],
+                        [fields: [declined_words_altered: "true", declined_words_truncated: "true"],
+                         rule: "model_calls_declined_words_altered_only_for_declined_words"],
+                        [fields: [declined_words: "'Demo Sample'", declined_words_truncated: "true"],
+                         rule: "model_calls_declined_words_truncated_only_for_altered_words"],
+                        [fields: [outcome: "null", ended_at: "null", came_back_count: "null", answer: "null",
+                                  answer_altered: "true", answer_truncated: "true"],
+                         rule: "model_calls_answer_altered_only_for_answer"]
+                ]
+        ].combinations()
+    }
+
+    def "new stored text flags reject SQL NULL on #operation at the exact column"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        execute(wordsCallStatement(operation, [(column): "null"]))
+
+        then:
+        def failure = thrown(PSQLException)
+        failure.getSQLState() == "23502"
+        failure.serverErrorMessage.schema == "app"
+        failure.serverErrorMessage.table == "model_calls"
+        failure.serverErrorMessage.column == column
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, column] << [["insert", "update"],
+                               ["answer_truncated", "declined_words_altered", "declined_words_truncated",
+                                "unreadable_response_altered", "unreadable_response_truncated"]].combinations()
+    }
+
+    def "stored answer and refusal bounds count characters rather than UTF8 bytes on #operation"() {
+        given:
+        def before = contentsOf("model_calls")
+        // DB-SPECIFIC: repeat() and chr() build the large Unicode text on PostgreSQL's server.
+        def text = "repeat(chr(${codePoint}), ${characters})"
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(wordsCallStatement(operation, [(column): text]), """
+            select length(${column})::text || '|' || octet_length(${column})::text
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == "${characters}|${characters * (codePoint == 97 ? 1 : 4)}"
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, column, codePoint, characters] << [
+                ["insert", "update"], ["answer", "declined_words"], [97, 128512], [8388607, 8388608]
+        ].combinations()
+    }
+
+    def "stored answer and refusal refuse one character beyond their bound on #operation without residue"() {
+        given:
+        def before = contentsOf("model_calls")
+        // DB-SPECIFIC: repeat() and chr() build the large Unicode text on PostgreSQL's server.
+        def text = "repeat(chr(${codePoint}), 8388609)"
+
+        when:
+        execute(wordsCallStatement(operation, [(column): text]))
+
+        then:
+        def failure = thrown(PSQLException)
+        failure.getSQLState() == "23514"
+        failure.serverErrorMessage.schema == "app"
+        failure.serverErrorMessage.table == "model_calls"
+        failure.serverErrorMessage.constraint == "model_calls_${column}_bounded"
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, column, codePoint] << [
+                ["insert", "update"], ["answer", "declined_words"], [97, 128512]
+        ].combinations()
+    }
+
+    def "unreadable response columns have their declared types, nullability and defaults"() {
+        expect:
+        // DB-SPECIFIC: pg_attribute, pg_attrdef, pg_get_expr() and format_type() expose PostgreSQL's column definitions.
+        // DB-SPECIFIC: ::text and ::regclass use PostgreSQL's cast syntax and relation lookup.
+        queryForStrings("""
+            select a.attname || '|' || format_type(a.atttypid, a.atttypmod) || '|' ||
+                   a.attnotnull::text || '|' || coalesce(pg_get_expr(d.adbin, d.adrelid), 'none')
+              from pg_attribute a
+              left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+             where a.attrelid = 'app.model_calls'::regclass
+               and a.attname in ('unreadable_response', 'unreadable_response_altered', 'unreadable_response_truncated')
+            """) == [
+                "unreadable_response|text|false|none",
+                "unreadable_response_altered|boolean|true|false",
+                "unreadable_response_truncated|boolean|true|false"
+        ] as Set
+    }
+
+    def "unreadable response text stays nullable and preserves empty text and permitted flags on #operation"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(unreadableCallStatement(operation, row.fields), """
+            select coalesce(outcome::text, 'unfinished') || '|' || (unreadable_response is null)::text || '|' ||
+                   coalesce(length(unreadable_response)::text, 'none') || '|' ||
+                   unreadable_response_altered::text || '|' || unreadable_response_truncated::text
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == row.expected
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, row] << [["insert", "update"], [
+                [fields: [:], expected: "errored|true|none|false|false"],
+                [fields: [unreadable_response: "null"], expected: "errored|true|none|false|false"],
+                [fields: [unreadable_response: "''"], expected: "errored|false|0|false|false"],
+                [fields: [unreadable_response: "''", unreadable_response_altered: "true"],
+                 expected: "errored|false|0|true|false"],
+                [fields: [unreadable_response: "''", unreadable_response_altered: "true",
+                          unreadable_response_truncated: "true"], expected: "errored|false|0|true|true"],
+                // DB-SPECIFIC: chr() builds control and replacement characters on PostgreSQL's server.
+                [fields: [unreadable_response: "chr(1) || chr(10) || chr(65533)", unreadable_response_altered: "true"],
+                 expected: "errored|false|3|true|false"],
+                [fields: [outcome: "null", ended_at: "null", error_detail: "null"],
+                 expected: "unfinished|true|none|false|false"],
+                [fields: [outcome: "'came_back'", answer: "'{}'", came_back_count: "300", error_detail: "null"],
+                 expected: "came_back|true|none|false|false"],
+                [fields: [outcome: "'turned_away'", error_detail: "null"],
+                 expected: "turned_away|true|none|false|false"],
+                [fields: [outcome: "'nothing_came_back'", error_detail: "null"],
+                 expected: "nothing_came_back|true|none|false|false"]
+        ]].combinations()
+    }
+
+    def "unreadable response rules reject an invalid row on #operation without residue"() {
+        given:
+        def before = contentsOf("model_calls")
+
+        when:
+        execute(unreadableCallStatement(operation, row.fields))
+
+        then:
+        def failure = thrown(PSQLException)
+        failure.getSQLState() == "23514"
+        failure.serverErrorMessage.schema == "app"
+        failure.serverErrorMessage.table == "model_calls"
+        failure.serverErrorMessage.constraint == row.rule
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, row] << [["insert", "update"], [
+                [fields: [outcome: "null", ended_at: "null", error_detail: "null", unreadable_response: "''"],
+                 rule: "model_calls_unreadable_response_only_for_errored"],
+                [fields: [outcome: "'came_back'", answer: "'{}'", came_back_count: "300", error_detail: "null",
+                          unreadable_response: "''"], rule: "model_calls_unreadable_response_only_for_errored"],
+                [fields: [outcome: "'turned_away'", error_detail: "null", unreadable_response: "''"],
+                 rule: "model_calls_unreadable_response_only_for_errored"],
+                [fields: [outcome: "'nothing_came_back'", error_detail: "null", unreadable_response: "''"],
+                 rule: "model_calls_unreadable_response_only_for_errored"],
+                [fields: [unreadable_response_altered: "true"],
+                 rule: "model_calls_unreadable_response_altered_only_for_response"],
+                [fields: [unreadable_response: "''", unreadable_response_truncated: "true"],
+                 rule: "model_calls_unreadable_response_truncated_only_for_altered"],
+                [fields: [unreadable_response_truncated: "true"],
+                 rule: "model_calls_unreadable_response_truncated_only_for_altered"],
+                [fields: [unreadable_response_altered: "true", unreadable_response_truncated: "true"],
+                 rule: "model_calls_unreadable_response_altered_only_for_response"]
+        ]].combinations()
+    }
+
+    def "unreadable response bounds count characters rather than UTF8 bytes on #operation"() {
+        given:
+        def before = contentsOf("model_calls")
+        // DB-SPECIFIC: repeat() and chr() build the large Unicode text on PostgreSQL's server.
+        def text = "repeat(chr(${codePoint}), ${characters})"
+
+        when:
+        // DB-SPECIFIC: ::text uses PostgreSQL's cast syntax.
+        def read = readInside(unreadableCallStatement(operation, [unreadable_response: text]), """
+            select length(unreadable_response)::text || '|' || octet_length(unreadable_response)::text
+              from app.model_calls where model_call_id = '${wordsCallId(operation)}'
+            """)
+
+        then:
+        read == "${characters}|${characters * (codePoint == 97 ? 1 : 4)}"
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, codePoint, characters] << [["insert", "update"], [97, 128512], [8388607, 8388608]].combinations()
+    }
+
+    def "unreadable response refuses one character beyond its bound on #operation without residue"() {
+        given:
+        def before = contentsOf("model_calls")
+        // DB-SPECIFIC: repeat() and chr() build the large Unicode text on PostgreSQL's server.
+        def text = "repeat(chr(${codePoint}), 8388609)"
+
+        when:
+        execute(unreadableCallStatement(operation, [unreadable_response: text]))
+
+        then:
+        def failure = thrown(PSQLException)
+        failure.getSQLState() == "23514"
+        failure.serverErrorMessage.schema == "app"
+        failure.serverErrorMessage.table == "model_calls"
+        failure.serverErrorMessage.constraint == "model_calls_unreadable_response_bounded"
+        contentsOf("model_calls") == before
+
+        where:
+        [operation, codePoint] << [["insert", "update"], [97, 128512]].combinations()
+    }
+
     def "a call says the model did its counting only where something came back"() {
         when:
         def refusedBy = attempt("model_calls", insertInto("model_calls", A_HELP_CALL + [outcome: literal(outcome),
@@ -2372,6 +3296,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
 
         where:
         outcome             | cameBack | answer | detail       | endedAt | counted || refusal
@@ -2466,6 +3391,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
 
         where:
         turnaway       | resent                                || refusal
@@ -2596,6 +3522,50 @@ class SchemaConstraintIntegrationSpec extends Specification {
         CODE_RUN_STEP | "code"     | true  | "Read it."  || "productions_explanation_exactly_for_ended_by_person"
     }
 
+    def "only an open model production may have no try number"() {
+        when:
+        def refusedBy = attempt("productions", insertInto("productions", aTry(step, producer) + [
+                try_number: "null"] + (ended ? [:] : [ended_at: "null", ended_by: "null", explanation: "null"])))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        step          | producer | ended || refusal
+        RUN_STEP      | "model"  | false || null
+        RUN_STEP      | "person" | false || "productions_try_number_absent_only_for_open_model"
+        RUN_STEP      | "person" | true  || "productions_try_number_absent_only_for_open_model"
+        CODE_RUN_STEP | "code"   | false || "productions_try_number_absent_only_for_open_model"
+        CODE_RUN_STEP | "code"   | true  || "productions_try_number_absent_only_for_open_model"
+    }
+
+    def "a completed model production retains its try number"() {
+        when:
+        def refusedBy = attempt("productions", aModelTryWithItsCall("came_back") + endTheModelTry("came_back", null) +
+                "update app.productions set try_number = null where production_id = '${SPARE_PRODUCTION}'")
+
+        then:
+        refusedBy == "productions_try_number_absent_only_for_open_model"
+    }
+
+    def "an unnumbered model production prevents another production from taking its place"() {
+        given:
+        def pending = insertInto("productions", aTry(RUN_STEP, "model") + [try_number: "null"]) + "; "
+
+        when:
+        def refusedBy = attempt("productions", pending + insertInto("productions", aTry(RUN_STEP, producer) + [
+                try_number: numbered ? "3" : "null", ended_at: "null", ended_by: "null", explanation: "null"]))
+
+        then:
+        refusedBy == "productions_one_unended"
+
+        where:
+        producer | numbered
+        "model"  | false
+        "model"  | true
+        "person" | true
+    }
+
     def "a step has one try waiting at most, whoever produces it, and one answered lets the next wait"() {
         when:
         def refusedBy = attempt("productions", first + insertInto("productions", aTry(step, producer) + [
@@ -2635,6 +3605,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "a model's try whose answer is not kept as it came back ends as one that did not fit"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("productions", aModelTryWithItsCall("came_back") +
                 "update app.model_calls set answer_altered = ${altered} where model_call_id = '${SPARE_CALL}'; " +
                 "update app.productions set ended_at = now(), ended_by = '${WORKFLOW_RUNNER}'," +
@@ -2669,7 +3640,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
         where:
         step          | producer | ended | lost                | detail      | returned | reason          || refusal
         CODE_RUN_STEP | "code"   | true  | "errored"           | "It broke." | null     | null            || null
-        CODE_RUN_STEP | "code"   | true  | "errored"           | "It broke." | "{}"     | null            || null
+        CODE_RUN_STEP | "code"   | true  | "errored"           | "It broke." | "{}"     | null            || "productions_returned_by_code_only_for_code_errored"
         CODE_RUN_STEP | "code"   | true  | "nothing_came_back" | null        | null     | null            || null
         CODE_RUN_STEP | "code"   | true  | "did_not_fit"       | null        | "{}"     | null            || "productions_did_not_fit_only_for_model"
         CODE_RUN_STEP | "code"   | true  | "errored"           | "It broke." | null     | "not_the_shape" || "productions_did_not_fit_reason_exactly_for_model_did_not_fit"
@@ -2699,7 +3670,11 @@ class SchemaConstraintIntegrationSpec extends Specification {
         when:
         def refusedBy = attempt("productions", insertInto("productions", aTry(CODE_RUN_STEP, "code") + [
                 lost_reason: "'errored'",
-                lost_detail: detailCount == null ? "'It broke.'" : "repeat(chr(128512), ${detailCount})",
+                // DB-SPECIFIC: repeat() and chr() use PostgreSQL's syntax and semantics.
+                lost_detail: returnedCount == null ? "repeat(chr(128512), ${detailCount})" : "null",
+                code_error_reason: returnedCount == null ? "null" : "'too_long'",
+                code_error_path: returnedCount == null ? "null" : "'receipt'",
+                // DB-SPECIFIC: repeat() and chr() use PostgreSQL's syntax and semantics.
                 returned_by_code: returnedCount == null ? "null" : "repeat(chr(128512), ${returnedCount})"]))
 
         then:
@@ -2737,7 +3712,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         where:
         lost                | detail      | returned            || refusal
-        "errored"           | "It broke." | "{\"total\": 9999}" || null
+        "errored"           | "It broke." | "{\"total\": 9999}" || "productions_returned_by_code_only_for_code_errored"
         "errored"           | "It broke." | null                || null
         "nothing_came_back" | null        | "{\"total\": 9999}" || "productions_returned_by_code_only_for_code_errored"
         null                | null        | "{\"total\": 9999}" || "productions_returned_by_code_only_for_code_errored"
@@ -2782,6 +3757,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "every reason code goes wrong for is about a field, about none, or about a member either way"() {
         expect:
+        // DB-SPECIFIC: unnest(), ::, enum_range() and text use PostgreSQL's syntax and semantics.
         queryForStrings("select unnest(enum_range(null::app.code_error_reason))::text") ==
                 (ABOUT_A_FIELD + ABOUT_NO_FIELD + ["not_declared"]) as Set
 
@@ -2866,6 +3842,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == (held ? null : bound)
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
 
         where:
         [column, bound, written, held] << [PATHS_IN_PRODUCTIONS.collect { [it[0], it[2]] },
@@ -2874,25 +3851,50 @@ class SchemaConstraintIntegrationSpec extends Specification {
     }
 
     /** The store holds the line to no control, a tab and a line feed among them; the rest one line refuses, cleaning takes out. */
-    def "a member's name holds no control character, and at most 64 characters and the one marking a cut"() {
+    def "a member's name holds no control character, and at most 64 characters"() {
         when:
         def refusedBy = attempt("productions", insertInto("productions", A_CODE_FAULT + [
                 code_error_reason: "'not_declared'", code_error_member: member]))
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: repeat() and chr() use PostgreSQL's syntax and semantics.
 
         where:
         member                             || refusal
-        "repeat('a', 64) || chr(8230)"     || null
-        "repeat(chr(128512), 65)"          || null
+        "repeat('a', 64)"                  || null
+        "repeat(chr(128512), 64)"          || null
+        "repeat('a', 63) || chr(8230)"     || null
         "'a' || chr(8203) || 'b'"          || null
         "'a b'"                            || null
-        "repeat('a', 66)"                  || "productions_code_error_member_bounded"
+        "repeat('a', 65)"                  || "productions_code_error_member_bounded"
+        "repeat(chr(128512), 65)"          || "productions_code_error_member_bounded"
         "'a' || chr(9) || 'b'"             || "productions_code_error_member_one_line"
         "'a' || chr(10) || 'b'"            || "productions_code_error_member_one_line"
         "'a' || chr(127) || 'b'"           || "productions_code_error_member_one_line"
         "'a' || chr(133) || 'b'"           || "productions_code_error_member_one_line"
+    }
+
+    /** Counted as the store counts characters, a character outside the basic plane being one. */
+    def "a member's name is said to be cut only where one is named, and only at 64 characters"() {
+        when:
+        def refusedBy = attempt("productions", insertInto("productions", A_CODE_FAULT + [
+                code_error_reason: literal(reason), code_error_path: literal(path), code_error_member: member,
+                code_error_member_truncated: truncated]))
+
+        then:
+        refusedBy == refusal
+        // DB-SPECIFIC: repeat() and chr() use PostgreSQL's syntax and semantics.
+
+        where:
+        reason         | path      | member                    | truncated || refusal
+        "not_declared" | null      | "repeat('a', 64)"         | "true"    || null
+        "not_declared" | null      | "repeat(chr(128512), 64)" | "true"    || null
+        "not_declared" | null      | "repeat('a', 64)"         | "false"   || null
+        "not_declared" | null      | "repeat('a', 63)"         | "true"    || "productions_code_error_member_truncated_at_bound"
+        "not_declared" | null      | "''"                      | "true"    || "productions_code_error_member_truncated_at_bound"
+        "too_long"     | "receipt" | "null"                    | "true"    || "productions_truncated_only_for_code_error_member"
+        "gave_nothing" | null      | "null"                    | "true"    || "productions_truncated_only_for_code_error_member"
     }
 
     def "a person's try names an answered question to the helper asked in its own tree, whoever asked it"() {
@@ -2982,6 +3984,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         then:
         refusedBy == refusal
+        // DB-SPECIFIC: to_jsonb(), repeat() and chr() use PostgreSQL's syntax and semantics.
 
         where:
         value                                           || refusal
@@ -3016,6 +4019,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
                 production_value_id: literal(SPARE_VALUE), production_id: literal(production), producer: literal(producer),
                 declaration_field_id: literal(field), field_standing: literal(standing),
                 standing_threshold: literal(threshold), confidence: literal(confidence)]),
+                // DB-SPECIFIC: :: and text use PostgreSQL's syntax and semantics.
                 "select needs_review::text from app.production_values where production_value_id = '${SPARE_VALUE}'")
 
         then:
@@ -3044,9 +4048,9 @@ class SchemaConstraintIntegrationSpec extends Specification {
         where:
         first                 | use          | production      | branchRun || refusal
         ""                    | A_USE        | REVIEWED_ANSWER | null      || null
-        DROP_THE_BRANCH_INPUT | A_BRANCH_USE | null            | SUB_RUN   || null
+        "" | A_BRANCH_USE | null            | SUB_RUN   || null
         ""                    | A_USE        | null            | null      || "production_inputs_exactly_one_owner"
-        DROP_THE_BRANCH_INPUT | A_BRANCH_USE | REVIEWED_ANSWER | SUB_RUN   || "production_inputs_exactly_one_owner"
+        "" | A_BRANCH_USE | REVIEWED_ANSWER | SUB_RUN   || "production_inputs_exactly_one_owner"
     }
 
     def "a try records only what its own step was given, in the run that step is in, and never a discriminator"() {
@@ -3077,8 +4081,8 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
         where:
         first                                              | branchRun | binding       || refusal
-        DROP_THE_BRANCH_INPUT                              | SUB_RUN   | DISCRIMINATOR || null
-        DROP_THE_BRANCH_INPUT + BIND_AN_INPUT_OF_THE_ROUTE | SUB_RUN   | SPARE_BINDING || "production_inputs_binding_fk"
+        ""                              | SUB_RUN   | DISCRIMINATOR || null
+        BIND_AN_INPUT_OF_THE_ROUTE | SUB_RUN   | SPARE_BINDING || "production_inputs_binding_fk"
         START_A_RUN_BENEATH                                | SPARE_RUN | DISCRIMINATOR || "production_inputs_branch_run_fk"
         ""                                                 | OTHER_RUN | DISCRIMINATOR || "production_inputs_branch_run_fk"
     }
@@ -3177,6 +4181,21 @@ class SchemaConstraintIntegrationSpec extends Specification {
         WITH_A_VALUE_ESCALATE_GAVE_BACK  | REVIEWED_BINDING  | STEP       | RUN_STEP          | "question" | SPARE_PRODUCTION | SPARE_VALUE || "production_inputs_source_production_fk"
     }
 
+    def "one input may retain the same maker at two target paths and a third part with no maker"() {
+        when:
+        def parts = readInside(
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer.id'"]) + "; " +
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer.note'",
+                        source_production_id: "null", source_production_value_id: "null"]),
+                // DB-SPECIFIC: ::, string_agg() and text use PostgreSQL's syntax and semantics.
+                "select string_agg(target_path || ':' || coalesce(source_production_value_id::text, '-')," +
+                        " '|' order by target_path) from app.production_input_parts")
+
+        then:
+        parts == "customer.id:${VALUE}|customer.name:${VALUE}|customer.note:-" as String
+        !parts.contains(CODE_VALUE)
+    }
+
     def "a value is recorded once for each owner and binding, and the same binding again for another try"() {
         when:
         def refusedBy = attempt("production_inputs", first + insertInto("production_inputs", use))
@@ -3187,14 +4206,29 @@ class SchemaConstraintIntegrationSpec extends Specification {
         where:
         first                 | use                             || refusal
         ""                    | THE_CONSTANT_GIVEN_TO_THE_MODEL || null
-        DROP_THE_BRANCH_INPUT | A_BRANCH_USE                    || null
+        "" | A_BRANCH_USE                    || null
         ""                    | A_CONSTANT_USE                  || "production_inputs_try_binding_unique"
-        ""                    | A_BRANCH_USE                    || "production_inputs_branch_binding_unique"
+        WITH_BRANCH_INPUT     | A_BRANCH_USE                    || "production_inputs_branch_binding_unique"
+    }
+
+    def "a recorded direct input or component cannot be deleted"() {
+        when:
+        def refusedBy = attempt(table, statement)
+
+        then:
+        refusedBy == rule
+
+        where:
+        table                    | statement                                                                                             || rule
+        "production_inputs"      | "delete from app.production_inputs where production_input_id = '${INPUT}'"                       || "production_inputs_immutable"
+        "production_input_parts" | "delete from app.production_input_parts where production_input_id = '${INPUT}' and target_path = 'customer.name'" || "production_input_parts_immutable"
     }
 
     def "a binding a value was recorded through keeps what it fills and what it reads from"() {
         when:
-        def refusedBy = attempt("bindings", "update app.bindings set ${assignments} where binding_id = '${binding}'")
+        def first = binding == DISCRIMINATOR ? WITH_BRANCH_INPUT : ""
+        def refusedBy = attempt("bindings", first +
+                "update app.bindings set ${assignments} where binding_id = '${binding}'")
 
         then:
         refusedBy == refusal
@@ -3615,6 +4649,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "a group's currency changes to any three capital English letters, and to nothing else"() {
         when:
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def refusedBy = attempt("group_currencies", setting("group_currencies",
                 "currency = ${literal(currency)}, updated_at = now(), updated_by = '${STEWARD}'"))
 
@@ -3642,11 +4677,41 @@ class SchemaConstraintIntegrationSpec extends Specification {
         "US" + Character.toString(0x0130)  || "group_currencies_currency_shape"
     }
 
+    def "a source that no longer matches is kept for model production with its original field and actual code step"() {
+        when:
+        def refusedBy = attempt("run_step_failures", REACH_SOURCE + insertInto("run_step_failures",
+                A_SOURCE_FAILURE + changed + [reason: literal(reason), source_field: field == null ? "null" : literal(field)]))
+
+        then:
+        refusedBy == refusal
+
+        where:
+        reason | changed | field || refusal
+        "source_no_longer_matches" | [:]                                                                      | "answer"              || null
+        "source_no_longer_matches" | [:]                                                                      | "removed.field"       || null
+        "source_no_longer_matches" | [:]                                                                      | "a." * 511 + "a"     || null
+        "source_no_longer_matches" | [run_step_id: literal(SEARCH_RUN_STEP), run_step_kind: "'search'",
+         production_id: literal(SEARCH_PRODUCTION)]                               | "answer"              || null
+        "source_no_longer_matches" | [source_run_id: literal(RUN), source_run_step_id: literal(RUN_STEP),
+         source_workflow_step_id: literal(STEP)]                                  | "answer"              || "run_step_failures_source_step_fk"
+        "source_list_not_here" | [:] | "answer" || null
+        "source_list_not_here" | [:] | "removed.field" || null
+        "source_list_not_here" | [run_step_id: literal(SEARCH_RUN_STEP), run_step_kind: "'search'",
+                                 production_id: literal(SEARCH_PRODUCTION)] | "answer" || null
+        "source_list_not_here" | [source_run_id: literal(RUN), source_run_step_id: literal(RUN_STEP),
+                                 source_workflow_step_id: literal(STEP)] | "answer" || "run_step_failures_source_step_fk"
+        "source_list_not_here" | [root_run_id: "null", source_run_id: "null", source_run_step_id: "null",
+                                 source_workflow_step_id: "null"] | null || "run_step_failures_source_exactly_for_a_source_failure"
+        "source_list_not_here" | [run_step_id: literal(REVIEWED_RUN_STEP), production_id: literal(REVIEWED_ANSWER),
+                                 purpose: "'review'"] | "answer" || "run_step_failures_source_only_for_produce"
+    }
+
     /** Every lookup of the rows naming a target reads a key's columns. Keys into subjects are exempt: no subject
      * is ever removed, and those a page reads rows through are held to an index of their own by "every key into
      * subjects a page reads rows through leads an index, partial or not". */
     def "every foreign key leads an index on the table holding it"() {
         when:
+        // DB-SPECIFIC: ::, pg_constraint, pg_class, pg_attribute, regnamespace, regclass, pg_index and pg_get_expr use PostgreSQL's syntax and semantics.
         def unindexed = queryForStrings("""
             select t.relname || '.' || con.conname
               from pg_constraint con
@@ -3660,6 +4725,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
                       and (i.indpred is null
                            or pg_get_expr(i.indpred, i.indrelid) = '(' || a.attname || ' IS NOT NULL)'))
             """)
+        // DB-SPECIFIC: ::, pg_constraint, pg_class, regnamespace and regclass use PostgreSQL's syntax and semantics.
         def keys = queryForStrings("""
             select t.relname || '.' || con.conname
               from pg_constraint con
@@ -3677,6 +4743,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     def "every key into subjects a page reads rows through leads an index, partial or not"() {
         when:
+        // DB-SPECIFIC: ::, pg_constraint, pg_class, regnamespace, regclass and pg_index use PostgreSQL's syntax and semantics.
         def indexed = queryForStrings("""
             select t.relname || '.' || con.conname
               from pg_constraint con
@@ -3705,11 +4772,14 @@ class SchemaConstraintIntegrationSpec extends Specification {
      * <p>A deny-list rather than an allow-list, so a contype this was written before arrives here
      * rather than disappearing. Two are denied on purpose. 't' is the constraint trigger, counted
      * from the third source instead. 'n' is NOT NULL, which PostgreSQL 18 began recording here, and
-     * which no case could cover in the way every case here works: a not-null violation carries no
-     * constraint name for the refusal to be identified by, so a suite built on asserting that name
-     * would have to assert something weaker for those alone.
+     * which cannot use the named-rule path: a not-null violation identifies its table and column,
+     * not a constraint name. Separate required-column paths cover file_contents, model_call_tool_uses,
+     * model_call_tool_prices and only model_calls' answer_truncated, declined_words_altered,
+     * declined_words_truncated, unreadable_response_altered and unreadable_response_truncated flags.
+     * Other required columns are outside this coverage.
      */
     private Set<String> enforceableRules() {
+        // DB-SPECIFIC: ::, pg_constraint, pg_class, pg_type, regnamespace, pg_index, pg_namespace and pg_trigger use PostgreSQL's syntax and semantics.
         queryForStrings("""
             select coalesce(t.relname, d.typname) || '.' || con.conname
               from pg_constraint con
@@ -3741,6 +4811,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
 
     private boolean subsumesThePrimaryKeyOf(String rule) {
         def (table, constraint) = rule.split("\\.", 2)
+        // DB-SPECIFIC: <@, ::, pg_constraint, pg_class and regnamespace use PostgreSQL's syntax and semantics.
         queryForStrings("""
             select 'subsumed'
               from pg_constraint u
@@ -3755,6 +4826,23 @@ class SchemaConstraintIntegrationSpec extends Specification {
             """) == ["subsumed"] as Set
     }
 
+    private static String wordsCallId(String operation) {
+        operation == "insert" ? "00000000-0000-4000-8000-000000009901" : SPARE_HELP_CALL
+    }
+
+    private static String wordsCallStatement(String operation, Map<String, String> fields) {
+        def values = A_HELP_CALL + CAME_BACK + fields
+        if (operation == "insert") {
+            return insertInto("model_calls", values + [model_call_id: "'${wordsCallId(operation)}'"])
+        }
+        "update app.model_calls set " + values.collect { key, value -> "${key} = ${value}" }.join(", ") +
+                " where model_call_id = '${wordsCallId(operation)}'"
+    }
+
+    private static String unreadableCallStatement(String operation, Map<String, String> fields) {
+        wordsCallStatement(operation, ERRORED + [answer: "null", came_back_count: "null"] + fields)
+    }
+
     /**
      * The whole of a table rather than its cardinality, because half of these cases are updates and
      * an update that lands leaves the count alone. What it does not see is a write to any other
@@ -3763,6 +4851,7 @@ class SchemaConstraintIntegrationSpec extends Specification {
      * in CASES is one statement, and one statement is atomic.
      */
     private String contentsOf(String table) {
+        // DB-SPECIFIC: ::, string_agg(), md5() and text use PostgreSQL's syntax and semantics.
         queryForStrings("select coalesce(md5(string_agg(t::text, '|' order by t::text)), 'empty')" +
                 " from app.${table} t").first()
     }

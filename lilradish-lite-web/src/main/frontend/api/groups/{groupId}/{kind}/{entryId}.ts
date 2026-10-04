@@ -46,7 +46,7 @@ export function readEntry(
 }
 
 /** Its name and what it is for, as one change; built member by member. */
-export function renameEntry(
+export function editEntry(
   groupId: string,
   kind: EntryKind,
   entryId: string,

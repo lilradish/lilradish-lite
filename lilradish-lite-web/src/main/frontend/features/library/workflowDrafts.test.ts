@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DeclaredField, PinnedList } from "../../api/declaration";
 import type { ContentProblem } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import type {
   OfferedCodeStep,
+  Step,
   WorkflowVersion,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { draftOf } from "./declarationDrafts";
@@ -22,6 +23,8 @@ import {
   pointers,
   pointsForward,
   removedStep,
+  reusableSentFlowOf,
+  searchTextRefused,
   sentFlowOf,
   sourcesFor,
   takesOf,
@@ -204,10 +207,44 @@ const WORKFLOW: WorkflowVersion = {
       { name: "Escalate", versionId: "w2", number: 2, takes: [], gives: [] },
     ],
     codeSteps: [STAMPING],
+    searchWays: [],
     models: [],
   },
   terms: new Map([["l1", ["urgent", "later"]]]),
 };
+
+const SEARCH_WAY = {
+  name: "web",
+  tool: "web_search",
+  gives: [{ ...COMPLAINT, fieldId: "f10", name: "title" }],
+};
+
+function searchingWorkflow(): WorkflowVersion {
+  const search: Step = {
+    stepId: "s4",
+    name: "find",
+    bindings: [],
+    runs: {
+      kind: "search",
+      searchWay: "web",
+      gives: SEARCH_WAY.gives,
+      question: [
+        { text: "Find " },
+        { partId: "p1", from: { input: "complaint" } },
+        { partId: "p2", from: { step: 0, path: "category" } },
+      ],
+      standings: { title: "always", body: "never" },
+    },
+    producer: { kind: "model", model: "general", toldWhatHappened: true },
+    tries: 2,
+    reviewer: { model: "small" },
+  };
+  return {
+    ...WORKFLOW,
+    steps: [...WORKFLOW.steps, search],
+    offered: { ...WORKFLOW.offered, searchWays: [SEARCH_WAY] },
+  };
+}
 
 const TEXT: Shape = {
   name: "said",
@@ -218,6 +255,17 @@ const TEXT: Shape = {
 };
 
 const NAMED = namedVersions(WORKFLOW);
+
+const FILE: DeclaredField = {
+  fieldId: "attachment",
+  name: "attachment",
+  kind: "file",
+  types: ["application/pdf"],
+  maximumBytes: 1024,
+  many: true,
+  most: 2,
+  mustBeGiven: true,
+};
 
 function flowWith(...steps: StepDraft[]): FlowDraft {
   return { steps, outputs: [] };
@@ -355,6 +403,20 @@ describe("fits", () => {
     ["a shorter text", { ...TEXT, longest: 50 }, TEXT, true],
     ["a longer text", { ...TEXT, longest: 150 }, TEXT, false],
     ["a text of no known length", { ...TEXT, longest: undefined }, TEXT, true],
+    [
+      "several lines into one",
+      { ...TEXT, lines: "several" },
+      { ...TEXT, lines: "one" },
+      false,
+    ],
+    ["an older text into one", TEXT, { ...TEXT, lines: "one" }, false],
+    ["one line into several", { ...TEXT, lines: "one" }, TEXT, true],
+    [
+      "fields holding several lines into one",
+      { ...TEXT, kind: "fields", fields: [{ ...TEXT, lines: "several" }] },
+      { ...TEXT, kind: "fields", fields: [{ ...TEXT, lines: "one" }] },
+      false,
+    ],
     ["another kind", { ...TEXT, kind: "number" }, TEXT, false],
     ["many into one", { ...TEXT, many: true }, TEXT, false],
     [
@@ -398,6 +460,35 @@ describe("fits", () => {
       { ...TEXT, kind: "fields", fields: [TEXT, { ...TEXT, name: "more" }] },
       { ...TEXT, kind: "fields", fields: [TEXT] },
       false,
+    ],
+    [
+      "a smaller file of an accepted type",
+      { ...TEXT, kind: "file", types: ["application/pdf"], maximumBytes: 1024 },
+      {
+        ...TEXT,
+        kind: "file",
+        types: ["application/pdf", "image/png"],
+        maximumBytes: 2048,
+      },
+      true,
+    ],
+    [
+      "a file with another type",
+      { ...TEXT, kind: "file", types: ["image/png"], maximumBytes: 1024 },
+      { ...TEXT, kind: "file", types: ["application/pdf"], maximumBytes: 2048 },
+      false,
+    ],
+    [
+      "a file past the receiving byte limit",
+      { ...TEXT, kind: "file", types: ["application/pdf"], maximumBytes: 4096 },
+      { ...TEXT, kind: "file", types: ["application/pdf"], maximumBytes: 2048 },
+      false,
+    ],
+    [
+      "a draft file without a byte limit yet",
+      { ...TEXT, kind: "file", types: ["application/pdf"] },
+      { ...TEXT, kind: "file", types: ["application/pdf"], maximumBytes: 2048 },
+      true,
     ],
   ])("judges %s", (_case, source, target, fitting) => {
     expect(fits(source as Shape, target as Shape)).toBe(fitting);
@@ -506,6 +597,86 @@ describe("takesOf", () => {
 });
 
 describe("givenBy", () => {
+  it.each([
+    ["1", "bytes", 1],
+    ["1", "KB", 1024],
+    ["1", "MB", 1048576],
+    ["1", "GB", 1073741824],
+    ["9007199254740991", "bytes", Number.MAX_SAFE_INTEGER],
+    ["", "bytes", undefined],
+    ["0", "bytes", undefined],
+    ["01", "bytes", undefined],
+    ["1.5", "KB", undefined],
+    ["9007199254740992", "bytes", undefined],
+    ["8796093022208", "KB", undefined],
+    ["8589934592", "MB", undefined],
+    ["8388608", "GB", undefined],
+  ] as const)(
+    "projects a live route file size %s %s without inventing an unchosen limit",
+    (fileSize, fileSizeUnit, maximumBytes) => {
+      const route: StepDraft = {
+        ...freshStep("files"),
+        runs: {
+          kind: "route",
+          discriminator: { from: "none" },
+          cases: [],
+          gives: [
+            {
+              ...draftOf(FILE),
+              fileTypes: " APPLICATION/PDF \n image/png ",
+              fileSize,
+              fileSizeUnit,
+            },
+          ],
+        },
+      };
+
+      const [field] = givenBy(route, NAMED, [], [])!;
+
+      expect(field).toMatchObject({
+        types: ["application/pdf", "image/png"],
+        most: 2,
+        many: true,
+      });
+      expect(field!.maximumBytes).toBe(maximumBytes);
+      if (maximumBytes === undefined) {
+        expect(field).not.toHaveProperty("maximumBytes");
+      }
+      expect(field).not.toHaveProperty("fileSize");
+      expect(field).not.toHaveProperty("fileSizeUnit");
+    },
+  );
+
+  it("leaves live file types unchosen and does not leak file constraints into another kind", () => {
+    const route: StepDraft = {
+      ...freshStep("files"),
+      runs: {
+        kind: "route",
+        discriminator: { from: "none" },
+        cases: [],
+        gives: [
+          { ...draftOf(FILE), fileTypes: "", fileSize: "" },
+          { ...draftOf(FILE), name: "count", kind: "number" },
+          {
+            ...draftOf(FILE),
+            name: "receiving",
+            fileTypes: "image/png",
+            fileSize: "1",
+            fileSizeUnit: "bytes",
+          },
+        ],
+      },
+    };
+    const [unchosen, number, receiving] = givenBy(route, NAMED, [], [])!;
+
+    expect(unchosen).not.toHaveProperty("types");
+    expect(unchosen).not.toHaveProperty("maximumBytes");
+    expect(fits(unchosen!, receiving!)).toBe(true);
+    expect(number).toMatchObject({ kind: "number", name: "count" });
+    expect(number).not.toHaveProperty("types");
+    expect(number).not.toHaveProperty("maximumBytes");
+  });
+
   it("reads what a pinned version gives, and a route's as typed", () => {
     const route: StepDraft = {
       ...freshStep("r"),
@@ -518,7 +689,12 @@ describe("givenBy", () => {
     };
 
     expect(
-      givenBy(flowOf(WORKFLOW).steps[0]!, NAMED, WORKFLOW.offered.codeSteps),
+      givenBy(
+        flowOf(WORKFLOW).steps[0]!,
+        NAMED,
+        WORKFLOW.offered.codeSteps,
+        WORKFLOW.offered.searchWays,
+      ),
     ).toEqual([
       {
         name: "category",
@@ -528,13 +704,21 @@ describe("givenBy", () => {
         list: "l1",
       },
     ]);
-    expect(givenBy(route, NAMED, WORKFLOW.offered.codeSteps)).toEqual([
+    expect(
+      givenBy(
+        route,
+        NAMED,
+        WORKFLOW.offered.codeSteps,
+        WORKFLOW.offered.searchWays,
+      ),
+    ).toEqual([
       {
         name: "complaint",
         kind: "text",
         many: false,
         mustBeGiven: false,
         longest: 4000,
+        lines: "several",
       },
     ]);
   });
@@ -548,6 +732,7 @@ describe("givenBy", () => {
         },
         NAMED,
         WORKFLOW.offered.codeSteps,
+        WORKFLOW.offered.searchWays,
       ),
     ).toEqual([
       {
@@ -556,22 +741,225 @@ describe("givenBy", () => {
         many: false,
         mustBeGiven: true,
         longest: 12,
+        lines: "several",
       },
     ]);
   });
 
   it("reads a code step the release does not offer, and a step running nothing yet, as unknown", () => {
     expect(
-      givenBy(flowOf(WORKFLOW).steps[2]!, NAMED, WORKFLOW.offered.codeSteps),
+      givenBy(
+        flowOf(WORKFLOW).steps[2]!,
+        NAMED,
+        WORKFLOW.offered.codeSteps,
+        WORKFLOW.offered.searchWays,
+      ),
     ).toBeUndefined();
     expect(
-      givenBy(freshStep("n"), NAMED, WORKFLOW.offered.codeSteps),
+      givenBy(
+        freshStep("n"),
+        NAMED,
+        WORKFLOW.offered.codeSteps,
+        WORKFLOW.offered.searchWays,
+      ),
     ).toBeUndefined();
   });
 });
 
 describe("sourcesFor", () => {
   const flow = flowOf(WORKFLOW);
+
+  it("keeps a default step name distinct from a real name with the same words without sending presentation metadata", () => {
+    const unnamed = {
+      ...flow,
+      steps: flow.steps.map((step, index) =>
+        index === 0 ? { ...step, name: "" } : step,
+      ),
+    };
+    const named = {
+      ...unnamed,
+      steps: unnamed.steps.map((step, index) =>
+        index === 0 ? { ...step, name: "Step 1, not named yet" } : step,
+      ),
+    };
+    const before = sourcesFor(unnamed, 1, WORKFLOW, NAMED, unnamed.steps[1]);
+    const after = sourcesFor(named, 1, WORKFLOW, NAMED, named.steps[1]);
+    expect(before[1]!.words).toBe(after[1]!.words);
+    expect(before[1]!.step).toEqual({ position: 1, name: "" });
+    expect(after[1]!.step).toEqual({
+      position: 1,
+      name: "Step 1, not named yet",
+    });
+    expect(before[0]!.step).toBeUndefined();
+    expect(before[1]!.fields).toEqual(after[1]!.fields);
+    expect(JSON.stringify(before)).not.toBe(JSON.stringify(after));
+    const wire = sentFlowOf(named, WORKFLOW, NAMED);
+    expect(wire.steps[0]!.name).toBe("Step 1, not named yet");
+    expect(wire.steps[0]).not.toHaveProperty("step");
+    expect(wire.steps[0]).not.toHaveProperty("words");
+  });
+
+  it.each(
+    (
+      [
+        [
+          "more target types",
+          FILE,
+          { ...FILE, types: ["application/pdf", "image/png"] },
+          true,
+        ],
+        [
+          "more source types",
+          { ...FILE, types: ["application/pdf", "image/png"] },
+          FILE,
+          false,
+        ],
+        ["larger source", { ...FILE, maximumBytes: 1025 }, FILE, false],
+        ["more source files", { ...FILE, most: 3 }, FILE, false],
+        ["equal limits", FILE, FILE, true],
+        [
+          "one into many",
+          { ...FILE, many: false, most: undefined },
+          FILE,
+          false,
+        ],
+        [
+          "many into one",
+          FILE,
+          { ...FILE, many: false, most: undefined },
+          false,
+        ],
+        [
+          "a nested larger source",
+          {
+            fieldId: "details",
+            name: "attachment",
+            kind: "fields",
+            many: false,
+            mustBeGiven: true,
+            fields: [{ ...FILE, maximumBytes: 1025 }],
+          },
+          {
+            fieldId: "details",
+            name: "attachment",
+            kind: "fields",
+            many: false,
+            mustBeGiven: true,
+            fields: [FILE],
+          },
+          false,
+        ],
+      ] satisfies readonly (readonly [
+        string,
+        DeclaredField,
+        DeclaredField,
+        boolean,
+      ])[]
+    ).flatMap(([name, source, target, accepted]) =>
+      (["input", "step"] as const).map(
+        (from) =>
+          [`${name} (${from})`, source, target, accepted, from] as const,
+      ),
+    ),
+  )(
+    "judges %s from real file projections when building target rows",
+    (_case, sourceField, targetField, accepted, from) => {
+      const declared = sourceField;
+      const target = targetField;
+      const route: StepDraft = {
+        ...freshStep("files"),
+        name: "Demo Sample",
+        runs: {
+          kind: "route",
+          discriminator: { from: "none" },
+          gives: [draftOf(declared)],
+          cases: [],
+        },
+      };
+      const binding: BindingDraft = {
+        bindingId: "bound-file",
+        target: "attachment",
+        source:
+          from === "input"
+            ? { from, path: "attachment" }
+            : { from: "step", stepKey: route.key, path: "attachment" },
+      };
+      const reader = { ...freshStep("reader"), bindings: [binding] };
+      const filing = flowWith(route, reader);
+      const workflow = { ...WORKFLOW, takes: [declared] };
+      const sources = sourcesFor(filing, 1, workflow, NAMED, reader);
+      const rows = targetRows(
+        [target],
+        [binding],
+        [],
+        (bound, shape) => flagsOf(bound, shape, filing, 1, [], sources),
+        "contentProblem.input_unbound",
+      );
+
+      expect(sources.map((each) => each.value)).toEqual(["input", "files"]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.binding).toBe(binding);
+      expect(rows[0]!.flags).toEqual(
+        accepted ? [] : ["contentProblem.source_does_not_fit"],
+      );
+      expect(rows[0]!.flags).not.toContain(
+        "contentProblem.source_may_be_empty",
+      );
+      expect(rows[0]!.flags).not.toContain("contentProblem.input_unbound");
+    },
+  );
+
+  it.each([false, true])(
+    "judges required file values separately from their fit, nested %s",
+    (nested) => {
+      const source: DeclaredField = nested
+        ? {
+            fieldId: "details",
+            name: "attachment",
+            kind: "fields",
+            many: false,
+            mustBeGiven: true,
+            fields: [{ ...FILE, mustBeGiven: false }],
+          }
+        : { ...FILE, mustBeGiven: false };
+      const target: DeclaredField = nested
+        ? {
+            fieldId: "details",
+            name: "attachment",
+            kind: "fields",
+            many: false,
+            mustBeGiven: true,
+            fields: [FILE],
+          }
+        : FILE;
+      const binding: BindingDraft = {
+        target: "attachment",
+        source: { from: "input", path: "attachment" },
+      };
+      const reader = { ...freshStep("reader"), bindings: [binding] };
+      const filing = flowWith(reader);
+      const sources = sourcesFor(
+        filing,
+        0,
+        { ...WORKFLOW, takes: [source] },
+        NAMED,
+        reader,
+      );
+      const rows = targetRows(
+        [target],
+        [binding],
+        [],
+        (bound, shape) => flagsOf(bound, shape, filing, 0, [], sources),
+        "contentProblem.input_unbound",
+      );
+
+      expect(fits(sources[0]!.fields![0]!, rows[0]!.target)).toBe(true);
+      expect(rows[0]!.flags).toEqual(["contentProblem.source_may_be_empty"]);
+      expect(rows[0]!.flags).not.toContain(
+        "contentProblem.source_does_not_fit",
+      );
+    },
+  );
 
   it("offers a step what the workflow takes and only the steps before it", () => {
     const sources = sourcesFor(flow, 1, WORKFLOW, NAMED, flow.steps[1]);
@@ -648,10 +1036,175 @@ describe("flagsOf", () => {
     ]);
   });
 
-  it("says nothing where what it reads is always there, or where what it fills need not be given", () => {
-    expect(flagsOf(reading("complaint"), TEXT, flow, 1, [], sources)).toEqual(
-      [],
+  it("names a removed known field while leaving an unknown declaration undecided", () => {
+    const removed = reading("removed");
+    expect(flagsOf(removed, TEXT, flow, 1, [], sources)).toEqual([
+      "contentProblem.source_unknown",
+    ]);
+    expect(
+      flagsOf(
+        removed,
+        TEXT,
+        flow,
+        1,
+        [],
+        [
+          {
+            value: "input",
+            words: "What the workflow takes",
+            fields: undefined,
+          },
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  it("says when a retained source no longer fits without repeating a server warning", () => {
+    const offered: SourceOffered[] = [
+      {
+        value: "input",
+        words: "What the workflow takes",
+        fields: [
+          { ...TEXT, name: "note", lines: "several", mustBeGiven: false },
+        ],
+      },
+    ];
+    const binding: BindingDraft = {
+      target: "note",
+      source: { from: "input", path: "note" },
+      bindingId: "b1",
+    };
+    const target = { ...TEXT, name: "note", lines: "one" as const };
+
+    expect(flagsOf(binding, target, flow, 1, [], offered)).toEqual([
+      "contentProblem.source_does_not_fit",
+      "contentProblem.source_may_be_empty",
+    ]);
+    expect(
+      flagsOf(
+        binding,
+        target,
+        flow,
+        1,
+        [{ code: "source_does_not_fit", part: "steps", bindingId: "b1" }],
+        offered,
+      ),
+    ).toEqual([
+      "contentProblem.source_does_not_fit",
+      "contentProblem.source_may_be_empty",
+    ]);
+  });
+
+  it("shows a kept source that stops fitting after a step or route case takes a newer version", () => {
+    const version: WorkflowVersion = {
+      ...WORKFLOW,
+      offered: {
+        ...WORKFLOW.offered,
+        questions: [
+          {
+            ...WORKFLOW.offered.questions[0]!,
+            takes: [{ ...COMPLAINT, lines: "one" }],
+          },
+        ],
+        workflows: [
+          {
+            ...WORKFLOW.offered.workflows[0]!,
+            takes: [{ ...NOTE, lines: "one" }],
+          },
+        ],
+      },
+    };
+    const named = namedVersions(version);
+    const flow = flowOf(version);
+    const step = tookVersion(
+      {
+        ...flow.steps[0]!,
+        bindings: [
+          {
+            target: "complaint",
+            source: { from: "input", path: "complaint" },
+            bindingId: "b1",
+          },
+        ],
+      },
+      "q2",
+      named,
     );
+    const stepped = { ...flow, steps: [step, ...flow.steps.slice(1)] };
+    const stepSources = sourcesFor(stepped, 0, version, named, step);
+    const stepRows = targetRows(
+      named.get("q2")!.takes,
+      step.bindings,
+      [],
+      (binding, target) =>
+        flagsOf(binding, target, stepped, 0, [], stepSources),
+      "contentProblem.input_unbound",
+    );
+
+    expect(step.bindings).toEqual([
+      {
+        target: "complaint",
+        source: { from: "input", path: "complaint" },
+      },
+    ]);
+    expect(stepRows[0]?.flags).toEqual(["contentProblem.source_does_not_fit"]);
+
+    const route = flow.steps[1]!;
+    if (route.runs.kind !== "route") {
+      throw new Error("Expected a route step");
+    }
+    const routeCase = caseTookVersion(
+      {
+        ...route.runs.cases[0]!,
+        bindings: [
+          {
+            target: "note",
+            source: { from: "input", path: "note" },
+            bindingId: "b3",
+          },
+        ],
+      },
+      "w2",
+      named,
+    );
+    const routed = {
+      ...route,
+      runs: {
+        ...route.runs,
+        cases: [routeCase, ...route.runs.cases.slice(1)],
+      },
+    };
+    const routedFlow = {
+      ...flow,
+      steps: flow.steps.map((each, index) => (index === 1 ? routed : each)),
+    };
+    const routeSources = sourcesFor(routedFlow, 1, version, named, routed);
+    const caseRows = targetRows(
+      named.get("w2")!.takes,
+      routeCase.bindings,
+      [],
+      (binding, target) =>
+        flagsOf(binding, target, routedFlow, 1, [], routeSources),
+      "contentProblem.input_unbound",
+    );
+
+    expect(routeCase.bindings).toEqual([
+      { target: "note", source: { from: "input", path: "note" } },
+    ]);
+    expect(caseRows[0]?.flags).toEqual(["contentProblem.source_does_not_fit"]);
+  });
+
+  it("says nothing where what it reads is always there, or where what it fills need not be given", () => {
+    expect(
+      flagsOf(
+        reading("complaint"),
+        { ...TEXT, longest: 4000 },
+        flow,
+        1,
+        [],
+        sources,
+      ),
+    ).toEqual([]);
     expect(
       flagsOf(
         reading("note"),
@@ -782,6 +1335,22 @@ describe("targetRows", () => {
     expect(drawn.map((row) => row.path)).toEqual(["address", "complaint"]);
     expect(drawn[0]!.binding).toBe(whole);
     expect(drawn[0]!.flags).toEqual([]);
+  });
+
+  it("does not let an emptied source occupy a whole field or a nested part", () => {
+    const drawn = rows([
+      { target: "address.city", source: { from: "none" } },
+      { target: "complaint", source: { from: "input", path: "" } },
+    ]);
+    expect(drawn.map((row) => [row.path, row.flags])).toEqual([
+      ["address", ["contentProblem.input_unbound"]],
+      ["address.street", []],
+      ["address.city", []],
+      ["complaint", ["contentProblem.input_unbound"]],
+    ]);
+    expect(drawn[2]!.binding?.source).toEqual({ from: "none" });
+    expect(drawn[3]!.binding?.source).toEqual({ from: "input", path: "" });
+    expect(drawn[3]!.flags).toContain("contentProblem.input_unbound");
   });
 
   it("says each field left unfilled within one partly filled, and not the field holding them", () => {
@@ -1119,6 +1688,374 @@ describe("boundTo", () => {
 });
 
 describe("sentFlowOf", () => {
+  it("sends a search's ordered text and values without read part keys, with every standing and ordinary review settings", () => {
+    const workflow = searchingWorkflow();
+    const flow = flowOf(workflow);
+    const search = flow.steps[3]!;
+
+    expect(search.runs.kind).toBe("search");
+    if (search.runs.kind !== "search") throw new Error("search missing");
+    expect(search.runs.question).toEqual([
+      { key: "text-0", text: "Find " },
+      { key: "p1", partId: "p1", source: { from: "input", path: "complaint" } },
+      {
+        key: "p2",
+        partId: "p2",
+        source: { from: "step", stepKey: "s1", path: "category" },
+      },
+    ]);
+    expect(
+      givenBy(
+        search,
+        namedVersions(workflow),
+        workflow.offered.codeSteps,
+        workflow.offered.searchWays,
+      ),
+    ).toEqual([
+      {
+        name: "title",
+        kind: "text",
+        many: false,
+        mustBeGiven: true,
+        longest: 4000,
+        lines: "several",
+      },
+    ]);
+    const sent = sentFlowOf(flow, workflow, namedVersions(workflow));
+
+    expect(sent.held).toBeNull();
+    expect(sent.steps[3]).toEqual({
+      stepId: "s4",
+      name: "find",
+      bindings: [],
+      runs: {
+        kind: "search",
+        searchWay: "web",
+        question: [
+          { text: "Find " },
+          { from: { input: "complaint" } },
+          { from: { step: 0, path: "category" } },
+        ],
+        standings: {
+          title: "always",
+          body: "never",
+          references: null,
+          other: null,
+        },
+      },
+      producer: {
+        kind: "model",
+        model: "general",
+        mode: null,
+        toldWhatHappened: true,
+      },
+      tries: 2,
+      reviewer: { model: "small", mode: null },
+    });
+  });
+
+  it("keeps a search read tied to its step when order changes and unchooses it when that step is removed", () => {
+    const workflow = searchingWorkflow();
+    const flow = flowOf(workflow);
+    const moved = movedStep(flow, 3, -1);
+    const search = moved.steps[2]!;
+    const removed = removedStep(flow, 0).steps[2]!;
+
+    expect(search.runs.kind).toBe("search");
+    if (search.runs.kind !== "search") throw new Error("search missing");
+    expect(search.runs.question[2]).toEqual({
+      key: "p2",
+      partId: "p2",
+      source: { from: "step", stepKey: "s1", path: "category" },
+    });
+    expect(removed.runs.kind).toBe("search");
+    if (removed.runs.kind !== "search") throw new Error("search missing");
+    expect(removed.runs.question[1]).toEqual({
+      key: "p1",
+      partId: "p1",
+      source: { from: "input", path: "complaint" },
+    });
+    expect(removed.runs.question[2]).toEqual({
+      key: "p2",
+      source: { from: "none" },
+    });
+  });
+
+  it("takes 256 question parts and refuses a 257th before sending", () => {
+    const workflow = searchingWorkflow();
+    const flow = flowOf(workflow);
+    const search = flow.steps[3]!;
+    if (search.runs.kind !== "search") throw new Error("search missing");
+    const question = Array.from({ length: 256 }, (_part, index) => ({
+      key: `text-${index}`,
+      text: "x",
+    }));
+    const withParts = (count: number): FlowDraft => ({
+      ...flow,
+      steps: flow.steps.map((step, index) =>
+        index === 3
+          ? {
+              ...search,
+              runs: { ...search.runs, question: question.slice(0, count) },
+            }
+          : step,
+      ),
+    });
+
+    expect(
+      sentFlowOf(withParts(256), workflow, namedVersions(workflow)).held,
+    ).toBeNull();
+    const tooMany = [...question, { key: "extra", text: "x" }];
+    const over = {
+      ...flow,
+      steps: flow.steps.map((step, index) =>
+        index === 3
+          ? { ...search, runs: { ...search.runs, question: tooMany } }
+          : step,
+      ),
+    };
+    expect(sentFlowOf(over, workflow, namedVersions(workflow)).held?.why).toBe(
+      "workflow.searchPartsFull",
+    );
+  });
+
+  it("builds search sources and reads each declaration at most once per step at the question limit", () => {
+    const input: DeclaredField = {
+      ...COMPLAINT,
+      fieldId: "query",
+      name: "query",
+      longest: 16,
+    };
+    const returned = ["title", "body", "references", "other"].map(
+      (name): DeclaredField => ({
+        ...input,
+        fieldId: name,
+        name,
+        stands: "always",
+      }),
+    );
+    let sourceReads = 0;
+    let declarationReads = 0;
+    const workflow: WorkflowVersion = {
+      ...WORKFLOW,
+      get takes() {
+        sourceReads += 1;
+        return [input];
+      },
+      gives: [],
+      steps: [],
+      outputs: [],
+      offered: {
+        ...WORKFLOW.offered,
+        searchWays: [
+          {
+            name: "web",
+            tool: "web_search",
+            get gives() {
+              declarationReads += 1;
+              return returned;
+            },
+          },
+        ],
+      },
+    };
+    const flow: FlowDraft = {
+      steps: Array.from({ length: 256 }, (_step, index) => ({
+        ...freshStep(`step-${index}`),
+        name: `step_${index}`,
+        producer: "person",
+        tries: "1",
+        runs: {
+          kind: "search",
+          searchWay: "web",
+          standings: {
+            title: "always",
+            body: "always",
+            references: "always",
+            other: "always",
+          },
+          question: Array.from({ length: 256 }, (_part, part) => ({
+            key: `part-${part}`,
+            source: { from: "input", path: "query" },
+          })),
+        },
+      })),
+      outputs: [],
+    };
+
+    const sent = sentFlowOf(flow, workflow, new Map());
+
+    expect(sent.held).toBeNull();
+    expect(sent.steps).toHaveLength(256);
+    expect(
+      sent.steps.every(
+        (step) =>
+          step.runs?.kind === "search" &&
+          step.runs.question.length === 256 &&
+          step.runs.question.every(
+            (part) =>
+              "from" in part &&
+              "input" in part.from &&
+              part.from.input === "query",
+          ),
+      ),
+    ).toBe(true);
+    expect([sourceReads, declarationReads]).toEqual([256, 255]);
+  }, 180000);
+
+  it("reuses unaffected compiled steps while changing the last of 256, and rechecks after reordering", () => {
+    let runsRead = 0;
+    const steps = Array.from({ length: 256 }, (_step, index): StepDraft => {
+      const fresh = freshStep(`step-${index}`);
+      return {
+        ...fresh,
+        name: `step_${index}`,
+        get runs() {
+          runsRead += 1;
+          return fresh.runs;
+        },
+      };
+    });
+    const flow: FlowDraft = { steps, outputs: [] };
+    const send = reusableSentFlowOf();
+    const first = send(flow, WORKFLOW, NAMED);
+    expect(runsRead).toBeGreaterThanOrEqual(256);
+    expect(first.steps).toEqual(sentFlowOf(flow, WORKFLOW, NAMED).steps);
+
+    runsRead = 0;
+    const edited: FlowDraft = {
+      ...flow,
+      steps: [...steps.slice(0, -1), { ...steps[255]!, name: "changed" }],
+    };
+    const second = send(edited, WORKFLOW, NAMED);
+    expect(runsRead).toBeLessThan(8);
+    expect(second.steps).toEqual(sentFlowOf(edited, WORKFLOW, NAMED).steps);
+
+    runsRead = 0;
+    const moved = movedStep(edited, 0, 1);
+    const reordered = send(moved, WORKFLOW, NAMED);
+    expect(runsRead).toBeGreaterThanOrEqual(254);
+    expect(reordered.steps).toEqual(sentFlowOf(moved, WORKFLOW, NAMED).steps);
+  });
+
+  it("rechecks a later step when the earlier step it reads changes", () => {
+    let laterReads = 0;
+    const initial = flowOf(WORKFLOW);
+    const later = initial.steps[1]!;
+    const reading: StepDraft = {
+      ...later,
+      get runs() {
+        laterReads += 1;
+        return later.runs;
+      },
+    };
+    const flow = {
+      ...initial,
+      steps: [initial.steps[0]!, reading, ...initial.steps.slice(2)],
+    };
+    const send = reusableSentFlowOf();
+    send(flow, WORKFLOW, NAMED);
+    laterReads = 0;
+
+    const changed = {
+      ...flow,
+      steps: [
+        { ...flow.steps[0]!, runs: { kind: "none" } as const },
+        ...flow.steps.slice(1),
+      ],
+    };
+    const sent = send(changed, WORKFLOW, NAMED);
+    expect(laterReads).toBeGreaterThan(0);
+    expect(sent).toEqual(sentFlowOf(changed, WORKFLOW, NAMED));
+  });
+
+  it("refuses a file in a search value while keeping text and earlier values available", () => {
+    const workflow = searchingWorkflow();
+    const file: DeclaredField = {
+      fieldId: "f11",
+      name: "attachment",
+      kind: "file",
+      many: false,
+      mustBeGiven: true,
+      maximumBytes: 100,
+      types: ["text/plain"],
+    };
+    const withFile = { ...workflow, takes: [...workflow.takes, file] };
+    const flow = flowOf(withFile);
+    const search = flow.steps[3]!;
+    if (search.runs.kind !== "search") throw new Error("search missing");
+    const changed = {
+      ...flow,
+      steps: flow.steps.map((step, index) =>
+        index === 3
+          ? {
+              ...search,
+              runs: {
+                ...search.runs,
+                question: [
+                  { key: "text", text: "Find " },
+                  {
+                    key: "file",
+                    source: { from: "input" as const, path: "attachment" },
+                  },
+                ],
+              },
+            }
+          : step,
+      ),
+    };
+
+    expect(
+      sentFlowOf(changed, withFile, namedVersions(withFile)).held?.why,
+    ).toBe("contentProblem.question_takes_file");
+    expect(sentFlowOf(flow, withFile, namedVersions(withFile)).held).toBeNull();
+  });
+
+  it("refuses written text past its bounds and concealed characters before the general refusal", () => {
+    expect(searchTextRefused(" ")).toBeNull();
+    expect(searchTextRefused("a".repeat(8192))).toBeNull();
+    expect(searchTextRefused("")).toBe("refusal.SEARCH_TEXT_UNUSABLE");
+    expect(searchTextRefused("a".repeat(8193))).toBe(
+      "refusal.SEARCH_TEXT_UNUSABLE",
+    );
+    expect(searchTextRefused("\u202e" + "a".repeat(8193))).toBe(
+      "refusal.PROSE_DIRECTION_CONTROL",
+    );
+    expect(searchTextRefused("\r\n" + "a".repeat(8193))).toBe(
+      "refusal.PROSE_LINE_BREAK_CRLF",
+    );
+    expect(
+      searchTextRefused(String.fromCodePoint(0xe0001) + "a".repeat(8193)),
+    ).toBe("refusal.PROSE_TAG_CHARACTER");
+  });
+
+  it("refuses a saved constant's line break when its target now takes one line", () => {
+    const typed = `a${String.fromCodePoint(0x0a)}b`;
+    const read = JSON.stringify(typed);
+    const flow = flowWith({
+      ...freshStep("a"),
+      name: "asking",
+      runs: { kind: "question", version: "q1" },
+      bindings: [
+        { target: "complaint", source: { from: "constant", typed, read } },
+      ],
+    });
+    const named = new Map(NAMED).set("q1", {
+      ...NAMED.get("q1")!,
+      takes: [{ ...COMPLAINT, lines: "one" }],
+    });
+
+    const sent = sentFlowOf(flow, WORKFLOW, named);
+
+    expect(sent.held).toEqual({ why: "fill.line_break", step: "a" });
+    expect(sent.steps[0]!.bindings).toEqual([]);
+    expect(flow.steps[0]!.bindings[0]!.source).toEqual({
+      from: "constant",
+      typed,
+      read,
+    });
+  });
+
   it("sends what was read back as it was, each step by its key, a step read from by its place, and a constant as read", () => {
     const sent = sentFlowOf(flowOf(WORKFLOW), WORKFLOW, NAMED);
 
@@ -1171,6 +2108,83 @@ describe("sentFlowOf", () => {
       ],
       outputs: [{ target: "category", source: { step: 0, path: "category" } }],
       held: null,
+    });
+  });
+
+  it("stops converting route gives at a sixty-fifth file type and sends sixty-four", () => {
+    const flow = flowOf(WORKFLOW);
+    const route = routeOf(flow.steps[1]!);
+    const names = Array.from(
+      { length: 65 },
+      (_, index) => `application/x${index}`,
+    );
+    const tooMany = `${names.join("\n")}\n${"application/after\n".repeat(1024)}`;
+    const file = draftOf({
+      fieldId: "file",
+      name: "documents",
+      kind: "file",
+      types: ["application/pdf"],
+      maximumBytes: 1024,
+      many: false,
+      mustBeGiven: true,
+    });
+    const withTypes = (fileTypes: string): FlowDraft => ({
+      ...flow,
+      steps: flow.steps.map((step, index) =>
+        index === 1
+          ? {
+              ...step,
+              runs: { ...route, gives: [{ ...file, fileTypes }] },
+            }
+          : step,
+      ),
+    });
+    const invalid = withTypes(tooMany);
+    const split = vi.spyOn(String.prototype, "split");
+    try {
+      const sent = sentFlowOf(invalid, WORKFLOW, NAMED);
+
+      expect(sent.held).toEqual({
+        why: "refusal.FILE_TYPES_TOO_MANY",
+        step: "s2",
+      });
+      expect(
+        split.mock.calls.some(
+          ([separator], index) =>
+            String(separator) === "\n" &&
+            String(split.mock.contexts[index]) === tooMany,
+        ),
+      ).toBe(false);
+      expect(invalid.steps[1]!.runs).toMatchObject({
+        gives: [{ fileTypes: tooMany }],
+      });
+      expect(sent.steps[1]!.runs).toMatchObject({
+        kind: "route",
+        discriminator: { step: 0, path: "category" },
+        gives: [],
+        cases: [
+          { term: "urgent", workflow: "w1" },
+          { term: null, workflow: null },
+        ],
+      });
+    } finally {
+      split.mockRestore();
+    }
+
+    const valid = sentFlowOf(
+      withTypes(names.slice(0, 64).join("\n")),
+      WORKFLOW,
+      NAMED,
+    );
+    expect(valid.held).toBeNull();
+    expect(valid.steps[1]!.runs).toMatchObject({
+      kind: "route",
+      discriminator: { step: 0, path: "category" },
+      gives: [{ kind: "file", types: names.slice(0, 64) }],
+      cases: [
+        { term: "urgent", workflow: "w1" },
+        { term: null, workflow: null },
+      ],
     });
   });
 

@@ -1,26 +1,28 @@
 import Box from "@mui/material/Box";
-import Link from "@mui/material/Link";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
-import { Link as RouterLink, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
 import type { Version } from "../../api/groups/{groupId}/{kind}";
 import {
   readWorkflow,
   writtenSinceRead,
-  type OfferedCodeStep,
   type WorkflowVersion,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { writeCeiling } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/ceiling";
@@ -28,16 +30,23 @@ import { writeHelp } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/
 import { writeSteps } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
 import { declareWorkflow } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/{side}";
 import type { Problem } from "../../api/problem";
+import {
+  contentProblemsIn,
+  contentProblemTotalIn,
+} from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import { Async } from "../../app/Async";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
+import { visible } from "../../i18n/visible";
 import { ActButton } from "../../lib/action/ActButton";
 import { Press } from "../../lib/action/Press";
 import { RowPanel } from "../../lib/collection/RowPanel";
-import { isolatedInText } from "../../lib/direction/isolated";
+import { FIGURE_SETTING } from "../../lib/collection/SortableTable";
+import { Part } from "../../lib/layout/Part";
+import { INNER_PART_SX, HEADING_SX, SPACED_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { useAction, type Action } from "../../lib/request/useAction";
-import { useResource } from "../../lib/request/useResource";
+import { useResource, type Resource } from "../../lib/request/useResource";
 import { VERSION_ACT_RULES } from "./actRules";
 import { BoundRows } from "./BindingControls";
 import { WRITTEN_LIMITS } from "./constantDrafts";
@@ -48,21 +57,21 @@ import {
 } from "./ContentProblems";
 import { DeclarationBuilder } from "./DeclarationBuilder";
 import { OPEN_STEP } from "./entryAddress";
-import { modelSaid } from "./ModelControls";
-import { PinNote } from "./PinNote";
+import { useDraftPartStatus } from "./useDraftStatus";
 import { SendsPast } from "./SendsPast";
-import { producerSaid, StepEditor } from "./StepEditor";
-import { CeilingPart, HelpPart } from "./WorkflowSettings";
+import { StepEditor } from "./StepEditor";
+import { calledOf, calledVisibleOf, kindSetApart, StepRow } from "./StepRow";
+import { RunSettings } from "./WorkflowSettings";
 import {
   boundTo,
   flagsOf,
   flowOf,
   freshStep,
-  givenBy,
   MOST_STEPS,
   movedStep,
   namedVersions,
   removedStep,
+  reusableSentFlowOf,
   sentFlowOf,
   sourcesFor,
   targetRows,
@@ -75,13 +84,11 @@ import {
   type StepDraft,
 } from "./workflowDrafts";
 
-const PART_SX = { mb: 3 };
-
-const HEADING_SX = { mb: 1 };
+export const WorkflowSubmissionRefusal = createContext<Problem | null>(null);
 
 const QUIET_SX = { color: "text.secondary" };
 
-const CONTROLS_SX = { display: "flex", flexWrap: "wrap", gap: 1 };
+const STEP_PANEL_WIDTH = 464;
 
 /** Where focus goes once the rows change: a row's step or the move pressed on it, or the steps' heading. */
 type Focus = { readonly key: string; readonly at?: "up" | "down" } | "heading";
@@ -98,6 +105,7 @@ export function WorkflowContent({
   onRefused,
   onWritten,
   onShown,
+  wrapDocument,
 }: {
   readonly groupId: string;
   readonly entryId: string;
@@ -108,7 +116,15 @@ export function WorkflowContent({
   /** A part was written, so whatever the page holds of the version before it is stale. */
   readonly onWritten: () => void;
   readonly onShown: (content: ReadContent | null) => void;
+  readonly wrapDocument?: (content: ReactNode) => ReactNode;
 }) {
+  const submissionRefusal = useContext(WorkflowSubmissionRefusal);
+  const refusedProblems =
+    submissionRefusal === null ? null : contentProblemsIn(submissionRefusal);
+  const refusedTotal =
+    submissionRefusal === null
+      ? null
+      : contentProblemTotalIn(submissionRefusal);
   const load = useCallback(
     (signal: AbortSignal): Promise<WorkflowVersion | null> =>
       readWorkflow(groupId, entryId, version.versionId, signal),
@@ -158,6 +174,11 @@ export function WorkflowContent({
     spending: useAction<WorkflowVersion>(written, refused),
     helping: useAction<WorkflowVersion>(written, refused),
   };
+  useDraftPartStatus(
+    "read",
+    false,
+    read.loading || Object.values(actions).some((action) => action.running),
+  );
   // Each write names the revision shown, so one sent while another write or a read is out is refused.
   const waitingBeside = (own: Action<WorkflowVersion>) =>
     read.loading ||
@@ -166,12 +187,18 @@ export function WorkflowContent({
   const at = { groupId, entryId, versionId: version.versionId };
 
   return (
-    <Async read={{ ...read, value: shown }} empty={() => null}>
-      {(workflow) =>
-        workflow === null ? null : (
+    <Parts
+      read={{ ...read, value: shown }}
+      editable={editable}
+      actions={actions}
+      waiting={waitingBeside}
+      at={at}
+      wrapDocument={wrapDocument}
+      before={
+        shown === null ? null : (
           <>
             {stale ? (
-              <Box ref={afresh} sx={PART_SX}>
+              <Box ref={afresh} sx={SPACED_SX}>
                 <Notice severity="warning" alert>
                   {say("workflow.writtenSince")}
                 </Notice>
@@ -180,22 +207,19 @@ export function WorkflowContent({
             ) : null}
             <ContentProblems
               problems={
-                workflow.problems.length === 0 ? null : workflow.problems
+                refusedProblems ??
+                (shown.problems.length === 0 ? null : shown.problems)
               }
-              content={contentOf(workflow)}
+              problemTotal={
+                refusedProblems === null ? shown.problemTotal : refusedTotal
+              }
+              content={contentOf(shown)}
             />
-            <SendsPast sendsPast={workflow.sendsPast} steps={workflow.steps} />
-            <Parts
-              workflow={workflow}
-              editable={editable}
-              actions={actions}
-              waiting={waitingBeside}
-              at={at}
-            />
+            <SendsPast sendsPast={shown.sendsPast} steps={shown.steps} />
           </>
         )
       }
-    </Async>
+    />
   );
 }
 
@@ -215,24 +239,35 @@ interface At {
 
 /** Every part in the order a reader meets it; the steps and what fills what it gives back are held as typed together. */
 function Parts({
-  workflow,
+  read,
+  before,
+  wrapDocument,
   editable,
   actions,
   waiting,
   at,
 }: {
-  readonly workflow: WorkflowVersion;
+  readonly read: Resource<WorkflowVersion | null>;
+  readonly before: ReactNode;
+  readonly wrapDocument?: (content: ReactNode) => ReactNode;
   readonly editable: boolean;
   readonly actions: Actions;
   /** Whether anything but the write named is out, which saving that part would be refused beside. */
   readonly waiting: (own: Action<WorkflowVersion>) => boolean;
   readonly at: At;
 }) {
-  const named = useMemo(() => namedVersions(workflow), [workflow]);
-  // What is typed into the steps is kept until the steps the server holds change; another part being written
-  // leaves it as typed.
-  const savedAs = JSON.stringify([workflow.steps, workflow.outputs]);
-  const saved = useMemo(() => flowOf(workflow), [workflow]);
+  const workflow = read.value;
+  const named = useMemo(
+    () =>
+      workflow === null ? new Map<string, Named>() : namedVersions(workflow),
+    [workflow],
+  );
+  const saved = useMemo(
+    () => (workflow === null ? null : flowOf(workflow)),
+    [workflow],
+  );
+  // Pin descriptions may refresh without changing the steps being edited.
+  const savedAs = useMemo(() => JSON.stringify(saved), [saved]);
   const [flow, setFlow] = useState(saved);
   const [readAs, setReadAs] = useState(savedAs);
   if (savedAs !== readAs) {
@@ -241,21 +276,83 @@ function Parts({
   }
   const [flowAsked, setFlowAsked] = useState(false);
   const running = actions.flowing.running;
-  const change = (next: (now: FlowDraft) => FlowDraft) => {
-    if (!running) {
-      setFlow(next);
-    }
-  };
-  const sent = sentFlowOf(flow, workflow, named);
+  const change = useCallback(
+    (next: (now: FlowDraft) => FlowDraft) => {
+      if (!running) {
+        setFlow((now) => (now === null ? null : next(now)));
+      }
+    },
+    [running],
+  );
+  const sendFlow = useMemo(() => reusableSentFlowOf(), []);
+  const sent = useMemo(
+    () =>
+      flow === null || workflow === null
+        ? null
+        : sendFlow(flow, workflow, named),
+    [sendFlow, flow, workflow, named],
+  );
   const savedSent = useMemo(
-    () => sentFlowOf(saved, workflow, named),
+    () =>
+      saved === null || workflow === null
+        ? null
+        : sentFlowOf(saved, workflow, named),
     [saved, workflow, named],
   );
-  const unchanged =
-    JSON.stringify([sent.steps, sent.outputs]) ===
-    JSON.stringify([savedSent.steps, savedSent.outputs]);
-  const heldAt = flow.steps.findIndex((step) => step.key === sent.held?.step);
-  const [, setParameters] = useSearchParams();
+  const savedSentAs = useMemo(
+    () =>
+      savedSent === null
+        ? null
+        : [JSON.stringify(savedSent.steps), JSON.stringify(savedSent.outputs)],
+    [savedSent],
+  );
+  const stepsUnsaved =
+    sent !== null &&
+    savedSentAs !== null &&
+    JSON.stringify(sent.steps) !== savedSentAs[0];
+  const outputsUnsaved =
+    sent !== null &&
+    savedSentAs !== null &&
+    JSON.stringify(sent.outputs) !== savedSentAs[1];
+  const unchanged = !stepsUnsaved && !outputsUnsaved;
+  useDraftPartStatus("flow", !unchanged, running || waiting(actions.flowing));
+  const heldAt =
+    flow?.steps.findIndex((step) => step.key === sent?.held?.step) ?? -1;
+  const [parameters, setParameters] = useSearchParams();
+  const picked = parameters.get(OPEN_STEP);
+  // The router's setter changes with the address; read through this, picking a step redraws only the rows it marks.
+  const latestSetParameters = useRef(setParameters);
+  useEffect(() => {
+    latestSetParameters.current = setParameters;
+  }, [setParameters]);
+  const pick = useCallback(
+    (key: string | null) =>
+      latestSetParameters.current(
+        (now) => {
+          const next = new URLSearchParams(now);
+          if (key === null) {
+            next.delete(OPEN_STEP);
+          } else {
+            next.set(OPEN_STEP, key);
+          }
+          return next;
+        },
+        { replace: true },
+      ),
+    [],
+  );
+  const changeStep = useCallback(
+    (key: string, changed: (step: StepDraft) => StepDraft) =>
+      change((now) => ({
+        ...now,
+        steps: now.steps.map((each) =>
+          each.key === key ? changed(each) : each,
+        ),
+      })),
+    [change],
+  );
+  const position = flow?.steps.findIndex((step) => step.key === picked) ?? -1;
+  const step = flow?.steps[position];
   // The server answers the steps in the order sent, so the step picked keeps its place under the key it now has.
   const repick = (keys: readonly string[], answered: WorkflowVersion) =>
     setParameters(
@@ -276,164 +373,242 @@ function Parts({
       },
       { replace: true },
     );
+  const contents =
+    workflow === null || flow === null || sent === null ? null : (
+      <>
+        <DeclarationBuilder
+          title={say("workflow.takes")}
+          heading="h3"
+          depth={2}
+          demands={WORKFLOW_TAKES}
+          fields={workflow.takes}
+          lists={workflow.offered.lists}
+          editable={editable}
+          waiting={waiting(actions.taking)}
+          saveLabel={say("workflow.saveTakes")}
+          underway={say("workflow.underway")}
+          rule={VERSION_ACT_RULES.write}
+          action={actions.taking}
+          save={(fields, signal) =>
+            declareWorkflow(
+              at.groupId,
+              at.entryId,
+              at.versionId,
+              "takes",
+              workflow.revision,
+              fields,
+              signal,
+            )
+          }
+        />
+        <StepsPart
+          flow={flow}
+          workflow={workflow}
+          named={named}
+          editable={editable}
+          running={running}
+          unsaved={stepsUnsaved}
+          picked={picked}
+          pick={pick}
+          changeStep={changeStep}
+          change={change}
+        />
+        <DeclarationBuilder
+          title={say("workflow.gives")}
+          heading="h3"
+          depth={2}
+          demands={WORKFLOW_GIVES}
+          fields={workflow.gives}
+          lists={workflow.offered.lists}
+          editable={editable}
+          waiting={waiting(actions.giving)}
+          saveLabel={say("workflow.saveGives")}
+          underway={say("workflow.underway")}
+          rule={VERSION_ACT_RULES.write}
+          action={actions.giving}
+          save={(fields, signal) =>
+            declareWorkflow(
+              at.groupId,
+              at.entryId,
+              at.versionId,
+              "gives",
+              workflow.revision,
+              fields,
+              signal,
+            )
+          }
+        />
+        <OutputsPart
+          flow={flow}
+          workflow={workflow}
+          named={named}
+          editable={editable}
+          unsaved={outputsUnsaved}
+          change={change}
+        />
+        {editable ? (
+          <Box sx={SPACED_SX}>
+            <ActButton
+              action={actions.flowing}
+              variant={!unchanged ? "contained" : undefined}
+              waiting={waiting(actions.flowing)}
+              reason={
+                sent.held !== null
+                  ? {
+                      severity: "warning",
+                      words:
+                        heldAt === -1
+                          ? say(sent.held.why, { ...WRITTEN_LIMITS, most: 256 })
+                          : say("workflow.heldAt", {
+                              step: calledOf(flow.steps[heldAt]!, heldAt),
+                              why: say(sent.held.why, {
+                                ...WRITTEN_LIMITS,
+                                most: 256,
+                              }),
+                            }),
+                      visible:
+                        heldAt === -1
+                          ? undefined
+                          : visible("workflow.heldAt", {
+                              step: (
+                                <>
+                                  {calledVisibleOf(
+                                    flow.steps[heldAt]!,
+                                    heldAt,
+                                    "inherit",
+                                  )}
+                                </>
+                              ),
+                              why: (
+                                <Box
+                                  component="span"
+                                  sx={{ typography: "systemHint" }}
+                                >
+                                  {say(sent.held.why, {
+                                    ...WRITTEN_LIMITS,
+                                    most: 256,
+                                  })}
+                                </Box>
+                              ),
+                            }),
+                    }
+                  : unchanged
+                    ? {
+                        severity: "info",
+                        words: say("workflow.stepsUnchanged"),
+                      }
+                    : undefined
+              }
+              act={(signal) => {
+                setFlowAsked(true);
+                const keys = flow.steps.map((step) => step.key);
+                return writeSteps(
+                  at.groupId,
+                  at.entryId,
+                  at.versionId,
+                  workflow.revision,
+                  sent.steps,
+                  sent.outputs,
+                  signal,
+                ).then((answered) => {
+                  repick(keys, answered);
+                  return answered;
+                });
+              }}
+            >
+              {say("workflow.saveSteps")}
+            </ActButton>
+            {running ? (
+              <Notice severity="info">{say("workflow.underway")}</Notice>
+            ) : null}
+            {!flowAsked || actions.flowing.problem === null ? null : (
+              <ProblemView
+                problem={actions.flowing.problem}
+                rule={{ inGroup: VERSION_ACT_RULES.write }}
+              />
+            )}
+          </Box>
+        ) : null}
+        <RunSettings
+          workflow={workflow}
+          editable={editable}
+          spending={actions.spending}
+          helping={actions.helping}
+          waiting={waiting}
+          saveCeiling={(ceiling, keeps, raise, signal) =>
+            writeCeiling(
+              at.groupId,
+              at.entryId,
+              at.versionId,
+              workflow.revision,
+              ceiling,
+              keeps,
+              raise,
+              signal,
+            )
+          }
+          saveHelp={(may, helper, signal) =>
+            writeHelp(
+              at.groupId,
+              at.entryId,
+              at.versionId,
+              workflow.revision,
+              may,
+              helper,
+              signal,
+            )
+          }
+        />
+      </>
+    );
+  const list = (
+    <Async read={read} empty={() => null}>
+      {() =>
+        contents === null ? null : (
+          <>
+            {before}
+            {contents}
+          </>
+        )
+      }
+    </Async>
+  );
   return (
-    <>
-      <DeclarationBuilder
-        title={say("workflow.takes")}
-        heading="h3"
-        demands={WORKFLOW_TAKES}
-        fields={workflow.takes}
-        lists={workflow.offered.lists}
-        editable={editable}
-        waiting={waiting(actions.taking)}
-        saveLabel={say("workflow.saveTakes")}
-        underway={say("workflow.underway")}
-        rule={VERSION_ACT_RULES.write}
-        action={actions.taking}
-        save={(fields, signal) =>
-          declareWorkflow(
-            at.groupId,
-            at.entryId,
-            at.versionId,
-            "takes",
-            workflow.revision,
-            fields,
-            signal,
-          )
-        }
-      />
-      <StepsPart
-        flow={flow}
-        workflow={workflow}
-        named={named}
-        editable={editable}
-        running={running}
-        change={change}
-      />
-      <DeclarationBuilder
-        title={say("workflow.gives")}
-        heading="h3"
-        demands={WORKFLOW_GIVES}
-        fields={workflow.gives}
-        lists={workflow.offered.lists}
-        editable={editable}
-        waiting={waiting(actions.giving)}
-        saveLabel={say("workflow.saveGives")}
-        underway={say("workflow.underway")}
-        rule={VERSION_ACT_RULES.write}
-        action={actions.giving}
-        save={(fields, signal) =>
-          declareWorkflow(
-            at.groupId,
-            at.entryId,
-            at.versionId,
-            "gives",
-            workflow.revision,
-            fields,
-            signal,
-          )
-        }
-      />
-      <OutputsPart
-        flow={flow}
-        workflow={workflow}
-        named={named}
-        editable={editable}
-        change={change}
-      />
-      {editable ? (
-        <Box sx={PART_SX}>
-          <ActButton
-            action={actions.flowing}
-            waiting={waiting(actions.flowing)}
-            reason={
-              sent.held !== null
-                ? {
-                    severity: "info",
-                    words:
-                      heldAt === -1
-                        ? say(sent.held.why, WRITTEN_LIMITS)
-                        : say("workflow.heldAt", {
-                            step: calledOf(flow.steps[heldAt]!, heldAt),
-                            why: say(sent.held.why, WRITTEN_LIMITS),
-                          }),
-                  }
-                : unchanged
-                  ? { severity: "info", words: say("workflow.stepsUnchanged") }
-                  : undefined
-            }
-            act={(signal) => {
-              setFlowAsked(true);
-              const keys = flow.steps.map((step) => step.key);
-              return writeSteps(
-                at.groupId,
-                at.entryId,
-                at.versionId,
-                workflow.revision,
-                sent.steps,
-                sent.outputs,
-                signal,
-              ).then((answered) => {
-                repick(keys, answered);
-                return answered;
-              });
-            }}
-          >
-            {say("workflow.saveSteps")}
-          </ActButton>
-          {running ? (
-            <Notice severity="info">{say("workflow.underway")}</Notice>
-          ) : null}
-          {!flowAsked || actions.flowing.problem === null ? null : (
-            <ProblemView
-              problem={actions.flowing.problem}
-              rule={{ inGroup: VERSION_ACT_RULES.write }}
-            />
-          )}
-        </Box>
-      ) : null}
-      <CeilingPart
-        workflow={workflow}
-        editable={editable}
-        action={actions.spending}
-        waiting={waiting(actions.spending)}
-        save={(ceiling, keeps, raise, signal) =>
-          writeCeiling(
-            at.groupId,
-            at.entryId,
-            at.versionId,
-            workflow.revision,
-            ceiling,
-            keeps,
-            raise,
-            signal,
-          )
-        }
-      />
-      <HelpPart
-        workflow={workflow}
-        editable={editable}
-        action={actions.helping}
-        waiting={waiting(actions.helping)}
-        save={(may, helper, signal) =>
-          writeHelp(
-            at.groupId,
-            at.entryId,
-            at.versionId,
-            workflow.revision,
-            may,
-            helper,
-            signal,
-          )
-        }
-      />
-    </>
+    <RowPanel
+      open={read.problem === null && step !== undefined}
+      onClose={() => pick(null)}
+      title={step === undefined ? "" : calledOf(step, position)}
+      visibleTitle={
+        step === undefined ? undefined : calledVisibleOf(step, position)
+      }
+      headingLevel="h4"
+      width={STEP_PANEL_WIDTH}
+      leastListWidth={620}
+      besideHeading={step === undefined ? undefined : kindSetApart(step)}
+      list={wrapDocument === undefined ? list : wrapDocument(list)}
+      listLabel={say("workflow.steps")}
+    >
+      {read.problem !== null ||
+      step === undefined ||
+      flow === null ||
+      workflow === null ? null : (
+        <StepEditor
+          key={step.key}
+          step={step}
+          position={position}
+          flow={flow}
+          workflow={workflow}
+          named={named}
+          editable={editable && !running}
+          change={(changed) => changeStep(step.key, changed)}
+        />
+      )}
+    </RowPanel>
   );
 }
 
 /**
- * The steps in the order they run, which nothing but moving one reorders, and the step picked beside them; the
- * step picked is held in the address.
+ * The steps in the order they run; nothing but moving one reorders them.
  */
 function StepsPart({
   flow,
@@ -441,6 +616,10 @@ function StepsPart({
   named,
   editable,
   running,
+  unsaved,
+  picked,
+  pick,
+  changeStep,
   change,
 }: {
   readonly flow: FlowDraft;
@@ -448,6 +627,13 @@ function StepsPart({
   readonly named: ReadonlyMap<string, Named>;
   readonly editable: boolean;
   readonly running: boolean;
+  readonly unsaved: boolean;
+  readonly picked: string | null;
+  readonly pick: (key: string | null) => void;
+  readonly changeStep: (
+    key: string,
+    changed: (step: StepDraft) => StepDraft,
+  ) => void;
   readonly change: (next: (now: FlowDraft) => FlowDraft) => void;
 }) {
   const headingId = useId();
@@ -469,46 +655,77 @@ function StepsPart({
       )?.focus();
     }
   }, [flow.steps]);
-  const [parameters, setParameters] = useSearchParams();
-  const picked = parameters.get(OPEN_STEP);
-  const pick = (key: string | null) =>
-    setParameters(
-      (now) => {
-        const next = new URLSearchParams(now);
-        if (key === null) {
-          next.delete(OPEN_STEP);
-        } else {
-          next.set(OPEN_STEP, key);
-        }
-        return next;
-      },
-      { replace: true },
-    );
+  const [parameters] = useSearchParams();
   const hrefOf = (key: string) => {
     const next = new URLSearchParams(parameters);
     next.set(OPEN_STEP, key);
     return `?${next}`;
   };
-  const position = flow.steps.findIndex((step) => step.key === picked);
-  const step = flow.steps[position];
-  const changeStep = (key: string, changed: (step: StepDraft) => StepDraft) =>
-    change((now) => ({
-      ...now,
-      steps: now.steps.map((each) => (each.key === key ? changed(each) : each)),
-    }));
+  // Each row is handed these rather than its own, so typing in the step picked redraws that step's row alone.
+  const registerRow = useCallback(
+    (key: string, row: HTMLElement | null) =>
+      setOrDelete(rows.current, key, row),
+    [],
+  );
+  const registerOpen = useCallback(
+    (key: string, open: HTMLElement | null) =>
+      setOrDelete(opens.current, key, open),
+    [],
+  );
+  const move = useCallback(
+    (key: string, index: number, by: -1 | 1) => {
+      pending.current = { key, at: by < 0 ? "up" : "down" };
+      change((now) => movedStep(now, index, by));
+    },
+    [change],
+  );
+  const takeOut = useCallback(
+    (index: number, focusAfter: string | undefined, wasPicked: boolean) => {
+      pending.current =
+        focusAfter === undefined ? "heading" : { key: focusAfter };
+      if (wasPicked) {
+        pick(null);
+      }
+      change((now) => removedStep(now, index));
+    },
+    [change, pick],
+  );
+  const takeVersion = useCallback(
+    (key: string, versionId: string) =>
+      changeStep(key, (now) => tookVersion(now, versionId, named)),
+    [changeStep, named],
+  );
   // No region of its own: the panel names the list it is drawn beside.
   const table = (
-    <Box sx={PART_SX}>
-      <Typography
-        id={headingId}
-        ref={heading}
-        tabIndex={-1}
-        variant="h6"
-        component="h3"
-        sx={HEADING_SX}
+    <Box sx={INNER_PART_SX}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 1,
+          flexWrap: "wrap",
+        }}
       >
-        {say("workflow.steps")}
-      </Typography>
+        <Typography
+          id={headingId}
+          ref={heading}
+          tabIndex={-1}
+          variant="h3"
+          sx={HEADING_SX}
+        >
+          {say("workflow.steps")}
+        </Typography>
+        {editable && unsaved ? (
+          <Typography
+            component="span"
+            variant="body2"
+            color="text.secondary"
+            sx={{ typography: "systemHint" }}
+          >
+            {say("draft.unsaved")}
+          </Typography>
+        ) : null}
+      </Box>
       {flow.steps.length === 0 ? (
         <>
           <Typography variant="body2" sx={QUIET_SX}>
@@ -520,124 +737,47 @@ function StepsPart({
           </Typography>
         </>
       ) : (
-        <Table size="small" aria-labelledby={headingId}>
-          <TableHead>
-            <TableRow>
-              <TableCell>{say("workflow.order")}</TableCell>
-              <TableCell>{say("workflow.name")}</TableCell>
-              <TableCell>{say("workflow.runs")}</TableCell>
-              <TableCell>{say("workflow.produces")}</TableCell>
-              <TableCell>{say("workflow.reviewedBy")}</TableCell>
-              <TableCell>{say("workflow.givesBack")}</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {flow.steps.map((each, index) => {
-              const called = calledOf(each, index);
-              const pinned = pinnedOf(each, named);
-              return (
-                <TableRow
+        <TableContainer>
+          <Table size="small" aria-labelledby={headingId}>
+            <TableHead>
+              <TableRow>
+                <TableCell {...FIGURE_SETTING}>
+                  {say("workflow.order")}
+                </TableCell>
+                <TableCell>{say("workflow.name")}</TableCell>
+                <TableCell>{say("workflow.runs")}</TableCell>
+                <TableCell>{say("workflow.produces")}</TableCell>
+                <TableCell>{say("workflow.reviewedBy")}</TableCell>
+                <TableCell>{say("workflow.givesBack")}</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {flow.steps.map((each, index) => (
+                <StepRow
                   key={each.key}
-                  ref={(row: HTMLTableRowElement | null) => {
-                    if (row === null) {
-                      rows.current.delete(each.key);
-                    } else {
-                      rows.current.set(each.key, row);
-                    }
-                  }}
-                  selected={each.key === picked}
-                >
-                  <TableCell>{index + 1}</TableCell>
-                  <TableCell>
-                    <Link
-                      ref={(open: HTMLElement | null) => {
-                        if (open === null) {
-                          opens.current.delete(each.key);
-                        } else {
-                          opens.current.set(each.key, open);
-                        }
-                      }}
-                      component={RouterLink}
-                      to={hrefOf(each.key)}
-                      replace
-                      aria-label={say("workflow.open", { name: called })}
-                      aria-current={each.key === picked || undefined}
-                    >
-                      <bdi>{called}</bdi>
-                    </Link>
-                    {editable ? (
-                      <Box sx={CONTROLS_SX}>
-                        <Box component="span" data-part="up">
-                          <Press
-                            unavailable={running || index === 0}
-                            onPress={() => {
-                              pending.current = { key: each.key, at: "up" };
-                              change((now) => movedStep(now, index, -1));
-                            }}
-                          >
-                            {say("workflow.up", { name: called })}
-                          </Press>
-                        </Box>
-                        <Box component="span" data-part="down">
-                          <Press
-                            unavailable={
-                              running || index === flow.steps.length - 1
-                            }
-                            onPress={() => {
-                              pending.current = { key: each.key, at: "down" };
-                              change((now) => movedStep(now, index, 1));
-                            }}
-                          >
-                            {say("workflow.down", { name: called })}
-                          </Press>
-                        </Box>
-                        <Press
-                          unavailable={running}
-                          onPress={() => {
-                            const next =
-                              flow.steps[index + 1] ?? flow.steps[index - 1];
-                            pending.current =
-                              next === undefined
-                                ? "heading"
-                                : { key: next.key };
-                            if (each.key === picked) {
-                              pick(null);
-                            }
-                            change((now) => removedStep(now, index));
-                          }}
-                        >
-                          {say("workflow.remove", { name: called })}
-                        </Press>
-                      </Box>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    {runsSaid(each, named)}
-                    {pinned === undefined ? null : (
-                      <PinNote
-                        pinned={pinned}
-                        called={called}
-                        take={
-                          editable && !running
-                            ? (versionId) =>
-                                changeStep(each.key, (now) =>
-                                  tookVersion(now, versionId, named),
-                                )
-                            : undefined
-                        }
-                      />
-                    )}
-                  </TableCell>
-                  <TableCell>{producerSaid(each)}</TableCell>
-                  <TableCell>{reviewedSaid(each)}</TableCell>
-                  <TableCell>
-                    {givesSaid(each, named, workflow.offered.codeSteps)}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+                  step={each}
+                  position={index}
+                  last={index === flow.steps.length - 1}
+                  focusAfterTakingOut={
+                    (flow.steps[index + 1] ?? flow.steps[index - 1])?.key
+                  }
+                  picked={each.key === picked}
+                  href={hrefOf(each.key)}
+                  named={named}
+                  codeSteps={workflow.offered.codeSteps}
+                  searchWays={workflow.offered.searchWays}
+                  editable={editable}
+                  running={running}
+                  onRegisterRow={registerRow}
+                  onRegisterOpen={registerOpen}
+                  onMove={move}
+                  onTakeOut={takeOut}
+                  onTakeVersion={takeVersion}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
       {editable ? (
         <Box sx={{ mt: 1 }}>
@@ -645,7 +785,7 @@ function StepsPart({
             unavailable={running}
             reason={
               flow.steps.length >= MOST_STEPS
-                ? { severity: "info", words: say("refusal.STEPS_TOO_MANY") }
+                ? { severity: "warning", words: say("refusal.STEPS_TOO_MANY") }
                 : undefined
             }
             onPress={() => {
@@ -665,38 +805,19 @@ function StepsPart({
       ) : null}
     </Box>
   );
-  return (
-    <RowPanel
-      open={step !== undefined}
-      onClose={() => pick(null)}
-      title={step === undefined ? "" : calledOf(step, position)}
-      headingLevel="h4"
-      list={table}
-      listLabel={say("workflow.steps")}
-    >
-      {step === undefined ? null : (
-        <StepEditor
-          key={step.key}
-          step={step}
-          position={position}
-          flow={flow}
-          workflow={workflow}
-          named={named}
-          editable={editable && !running}
-          change={(changed) => changeStep(step.key, changed)}
-        />
-      )}
-    </RowPanel>
-  );
+  return table;
 }
 
-function pinnedOf(
-  step: StepDraft,
-  named: ReadonlyMap<string, Named>,
-): Named["pinned"] {
-  return step.runs.kind === "question" || step.runs.kind === "workflow"
-    ? named.get(step.runs.version)?.pinned
-    : undefined;
+function setOrDelete(
+  held: Map<string, HTMLElement>,
+  key: string,
+  element: HTMLElement | null,
+): void {
+  if (element === null) {
+    held.delete(key);
+  } else {
+    held.set(key, element);
+  }
 }
 
 /** What fills each value the workflow gives back, only ever what a step gives back; one unfilled says so at once. */
@@ -705,15 +826,16 @@ function OutputsPart({
   workflow,
   named,
   editable,
+  unsaved,
   change,
 }: {
   readonly flow: FlowDraft;
   readonly workflow: WorkflowVersion;
   readonly named: ReadonlyMap<string, Named>;
   readonly editable: boolean;
+  readonly unsaved: boolean;
   readonly change: (next: (now: FlowDraft) => FlowDraft) => void;
 }) {
-  const headingId = useId();
   const position = flow.steps.length;
   const sources = sourcesFor(flow, position, workflow, named, undefined);
   const problems = workflow.problems.filter(
@@ -728,10 +850,23 @@ function OutputsPart({
     "workflow.outputUnbound",
   );
   return (
-    <Box component="section" aria-labelledby={headingId} sx={PART_SX}>
-      <Typography id={headingId} variant="h6" component="h3" sx={HEADING_SX}>
-        {say("workflow.outputs")}
-      </Typography>
+    <Part
+      title={say("workflow.outputs")}
+      actions={
+        editable && unsaved ? (
+          <Typography
+            component="span"
+            variant="body2"
+            color="text.secondary"
+            sx={{ typography: "systemHint" }}
+          >
+            {say("draft.unsaved")}
+          </Typography>
+        ) : undefined
+      }
+      level="h3"
+      depth={2}
+    >
       {rows.length === 0 ? (
         <Typography variant="body2" sx={QUIET_SX}>
           {say("workflow.outputsNone")}
@@ -750,56 +885,6 @@ function OutputsPart({
           }
         />
       )}
-    </Box>
+    </Part>
   );
-}
-
-function calledOf(step: StepDraft, position: number): string {
-  return step.name === ""
-    ? say("workflow.unnamed", { position: position + 1 })
-    : isolatedInText(step.name);
-}
-
-function runsSaid(step: StepDraft, named: ReadonlyMap<string, Named>): string {
-  const runs = step.runs;
-  switch (runs.kind) {
-    case "none":
-      return say("workflow.runsNothing");
-    case "question":
-    case "workflow": {
-      const version = named.get(runs.version);
-      return version === undefined
-        ? say("workflow.runsNothing")
-        : say("workflow.runsVersion", {
-            name: isolatedInText(version.name),
-            number: version.number,
-          });
-    }
-    case "code_step":
-      return runs.codeStep === ""
-        ? say("workflow.runsNothing")
-        : say("workflow.runsCode", { name: runs.codeStep });
-    case "route":
-      return say("workflow.runsRoute");
-  }
-}
-
-function reviewedSaid(step: StepDraft): string {
-  if (step.runs.kind !== "question" && step.runs.kind !== "code_step") {
-    return say("workflow.producesNobody");
-  }
-  return step.reviewer === "model"
-    ? modelSaid(step.reviewerModel, step.reviewerMode)
-    : say("workflow.producesPerson");
-}
-
-function givesSaid(
-  step: StepDraft,
-  named: ReadonlyMap<string, Named>,
-  codeSteps: readonly OfferedCodeStep[],
-): string {
-  const gives = givenBy(step, named, codeSteps);
-  return gives === undefined
-    ? say("workflow.givesUnknown")
-    : say("workflow.givesCount", { count: gives.length });
 }

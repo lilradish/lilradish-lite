@@ -105,6 +105,7 @@ class QuestionsIntegrationSpec extends Specification {
         store.seeded(OTHER_LIST_IN_SERVICE, OTHER_LIST, 1)
         ["Billing": "A charge is what is disputed.", "Delivery": "It came late or not at all."]
                 .eachWithIndex { term, meaning, position ->
+                    // DB-SPECIFIC: PostgreSQL :: casts to uuid.
                     store.session.sql("""
                             insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                             values (?::uuid, ?, ?, ?, ?::uuid)
@@ -118,6 +119,7 @@ class QuestionsIntegrationSpec extends Specification {
 
     /** The version's fields: a text taken, a term pinning the older list, and a field holding one of text. */
     private void fields(String version, boolean whole) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side,
                                                 parent_field_id, position, name, kind, text_limit,
@@ -143,6 +145,7 @@ class QuestionsIntegrationSpec extends Specification {
 
     def "reads what a version holds, each list it pins as a reader names it, and what a field of terms could pin"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update entry_versions set revision = 4 where entry_version_id = ?::uuid").param(VERSION)
                 .update()
 
@@ -257,6 +260,7 @@ class QuestionsIntegrationSpec extends Specification {
     /** Nothing but a page ever pins a list, and it pins only its own group's: another's is a store gone wrong. */
     def "a version pinning a list of another group's fails the read rather than naming it"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update declaration_fields set term_list_version_id = ?::uuid where name = 'category'")
                 .param(OTHER_LIST_IN_SERVICE).update()
 

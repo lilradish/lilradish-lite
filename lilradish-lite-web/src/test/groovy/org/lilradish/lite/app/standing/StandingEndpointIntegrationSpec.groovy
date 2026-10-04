@@ -154,6 +154,28 @@ class StandingEndpointIntegrationSpec extends Specification {
         !answered.response.contentAsString.contains("owner")
     }
 
+    /** The reader as an answer naming a person names them, so a page can tell their own acts by it. */
+    def "names the reader by the user they arrived as, and by nothing else of theirs or anybody's"() {
+        given:
+        arriving(STEWARD)
+        def principal = HumanPrincipal.of(READER, [EstateRole.STEWARD] as Set, [
+                (new Scope.Group(PAYROLL)): [GroupRole.OPERATOR] as Set])
+        BDDMockito.given(holdings.heldBy(STEWARD)).willReturn(Optional.of(new Holdings.Held(principal, [
+                new Holdings.GroupInView(PAYROLL, new GroupKey("PAYROLL"), new GroupName("Payroll"))])))
+
+        when:
+        MvcResult answered = asking()
+
+        then:
+        answered.response.status == 200
+        answerIn(answered).get("userId").asString() == STEWARD.value()
+
+        and: "beside the acts and the groups and nothing more, the subject it is held under nowhere on the wire"
+        answerIn(answered).propertyNames() as Set == ["userId", "acts", "groups"] as Set
+        !answered.response.contentAsString.contains(READER.value().toString())
+        answered.response.contentAsString.count(STEWARD.value()) == 1
+    }
+
     /** A 200 saying nothing of freshness may be kept on a guess, and nothing on this path sends Authorization. */
     def "forbids every cache from keeping an answer decided for one reader"() {
         given:
@@ -183,6 +205,10 @@ class StandingEndpointIntegrationSpec extends Specification {
         answered.response.status == 200
         actsIn(answered).isEmpty()
         groupsIn(answered).isEmpty()
+
+        and: "naming nobody, the user they arrived as included"
+        !answerIn(answered).has("userId")
+        !answered.response.contentAsString.contains(STEWARD.value())
 
         and: "and nothing was refused, so no code on this response says which of the two it was"
         !answered.response.contentAsString.contains("code")

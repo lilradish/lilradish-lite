@@ -24,12 +24,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A process killed with a model's call out and code running, on a real server running the real baseline. The killed
- * process is an engine of its own left parked mid-call and mid-run and never shut down: the store sees only what it
- * committed, as after a kill, since no call and no code runs inside a transaction. A second engine over the same store
- * starts, settles and goes on; what the first says when it wakes changes nothing, and says so by its keys alone.
- */
 class EngineCrashIntegrationSpec extends Specification {
 
     static final String SAID = '{"values":{"summary":"invoice 4471 is on fire."},"confidences":{}}'
@@ -49,7 +43,6 @@ class EngineCrashIntegrationSpec extends Specification {
 
     LibraryStore store
 
-    /** The process killed: its model paused mid-call, its code held at its gate. */
     EngineWiring killed
 
     ScriptedModelCalls killedModel
@@ -60,7 +53,6 @@ class EngineCrashIntegrationSpec extends Specification {
 
     CountDownLatch codeRunning
 
-    /** The process started after it. */
     EngineWiring started
 
     ScriptedModelCalls startedModel
@@ -74,6 +66,7 @@ class EngineCrashIntegrationSpec extends Specification {
     def setup() {
         store = LibraryStore.copied(server, "engine_crash_" + (++databasesMade))
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(TicketWorkflow.SUMMARISE).update()
@@ -88,7 +81,6 @@ class EngineCrashIntegrationSpec extends Specification {
         started?.executor?.destroy()
     }
 
-    /** The first process started both runs and was killed with both out; the second started and went on. */
     private void killedAndStartedAgain() {
         callOut = new Pause()
         codeRunning = new CountDownLatch(1)
@@ -118,7 +110,7 @@ class EngineCrashIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer) {
-        new CallOutcome.CameBack(answer, 321, 12, true, false)
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
     }
 
     private static RunId ticketRun() {
@@ -138,6 +130,7 @@ class EngineCrashIntegrationSpec extends Specification {
     }
 
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by_kind || ' '
                        || case when try.ended_at is null then 'open'
@@ -148,6 +141,7 @@ class EngineCrashIntegrationSpec extends Specification {
     }
 
     private List<String> callRows() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select try.try_number || ' ' || call.outcome || ' ' || call.sent_count || ' '
                        || coalesce(call.came_back_count::text, '-') || ' ' || coalesce(call.answer, '-')
@@ -156,7 +150,6 @@ class EngineCrashIntegrationSpec extends Specification {
                 """)
     }
 
-    /** Every table the baseline made, read off the catalogue, so one a later stage adds is held too. */
     private String runRows() {
         store.contents()
     }
@@ -198,10 +191,13 @@ class EngineCrashIntegrationSpec extends Specification {
         runRows() == before
 
         and:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         def call = store.texts("""
                 select call.model_call_id::text from model_calls call where call.outcome = 'nothing_came_back'""")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         def modelTry = store.texts("""
                 select production_id::text from productions where producer = 'model' and try_number = 1""")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         def codeTry = store.texts("""
                 select production_id::text from productions where producer = 'code' and try_number = 1""")[0]
         logged.list*.formattedMessage.sort() == [
@@ -214,6 +210,7 @@ class EngineCrashIntegrationSpec extends Specification {
         and: "nothing either came back with said, nor any value it gave"
         logged.list.every { !it.formattedMessage.contains("4471") }
         store.count("select count(*) from model_calls where answer like '%4471%'") == 0
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.count("select count(*) from production_values where value::text like '%4471%'") == 0
 
         cleanup:

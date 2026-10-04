@@ -9,12 +9,12 @@ import org.libprunus.core.error.ApiErrorException;
 import org.lilradish.lite.domain.declaration.AskedField;
 import org.lilradish.lite.domain.declaration.DeclarationSide;
 import org.lilradish.lite.domain.declaration.Demands;
-import org.lilradish.lite.domain.declaration.FieldKind;
 import org.lilradish.lite.domain.declaration.Instruction;
-import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.failure.RefusalCode;
 import org.lilradish.lite.domain.identity.GroupPermission;
-import org.lilradish.lite.domain.referencelist.ListNote;
+import org.lilradish.lite.domain.inference.Envelope;
+import org.lilradish.lite.domain.text.CharacterStanding;
+import org.lilradish.lite.domain.text.Legibility;
 import org.lilradish.lite.domain.text.ProseRefusal;
 import org.lilradish.lite.web.ActAdmission;
 import org.lilradish.lite.web.ChangeRequests;
@@ -41,17 +41,24 @@ final class QuestionController {
 
     static final String INSTRUCTION = VERSION + "/instruction";
 
+    static final String DRAWING = VERSION + "/drawing";
+
     static final String HALF = VERSION + "/{side:takes|gives}";
 
     private static final String INSTRUCTION_MEMBER = "instruction";
 
+    private static final String DRAWING_MEMBER = "drawing";
+
     private static final String FIELDS_MEMBER = "fields";
 
-    /** Room for the longest instruction with every character escaped as a pair, and its members. */
-    private static final int LARGEST_INSTRUCTION = 131072;
+    /** Room for the longest instruction or drawing with every character escaped as a pair, and its members. */
+    private static final int LARGEST_PROSE_REQUEST_BYTES = 131072;
 
     private static final String INSTRUCTION_REFUSED =
             "This takes a JSON object holding the revision read and an instruction, or null, and nothing else.";
+
+    private static final String DRAWING_REFUSED =
+            "This takes a JSON object holding the revision read and how it is drawn, or null, and nothing else.";
 
     private static final String HALF_REFUSED =
             "This takes a JSON object holding the revision read and the half's fields, and nothing else.";
@@ -79,7 +86,7 @@ final class QuestionController {
             throws IOException {
         VersionAddress addressed = VersionAddress.of(entryId, versionId, request);
         ChangeRequests.requireNoParameter(request);
-        JsonNode body = JsonBody.read(request, LARGEST_INSTRUCTION, INSTRUCTION_REFUSED);
+        JsonNode body = JsonBody.read(request, LARGEST_PROSE_REQUEST_BYTES, INSTRUCTION_REFUSED);
         JsonNode said = body.path(INSTRUCTION_MEMBER);
         if (!body.isObject() || body.size() != 2 || !(said.isString() || said.isNull())) {
             throw new ApiErrorException(RefusalCode.BODY_UNUSABLE, INSTRUCTION_REFUSED);
@@ -88,6 +95,27 @@ final class QuestionController {
         Instruction instruction = said.isString() ? instructionOf(said.asString()) : null;
         return answer(drafts.instruct(
                 addressed.group(), addressed.entry(), addressed.version(), addressed.caller(), seen, instruction));
+    }
+
+    @PutMapping(DRAWING)
+    @GroupPermissionRequired(GroupPermission.AUTHOR_ENTRY)
+    QuestionAnswer draw(@PathVariable String entryId, @PathVariable String versionId, HttpServletRequest request)
+            throws IOException {
+        VersionAddress addressed = VersionAddress.of(entryId, versionId, request);
+        ChangeRequests.requireNoParameter(request);
+        JsonNode body = JsonBody.read(request, LARGEST_PROSE_REQUEST_BYTES, DRAWING_REFUSED);
+        JsonNode drawing = body.path(DRAWING_MEMBER);
+        if (!body.isObject() || body.size() != 2 || !(drawing.isString() || drawing.isNull())) {
+            throw new ApiErrorException(RefusalCode.BODY_UNUSABLE, DRAWING_REFUSED);
+        }
+        int seen = SeenRevision.in(body, DRAWING_REFUSED);
+        return answer(drafts.draw(
+                addressed.group(),
+                addressed.entry(),
+                addressed.version(),
+                addressed.caller(),
+                seen,
+                drawing.isString() ? drawingOf(drawing.asString()) : null));
     }
 
     @PutMapping(HALF)
@@ -126,6 +154,32 @@ final class QuestionController {
         throw LibraryRefusal.refusingProse(refusal, LibraryRefusal.INSTRUCTION_UNUSABLE);
     }
 
+    private static String drawingOf(String said) {
+        if (said.contains("\r\n")) {
+            throw LibraryRefusal.PROSE_LINE_BREAK_CRLF.raised();
+        }
+        try {
+            for (int at = 0; at < said.length(); ) {
+                int point = said.codePointAt(at);
+                CharacterStanding standing = CharacterStanding.of(point);
+                if (standing == CharacterStanding.OTHER_CONTROL
+                        || standing == CharacterStanding.LINE_OR_PARAGRAPH_SEPARATOR
+                        || standing == CharacterStanding.SURROGATE) {
+                    throw new IllegalArgumentException("Drawing holds a character that prose cannot hold");
+                }
+                at += Character.charCount(point);
+            }
+            Legibility.requireSomethingVisibleInProse(said, "Drawing");
+            Legibility.requireWithinMaximumLength(said, 8192, "Drawing");
+        } catch (IllegalArgumentException refused) {
+            throw LibraryRefusal.DRAWING_UNUSABLE.raised();
+        }
+        if (DrawingDepth.tooDeep(said)) {
+            throw LibraryRefusal.DRAWING_TOO_DEEP.raised();
+        }
+        return said;
+    }
+
     static QuestionAnswer answer(Questions.QuestionView view) {
         StoredQuestion stored = view.stored();
         Instruction instruction = stored.instruction();
@@ -133,42 +187,17 @@ final class QuestionController {
         return new QuestionAnswer(
                 view.revision(),
                 instruction == null ? null : instruction.value(),
+                stored.drawing(),
                 DeclarationAnswers.of(stored.takes(), view.pins()),
                 DeclarationAnswers.of(stored.gives(), view.pins()),
-                added == null
-                        ? null
-                        : added.stream().map(QuestionController::addedAnswer).toList(),
+                added == null ? null : Envelope.toProduce(added),
                 view.pinnable().stream().map(DeclarationAnswers::offered).toList());
-    }
-
-    private static AddedAnswer addedAnswer(AskedField field) {
-        OfferedTerms offered = field.terms();
-        ListNote note = offered == null ? null : offered.note();
-        return new AddedAnswer(
-                field.name().value(),
-                field.kind().published(),
-                field.longest(),
-                field.most() != null,
-                field.most(),
-                field.mustBeGiven(),
-                offered == null
-                        ? null
-                        : offered.terms().stream()
-                                .map(each -> new TermAnswer(
-                                        each.term().value(), each.meaning().value()))
-                                .toList(),
-                note == null ? null : note.value(),
-                field.confidenceAsked(),
-                field.kind() == FieldKind.FIELDS
-                        ? field.fields().stream()
-                                .map(QuestionController::addedAnswer)
-                                .toList()
-                        : null);
     }
 
     /**
      * @param revision what a write sends back as the one it read
      * @param instruction absent where the version says nothing yet
+     * @param drawing absent where the version does not lay out its inputs for a person
      * @param takes what it takes, in declared order
      * @param gives what it gives back, in declared order
      * @param added what a model is told of what it gives back, absent where that half is not whole yet
@@ -178,28 +207,9 @@ final class QuestionController {
     record QuestionAnswer(
             int revision,
             @Nullable String instruction,
+            @Nullable String drawing,
             List<DeclarationAnswers.FieldAnswer> takes,
             List<DeclarationAnswers.FieldAnswer> gives,
-            @Nullable List<AddedAnswer> added,
+            @Nullable String added,
             List<DeclarationAnswers.OfferedAnswer> lists) {}
-
-    /**
-     * @param mustBeGiven whether it is told it may not give nothing
-     * @param confidence whether a value is asked to come with how sure its maker was, and never above what
-     * @param fields only on a field holding fields, in declared order
-     */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    record AddedAnswer(
-            String name,
-            String kind,
-            @Nullable Integer longest,
-            boolean many,
-            @Nullable Integer most,
-            boolean mustBeGiven,
-            @Nullable List<TermAnswer> terms,
-            @Nullable String note,
-            boolean confidence,
-            @Nullable List<AddedAnswer> fields) {}
-
-    record TermAnswer(String term, String meaning) {}
 }

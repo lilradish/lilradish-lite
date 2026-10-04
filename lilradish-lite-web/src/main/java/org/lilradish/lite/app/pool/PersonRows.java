@@ -14,12 +14,9 @@ import org.lilradish.lite.domain.people.PersonName;
 import org.lilradish.lite.domain.wire.StoreLabels;
 
 /**
- * Somebody in the pool as a row of any reading of them holds them, under the columns every such reading
- * names alike: {@code subject_id}, {@code user_id} and {@code display_name}. Shared by every reading of
- * people in the pool, so no two of them judge a stored value differently.
+ * Somebody in the pool as every reader sees them. Readers share the same judgement of a stored value.
  *
- * <p>A stored value its type refuses — written round the type, by hand or by a restore — fails the whole
- * read rather than being shown or left out, naming whose row it was.
+ * <p>A stored value its type refuses fails the whole read rather than being shown or left out, naming whose row it was.
  */
 public final class PersonRows {
 
@@ -52,7 +49,6 @@ public final class PersonRows {
         }
     }
 
-    /** Somebody as the row names them, under the three columns every reading of people names alike. */
     public static Person person(ResultSet result) throws SQLException {
         SubjectId subject = subjectOf(result);
         return new Person(subject, userIdOf(result, subject), nameOf(result, subject));

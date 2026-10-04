@@ -1,5 +1,6 @@
 package org.lilradish.lite.app.codestep.development
 
+import org.lilradish.lite.domain.codestep.CodeStep
 import org.lilradish.lite.domain.declaration.Demand
 import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
@@ -28,9 +29,9 @@ class StampReferenceSpec extends Specification {
 
     def "stamps a complaint with a reference drawn from its words alone, alike each time and apart from another's"() {
         when:
-        def first = stamping.run(complaint("The kettle came broken."))
-        def again = stamping.run(complaint("The kettle came broken."))
-        def other = stamping.run(complaint("The kettle came late."))
+        def first = stamping.run(new CodeStep.Input(complaint("The kettle came broken."), [:])).values()
+        def again = stamping.run(new CodeStep.Input(complaint("The kettle came broken."), [:])).values()
+        def other = stamping.run(new CodeStep.Input(complaint("The kettle came late."), [:])).values()
 
         then:
         CanonicalJson.write(first) ==~ /\{"reference":"SUP-[0-9A-F]{8}"\}/
@@ -40,7 +41,7 @@ class StampReferenceSpec extends Specification {
 
     def "refuses to stamp where it is given no complaint in text"() {
         when:
-        stamping.run(takes)
+        stamping.run(new CodeStep.Input(takes, [:]))
 
         then:
         def refused = thrown(IllegalArgumentException)

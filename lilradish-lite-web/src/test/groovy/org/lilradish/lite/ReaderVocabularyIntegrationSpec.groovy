@@ -8,6 +8,7 @@ import org.lilradish.lite.app.run.FailureReason
 import org.lilradish.lite.app.run.StoppedWhat
 import org.lilradish.lite.app.run.TryEnded
 import org.lilradish.lite.app.run.WhereKind
+import org.lilradish.lite.domain.codestep.CodeErrorReason
 import org.lilradish.lite.domain.declaration.Declaration
 import org.lilradish.lite.domain.declaration.DeclarationSide
 import org.lilradish.lite.domain.declaration.Demands
@@ -136,6 +137,7 @@ class ReaderVocabularyIntegrationSpec extends Specification {
         STEP                 | "Standing"          || CameOutNow.values()*.published()
         STEP                 | "Ended"             || TryEnded.values()*.published()
         STEP                 | "DidNotFitReason"   || DidNotFitReason.values()*.published()
+        STEP                 | "ErroredForReason"  || CodeErrorReason.values()*.published()
     }
 
     /**
@@ -186,6 +188,7 @@ class ReaderVocabularyIntegrationSpec extends Specification {
         STEP                 | "Standing"
         STEP                 | "Ended"
         STEP                 | "DidNotFitReason"
+        STEP                 | "ErroredForReason"
     }
 
     /**

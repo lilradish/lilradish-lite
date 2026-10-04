@@ -15,7 +15,7 @@ import org.lilradish.lite.domain.workflow.StepProducer;
 /**
  * One try of a step, as the store holds it: open until its production is in or lost.
  *
- * @param number which of the step's tries it is, counted from one; tries are ordered by this and never by time
+ * @param number which spent try it is, counted from one; none until a model sends it, or after it is turned away
  * @param producer who produces it, which is the step's producer or a person answering in its place
  * @param askedBy the person who asked for it; none where the system did
  * @param endedAt none while it is open
@@ -33,7 +33,7 @@ import org.lilradish.lite.domain.workflow.StepProducer;
  */
 public record TryRecord(
         ProductionId id,
-        int number,
+        @Nullable Integer number,
         StepProducer producer,
         @Nullable SubjectId askedBy,
         Instant askedAt,
@@ -61,7 +61,10 @@ public record TryRecord(
         attempts = List.copyOf(requireNonNull(attempts, "TryRecord attempts must not be null"));
         calls = List.copyOf(requireNonNull(calls, "TryRecord calls must not be null"));
         requireSentBy(producer, endedAt != null && lost == null, attempts, calls);
-        if (number < 1) {
+        if (number == null && (producer != StepProducer.MODEL || endedAt != null)) {
+            throw new IllegalArgumentException("TryRecord has no number only while a model production is open");
+        }
+        if (number != null && number < 1) {
             throw new IllegalArgumentException("TryRecord number must be positive: " + number);
         }
         if (endedAt == null && (lost != null || endedBy != null || !values.isEmpty())) {
@@ -73,6 +76,9 @@ public record TryRecord(
         if ((fault != null) != (producer == StepProducer.CODE && lost == TryLostReason.ERRORED && lostDetail == null)) {
             throw new IllegalArgumentException(
                     "TryRecord gives this system's reason exactly where code went wrong without saying why itself");
+        }
+        if (returned != null && (fault == null || !fault.reason().aboutWhatCameBack())) {
+            throw new IllegalArgumentException("TryRecord keeps a return only for a reason found in it");
         }
     }
 

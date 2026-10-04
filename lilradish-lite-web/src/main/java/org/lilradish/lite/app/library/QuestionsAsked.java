@@ -17,8 +17,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * What a model is told of a question version a step of the group's pins: its instruction and both halves,
- * for whatever builds what is sent. It asks nobody's permission, naming the version being the whole question.
+ * Loads the instruction and both halves of an approved question version in the given group. Callers
+ * must enforce their own admission before asking for it.
  */
 @Component
 public final class QuestionsAsked {
@@ -44,9 +44,8 @@ public final class QuestionsAsked {
     }
 
     /**
-     * One moment of the store, refused inside a transaction reading more than one. No approved question of the
-     * group's fails, as do one pinning another group's list and one holding a problem submitting names before
-     * it measures; how much one asking of it could send is not measured here.
+     * One moment of the store, refused inside a transaction reading more than one. The question and
+     * its pinned lists must be valid for the given group. This read does not measure what is sent.
      */
     public Asking of(GroupId group, EntryVersionId version) {
         requireNonNull(group, "QuestionsAsked group must not be null");

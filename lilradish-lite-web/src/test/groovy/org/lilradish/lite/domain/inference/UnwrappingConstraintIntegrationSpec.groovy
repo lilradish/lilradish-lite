@@ -20,10 +20,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What a model gives back is kept as it came, so what unwrapping lets through is judged by the schema's own
- * checks on the columns it is kept in, and counted as the server writes it back, read off a real server.
- */
+/** Schema checks must agree with the server representation of the stored answer. */
 class UnwrappingConstraintIntegrationSpec extends Specification {
 
     static final String GRINNING = Character.toString(0x1F600)
@@ -39,7 +36,7 @@ class UnwrappingConstraintIntegrationSpec extends Specification {
         session = JdbcClient.create(Baseline.appliedTo(server, "postgres"))
     }
 
-    /** A null character and half a pair never reach the store at all, and are refused by unwrapping alone. */
+
     def "words are refused by unwrapping exactly where the store would refuse to keep them, character by character"() {
         given:
         def condition = conditionOf("review_decisions_explanation_visible")
@@ -112,7 +109,7 @@ class UnwrappingConstraintIntegrationSpec extends Specification {
         5       || false
     }
 
-    /** Built again where it is kept, and counted alike there. */
+
     def "numbers as long as the store keeps any one value fit, their marks counted, and one character more does not"() {
         given:
         def value = numbersAtTheBound(onePast)
@@ -147,11 +144,13 @@ class UnwrappingConstraintIntegrationSpec extends Specification {
         2       || false
     }
 
+    // The comparison uses characters representable by the server.
     private static List<String> characters() {
         (1..0xFFFF).findAll { !Character.isSurrogate(it as char) }.collect { Character.toString(it) } + [GRINNING]
     }
 
     private String conditionOf(String constraint) {
+        // DB-SPECIFIC: PostgreSQL :: casts to regnamespace; pg_constraint; pg_get_constraintdef().
         session.sql("""
                 select pg_get_constraintdef(oid) from pg_constraint
                 where conname = ? and connamespace = 'app'::regnamespace and contype = 'c'
@@ -159,12 +158,14 @@ class UnwrappingConstraintIntegrationSpec extends Specification {
     }
 
     private boolean passes(String condition, String column, String type, String candidate) {
+        // DB-SPECIFIC: PostgreSQL jsonb target in the stored-answer checks.
         session.sql("select ${condition} from (select cast(? as ${type}) as ${column}) as candidate".toString())
                 .param(candidate).query(Boolean).single()
     }
 
-    /** The numbers `numbersAtTheBound` holds, as long as the server writes them back and whether it keeps them. */
+
     private String keptOnServer(boolean onePast) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; jsonb_agg(), generate_series().
         session.sql("""
                 select length(value::text) || ' ' || (${conditionOf("production_values_value_bounded")})
                   from (select jsonb_agg(case when place <= ? then -cast(? as numeric) else cast(? as numeric) end
@@ -175,11 +176,13 @@ class UnwrappingConstraintIntegrationSpec extends Specification {
     }
 
     private long keptLength(JsonValue value) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; jsonb type.
         session.sql("select length(cast(? as jsonb)::text)").param(CanonicalJson.write(value)).query(Long).single()
     }
 
-    /** Each character of the chunk the check refuses as words of its own, in the order they stand. */
+
     private List<String> refusedAmong(String condition, List<String> chunk) {
+        // DB-SPECIFIC: PostgreSQL regexp_split_to_table().
         session.sql("""
                 select explanation from regexp_split_to_table(?, '') with ordinality as candidate(explanation, place)
                 where not (${condition}) order by place

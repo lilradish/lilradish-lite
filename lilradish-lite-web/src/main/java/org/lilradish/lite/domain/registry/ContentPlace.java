@@ -2,24 +2,36 @@ package org.lilradish.lite.domain.registry;
 
 import static java.util.Objects.requireNonNull;
 
+import java.util.List;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
-/**
- * Where in a version's stored content a problem is: a part as a whole, or one row of it by its key. Never by
- * anything its authors wrote, which a reader of the version finds by the key. Every key but a pinned version's
- * field key and a term's changes whenever the part holding it is written again.
- */
+/** A problem's part, stored row key, or an unknown name written in a question's drawing. */
 public sealed interface ContentPlace
         permits ContentPlace.Whole,
                 ContentPlace.AtField,
                 ContentPlace.AtStep,
+                ContentPlace.AtStepFields,
                 ContentPlace.AtCase,
+                ContentPlace.AtCaseField,
                 ContentPlace.AtBinding,
                 ContentPlace.AtInput,
-                ContentPlace.AtTerm {
+                ContentPlace.AtTerm,
+                ContentPlace.AtDrawing {
 
     ContentPart part();
+
+    record AtDrawing(String name) implements ContentPlace {
+
+        public AtDrawing {
+            requireNonNull(name, "ContentPlace.AtDrawing name must not be null");
+        }
+
+        @Override
+        public ContentPart part() {
+            return ContentPart.DRAWING;
+        }
+    }
 
     record Whole(ContentPart part) implements ContentPlace {
 
@@ -49,6 +61,23 @@ public sealed interface ContentPlace
         }
     }
 
+    /** @param fields fields of what the step runs, as what declares them names them, in its order; at least one */
+    record AtStepFields(UUID stepId, List<String> fields) implements ContentPlace {
+
+        public AtStepFields {
+            requireNonNull(stepId, "ContentPlace.AtStepFields stepId must not be null");
+            fields = List.copyOf(requireNonNull(fields, "ContentPlace.AtStepFields fields must not be null"));
+            if (fields.isEmpty() || fields.contains("")) {
+                throw new IllegalArgumentException("ContentPlace.AtStepFields names at least one field, none empty");
+            }
+        }
+
+        @Override
+        public ContentPart part() {
+            return ContentPart.STEPS;
+        }
+    }
+
     record AtCase(UUID stepId, UUID caseId) implements ContentPlace {
 
         public AtCase {
@@ -62,7 +91,25 @@ public sealed interface ContentPlace
         }
     }
 
-    /** @param part the steps where the binding fills a step's or a case's input, what it gives back otherwise */
+    record AtCaseField(UUID stepId, UUID caseId, UUID fieldId) implements ContentPlace {
+
+        public AtCaseField {
+            requireNonNull(stepId, "ContentPlace.AtCaseField stepId must not be null");
+            requireNonNull(caseId, "ContentPlace.AtCaseField caseId must not be null");
+            requireNonNull(fieldId, "ContentPlace.AtCaseField fieldId must not be null");
+        }
+
+        @Override
+        public ContentPart part() {
+            return ContentPart.STEPS;
+        }
+    }
+
+    /**
+     * A binding, or a part of a searching step's question reading a value, which is keyed alike.
+     *
+     * @param part the steps where the binding fills a step's or a case's input, what it gives back otherwise
+     */
     record AtBinding(ContentPart part, UUID bindingId) implements ContentPlace {
 
         public AtBinding {

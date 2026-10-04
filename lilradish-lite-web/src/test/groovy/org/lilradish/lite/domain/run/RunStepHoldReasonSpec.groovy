@@ -2,6 +2,7 @@ package org.lilradish.lite.domain.run
 
 import static org.lilradish.lite.domain.run.RunStepHoldReason.CODE_STEP_NOT_HELD
 import static org.lilradish.lite.domain.run.RunStepHoldReason.ENTRY_STOPPED
+import static org.lilradish.lite.domain.run.RunStepHoldReason.SEARCH_WAY_NOT_HELD
 import static org.lilradish.lite.domain.run.RunStepHoldReason.TOO_LONG
 import static org.lilradish.lite.domain.run.RunStepHoldReason.TURNED_AWAY
 
@@ -16,6 +17,7 @@ class RunStepHoldReasonSpec extends Specification {
                 [TOO_LONG, "too_long"],
                 [TURNED_AWAY, "turned_away"],
                 [CODE_STEP_NOT_HELD, "code_step_not_held"],
+                [SEARCH_WAY_NOT_HELD, "search_way_not_held"],
         ]
     }
 }

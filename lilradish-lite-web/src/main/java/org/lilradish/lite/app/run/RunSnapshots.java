@@ -9,6 +9,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,7 @@ import org.lilradish.lite.app.codestep.CodeSteps;
 import org.lilradish.lite.app.library.ConstantJson;
 import org.lilradish.lite.app.library.EntrySwitch;
 import org.lilradish.lite.app.library.RunnableWorkflows;
+import org.lilradish.lite.app.search.SearchWays;
 import org.lilradish.lite.domain.codestep.CodeError;
 import org.lilradish.lite.domain.codestep.CodeErrorReason;
 import org.lilradish.lite.domain.declaration.Field;
@@ -43,6 +45,7 @@ import org.lilradish.lite.domain.run.ReviewOutcome;
 import org.lilradish.lite.domain.run.ReviewRecord;
 import org.lilradish.lite.domain.run.ReviewUnbuiltReason;
 import org.lilradish.lite.domain.run.RunId;
+import org.lilradish.lite.domain.run.RunInTree;
 import org.lilradish.lite.domain.run.RunSnapshot;
 import org.lilradish.lite.domain.run.RunStepFailureId;
 import org.lilradish.lite.domain.run.RunStepFailureReason;
@@ -74,11 +77,18 @@ final class RunSnapshots {
 
     // DB-SPECIFIC: enum and jsonb casts to text, array casts, any(…), an enum compared to a literal, and booleans
     // and exists(…) selected as columns are PostgreSQL's.
-    private static final String RUNS = """
-            select run.run_id, run.root_run_id, run.entry_id, run.entry_version_id,
-                   cast(run.started_with as text) as started_with, %s as stopped
+    private static final String REQUESTED = """
+            select run.run_id, run.root_run_id
               from runs run
              where run.run_id = any(cast(:runs as uuid[])) and run.group_id = :group
+            """;
+
+    private static final String RUNS = """
+            select run.run_id, run.root_run_id, run.parent_run_id, run.parent_run_step_id,
+                   run.parent_route_case_id, run.depth, run.entry_id, run.entry_version_id,
+                   cast(run.started_with as text) as started_with, %s as stopped
+              from runs run
+             where run.root_run_id = any(cast(:roots as uuid[])) and run.group_id = :group
             """.formatted(RunTree.stopInForce("run.root_run_id"));
 
     private static final String STEPS = """
@@ -93,11 +103,12 @@ final class RunSnapshots {
                    try.ended_at, try.ended_by, try.ended_by_kind = 'person' as ended_by_person,
                    try.explanation, cast(try.lost_reason as text) as lost_reason,
                    cast(try.code_error_reason as text) as code_error_reason, try.code_error_path,
-                   try.code_error_member, try.code_error_read_by_step, try.code_error_read_by_output,
+                   try.code_error_member, try.code_error_member_truncated,
+                   try.code_error_read_by_step, try.code_error_read_by_output,
                    try.lost_detail, try.lost_detail_truncated, try.returned_by_code
               from productions try
              where try.run_id = any(cast(:runs as uuid[]))
-             order by try.run_step_id, try.try_number
+             order by try.run_step_id, try.try_number nulls last
             """;
 
     /* A question's value names its field by key and a code step's by name; the store orders neither. */
@@ -131,10 +142,13 @@ final class RunSnapshots {
             """;
 
     private static final String INPUTS = """
-            select taken.production_id, taken.binding_id, taken.source_production_value_id
+            select taken.production_input_id, taken.production_id, taken.binding_id, taken.search_question_part_id,
+                   taken.source_production_value_id, part.target_path,
+                   part.source_production_value_id as part_source
               from production_inputs taken
+              left join production_input_parts part on part.production_input_id = taken.production_input_id
              where taken.run_id = any(cast(:runs as uuid[])) and taken.production_id is not null
-             order by taken.production_id, taken.production_input_id
+             order by taken.production_id, taken.production_input_id, part.target_path
             """;
 
     /* What an attempt would send, and what a call sent or got back, is never read into a snapshot. */
@@ -158,12 +172,14 @@ final class RunSnapshots {
 
     private static final String HOLDS = """
             select hold.run_step_id, cast(hold.reason as text) as reason, hold.created_at,
-                   hold.run_step_send_attempt_id,
+                   hold.run_step_send_attempt_id, hold.root_run_id, owner.root_run_id as actual_root_run_id,
+                   hold.source_run_id, hold.source_run_step_id, hold.source_workflow_step_id,
                    exists (select 1 from model_calls call
                              join model_call_turnaways turnaway on turnaway.model_call_id = call.model_call_id
                             where call.run_step_send_attempt_id = hold.run_step_send_attempt_id
                               and turnaway.spent_up) as spent_up
-              from run_step_holds hold
+               from run_step_holds hold
+               join runs owner on owner.run_id = hold.run_id
              where hold.run_id = any(cast(:runs as uuid[])) and hold.released_at is null
             """;
 
@@ -171,8 +187,12 @@ final class RunSnapshots {
             select failure.run_step_failure_id, failure.run_step_id, cast(failure.reason as text) as reason,
                    failure.production_id, cast(failure.purpose as text) as purpose, failure.created_at,
                    exists (select 1 from run_step_send_attempts attempt
-                            where attempt.answers_failure_id = failure.run_step_failure_id) as answered
-              from run_step_failures failure
+                            where attempt.answers_failure_id = failure.run_step_failure_id) as answered,
+                   case when failure.reason = 'unclaimed_value' then failure.detail end as term, failure.tool,
+                   failure.root_run_id, owner.root_run_id as actual_root_run_id, failure.source_run_id,
+                   failure.source_run_step_id, failure.source_workflow_step_id, failure.source_field
+               from run_step_failures failure
+               join runs owner on owner.run_id = failure.run_id
              where failure.run_id = any(cast(:runs as uuid[]))
              order by failure.created_at, failure.run_step_failure_id
             """;
@@ -181,25 +201,34 @@ final class RunSnapshots {
 
     private final CodeSteps release;
 
-    RunSnapshots(JdbcClient database, CodeSteps release) {
+    private final SearchWays ways;
+
+    RunSnapshots(JdbcClient database, CodeSteps release, SearchWays ways) {
         this.database = database;
         this.release = release;
+        this.ways = ways;
     }
 
-    /** Under the tree's lock, a run of that tree; each entry the run runs is held for share before it is read. */
+    /** Under the tree's lock, a run of that tree; verify membership before locking any entry. */
     RunSnapshot locked(LockedTree tree, RunId run) {
         requireNonNull(tree, "RunSnapshots tree must not be null");
         tree.requireHeld();
-        RunSnapshot read = read(tree.group(), List.of(run), true).getFirst();
-        if (!read.root().equals(tree.root())) {
-            throw new IllegalStateException("Run " + run.value() + " is not of the tree held");
-        }
-        return read;
+        return read(tree.group(), List.of(run), true, tree.root()).getFirst();
+    }
+
+    RunInTree inTreeLocked(LockedTree tree, RunId run) {
+        requireNonNull(tree, "RunSnapshots tree must not be null");
+        tree.requireHeld();
+        return context(tree.group(), run, true, tree.root());
     }
 
     /** Inside a read-only snapshot, holding nothing. */
     RunSnapshot asRead(GroupId group, RunId run) {
-        return read(group, List.of(run), false).getFirst();
+        return read(group, List.of(run), false, null).getFirst();
+    }
+
+    RunInTree inTreeAsRead(GroupId group, RunId run) {
+        return context(group, run, false, null);
     }
 
     /**
@@ -207,31 +236,72 @@ final class RunSnapshots {
      * One the group does not hold fails the read.
      */
     List<RunSnapshot> asRead(GroupId group, List<RunId> runs) {
-        return read(group, runs, false);
+        return read(group, runs, false, null);
     }
 
-    private List<RunSnapshot> read(GroupId group, List<RunId> runs, boolean holding) {
+    private RunInTree context(GroupId group, RunId run, boolean holding, @Nullable RunId heldRoot) {
+        Map<RunId, RunId> requested = requested(group, List.of(run), heldRoot);
+        Map<RunId, RunSnapshot> members = members(group, requested.values(), holding);
+        RunId root = requireNonNull(requested.get(run));
+        RunSnapshot top = requireNonNull(members.get(root), "A requested run has no root snapshot");
+        return RunInTree.root(top)
+                .find(run)
+                .orElseThrow(() -> new IllegalStateException("Run " + run.value() + " is not connected to its root"));
+    }
+
+    private List<RunSnapshot> read(GroupId group, List<RunId> runs, boolean holding, @Nullable RunId heldRoot) {
         requireNonNull(group, "RunSnapshots group must not be null");
         requireNonNull(runs, "RunSnapshots runs must not be null");
         if (runs.isEmpty()) {
             return List.of();
         }
+        Map<RunId, RunId> requested = requested(group, runs, heldRoot);
+        Map<RunId, RunSnapshot> members = members(group, requested.values(), holding);
+        return runs.stream()
+                .map(run -> requireNonNull(members.get(run), "A requested run has no snapshot"))
+                .toList();
+    }
+
+    private Map<RunId, RunId> requested(GroupId group, List<RunId> runs, @Nullable RunId heldRoot) {
+        requireNonNull(group, "RunSnapshots group must not be null");
+        requireNonNull(runs, "RunSnapshots runs must not be null");
         String[] spelled =
                 runs.stream().map(run -> run.value().toString()).distinct().toArray(String[]::new);
+        Map<RunId, RunId> found = new HashMap<>();
+        database.sql(REQUESTED)
+                .param("runs", spelled)
+                .param("group", group.value())
+                .query(result -> {
+                    found.put(
+                            new RunId(result.getObject("run_id", UUID.class)),
+                            new RunId(result.getObject("root_run_id", UUID.class)));
+                });
+        for (RunId run : runs) {
+            RunId root = found.get(run);
+            if (root == null) {
+                throw new IllegalStateException("Group " + group.value() + " holds no run " + run.value() + " to read");
+            }
+            if (heldRoot != null && !root.equals(heldRoot)) {
+                throw new IllegalStateException("Run " + run.value() + " is not of the tree held");
+            }
+        }
+        return found;
+    }
+
+    private Map<RunId, RunSnapshot> members(GroupId group, java.util.Collection<RunId> roots, boolean holding) {
+        String[] rootIds =
+                roots.stream().map(root -> root.value().toString()).distinct().toArray(String[]::new);
         Map<RunId, RunRow> rows = new HashMap<>();
-        database.sql(RUNS).param("runs", spelled).param("group", group.value()).query(result -> {
+        database.sql(RUNS).param("roots", rootIds).param("group", group.value()).query(result -> {
             RunRow row = runRow(result);
             rows.put(row.run(), row);
         });
+        String[] memberIds =
+                rows.keySet().stream().map(run -> run.value().toString()).toArray(String[]::new);
         Set<EntryVersionId> versions = new LinkedHashSet<>();
-        for (RunId run : runs) {
-            RunRow row = rows.get(run);
-            if (row == null) {
-                throw new IllegalStateException("Group " + group.value() + " holds no run " + run.value() + " to read");
-            }
-            versions.add(row.version());
-        }
-        Map<EntryVersionId, RunnableWorkflow> workflows = RunnableWorkflows.read(database, group, versions, release);
+        rows.values().forEach(row -> versions.add(row.version()));
+        Map<EntryVersionId, RunnableWorkflow> workflows =
+                RunnableWorkflows.read(database, group, versions, release, ways);
         Set<EntryId> entries = new LinkedHashSet<>();
         rows.values().forEach(row -> entries.add(row.entry()));
         workflows.values().forEach(workflow -> workflow.steps().forEach(step -> {
@@ -239,44 +309,90 @@ final class RunSnapshots {
             if (pinned != null) {
                 entries.add(pinned);
             }
+            if (step.runs() instanceof StepRuns.Route route) {
+                route.cases().forEach(aCase -> entries.add(aCase.target().entry()));
+            }
         }));
         Map<EntryId, StopRecord> stopped =
                 holding ? EntrySwitch.stopsOnceHeld(database, group, entries) : EntrySwitch.stops(database, entries);
         Map<RunId, Map<UUID, UUID>> runSteps = new HashMap<>();
-        database.sql(STEPS).param("runs", spelled).query(result -> {
-            runSteps.computeIfAbsent(new RunId(result.getObject("run_id", UUID.class)), ignored -> new HashMap<>())
-                    .put(result.getObject("workflow_step_id", UUID.class), result.getObject("run_step_id", UUID.class));
-        });
-        Rows held = rows(spelled);
-        List<RunSnapshot> read = new ArrayList<>(runs.size());
-        for (RunId run : runs) {
-            RunRow row = requireNonNull(rows.get(run));
-            RunnableWorkflow workflow = requireNonNull(workflows.get(row.version()));
-            Map<UUID, UUID> runStepOf = runSteps.getOrDefault(run, Map.of());
-            List<StepSnapshot> steps = new ArrayList<>(workflow.steps().size());
-            for (PlannedStep planned : workflow.steps()) {
-                UUID runStep = runStepOf.get(planned.id().value());
-                EntryId pinned = pinnedEntry(planned);
-                steps.add(new StepSnapshot(
-                        planned,
-                        pinned == null ? null : stopped.get(pinned),
-                        runStep == null ? null : new RunStepId(runStep),
-                        runStep == null ? null : held.holds.get(runStep),
-                        runStep == null ? List.of() : held.failures.getOrDefault(runStep, List.of()),
-                        runStep == null ? List.of() : inDeclaredOrder(planned, held.tries(runStep))));
+        database.sql(STEPS).param("runs", memberIds).query(result -> {
+            RunId run = new RunId(result.getObject("run_id", UUID.class));
+            UUID step = result.getObject("workflow_step_id", UUID.class);
+            UUID stored = result.getObject("run_step_id", UUID.class);
+            UUID prior =
+                    runSteps.computeIfAbsent(run, ignored -> new HashMap<>()).put(step, stored);
+            if (prior != null) {
+                throw new IllegalStateException("Run " + run.value() + " holds duplicate step rows");
             }
-            read.add(new RunSnapshot(
-                    run,
-                    row.root(),
-                    group,
-                    row.version(),
-                    row.stopped(),
-                    stopped.get(row.entry()),
-                    startedWith(run, row.startedWith()),
-                    workflow,
-                    steps));
-        }
-        return read;
+        });
+        Rows held = rows(memberIds);
+        Map<RunId, Map<UUID, RunRow>> children = new HashMap<>();
+        rows.values().forEach(row -> {
+            if (row.parent() != null) {
+                Map<UUID, RunRow> ofParent = children.computeIfAbsent(row.parent(), ignored -> new HashMap<>());
+                RunRow prior = ofParent.put(row.parentStep(), row);
+                if (prior != null) {
+                    throw new IllegalStateException("Two runs are beneath the same step");
+                }
+            }
+        });
+        Map<RunId, RunSnapshot> assembled = new HashMap<>();
+        rows.values().stream()
+                .sorted(Comparator.comparingInt(RunRow::depth).reversed())
+                .forEach(row -> {
+                    RunnableWorkflow workflow = requireNonNull(workflows.get(row.version()), "A run has no workflow");
+                    Map<UUID, UUID> runStepOf = runSteps.getOrDefault(row.run(), Map.of());
+                    Map<UUID, RunRow> below = children.getOrDefault(row.run(), Map.of());
+                    List<StepSnapshot> steps = new ArrayList<>(workflow.steps().size());
+                    for (PlannedStep planned : workflow.steps()) {
+                        UUID runStep = runStepOf.get(planned.id().value());
+                        RunRow child = runStep == null ? null : below.get(runStep);
+                        StepSnapshot.Beneath beneath = child == null
+                                ? null
+                                : new StepSnapshot.Beneath(
+                                        requireNonNull(assembled.get(child.run()), "A child run has no snapshot"),
+                                        child.routeCase());
+                        EntryId pinned = pinnedEntry(planned);
+                        Map<UUID, StopRecord> casesStopped = new HashMap<>();
+                        if (planned.runs() instanceof StepRuns.Route route) {
+                            for (StepRuns.Route.Case aCase : route.cases()) {
+                                StopRecord stop = stopped.get(aCase.target().entry());
+                                if (stop != null) {
+                                    casesStopped.put(aCase.id(), stop);
+                                }
+                            }
+                        }
+                        steps.add(new StepSnapshot(
+                                planned,
+                                pinned == null ? null : stopped.get(pinned),
+                                runStep == null ? null : new RunStepId(runStep),
+                                runStep == null ? null : held.holds.get(runStep),
+                                runStep == null ? List.of() : held.failures.getOrDefault(runStep, List.of()),
+                                runStep == null ? List.of() : inDeclaredOrder(planned, held.tries(runStep)),
+                                beneath,
+                                casesStopped));
+                    }
+                    if (below.size()
+                            != steps.stream()
+                                    .filter(step -> step.beneath() != null)
+                                    .count()) {
+                        throw new IllegalStateException("A child run has no parent step row");
+                    }
+                    assembled.put(
+                            row.run(),
+                            new RunSnapshot(
+                                    row.run(),
+                                    row.root(),
+                                    group,
+                                    row.version(),
+                                    row.stopped(),
+                                    stopped.get(row.entry()),
+                                    startedWith(row.run(), row.startedWith()),
+                                    workflow,
+                                    steps));
+                });
+        return assembled;
     }
 
     private static JsonValue.@Nullable JsonObject startedWith(RunId run, @Nullable String started) {
@@ -291,6 +407,8 @@ final class RunSnapshots {
 
     /* A code step's values are read in name order, which the release's declaration puts in its own; a field it no
      * longer declares goes after every one it does, in name order still. */
+    // NullAway misses the nullable annotation on TryRecord's nested Fault constructor parameter.
+    @SuppressWarnings("NullAway")
     private static List<TryRecord> inDeclaredOrder(PlannedStep planned, List<TryRecord> tries) {
         if (!(planned.runs() instanceof StepRuns.Code code) || code.released() == null) {
             return tries;
@@ -337,6 +455,7 @@ final class RunSnapshots {
             case StepRuns.Question question -> question.pinned().entry();
             case StepRuns.Workflow pinned -> pinned.pinned().entry();
             case StepRuns.Code ignored -> null;
+            case StepRuns.Search ignored -> null;
             case StepRuns.Route ignored -> null;
         };
     }
@@ -374,14 +493,37 @@ final class RunSnapshots {
                             misfit == null ? null : StoreLabels.parse(DidNotFitReason.class, misfit),
                             decisions.getOrDefault(review, List.of())));
         });
-        Map<UUID, List<InputRecord>> inputs = new HashMap<>();
+        Map<UUID, UUID> inputProductions = new LinkedHashMap<>();
+        Map<UUID, UUID> inputBindings = new HashMap<>();
+        Map<UUID, UUID> inputSearchParts = new HashMap<>();
+        Map<UUID, ProductionValueId> inputSources = new HashMap<>();
+        Map<UUID, List<InputRecord.Part>> inputParts = new HashMap<>();
         database.sql(INPUTS).param("runs", runs).query(result -> {
+            UUID input = result.getObject("production_input_id", UUID.class);
+            inputProductions.putIfAbsent(input, result.getObject("production_id", UUID.class));
+            inputBindings.putIfAbsent(input, result.getObject("binding_id", UUID.class));
+            inputSearchParts.putIfAbsent(input, result.getObject("search_question_part_id", UUID.class));
             UUID source = result.getObject("source_production_value_id", UUID.class);
-            inputs.computeIfAbsent(result.getObject("production_id", UUID.class), ignored -> new ArrayList<>())
-                    .add(new InputRecord(
-                            result.getObject("binding_id", UUID.class),
-                            source == null ? null : new ProductionValueId(source)));
+            if (source != null) {
+                inputSources.put(input, new ProductionValueId(source));
+            }
+            String path = result.getString("target_path");
+            if (path != null) {
+                UUID partSource = result.getObject("part_source", UUID.class);
+                inputParts
+                        .computeIfAbsent(input, ignored -> new ArrayList<>())
+                        .add(new InputRecord.Part(
+                                Pointer.parse(path).names(),
+                                partSource == null ? null : new ProductionValueId(partSource)));
+            }
         });
+        Map<UUID, List<InputRecord>> inputs = new HashMap<>();
+        inputProductions.forEach((input, production) -> inputs.computeIfAbsent(production, ignored -> new ArrayList<>())
+                .add(new InputRecord(
+                        inputBindings.get(input),
+                        inputSearchParts.get(input),
+                        inputSources.get(input),
+                        inputParts.getOrDefault(input, List.of()))));
         Map<UUID, List<AttemptRecord>> attempts = new HashMap<>();
         database.sql(ATTEMPTS).param("runs", runs).query(result -> {
             String unbuilt = result.getString("unbuilt_reason");
@@ -415,7 +557,8 @@ final class RunSnapshots {
                     StoreLabels.parse(RunStepHoldReason.class, requireNonNull(result.getString("reason"))),
                     instant(result, "created_at"),
                     attempt == null ? null : new RunStepSendAttemptId(attempt),
-                    result.getBoolean("spent_up"));
+                    result.getBoolean("spent_up"),
+                    codeSource(result));
             if (rows.holds.put(runStep, hold) != null) {
                 throw new IllegalStateException("Step " + runStep + " is held back twice at once");
             }
@@ -431,11 +574,46 @@ final class RunSnapshots {
                             onTry == null ? null : new ProductionId(onTry),
                             purpose == null ? null : StoreLabels.parse(ModelCallPurpose.class, purpose),
                             instant(result, "created_at"),
-                            result.getBoolean("answered")));
+                            result.getBoolean("answered"),
+                            result.getString("term"),
+                            result.getString("tool"),
+                            failedSource(result)));
         });
         return rows;
     }
 
+    private static HoldRecord.@Nullable SourceRecord codeSource(ResultSet result) throws SQLException {
+        UUID root = result.getObject("root_run_id", UUID.class);
+        UUID run = result.getObject("source_run_id", UUID.class);
+        UUID runStep = result.getObject("source_run_step_id", UUID.class);
+        UUID step = result.getObject("source_workflow_step_id", UUID.class);
+        if (root == null && run == null && runStep == null && step == null) {
+            return null;
+        }
+        if (!requireNonNull(root, "A held source has its root")
+                .equals(result.getObject("actual_root_run_id", UUID.class))) {
+            throw new IllegalStateException("A held source belongs to the held step's tree");
+        }
+        return new HoldRecord.SourceRecord(
+                new RunId(requireNonNull(run, "A held source has its run")),
+                new RunStepId(requireNonNull(runStep, "A held source has its reached step")),
+                requireNonNull(step, "A held source has its planned step"));
+    }
+
+    private static FailureRecord.@Nullable SourceRecord failedSource(ResultSet result) throws SQLException {
+        HoldRecord.SourceRecord maker = codeSource(result);
+        String field = result.getString("source_field");
+        if (maker == null) {
+            if (field != null) {
+                throw new IllegalStateException("A failed source field has its actual maker");
+            }
+            return null;
+        }
+        return new FailureRecord.SourceRecord(maker, requireNonNull(field, "A failed source names its field"));
+    }
+
+    // NullAway misses the nullable annotation on TryRecord's nested Fault constructor parameter.
+    @SuppressWarnings("NullAway")
     private static TryRecord tried(
             ResultSet result,
             UUID id,
@@ -449,7 +627,7 @@ final class RunSnapshots {
         String lost = result.getString("lost_reason");
         return new TryRecord(
                 new ProductionId(id),
-                result.getInt("try_number"),
+                result.getObject("try_number", Integer.class),
                 StoreLabels.parse(StepProducer.class, requireNonNull(result.getString("producer"))),
                 result.getBoolean("asked_by_person") ? new SubjectId(result.getObject("created_by", UUID.class)) : null,
                 instant(result, "created_at"),
@@ -476,6 +654,7 @@ final class RunSnapshots {
             return null;
         }
         String path = result.getString("code_error_path");
+        String member = result.getString("code_error_member");
         UUID readByStep = result.getObject("code_error_read_by_step", UUID.class);
         String readByOutput = result.getString("code_error_read_by_output");
         CodeError.ReadBy readBy = readByStep != null
@@ -486,7 +665,9 @@ final class RunSnapshots {
         return new CodeError.Fault(
                 StoreLabels.parse(CodeErrorReason.class, reason),
                 path == null ? List.of() : Pointer.parse(path).names(),
-                result.getString("code_error_member"),
+                member == null
+                        ? null
+                        : new CodeError.UndeclaredMember(member, result.getBoolean("code_error_member_truncated")),
                 readBy);
     }
 
@@ -507,7 +688,13 @@ final class RunSnapshots {
                 new EntryId(result.getObject("entry_id", UUID.class)),
                 new EntryVersionId(result.getObject("entry_version_id", UUID.class)),
                 result.getString("started_with"),
-                result.getBoolean("stopped"));
+                result.getBoolean("stopped"),
+                result.getObject("parent_run_id", UUID.class) == null
+                        ? null
+                        : new RunId(result.getObject("parent_run_id", UUID.class)),
+                result.getObject("parent_run_step_id", UUID.class),
+                result.getObject("parent_route_case_id", UUID.class),
+                result.getInt("depth"));
     }
 
     private static Instant instant(ResultSet result, String column) throws SQLException {
@@ -520,7 +707,11 @@ final class RunSnapshots {
             EntryId entry,
             EntryVersionId version,
             @Nullable String startedWith,
-            boolean stopped) {}
+            boolean stopped,
+            @Nullable RunId parent,
+            @Nullable UUID parentStep,
+            @Nullable UUID routeCase,
+            int depth) {}
 
     /** What the runs' steps hold, by each step's row. */
     private static final class Rows {

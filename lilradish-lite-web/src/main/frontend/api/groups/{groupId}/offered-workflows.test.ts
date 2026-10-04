@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { answering, refusalOf } from "../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT, NOT_AN_ADDRESS } from "../../problem";
-import { readOffered } from "./offered-workflows";
+import { offeredLoader } from "./offered-workflows";
 
 const GROUP = "00000003-0000-4000-8000-000000000c31";
 
@@ -43,39 +43,77 @@ const REFUND = {
   ],
 };
 
-describe("readOffered", () => {
+describe("offeredLoader", () => {
   it("reads what the group may start a run of at its address, in the order sent, a purpose only where one arrived", async () => {
     const sent = answering([
-      JSON.stringify({ workflows: [HANDLE, REFUND] }),
+      JSON.stringify({ items: [HANDLE, REFUND], nextCursor: "later" }),
       200,
     ]);
 
-    const offered = await readOffered(GROUP, new AbortController().signal);
+    const offered = await offeredLoader(GROUP)(
+      null,
+      new AbortController().signal,
+    );
 
     expect(sent.mock.calls[0]![0]).toBe(
       `/api/groups/${GROUP}/offered-workflows`,
     );
-    expect(offered).toEqual([HANDLE, REFUND]);
-    expect(Object.keys(offered[1]!).toSorted()).toEqual(
+    expect(offered).toEqual({ items: [HANDLE, REFUND], nextCursor: "later" });
+    expect(Object.keys(offered.items[1]!).toSorted()).toEqual(
       Object.keys(REFUND).toSorted(),
     );
   });
 
   it("reads each version in the order sent, with what it takes in declared order", async () => {
-    answering([JSON.stringify({ workflows: [HANDLE] }), 200]);
+    answering([JSON.stringify({ items: [HANDLE] }), 200]);
 
-    const [offered] = await readOffered(GROUP, new AbortController().signal);
+    const [offered] = (
+      await offeredLoader(GROUP)(null, new AbortController().signal)
+    ).items;
 
     expect(offered!.versions.map((version) => version.number)).toEqual([2, 1]);
     expect(offered!.versions[0]!.takes).toEqual([COMPLAINT]);
     expect(offered!.versions[1]!.takes).toEqual([]);
   });
 
-  it("refuses a group that names no address, asking nothing", async () => {
-    const sent = answering(['{"workflows":[]}', 200]);
+  it("hands the server the unaltered name filter and opaque cursor without a sort or limit", async () => {
+    const sent = answering([JSON.stringify({ items: [REFUND] }), 200]);
+    const load = offeredLoader(GROUP, "  A%_ß  ");
+    const signal = new AbortController().signal;
+
+    expect(await load(null, signal)).toEqual({ items: [REFUND] });
+    expect(await load("next/page", signal)).toEqual({ items: [REFUND] });
+    expect(sent.mock.calls.map(([input]) => String(input))).toEqual([
+      `/api/groups/${GROUP}/offered-workflows?filter=++A%25_%C3%9F++`,
+      `/api/groups/${GROUP}/offered-workflows?filter=++A%25_%C3%9F++&cursor=next%2Fpage`,
+    ]);
+    expect(sent.mock.calls.every(([, init]) => init?.signal === signal)).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["the old envelope", { workflows: [HANDLE] }],
+    ["a null cursor", { items: [HANDLE], nextCursor: null }],
+    ["a malformed cursor", { items: [HANDLE], nextCursor: 4 }],
+  ])("refuses %s as an unreadable page", async (_case, body) => {
+    answering([JSON.stringify(body), 200]);
 
     const failure = await refusalOf(
-      readOffered("..", new AbortController().signal),
+      offeredLoader(GROUP)(null, new AbortController().signal),
+    );
+
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
+  it("refuses a group that names no address, asking nothing", async () => {
+    const sent = answering(['{"items":[]}', 200]);
+
+    const failure = await refusalOf(
+      offeredLoader("..")(null, new AbortController().signal),
     );
 
     expect(failure.problem).toEqual({ code: NOT_AN_ADDRESS });
@@ -86,25 +124,22 @@ describe("readOffered", () => {
     ["no list of workflows", {}],
     [
       "a workflow with no identifier",
-      { workflows: [{ ...REFUND, entryId: undefined }] },
+      { items: [{ ...REFUND, entryId: undefined }] },
     ],
-    [
-      "a workflow with no name",
-      { workflows: [{ ...REFUND, name: undefined }] },
-    ],
-    ["a purpose that is no text", { workflows: [{ ...REFUND, purpose: 5 }] }],
+    ["a workflow with no name", { items: [{ ...REFUND, name: undefined }] }],
+    ["a purpose that is no text", { items: [{ ...REFUND, purpose: 5 }] }],
     [
       "a workflow with no list of versions",
-      { workflows: [{ ...REFUND, versions: undefined }] },
+      { items: [{ ...REFUND, versions: undefined }] },
     ],
     [
       "a workflow with no version in service",
-      { workflows: [{ ...REFUND, versions: [] }] },
+      { items: [{ ...REFUND, versions: [] }] },
     ],
     [
       "a version with no identifier",
       {
-        workflows: [
+        items: [
           { ...REFUND, versions: [{ ...REFUND.versions[0], versionId: 7 }] },
         ],
       },
@@ -112,7 +147,7 @@ describe("readOffered", () => {
     [
       "a version numbered in no whole number",
       {
-        workflows: [
+        items: [
           { ...REFUND, versions: [{ ...REFUND.versions[0], number: "4" }] },
         ],
       },
@@ -120,7 +155,7 @@ describe("readOffered", () => {
     [
       "a version saying nothing of what it takes",
       {
-        workflows: [
+        items: [
           {
             ...REFUND,
             versions: [{ ...REFUND.versions[0], takes: undefined }],
@@ -131,7 +166,7 @@ describe("readOffered", () => {
     [
       "a field this side cannot draw",
       {
-        workflows: [
+        items: [
           {
             ...REFUND,
             versions: [
@@ -150,7 +185,7 @@ describe("readOffered", () => {
       answering([JSON.stringify(body), 200]);
 
       const failure = await refusalOf(
-        readOffered(GROUP, new AbortController().signal),
+        offeredLoader(GROUP)(null, new AbortController().signal),
       );
 
       expect(failure.problem).toEqual({

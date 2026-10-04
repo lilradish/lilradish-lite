@@ -24,20 +24,17 @@ describe.each([
   it(`asks ${method} of the version's submission, sending nothing, and reads the entry it answers with`, async () => {
     const sent = answering([JSON.stringify(READ), 200]);
 
-    const read = await change(
-      GROUP,
-      "workflow",
-      ENTRY,
-      VERSION,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    const read = await change(GROUP, "workflow", ENTRY, VERSION, signal);
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(
       `/api/groups/${GROUP}/workflows/${ENTRY}/versions/${VERSION}/submission`,
     );
     expect(init?.method).toBe(method);
+    expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
-    expect(read.entryId).toBe(ENTRY);
+    expect(read).toEqual({ ...READ, acts: new Set() });
   });
 });

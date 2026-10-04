@@ -42,7 +42,7 @@ class CodeCallSpec extends Specification {
     def "keeps the terms of every list its declaration pins, whatever is done to the map they came in afterwards"() {
         given:
         def handed = [(TIERS): TERMS, (REGIONS): TERMS]
-        def call = new CodeCall(ROUTE, DECLARED, handed, TAKES)
+        def call = new CodeCall(ROUTE, DECLARED, handed, TAKES, [:])
 
         when:
         handed.remove(REGIONS)
@@ -56,7 +56,7 @@ class CodeCallSpec extends Specification {
     /** What it gives back is read against these terms, so a call without them could not say whether it fits. */
     def "refuses a call handed no terms for a list its declaration pins, naming the code step and the list"() {
         when:
-        new CodeCall(ROUTE, DECLARED, lists, TAKES)
+        new CodeCall(ROUTE, DECLARED, lists, TAKES, [:])
 
         then:
         def refused = thrown(IllegalArgumentException)
@@ -71,7 +71,7 @@ class CodeCallSpec extends Specification {
 
     def "refuses a part it is not given"() {
         when:
-        new CodeCall(name, declared, lists, takes)
+        new CodeCall(name, declared, lists, takes, [:])
 
         then:
         def refused = thrown(NullPointerException)

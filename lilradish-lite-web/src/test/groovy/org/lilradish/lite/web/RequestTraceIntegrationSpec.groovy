@@ -190,10 +190,10 @@ class RequestTraceIntegrationSpec extends Specification {
 
         then:
         logged.list.size() == 1
-        everythingIn(logged.list.first()).every { !it.contains("000501") && !it.contains("Lovelace") }
+        everythingIn(logged.list.first()).every { !it.contains("000501") && !it.contains("Mockvale") }
 
         where:
-        address << ["/api/standing?search=Lovelace&user=000501", "/api/people/000501-Lovelace?search=Lovelace"]
+        address << ["/api/standing?search=Mockvale&user=000501", "/api/people/000501-Mockvale?search=Mockvale"]
     }
 
     /** The document and the files it loads are nobody's to audit, and every page load asks for them. */

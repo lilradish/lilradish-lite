@@ -6,6 +6,8 @@ import java.nio.file.Path
 import org.libprunus.spring.error.ApiErrorAutoConfiguration
 import org.lilradish.lite.app.currency.GroupCurrencies
 import org.lilradish.lite.app.estate.EstateRoleGrants
+import org.lilradish.lite.app.files.FileOpenAdmission
+import org.lilradish.lite.app.files.RunFiles
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.groupregister.GroupChanges
 import org.lilradish.lite.app.groupregister.GroupRegister
@@ -39,6 +41,7 @@ import org.springframework.boot.autoconfigure.ImportAutoConfiguration
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Import
 import org.springframework.http.server.PathContainer
+import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
@@ -69,7 +72,7 @@ import spock.lang.Specification
 @MockitoBean(types = [UserIdentification, EstateRoleGrants, GroupRoles, Holdings, PoolPeople, PoolChanges, People,
         GroupRegister, GroupChanges, Members, MembershipChanges, Library, EntryChanges, VersionChanges, Measurements,
         Questions, QuestionDrafts, Workflows, WorkflowDrafts, ReferenceLists, ReferenceListDrafts, GroupCurrencies, Runs,
-        RunChanges, RunList, Offers, RunSteps, StepActs, StartRuns])
+        RunChanges, RunList, Offers, RunSteps, StepActs, StartRuns, JdbcClient, RunFiles, FileOpenAdmission])
 class GatedSurfaceIntegrationSpec extends Specification {
 
     static final List<Class> DECLARATIONS = [ActRequired, GroupPermissionRequired, GroupMembershipRequired, NoActRequired]
@@ -181,6 +184,23 @@ class GatedSurfaceIntegrationSpec extends Specification {
             def methods = mapped.methodsCondition.methods
             methods.isEmpty() || !([RequestMethod.GET, RequestMethod.HEAD] as Set).containsAll(methods)
         }) == []
+    }
+
+    def "the run file download address asks group membership and only serves a read"() {
+        given:
+        String fileRoute = ActAdmission.IN_A_GROUP + '/runs/{runId}/files/{fileId}'
+        def download = mappings.handlerMethods.findAll { mapped, handler ->
+            mapped.patternValues.contains(fileRoute)
+        }
+
+        expect:
+        download.size() == 1
+        def mapped = download.keySet().first()
+        def handler = download.values().first()
+        handler.method.name == 'download'
+        handler.getMethodAnnotation(GroupMembershipRequired) != null
+        mapped.methodsCondition.methods == [RequestMethod.GET] as Set
+        underThePrefix(fileRoute)
     }
 
     private static int declared(handler) {

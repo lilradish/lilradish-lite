@@ -18,19 +18,14 @@ import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
+import { SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { useAction } from "../../../lib/request/useAction";
 import { STEP_ACT_RULES } from "../actRules";
+import { useRunReadAccess } from "../RunReadAccess";
 import { actedFirstSaid, movedOnNotice, staleFor } from "./movedOn";
-
-const PART_SX = { mt: 2 };
 
 const ASK_RULE: Rule = { inGroup: STEP_ACT_RULES.ask_again };
 
-/**
- * Ask again, drawn only where the step offers it the reader: the try it owes, asked of whoever it names. The step
- * the ask is answered with is handed to `onShown`; one refused as changed since it was read is read again, and that
- * is handed on too.
- */
 export function AskAgainButton({
   groupId,
   runId,
@@ -52,6 +47,7 @@ export function AskAgainButton({
 }) {
   const noticeId = useId();
   const reloadStanding = useStandingRead().reload;
+  const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const [sentFor, setSentFor] = useState<number | null>(null);
   const [readAgainAt, setReadAgainAt] = useState<number | null>(null);
@@ -82,7 +78,9 @@ export function AskAgainButton({
       }
       if (refusedAsChanged(problem)) {
         rereading.run((signal) =>
-          readStep(groupId, runId, step.stepId, signal),
+          access.read(signal, () =>
+            readStep(groupId, runId, step.stepId, signal),
+          ),
         );
       }
       if (!refusedAsMovedOn(problem)) {
@@ -119,8 +117,9 @@ export function AskAgainButton({
   return (
     <>
       {!step.acts.includes("ask_again") || next === undefined ? null : (
-        <Box sx={PART_SX}>
+        <Box sx={SPACED_ABOVE_SX}>
           <ActButton
+            variant="contained"
             action={asking}
             waiting={rereading.running || held}
             act={(signal) => {
@@ -145,7 +144,7 @@ export function AskAgainButton({
         </Box>
       )}
       {notice === null && rereadRefusal === null ? null : (
-        <Box id={noticeId} tabIndex={-1} sx={PART_SX}>
+        <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
           {notice}
           {rereadRefusal === null ? null : (
             <ProblemView problem={rereadRefusal} />

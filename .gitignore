@@ -8,8 +8,8 @@ node_modules/
 .node/
 npm-debug.log*
 
-# Vite loads these in every mode and they hold the local development credential.
-# A secret must never enter the repository, and this is the line that enforces it.
+# Ignore untracked local configuration; tracked files are unaffected.
+# This pattern does not guarantee that repository contents contain no secrets.
 *.local
 
 # IDE

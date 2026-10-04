@@ -93,4 +93,15 @@ describe("useStanding", () => {
     expect(() => render(<Reading />)).toThrow(/StandingProvider/);
     expect(screen.queryByRole("list", { name: "standing" })).toBeNull();
   });
+
+  it("names the read hook when its provider is missing", () => {
+    function MissingRead() {
+      useStandingRead();
+      return null;
+    }
+
+    expect(() => render(<MissingRead />)).toThrow(
+      "useStandingRead was called outside a StandingProvider",
+    );
+  });
 });

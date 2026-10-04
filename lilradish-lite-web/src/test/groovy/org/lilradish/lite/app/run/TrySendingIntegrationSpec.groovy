@@ -23,6 +23,7 @@ import org.lilradish.lite.app.run.fixture.TicketWorkflow
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.inference.CallOutcome
+import org.lilradish.lite.domain.inference.Envelope
 import org.lilradish.lite.domain.inference.TurnAway
 import org.lilradish.lite.domain.model.DeployedModel
 import org.lilradish.lite.domain.model.ModelCatalog
@@ -42,22 +43,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Try sending on a step a model produces, on a real server running the real baseline, the model scripted: the press
- * writes nothing where it is made, and the engine's thread, once it holds the tree, judges it again and writes the
- * attempt as the presser's with its call, measured against the models held then. A second wiring over the same store
- * stands in for a deploy holding other models, or for the process that starts after one was killed.
- */
 class TrySendingIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
 
     static final String FITS = '{"values":{"summary":"A printer fire."},"confidences":{}}'
 
-    /** Four characters a unit: what it cannot cut is about 250 units, and this ticket adds nearly 1,000. */
     static final String LONG_TICKET = '{"ticket": "' + "x" * 3900 + '"}'
 
-    /** Every attempt numbered in the order made, so one naming another is read by that number. */
     static final String NUMBERED = """
             with numbered as (
                 select attempt.*, row_number() over (order by attempt.created_at, attempt.run_step_send_attempt_id)
@@ -74,10 +67,9 @@ class TrySendingIntegrationSpec extends Specification {
 
     LibraryStore store
 
-    /** Every process a feature wires, each shut down after it. */
     List<EngineWiring> wired = []
 
-    /** Gates a feature holds shut, opened after every process it wired has begun to stop. */
+    // Begin stopping every engine before releasing its gates so cleanup cannot start further work.
     List<CountDownLatch> gates = []
 
     def setupSpec() {
@@ -97,6 +89,7 @@ class TrySendingIntegrationSpec extends Specification {
     }
 
     private void producedBy(String model) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = ?, producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(model, SUMMARISE).update()
@@ -123,7 +116,7 @@ class TrySendingIntegrationSpec extends Specification {
     }
 
     private static CallOutcome cameBack() {
-        new CallOutcome.CameBack(FITS, 321, 12, true, false)
+        new CallOutcome.CameBack(FITS, 321, 12, true, false, null, null)
     }
 
     private static RunId runId() {
@@ -134,7 +127,6 @@ class TrySendingIntegrationSpec extends Specification {
         new WorkflowStepId(UUID.fromString(SUMMARISE))
     }
 
-    /** As a start does, Cat starting it, then everything handed over done. */
     private void started(EngineWiring wiring, String startedWith = TicketWorkflow.STARTED_WITH) {
         store.transactions().executeWithoutResult {
             StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, startedWith)
@@ -153,23 +145,22 @@ class TrySendingIntegrationSpec extends Specification {
         gate
     }
 
-    /** The stop on what summarise runs let go, as a steward letting it go does, and every run it held gone on. */
     private void letGo(EngineWiring wiring) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(ANN, SUMMARISE_QUESTION).update()
         wiring.engine.goesOn(entryId(SUMMARISE_QUESTION))
         wiring.drained()
     }
 
-    /** Cat no longer a member of the group, as a steward removing her does. */
     private void catRemoved() {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update group_members set removed_at = now(), removed_by = ?::uuid, removal = 'removed_from_group'
                  where group_id = ?::uuid and subject_id = ?::uuid and removed_at is null""").params(ANN, GROUP, CAT)
                 .update()
     }
 
-    /** What pressing it now would be refused with, none where the step offers it. */
     private RefusalCode sendingRefused(EngineWiring wiring) {
         def read = wiring.snapshots.asRead(groupId(GROUP), runId())
         def step = read.step(summarise()).orElseThrow()
@@ -181,7 +172,6 @@ class TrySendingIntegrationSpec extends Specification {
         StepPositions.of(read, read.step(summarise()).orElseThrow())
     }
 
-    /** Each attempt as its number, whether it was too long, who made it, and what it holds or repeats and answers. */
     private List<String> attempts() {
         store.texts(NUMBERED + """
                 select numbered.ordinal || ' ' || case when numbered.too_long then 'too_long' else 'sent' end
@@ -195,6 +185,7 @@ class TrySendingIntegrationSpec extends Specification {
     }
 
     private List<String> holds() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts(NUMBERED + """
                 select hold.reason || ' on ' || coalesce(numbered.ordinal::text, '-') || ' '
                        || coalesce('released by ' || hold.released_by_kind || ' ' || hold.released_by, 'held')
@@ -211,8 +202,8 @@ class TrySendingIntegrationSpec extends Specification {
                  order by failure.created_at, failure.run_step_failure_id""")
     }
 
-    /** Each call an attempt sent, as that attempt's number, how it ended, and the envelope it was sent under. */
     private List<String> calls() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts(NUMBERED + """
                 select numbered.ordinal || ' ' || coalesce(call.outcome::text, 'out') || ' ' || call.envelope_version
                   from model_calls call
@@ -221,8 +212,9 @@ class TrySendingIntegrationSpec extends Specification {
     }
 
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
-                select try.try_number || ' ' || case when try.ended_at is null then 'open' else 'ended' end
+                select coalesce(try.try_number::text, '-') || ' ' || case when try.ended_at is null then 'open' else 'ended' end
                   from productions try join run_steps held on held.run_step_id = try.run_step_id
                  where held.workflow_step_id = ?::uuid order by try.try_number
                 """, step)
@@ -256,12 +248,11 @@ class TrySendingIntegrationSpec extends Specification {
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String]
         attempts() == ["1 sent by system ${SYSTEM} holding its payload" as String,
                        "2 sent by person ${CAT} repeating 1" as String]
-        calls() == ["1 turned_away 2", "2 came_back 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String, "2 came_back ${Envelope.VERSION}" as String]
         model.scripted.requests.size() == 2
         model.madeOn == [[true, false], [true, false]]
     }
 
-    /** The same try is sent again as it was stored, so nothing it took is read afresh and no try is spent. */
     def "a step held on a turnaway is sent again word for word, repeating the attempt holding what it sent"() {
         given:
         def model = answering(turnedAway(), cameBack())
@@ -281,7 +272,7 @@ class TrySendingIntegrationSpec extends Specification {
         attempts() == ["1 sent by system ${SYSTEM} holding its payload" as String,
                        "2 sent by person ${CAT} repeating 1" as String]
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String]
-        calls() == ["1 turned_away 2", "2 came_back 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String, "2 came_back ${Envelope.VERSION}" as String]
 
         and: "the one try, now ended, and nothing failed or held again"
         triesOf(SUMMARISE) == ["1 ended"]
@@ -306,11 +297,10 @@ class TrySendingIntegrationSpec extends Specification {
                        "3 sent by person ${CAT} repeating 1" as String]
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String,
                     "turned_away on 2 released by system ${SYSTEM}" as String]
-        calls() == ["1 turned_away 2", "2 turned_away 2", "3 came_back 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String, "2 turned_away ${Envelope.VERSION}" as String, "3 came_back ${Envelope.VERSION}" as String]
         model.scripted.requests*.sent()*.user().toSet().size() == 1
     }
 
-    /** Held again on the repeat's turnaway, the row reads every turnaway of the try, not only the one holding it. */
     def "a step held on a turnaway reads every time its try was turned away, oldest first, a pressed repeat's among them"() {
         given:
         def model = answering(turnedAway(), new CallOutcome.TurnedAway(new TurnAway("Still busy.", false)))
@@ -323,7 +313,7 @@ class TrySendingIntegrationSpec extends Specification {
 
         when:
         def row = new RunSteps(store.session, new GroupRoles(store.session), first.snapshots,
-                store.transactionManager()).steps(groupId(GROUP), runId(), ANN_USER).steps()[0]
+                store.transactionManager(), Deployments.DEEP_ENOUGH, new org.lilradish.lite.app.currency.GroupCurrencies(store.session, new org.springframework.transaction.support.TransactionTemplate(store.transactionManager()), new GroupRoles(store.session), org.lilradish.lite.testutil.library.DeployedModels.HELD)).steps(groupId(GROUP), runId(), ANN_USER).steps()[0]
 
         then:
         row.where().kind() == "held_back"
@@ -340,10 +330,6 @@ class TrySendingIntegrationSpec extends Specification {
         1       || ["Too busy.", "Still busy."]
     }
 
-    /**
-     * Ruled: what was sent under an envelope this release no longer holds is never sent again as it was. It is built
-     * afresh from what the try took, as a new attempt holding its own payload, and measured as any fresh build is.
-     */
     def "a turnaway sent under an envelope no longer held is built afresh, sent where it fits and held on length where not, the old attempt left as it was"() {
         given:
         started(wiring(answering(turnedAway())), startedWith)
@@ -368,11 +354,10 @@ class TrySendingIntegrationSpec extends Specification {
 
         where:
         startedWith                 | limit   || attemptsAfter                                                                                                  | holdsAfter                                                                  | callsAfter                           | requestsMade
-        TicketWorkflow.STARTED_WITH | 100_000 || ["1 sent by system ${SYSTEM} holding its payload", "2 sent by person ${CAT} holding its payload"]     | ["turned_away on 1 released by system ${SYSTEM}"]                           | ["1 turned_away 1", "2 came_back 2"] | 1
+        TicketWorkflow.STARTED_WITH | 100_000 || ["1 sent by system ${SYSTEM} holding its payload", "2 sent by person ${CAT} holding its payload"]     | ["turned_away on 1 released by system ${SYSTEM}"]                           | ["1 turned_away 1", "2 came_back ${Envelope.VERSION}" as String] | 1
         LONG_TICKET                 | 600     || ["1 sent by system ${SYSTEM} holding its payload", "2 too_long by person ${CAT} holding its payload"] | ["turned_away on 1 released by system ${SYSTEM}", "too_long on 2 held"]     | ["1 turned_away 1"]                  | 0
     }
 
-    /** A deploy since may take less: what was turned away is measured again against the model as held now. */
     def "a turned-away try longer than the model now held takes is held on length, repeating what it would send, and not sent"() {
         given:
         def model = answering(turnedAway())
@@ -389,13 +374,12 @@ class TrySendingIntegrationSpec extends Specification {
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String, "too_long on 2 held"]
 
         and: "nothing sent, and nothing failed"
-        calls() == ["1 turned_away 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String]
         failures() == []
         model.scripted.requests.size() == 1
         sendingRefused(redeployed) == null
     }
 
-    /** The only way a released turnaway ends in a failure: the model it was sent to is one this system no longer has. */
     def "a turned-away try whose model a deploy since no longer holds fails on that, its hold released and nothing sent"() {
         given:
         def model = answering(turnedAway())
@@ -410,15 +394,14 @@ class TrySendingIntegrationSpec extends Specification {
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String]
         failures() == ["model_not_deployed"]
         attempts() == ["1 sent by system ${SYSTEM} holding its payload" as String]
-        calls() == ["1 turned_away 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String]
         model.scripted.requests.size() == 1
 
         and: "the try still open, the step failed on it and offering it again"
-        triesOf(SUMMARISE) == ["1 open"]
+        triesOf(SUMMARISE) == ["- open"]
         sendingRefused(redeployed) == null
     }
 
-    /** Held on length, a press measures what the try took afresh against the model as it is held now. */
     def "a step held on length is measured again: sent where it now fits, held again where not, failed where what cannot be cut does not"() {
         given:
         started(wiring(new RecordedModelCalls(), taking("general", 600)), LONG_TICKET)
@@ -442,7 +425,7 @@ class TrySendingIntegrationSpec extends Specification {
 
         where:
         limit   || attemptsAfter                                                                                  | holdsAfter                                                                        | failuresAfter         | callsAfter        | requestsMade
-        100_000 || ["1 too_long by system ${SYSTEM} holding its payload", "2 sent by person ${CAT} holding its payload"]     | ["too_long on 1 released by system ${SYSTEM}"]                                    | []                    | ["2 came_back 2"] | 1
+        100_000 || ["1 too_long by system ${SYSTEM} holding its payload", "2 sent by person ${CAT} holding its payload"]     | ["too_long on 1 released by system ${SYSTEM}"]                                    | []                    | ["2 came_back ${Envelope.VERSION}" as String] | 1
         700     || ["1 too_long by system ${SYSTEM} holding its payload", "2 too_long by person ${CAT} holding its payload"] | ["too_long on 1 released by system ${SYSTEM}", "too_long on 2 held"]              | []                    | []                | 0
         50      || ["1 too_long by system ${SYSTEM} holding its payload"]                                              | ["too_long on 1 released by system ${SYSTEM}"]                                    | ["uncuttable_length"] | []                | 0
     }
@@ -461,7 +444,7 @@ class TrySendingIntegrationSpec extends Specification {
         then:
         failures() == ["model_not_deployed answered by 1"]
         attempts() == ["1 sent by person ${CAT} holding its payload answering model_not_deployed" as String]
-        calls() == ["1 came_back 2"]
+        calls() == ["1 came_back ${Envelope.VERSION}" as String]
         model.scripted.requests*.sent()*.user() == payloads()
 
         and: "the try it was on is the one sent, and nothing held"
@@ -486,10 +469,9 @@ class TrySendingIntegrationSpec extends Specification {
 
         and: "still offered, on the same try"
         sendingRefused(first) == null
-        triesOf(SUMMARISE) == ["1 open"]
+        triesOf(SUMMARISE) == ["- open"]
     }
 
-    /** The later failure supersedes the earlier, so the attempt answering it ends both and the try goes on to its end. */
     def "a failure written again by a press and answered by a later one ends every failure on the try, so the step moves on"() {
         given:
         producedBy("absent")
@@ -507,7 +489,7 @@ class TrySendingIntegrationSpec extends Specification {
         then:
         failures() == ["model_not_deployed", "model_not_deployed answered by 1"]
         attempts() == ["1 sent by person ${CAT} holding its payload answering model_not_deployed" as String]
-        calls() == ["1 came_back 2"]
+        calls() == ["1 came_back ${Envelope.VERSION}" as String]
         triesOf(SUMMARISE) == ["1 ended"]
         model.scripted.requests.size() == 1
 
@@ -529,7 +511,7 @@ class TrySendingIntegrationSpec extends Specification {
         then:
         failures() == ["uncuttable_length answered by 1"]
         attempts() == ["1 sent by person ${CAT} holding its payload answering uncuttable_length" as String]
-        calls() == ["1 came_back 2"]
+        calls() == ["1 came_back ${Envelope.VERSION}" as String]
         triesOf(SUMMARISE) == ["1 ended"]
         holds() == []
     }
@@ -554,7 +536,6 @@ class TrySendingIntegrationSpec extends Specification {
         model.scripted.requests.size() == 1
     }
 
-    /** Ruled: nothing is sent while what the step runs is stopped, and letting it go sends nothing by itself either. */
     def "a step held or failed on what a send may settle is refused while what it runs is stopped, and let go it stands as it was, still to be pressed"() {
         given:
         producedBy(produced)
@@ -593,6 +574,7 @@ class TrySendingIntegrationSpec extends Specification {
         def model = answering(turnedAway())
         def first = wiring(model)
         started(first)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_versions set ceiling = 100 where entry_version_id = ?::uuid").params(VERSION)
                 .update()
         RunRows.called(store, RUN, "came_back", 100, 40)
@@ -612,7 +594,6 @@ class TrySendingIntegrationSpec extends Specification {
         model.scripted.requests.size() == 1
     }
 
-    /** Ruled: the engine's thread asks again whether the presser may, and one who no longer may has pressed nothing. */
     def "a press whose presser is removed from the group before the engine's thread takes it up writes and sends nothing, and the step still offers it"() {
         given:
         def model = answering(turnedAway(), cameBack())
@@ -634,7 +615,6 @@ class TrySendingIntegrationSpec extends Specification {
         sendingRefused(first) == null
     }
 
-    /** The press was only ever handed to the lost process's threads, so nothing of it outlives that process. */
     def "a press lost with its process leaves the step held and offering it, and the process after it sends a press made there"() {
         given:
         def killed = wiring(answering(turnedAway()))
@@ -661,7 +641,7 @@ class TrySendingIntegrationSpec extends Specification {
         then:
         attempts() == ["1 sent by system ${SYSTEM} holding its payload" as String,
                        "2 sent by person ${CAT} repeating 1" as String]
-        calls() == ["1 turned_away 2", "2 came_back 2"]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String, "2 came_back ${Envelope.VERSION}" as String]
         model.scripted.requests.size() == 1
     }
 
@@ -687,32 +667,29 @@ class TrySendingIntegrationSpec extends Specification {
         model.scripted.requests.size() == 2
     }
 
-    /** Neither press wrote anything, so both are taken; the engine's thread, judging each under the lock, sends once. */
-    def "two presses taken before the engine's thread comes to either make one attempt and one call"() {
+    def "repeated presses on one queued intent make one attempt for the first presser"() {
         given:
         def model = answering(turnedAway(), cameBack())
         def first = wiring(model)
         started(first)
         def gate = occupied(first)
         pressed(first)
-        pressed(first, TicketWorkflow.ANN_USER)
+        24.times { pressed(first, TicketWorkflow.ANN_USER) }
+        assert first.executor.@pool.threadPoolExecutor.queue.size() == 1
 
         when:
         gate.countDown()
         first.drained()
 
         then:
-        attempts().size() == 2
-        calls() == ["1 turned_away 2", "2 came_back 2"]
+        attempts() == ["1 sent by system ${SYSTEM} holding its payload" as String,
+                       "2 sent by person ${CAT} repeating 1" as String]
+        calls() == ["1 turned_away ${Envelope.VERSION}" as String, "2 came_back ${Envelope.VERSION}" as String]
         holds() == ["turned_away on 1 released by system ${SYSTEM}" as String]
         failures() == []
-
-        and: "made once, by whichever press the engine's thread came to first"
         model.scripted.requests.size() == 2
-        attempts()[1] in ["2 sent by person ${CAT} repeating 1" as String, "2 sent by person ${ANN} repeating 1" as String]
     }
 
-    /** Each press names the failure it was made on; the first answers it with another, so the second finds it gone. */
     def "two presses taken on a model still not held write one failure between them, and nothing is sent"() {
         given:
         producedBy("absent")
@@ -734,7 +711,6 @@ class TrySendingIntegrationSpec extends Specification {
         sendingRefused(first) == null
     }
 
-    /** Refused before anything is handed over, so nothing reaches the engine's thread at all. */
     def "a press is refused, writing and handing over nothing, where #why"() {
         given:
         def model = answering(turnedAway())

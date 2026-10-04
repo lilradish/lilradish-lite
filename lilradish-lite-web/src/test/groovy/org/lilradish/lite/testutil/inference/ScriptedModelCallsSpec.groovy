@@ -29,7 +29,7 @@ class ScriptedModelCallsSpec extends Specification {
 
     static final TurnAway SPENT_UP = new TurnAway("quota spent", true)
 
-    static final CallOutcome CAME_BACK = new CallOutcome.CameBack('{"total":"12"}', 5, 2, true, false)
+    static final CallOutcome CAME_BACK = new CallOutcome.CameBack('{"total":"12"}', 5, 2, true, false, null, null)
 
     ScriptedModelCalls model = new ScriptedModelCalls()
 
@@ -55,7 +55,7 @@ class ScriptedModelCallsSpec extends Specification {
         model.scriptsLeft() == 0
 
         where:
-        ending << [CAME_BACK, new CallOutcome.Errored("upstream refused"), new CallOutcome.TurnedAway(SPENT_UP)]
+        ending << [CAME_BACK, new CallOutcome.Errored("upstream refused", null), new CallOutcome.TurnedAway(SPENT_UP)]
     }
 
     def "each turnaway a resend follows is passed on, then asked about, and only then is the resend made"() {
@@ -174,7 +174,7 @@ class ScriptedModelCallsSpec extends Specification {
         0 * _
 
         and:
-        outcome.get() == new CallOutcome.Errored(INTERRUPTED_IN_A_SEND)
+        outcome.get() == new CallOutcome.Errored(INTERRUPTED_IN_A_SEND, null)
         interruptedAfter.get()
         model.events == [SENT]
     }
@@ -212,7 +212,7 @@ class ScriptedModelCallsSpec extends Specification {
 
     def "calls take their scripts in order, each taken script no longer left, and every request is kept in order"() {
         given:
-        def errored = new CallOutcome.Errored("upstream refused")
+        def errored = new CallOutcome.Errored("upstream refused", null)
         model.answering(CAME_BACK).answering(errored)
         def first = request(ModelCallPurpose.PRODUCE)
         def second = request(ModelCallPurpose.REVIEW)

@@ -139,11 +139,14 @@ describe("createGroup", () => {
       picked: "somebody",
     };
 
-    const created = await createGroup(asked, new AbortController().signal);
+    const signal = new AbortController().signal;
+    const created = await createGroup(asked, signal);
 
     expect(created).toEqual(PAYROLL);
+    expect(sent.mock.calls).toHaveLength(1);
     expect(addressAsked(sent).pathname).toBe("/api/groups");
     expect(sent.mock.calls[0]![1]!.method).toBe("POST");
+    expect(sent.mock.calls[0]![1]!.signal).toBe(signal);
     expect(JSON.parse(String(sent.mock.calls[0]![1]!.body))).toEqual({
       name: "Payroll",
       key: "payroll",

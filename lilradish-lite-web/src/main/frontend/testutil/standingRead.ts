@@ -16,9 +16,14 @@ import type { Resource } from "../lib/request/useResource";
 export function answered(
   acts: Iterable<string>,
   groups: readonly GroupStanding[] = [],
+  userId?: string,
 ): Resource<Standing> {
   return {
-    value: { acts: new Set(acts), groups },
+    value: {
+      acts: new Set(acts),
+      groups,
+      ...(userId === undefined ? null : { userId }),
+    },
     problem: null,
     loading: false,
     reload: noop,

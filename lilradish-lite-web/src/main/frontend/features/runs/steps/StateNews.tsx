@@ -2,34 +2,17 @@ import Box from "@mui/material/Box";
 import { useEffect, useState } from "react";
 
 import { say } from "../../../i18n/app";
+import { UNSEEN_SX } from "../../../lib/layout/parts";
 
 const HEARD_FOR_MILLISECONDS = 5000;
 
-// In pixels: `sx` reads a bare 1 on a size as a fraction and emits 100%.
-const UNSEEN_SX = {
-  position: "absolute",
-  height: "1px",
-  width: "1px",
-  clipPath: "inset(50%)",
-  overflow: "hidden",
-  whiteSpace: "nowrap",
-};
-
-/**
- * One thing a page keeps up: what identifies it, the name it is drawn by, and the words its state is said in, null
- * where this build has none.
- */
 export interface Stated {
   readonly key: string;
   readonly name: string;
   readonly state: string | null;
 }
 
-/**
- * An unseen polite region, heard only where a read finds something in another state than the read before; one
- * finding nothing changed empties it, so the next change is new words, and so does a while gone by since it was
- * heard, so nobody comes on words gone stale once reads stop. Nothing drawn is read out here.
- */
+// Clear old announcements so a later change is heard once, even after reads stop.
 export function StateNews<T>({
   reading,
   statesOf,

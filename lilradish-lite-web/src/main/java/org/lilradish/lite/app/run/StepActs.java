@@ -2,6 +2,8 @@ package org.lilradish.lite.app.run;
 
 import static java.util.Objects.requireNonNull;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +11,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.jspecify.annotations.Nullable;
 import org.libprunus.core.log.annotation.DoNotLog;
+import org.lilradish.lite.app.files.FileDeployment;
+import org.lilradish.lite.app.files.RunFiles;
 import org.lilradish.lite.app.filling.ValueProblemsRefusal;
 import org.lilradish.lite.app.group.GroupReach;
 import org.lilradish.lite.app.group.GroupRoles;
@@ -28,6 +32,8 @@ import org.lilradish.lite.domain.run.InputRecord;
 import org.lilradish.lite.domain.run.ProductionId;
 import org.lilradish.lite.domain.run.ReviewOutcome;
 import org.lilradish.lite.domain.run.RunId;
+import org.lilradish.lite.domain.run.RunInTree;
+import org.lilradish.lite.domain.run.RunPayloads;
 import org.lilradish.lite.domain.run.RunSnapshot;
 import org.lilradish.lite.domain.run.StepAct;
 import org.lilradish.lite.domain.run.StepGround;
@@ -36,9 +42,14 @@ import org.lilradish.lite.domain.run.StepPosition;
 import org.lilradish.lite.domain.run.StepPositions;
 import org.lilradish.lite.domain.run.StepRuns;
 import org.lilradish.lite.domain.run.StepSnapshot;
+import org.lilradish.lite.domain.run.TryRecord;
 import org.lilradish.lite.domain.run.WorkflowStepId;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.wire.JsonValue;
+import org.lilradish.lite.domain.wire.JsonValue.JsonMember;
+import org.lilradish.lite.domain.workflow.SearchQuestionPart;
 import org.lilradish.lite.domain.workflow.StepProducer;
+import org.lilradish.lite.web.MultipartFiles;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionOperations;
@@ -68,6 +79,10 @@ final class StepActs {
 
     private final RunEngine engine;
 
+    private final RunFiles files;
+
+    private final FileDeployment deployment;
+
     StepActs(
             JdbcClient database,
             TransactionOperations transactions,
@@ -75,7 +90,9 @@ final class StepActs {
             RunTree tree,
             RunSnapshots snapshots,
             EngineWrites writes,
-            RunEngine engine) {
+            RunEngine engine,
+            RunFiles files,
+            FileDeployment deployment) {
         this.database = database;
         this.transactions = transactions;
         this.roles = roles;
@@ -83,6 +100,8 @@ final class StepActs {
         this.snapshots = snapshots;
         this.writes = writes;
         this.engine = engine;
+        this.files = files;
+        this.deployment = deployment;
     }
 
     /**
@@ -119,6 +138,12 @@ final class StepActs {
                     acting.step().newest().orElseThrow().id(),
                     caller,
                     decided);
+            List<String> assured = waiting.values().stream()
+                    .filter(value ->
+                            requireNonNull(decisions.get(value.field())).outcome() == ReviewOutcome.ASSURED)
+                    .map(StepPosition.WaitingValue::field)
+                    .toList();
+            holdOutputs(acting, acting.step().newest().orElseThrow().id(), assured);
             return acting.tree().root();
         }));
         engine.goOn(group, root);
@@ -133,7 +158,7 @@ final class StepActs {
             }
             // Asked as the run asks a try by itself, a model's here and sent from the engine's thread. Code's try is
             // written only on the engine's thread: one dying before it loses this press, and Ask again is offered.
-            engine.askAgain(acting.tree(), acting.run(), acting.step(), number, caller);
+            engine.askAgain(acting.tree(), acting.context(), acting.step(), number, caller);
             engine.planWithin(acting.tree());
             return acting.tree().root();
         }));
@@ -159,6 +184,31 @@ final class StepActs {
      */
     void answer(
             GroupId group, RunId run, WorkflowStepId step, int number, UserId caller, JsonValue values, String why) {
+        answered(group, run, step, number, caller, values, why, null);
+    }
+
+    /** Answer with file parts consumed only after the locked step and its declaration are rechecked. */
+    void answerFiles(
+            GroupId group,
+            RunId run,
+            WorkflowStepId step,
+            int number,
+            UserId caller,
+            JsonValue values,
+            String why,
+            MultipartFiles body) {
+        answered(group, run, step, number, caller, values, why, requireNonNull(body));
+    }
+
+    private void answered(
+            GroupId group,
+            RunId run,
+            WorkflowStepId step,
+            int number,
+            UserId caller,
+            JsonValue values,
+            String why,
+            @Nullable MultipartFiles body) {
         requireNonNull(values, "StepActs values must not be null");
         requireNonNull(why, "StepActs why must not be null");
         RunId root = requireNonNull(transactions.execute(status -> {
@@ -167,22 +217,66 @@ final class StepActs {
                 throw RunRefusal.STEP_MOVED_ON.raised();
             }
             StepSnapshot found = acting.step();
-            switch (found.planned().runs()) {
-                case StepRuns.Question question -> answerQuestion(acting, question, number, caller, values, why);
-                case StepRuns.Code code -> answerCode(acting, code, number, caller, values, why);
-                case StepRuns.Workflow ignored ->
-                    throw new IllegalStateException("A workflow's try is never answered here");
-                case StepRuns.Route ignored -> throw new IllegalStateException("A route's try is never answered here");
-            }
+            ProductionId answered =
+                    switch (found.planned().runs()) {
+                        case StepRuns.Question question -> {
+                            List<FillField> gives =
+                                    FillField.of(question.gives().fields(), question.lists());
+                            yield answerQuestion(
+                                    acting, question, number, caller, filled(acting, gives, values, body), why);
+                        }
+                        case StepRuns.Code code -> {
+                            ReleasedCodeStep released = requireNonNull(
+                                    code.released(), "a code step answered here is one the release holds");
+                            List<FillField> gives =
+                                    FillField.of(released.declared().gives().fields(), released.lists());
+                            yield answerCode(acting, code, number, caller, filled(acting, gives, values, body), why);
+                        }
+                        case StepRuns.Search search -> {
+                            SearchWay way = requireNonNull(search.released(), "an answered search holds its way");
+                            yield answerSearch(
+                                    acting,
+                                    search,
+                                    number,
+                                    caller,
+                                    filled(acting, FillField.of(way.outputs(), Map.of()), values, body),
+                                    why);
+                        }
+                        case StepRuns.Workflow ignored ->
+                            throw new IllegalStateException("A workflow's try is never answered here");
+                        case StepRuns.Route ignored ->
+                            throw new IllegalStateException("A route's try is never answered here");
+                    };
+            List<String> answeredFields =
+                    switch (found.planned().runs()) {
+                        case StepRuns.Question question ->
+                            question.gives().fields().stream()
+                                    .map(field -> field.name().value())
+                                    .toList();
+                        case StepRuns.Code code ->
+                            requireNonNull(code.released()).declared().gives().fields().stream()
+                                    .map(field -> field.name().value())
+                                    .toList();
+                        case StepRuns.Search search ->
+                            requireNonNull(search.released()).outputs().stream()
+                                    .map(field -> field.name().value())
+                                    .toList();
+                        default -> throw new IllegalStateException("Only a producing step is answered");
+                    };
+            holdOutputs(acting, answered, answeredFields);
             return acting.tree().root();
         }));
         engine.goOn(group, root);
     }
 
-    private void answerQuestion(
-            Acting acting, StepRuns.Question question, int number, UserId caller, JsonValue values, String why) {
+    private ProductionId answerQuestion(
+            Acting acting,
+            StepRuns.Question question,
+            int number,
+            UserId caller,
+            JsonValue.JsonObject kept,
+            String why) {
         List<FillField> gives = FillField.of(question.gives().fields(), question.lists());
-        JsonValue.JsonObject kept = filled(gives, values);
         StepSnapshot found = acting.step();
         ProductionId answered = owed(acting).open()
                 ? found.newest().orElseThrow().id()
@@ -194,7 +288,7 @@ final class StepActs {
                         StepProducer.PERSON,
                         caller,
                         null,
-                        StepInputs.traced(acting.run(), found, question.takes())
+                        StepInputs.traced(acting.context(), found, question.takes())
                                 .orElseThrow(() -> new IllegalStateException(
                                         "What step " + found.planned().id().value() + " took no longer stands")));
         List<EngineWrites.AnsweredRecord> given = new ArrayList<>(gives.size());
@@ -203,15 +297,15 @@ final class StepActs {
                     question.givesFields().get(index), kept.members().get(index).value()));
         }
         writes.answered(acting.tree(), acting.run(), answered, caller, why, given);
+        return answered;
     }
 
     /* Read against what the release declares now, which is what every step after reads it as. */
-    private void answerCode(
-            Acting acting, StepRuns.Code code, int number, UserId caller, JsonValue values, String why) {
+    private ProductionId answerCode(
+            Acting acting, StepRuns.Code code, int number, UserId caller, JsonValue.JsonObject kept, String why) {
         ReleasedCodeStep released =
                 requireNonNull(code.released(), "a code step answered here is one the release holds");
         List<Field> declared = released.declared().gives().fields();
-        JsonValue.JsonObject kept = filled(FillField.of(declared, released.lists()), values);
         StepSnapshot found = acting.step();
         ProductionId answered = owed(acting).open()
                 ? found.newest().orElseThrow().id()
@@ -223,11 +317,11 @@ final class StepActs {
                         StepProducer.PERSON,
                         caller,
                         released.mayRunAgain(),
-                        StepInputs.bound(acting.run(), found)
+                        StepInputs.bound(acting.context(), found)
                                 .orElseThrow(() -> new IllegalStateException(
                                         "What step " + found.planned().id().value() + " took no longer stands"))
                                 .stream()
-                                .map(each -> new InputRecord(each.binding().id(), each.source()))
+                                .map(each -> new InputRecord(each.binding().id(), each.source(), each.parts()))
                                 .toList());
         List<CodeOutcome.Given> given = new ArrayList<>(declared.size());
         for (int index = 0; index < declared.size(); index++) {
@@ -235,6 +329,74 @@ final class StepActs {
                     declared.get(index), kept.members().get(index).value()));
         }
         writes.codeAnswered(acting.tree(), acting.run(), answered, caller, why, given);
+        return answered;
+    }
+
+    private ProductionId answerSearch(
+            Acting acting, StepRuns.Search search, int number, UserId caller, JsonValue.JsonObject kept, String why) {
+        StepSnapshot found = acting.step();
+        ProductionId answered;
+        if (owed(acting).open()) {
+            TryRecord open = found.newest().orElseThrow();
+            StepInputs.tookSearch(acting.context(), search.question(), open);
+            answered = open.id();
+        } else {
+            List<InputRecord> inputs = new ArrayList<>();
+            for (SearchQuestionPart part : search.question()) {
+                if (part instanceof SearchQuestionPart.Read read) {
+                    StepInputs.ReadRecord input = StepInputs.bound(acting.context(), read)
+                            .orElseThrow(() -> new IllegalStateException("What the search reads no longer stands"));
+                    inputs.add(new InputRecord(null, read.id(), input.source(), input.parts()));
+                }
+            }
+            answered = writes.tried(
+                    acting.tree(),
+                    acting.run(),
+                    requireNonNull(found.runStep(), "a search owing a try is written"),
+                    number,
+                    StepProducer.PERSON,
+                    caller,
+                    null,
+                    inputs);
+        }
+        writes.searchAnswered(acting.tree(), acting.run(), answered, caller, why, search.standings(), kept);
+        return answered;
+    }
+
+    private void holdOutputs(Acting acting, ProductionId answered, List<String> fields) {
+        List<String> affected =
+                writes.fileOutputsAffected(acting.tree(), acting.run().run(), answered, fields);
+        if (!affected.isEmpty()) {
+            RunEngine.holdBeneathOutputs(
+                    snapshots.inTreeLocked(acting.tree(), acting.run().run()), affected, files);
+        }
+    }
+
+    private JsonValue.JsonObject filled(
+            Acting acting, List<FillField> gives, JsonValue values, @Nullable MultipartFiles body) {
+        if (body == null) {
+            return filled(gives, values);
+        }
+        JsonValue.JsonObject previous = RunPayloads.refusedBeforeAnswer(acting.step())
+                .map(StepActs::previous)
+                .orElse(null);
+        FillOutcome outcome;
+        try {
+            outcome = body.fill(acting.run().run(), acting.tree().group(), gives, values, previous, files, deployment);
+        } catch (IOException unread) {
+            throw new UncheckedIOException(unread);
+        }
+        return switch (outcome) {
+            case FilledFields filled -> filled.values();
+            case FillProblems problems -> throw new ValueProblemsRefusal(problems);
+            case FillOutcome.Unshaped ignored -> throw RunRefusal.VALUES_UNSHAPED.raised();
+        };
+    }
+
+    private static JsonValue.JsonObject previous(TryRecord prior) {
+        return new JsonValue.JsonObject(prior.values().stream()
+                .map(value -> new JsonMember(value.field(), value.value()))
+                .toList());
     }
 
     private static JsonValue.JsonObject filled(List<FillField> gives, JsonValue values) {
@@ -269,7 +431,8 @@ final class StepActs {
         }
         // A hold whose stop was let go while nothing went on after it is released here, before the act is judged.
         engine.planWithin(lockedTree);
-        RunSnapshot snapshot = snapshots.locked(lockedTree, run);
+        RunInTree context = snapshots.inTreeLocked(lockedTree, run);
+        RunSnapshot snapshot = context.run();
         StepSnapshot found = snapshot.step(step).orElseThrow(RunRefusal.STEP_NOT_IN_VIEW::raised);
         StepPosition position = StepPositions.of(snapshot, found);
         StepGround ground = StepGround.of(snapshot, found, position, RunScope.subjectOf(database, caller));
@@ -280,7 +443,7 @@ final class StepActs {
         if (refused != null) {
             throw RunRefusal.answering(refused).raised();
         }
-        return new Acting(lockedTree, snapshot, found, position);
+        return new Acting(lockedTree, context, snapshot, found, position);
     }
 
     private boolean inView(GroupId group, RunId run, UserId caller, Set<GroupPermission> permitted) {
@@ -306,5 +469,6 @@ final class StepActs {
         }
     }
 
-    private record Acting(LockedTree tree, RunSnapshot run, StepSnapshot step, StepPosition position) {}
+    private record Acting(
+            LockedTree tree, RunInTree context, RunSnapshot run, StepSnapshot step, StepPosition position) {}
 }

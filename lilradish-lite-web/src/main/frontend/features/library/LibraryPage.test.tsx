@@ -1,5 +1,12 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -8,11 +15,14 @@ import { StandingProvider } from "../../app/standing/StandingContext";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { answered, inGroup } from "../../testutil/standingRead";
-import { justStarted } from "./entryAddress";
+import { deferred } from "../../testutil/deferred";
+import { justMade } from "./entryAddress";
 import { LibraryPage } from "./LibraryPage";
 import { LIBRARY_KINDS } from "./libraryKinds";
 
 const GROUP = "00000003-0000-4000-8000-000000000b41";
+
+const OTHER_GROUP = "00000003-0000-4000-8000-000000000b43";
 
 const PAGE = `/groups/${GROUP}/questions`;
 
@@ -23,6 +33,7 @@ const WRITES = ["read_membership", "author_entry"];
 const TRIAGE = {
   entryId: "00000006-0000-4000-8000-000000000b41",
   name: "Triage",
+  purpose: "Sorts claims.",
   inService: 2,
   submitted: true,
   stopped: false,
@@ -40,6 +51,7 @@ const LISTED: Reply = [JSON.stringify({ items: [TRIAGE, HANDLE] }), 200];
 interface Opening {
   readonly permissions?: readonly string[];
   readonly routes?: Readonly<Record<string, readonly Reply[]>>;
+  readonly otherGroup?: boolean;
 }
 
 /**
@@ -49,7 +61,7 @@ interface Opening {
  */
 function opening(
   address: string,
-  { permissions = WRITES, routes = {} }: Opening = {},
+  { permissions = WRITES, routes = {}, otherGroup = false }: Opening = {},
 ) {
   const sent = serving({ [`GET ${LIST}`]: [LISTED], ...routes });
   const router = createMemoryRouter(
@@ -65,7 +77,12 @@ function opening(
   const readAgain = vi.fn();
   const standing = answered(
     [],
-    [inGroup(GROUP, "CLAIMS", "Claims", permissions)],
+    [
+      inGroup(GROUP, "CLAIMS", "Claims", permissions),
+      ...(otherGroup
+        ? [inGroup(OTHER_GROUP, "SAMPLE", "Demo Sample", permissions)]
+        : []),
+    ],
   );
   render(
     <ThemeProvider theme={theme}>
@@ -80,6 +97,9 @@ function opening(
     at: () =>
       `${router.state.location.pathname}${router.state.location.search}`,
     state: () => router.state.location.state as unknown,
+    async go(path: string) {
+      await act(async () => router.navigate(path));
+    },
   };
 }
 
@@ -102,8 +122,8 @@ describe("LibraryPage", () => {
     const { sent } = opening(PAGE);
 
     expect(await rows()).toEqual([
-      ["Triage", "Version 2", "Waiting", "No"],
-      ["Handle", "None", "No", "Stopped"],
+      ["TriageSorts claims.", "Version 2", "Waiting for approval"],
+      ["HandleIt says nothing of what it is for.", "None", "Stopped"],
     ]);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Questions of",
@@ -111,6 +131,12 @@ describe("LibraryPage", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Claims",
     );
+    expect(
+      screen.getByRole("link", { name: "Triage" }),
+    ).toHaveAccessibleDescription("Sorts claims.");
+    expect(
+      screen.getByRole("link", { name: "Handle" }),
+    ).toHaveAccessibleDescription("It says nothing of what it is for.");
     expect(requestsTo(sent)).toEqual([`GET ${LIST}?sort=name`]);
   });
 
@@ -141,13 +167,13 @@ describe("LibraryPage", () => {
     ["may not", ["read_membership"], 0],
     ["holds nothing but membership", [], 0],
   ])(
-    "draws Start one only for a reader who %s",
+    "draws its New button only for a reader who %s",
     async (_case, permissions, drawn) => {
       opening(PAGE, { permissions });
       await rows();
 
       expect(
-        screen.queryAllByRole("button", { name: "Start a question" }),
+        screen.queryAllByRole("button", { name: "New question" }),
       ).toHaveLength(drawn);
     },
   );
@@ -157,13 +183,13 @@ describe("LibraryPage", () => {
     await rows();
 
     await userEvent.click(
-      within(table()).getByRole("button", { name: "Submitted" }),
+      within(table()).getByRole("button", { name: "Status" }),
     );
 
     await waitFor(() =>
-      expect(requestsTo(sent)).toContain(`GET ${LIST}?sort=submitted`),
+      expect(requestsTo(sent)).toContain(`GET ${LIST}?sort=status`),
     );
-    expect(at()).toBe(`${PAGE}?sort=submitted`);
+    expect(at()).toBe(`${PAGE}?sort=status`);
   });
 
   /** An entry opens a page of its own, on its newest version, and leaves the list's order behind. */
@@ -177,7 +203,7 @@ describe("LibraryPage", () => {
     expect(at()).toBe(`${PAGE}/${HANDLE.entryId}`);
   });
 
-  it("opens an entry just started onto its own page", async () => {
+  it("opens an entry just made onto its own page", async () => {
     const { at, state } = opening(PAGE, {
       routes: {
         [`POST ${LIST}`]: [
@@ -196,19 +222,73 @@ describe("LibraryPage", () => {
     });
     await rows();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Start a question" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "New question" }));
     await userEvent.type(
       screen.getByRole("textbox", { name: "Name" }),
       "Intake",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
       expect(at()).toBe(`${PAGE}/00000006-0000-4000-8000-000000000b49`),
     );
-    expect(justStarted(state())).toBe(true);
+    expect(justMade(state())).toBe(true);
+  });
+
+  it("does not open an entry made in the previous group under the group now shown", async () => {
+    const otherPage = `/groups/${OTHER_GROUP}/questions`;
+    const otherList = `/api/groups/${OTHER_GROUP}/questions`;
+    const { go, at, state } = opening(PAGE, {
+      otherGroup: true,
+      routes: { [`GET ${otherList}`]: [['{"items":[]}', 200]] },
+    });
+    await rows();
+    const held = deferred<Response>();
+    const ordinaryFetch = globalThis.fetch;
+    const sent = vi.fn<typeof fetch>((input, init) =>
+      init?.method === "POST" &&
+      new URL(String(input), "http://reader.test").pathname === LIST
+        ? held.promise
+        : ordinaryFetch(input, init),
+    );
+    vi.stubGlobal("fetch", sent);
+
+    await userEvent.click(screen.getByRole("button", { name: "New question" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Name" }),
+      "Demo Sample",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(
+      sent.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" && String(input).includes(LIST),
+      ),
+    ).toBe(true);
+    await go(otherPage);
+    expect(
+      await screen.findByRole("heading", { level: 1, name: /Demo Sample/ }),
+    ).toBeInTheDocument();
+
+    await act(async () =>
+      held.settle(
+        new Response(
+          JSON.stringify({
+            entryId: "00000006-0000-4000-8000-000000000b49",
+            kind: "question",
+            name: "Demo Sample",
+            acts: [],
+            versions: [],
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    expect(at()).toBe(otherPage);
+    expect(state()).toBeNull();
+    expect(screen.queryByText("Entry")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it.each([
@@ -223,6 +303,10 @@ describe("LibraryPage", () => {
 
       await screen.findByRole("alert");
 
+      // Reread from a passive effect, which React may run in a task after the commit that drew the alert.
+      await waitFor(() => expect(readAgain).toHaveBeenCalledTimes(again));
+      // Unmounting flushes the passive effects of commits already made, so a further reread is counted too.
+      cleanup();
       expect(readAgain).toHaveBeenCalledTimes(again);
     },
   );
@@ -232,7 +316,7 @@ describe("LibraryPage", () => {
     ["the group", "GROUP_NOT_IN_VIEW", 404, 1],
     ["only the name asked for", "ENTRY_NAME_TAKEN", 409, 0],
   ])(
-    "reads the standing again where starting one is refused for %s",
+    "reads the standing again where making one is refused for %s",
     async (_case, code, status, again) => {
       const { readAgain, at } = opening(PAGE, {
         routes: { [`POST ${LIST}`]: [[JSON.stringify({ code }), status]] },
@@ -240,13 +324,13 @@ describe("LibraryPage", () => {
       await rows();
 
       await userEvent.click(
-        screen.getByRole("button", { name: "Start a question" }),
+        screen.getByRole("button", { name: "New question" }),
       );
       await userEvent.type(
         screen.getByRole("textbox", { name: "Name" }),
         "Intake",
       );
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
       await screen.findByRole("alert");
       expect(readAgain).toHaveBeenCalledTimes(again);

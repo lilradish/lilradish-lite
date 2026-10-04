@@ -6,7 +6,8 @@ import {
   optional,
   textFrom,
 } from "../../../lib/request/document";
-import { get } from "../../../lib/request/http";
+import { cursorLoader } from "../../../lib/request/cursorLoader";
+import type { Page } from "../../../lib/request/page";
 import { fillFieldsFrom, type FillField } from "../../filling";
 import { GROUPS } from "../../groups";
 
@@ -29,18 +30,26 @@ export interface OfferedVersion {
   readonly takes: readonly FillField[];
 }
 
-/** By name, as the server orders them. */
-export function readOffered(
+/** By name, as the server orders them, one page at a time. */
+export function offeredLoader(
   groupId: string,
+  filter = "",
+): (
+  cursor: string | null,
   signal: AbortSignal,
-): Promise<readonly OfferedWorkflow[]> {
-  return atSegment(GROUPS, groupId, (group) =>
-    get(`${group}/offered-workflows`, signal, offeredFrom),
-  );
-}
-
-function offeredFrom(body: unknown): readonly OfferedWorkflow[] | null {
-  return isUnchecked(body) ? listOf(body.workflows, workflowFrom) : null;
+) => Promise<Page<OfferedWorkflow>> {
+  return (cursor, signal) =>
+    atSegment(GROUPS, groupId, (group) => {
+      const query = new URLSearchParams();
+      if (filter !== "") {
+        query.set("filter", filter);
+      }
+      return cursorLoader(
+        `${group}/offered-workflows`,
+        workflowFrom,
+        query,
+      )(cursor, signal);
+    });
 }
 
 /** Built member by member; a workflow missing what it is drawn from is not one this side can show. */

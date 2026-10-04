@@ -1,12 +1,16 @@
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { ListTerm } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import type { Worded } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/terms";
@@ -14,9 +18,11 @@ import type { TermWay } from "../../api/groups/{groupId}/{kind}/{entryId}/versio
 import type { GroupRule } from "../../app/standing/actRules";
 import { say, type MessageId } from "../../i18n/app";
 import { ActButton } from "../../lib/action/ActButton";
-import { Press } from "../../lib/action/Press";
+import { IconPress } from "../../lib/action/IconPress";
+import { Press, type Reason } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
-import { ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { Part } from "../../lib/layout/Part";
+import { ACTS_SX, HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { StatusLine, type Line } from "../../lib/notice/StatusLine";
 import type { Action } from "../../lib/request/useAction";
@@ -28,13 +34,14 @@ import {
 } from "../../lib/text/legibility";
 import REFERENCE_LIST_LIMITS from "./referenceListLimits.json";
 import { usePartFocus } from "./usePartFocus";
+import { useDraftPartStatus } from "./useDraftStatus";
 import { WriteRefused } from "./WriteRefused";
 
-const PART_SX = { mb: 3 };
+const TABLE_SX = { "& td": { verticalAlign: "top" } };
 
-const HEADING_SX = { mb: 1 };
+const TABLE_HOLDER_SX = { mb: 2 };
 
-const TABLE_SX = { mb: 2, "& td": { verticalAlign: "top" } };
+const ROW_ACTS_SX = { ...HEADER_ACTS_SX, alignItems: "flex-start" };
 
 const ADDING_SX = {
   display: "flex",
@@ -60,7 +67,6 @@ const MEANING_REFUSALS = {
 
 const NOTHING_TYPED: Worded = { term: "", meaning: "" };
 
-// Level with the server's Term.MOST_IN_A_LIST, which a spec holds this table to.
 const MOST_TERMS = REFERENCE_LIST_LIMITS.mostTerms;
 
 interface TermChanges<T> {
@@ -143,138 +149,164 @@ export function TermsTable<T>({
   }, [landed, heading]);
 
   const running = action.running;
-  const shown = terms.map(
-    (term) => typing.get(term.termId)?.worded ?? wordedOf(term),
-  );
+  const run = action.run;
   // Where the keyboard goes, and what is said, is set only once the write has landed: a refusal redraws nothing.
-  const press = (
-    act: (signal: AbortSignal) => Promise<T>,
-    focus: Focus | null,
-    said: string,
-  ) =>
-    action.run((signal) => {
-      setAsked(true);
-      setLanded(null);
-      return act(signal).then((answer) => {
-        pending.current = focus;
-        setLanded({ severity: "info", words: said });
-        return answer;
-      });
-    });
-  const type = (term: ListTerm, worded: Worded) => {
-    if (!running) {
-      setTyping((now) =>
-        new Map(now).set(term.termId, {
-          worded,
-          over: now.get(term.termId)?.over ?? term,
-        }),
-      );
+  const press = useCallback(
+    (
+      act: (signal: AbortSignal) => Promise<T>,
+      focus: Focus | null,
+      said: string,
+    ) =>
+      run((signal) => {
+        setAsked(true);
+        setLanded(null);
+        return act(signal).then((answer) => {
+          pending.current = focus;
+          setLanded({ severity: "info", words: said });
+          return answer;
+        });
+      }),
+    [run],
+  );
+  // Each row is handed these rather than its own, so a keystroke in one row redraws that row alone.
+  const register = useCallback((termId: string, row: HTMLElement | null) => {
+    if (row === null) {
+      rows.current.delete(termId);
+    } else {
+      rows.current.set(termId, row);
     }
-  };
+  }, []);
+  const type = useCallback(
+    (term: ListTerm, worded: Worded) => {
+      if (!running) {
+        setTyping((now) =>
+          new Map(now).set(term.termId, {
+            worded,
+            over: now.get(term.termId)?.over ?? term,
+          }),
+        );
+      }
+    },
+    [running],
+  );
+  const save = useCallback(
+    (term: ListTerm, worded: Worded) =>
+      press(
+        (signal) => changes.reword(term.termId, worded, signal),
+        { termId: term.termId },
+        say("referenceList.saved", { term: isolatedInText(worded.term) }),
+      ),
+    [press, changes],
+  );
+  // A write names the revision read, so one landing moved exactly one place.
+  const move = useCallback(
+    (term: ListTerm, way: TermWay, position: number) =>
+      press(
+        (signal) => changes.move(term.termId, way, signal),
+        null,
+        say("referenceList.moved", {
+          term: isolatedInText(term.term),
+          position: way === "up" ? position - 1 : position + 1,
+        }),
+      ),
+    [press, changes],
+  );
+  const remove = useCallback(
+    (term: ListTerm) =>
+      press(
+        (signal) => changes.remove(term.termId, signal),
+        { at: "heading" },
+        say("referenceList.removed", { term: isolatedInText(term.term) }),
+      ),
+    [press, changes],
+  );
   const typedRefused = refusalOf(adding);
-  const addRefused =
+  const unsaved =
+    terms.some((term) => {
+      const worded = typing.get(term.termId)?.worded;
+      return (
+        worded !== undefined &&
+        (worded.term !== term.term || worded.meaning !== term.meaning)
+      );
+    }) ||
+    adding.term !== "" ||
+    adding.meaning !== "";
+  useDraftPartStatus("terms", unsaved, action.running || waiting);
+  const addHeld: Reason | undefined =
     terms.length >= MOST_TERMS
-      ? say("referenceList.full", { most: MOST_TERMS })
+      ? {
+          severity: "warning",
+          words: say("referenceList.full", { most: MOST_TERMS }),
+        }
       : adding.term === "" || adding.meaning === ""
-        ? say("referenceList.addFirst")
+        ? { severity: "info", words: say("referenceList.addFirst") }
         : typedRefused === null
-          ? null
-          : say(typedRefused);
+          ? undefined
+          : { severity: "warning", words: say(typedRefused) };
 
   return (
-    <Box
-      component="section"
+    <Part
+      title={say("referenceList.terms")}
+      actions={
+        editable && unsaved ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {say("draft.unsaved")}
+          </Typography>
+        ) : undefined
+      }
+      level="h3"
+      depth={2}
+      headingId={headingId}
+      headingRef={heading}
       ref={section}
-      aria-labelledby={headingId}
-      sx={PART_SX}
     >
-      <Typography
-        id={headingId}
-        ref={heading}
-        tabIndex={-1}
-        variant="h6"
-        component="h3"
-        sx={HEADING_SX}
-      >
-        {say("referenceList.terms")}
-      </Typography>
       {terms.length === 0 ? (
         <Typography variant="body2" sx={QUIET_SX}>
           {say("referenceList.noTerms")}
         </Typography>
       ) : (
-        <Table size="small" aria-labelledby={headingId} sx={TABLE_SX}>
-          <TableHead>
-            <TableRow>
-              <TableCell>{say("referenceList.term")}</TableCell>
-              <TableCell>{say("referenceList.meaning")}</TableCell>
-              {editable ? (
-                <TableCell>{say("referenceList.changes")}</TableCell>
-              ) : null}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {terms.map((term, index) =>
-              editable ? (
-                <EditedRow
-                  key={term.termId}
-                  term={term}
-                  worded={shown[index]!}
-                  position={index + 1}
-                  last={index === terms.length - 1}
-                  running={running}
-                  waiting={waiting}
-                  register={(row) => {
-                    if (row === null) {
-                      rows.current.delete(term.termId);
-                    } else {
-                      rows.current.set(term.termId, row);
-                    }
-                  }}
-                  onType={(worded) => type(term, worded)}
-                  onSave={(worded) =>
-                    press(
-                      (signal) => changes.reword(term.termId, worded, signal),
-                      { termId: term.termId },
-                      say("referenceList.saved", {
-                        term: isolatedInText(worded.term),
-                      }),
-                    )
-                  }
-                  // A write names the revision read, so one landing moved exactly one place.
-                  onMove={(way) =>
-                    press(
-                      (signal) => changes.move(term.termId, way, signal),
-                      null,
-                      say("referenceList.moved", {
-                        term: isolatedInText(term.term),
-                        position: way === "up" ? index : index + 2,
-                      }),
-                    )
-                  }
-                  onRemove={() =>
-                    press(
-                      (signal) => changes.remove(term.termId, signal),
-                      { at: "heading" },
-                      say("referenceList.removed", {
-                        term: isolatedInText(term.term),
-                      }),
-                    )
-                  }
-                />
-              ) : (
-                <TableRow key={term.termId}>
-                  <TableCell>
-                    <bdi>{term.term}</bdi>
-                  </TableCell>
-                  <TableCell>
-                    <bdi>{term.meaning}</bdi>
-                  </TableCell>
-                </TableRow>
-              ),
-            )}
-          </TableBody>
-        </Table>
+        <TableContainer sx={TABLE_HOLDER_SX}>
+          <Table size="small" aria-labelledby={headingId} sx={TABLE_SX}>
+            <TableHead>
+              <TableRow>
+                <TableCell>{say("referenceList.term")}</TableCell>
+                <TableCell>{say("referenceList.meaning")}</TableCell>
+                {editable ? (
+                  <TableCell>{say("referenceList.changes")}</TableCell>
+                ) : null}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {terms.map((term, index) =>
+                editable ? (
+                  <EditedRow
+                    key={term.termId}
+                    term={term}
+                    typed={typing.get(term.termId)?.worded}
+                    position={index + 1}
+                    last={index === terms.length - 1}
+                    running={running}
+                    waiting={waiting}
+                    onRegister={register}
+                    onType={type}
+                    onSave={save}
+                    onMove={move}
+                    onRemove={remove}
+                  />
+                ) : (
+                  <TableRow key={term.termId}>
+                    <TableCell>
+                      <bdi>{term.term}</bdi>
+                    </TableCell>
+                    <TableCell>
+                      <bdi>{term.meaning}</bdi>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
       {editable ? (
         <>
@@ -308,12 +340,13 @@ export function TermsTable<T>({
           <Box sx={ACTS_SX}>
             <ActButton
               action={action}
-              waiting={waiting}
-              reason={
-                addRefused === null
-                  ? undefined
-                  : { severity: "info", words: addRefused }
+              variant={
+                adding.term !== "" || adding.meaning !== ""
+                  ? "contained"
+                  : undefined
               }
+              waiting={waiting}
+              reason={addHeld}
               act={(signal) => {
                 setAsked(true);
                 setLanded(null);
@@ -346,37 +379,39 @@ export function TermsTable<T>({
           onReadAfresh={onReadAfresh}
         />
       )}
-    </Box>
+    </Part>
   );
 }
 
 /** One term as it is written: its two text boxes, and each change to it, named with the term as it was read. */
-function EditedRow({
+const EditedRow = memo(function EditedRow({
   term,
-  worded,
+  typed,
   position,
   last,
   running,
   waiting,
-  register,
+  onRegister,
   onType,
   onSave,
   onMove,
   onRemove,
 }: {
   readonly term: ListTerm;
-  readonly worded: Worded;
+  /** What is typed over it, where anything is. */
+  readonly typed: Worded | undefined;
   /** Counted from one. */
   readonly position: number;
   readonly last: boolean;
   readonly running: boolean;
   readonly waiting: boolean;
-  readonly register: (row: HTMLElement | null) => void;
-  readonly onType: (worded: Worded) => void;
-  readonly onSave: (worded: Worded) => void;
-  readonly onMove: (way: TermWay) => void;
-  readonly onRemove: () => void;
+  readonly onRegister: (termId: string, row: HTMLElement | null) => void;
+  readonly onType: (term: ListTerm, worded: Worded) => void;
+  readonly onSave: (term: ListTerm, worded: Worded) => void;
+  readonly onMove: (term: ListTerm, way: TermWay, position: number) => void;
+  readonly onRemove: (term: ListTerm) => void;
 }) {
+  const worded = typed ?? wordedOf(term);
   const spoken = isolatedInText(term.term);
   const named = (act: MessageId) =>
     say("referenceList.onTerm", { act: say(act), term: spoken });
@@ -384,11 +419,13 @@ function EditedRow({
   const changed = worded.term !== term.term || worded.meaning !== term.meaning;
   const refused = refusalOf(worded);
   return (
-    <TableRow ref={register}>
+    <TableRow ref={(row) => onRegister(term.termId, row)}>
       <TableCell>
         <TextField
           value={worded.term}
-          onChange={(edit) => onType({ ...worded, term: edit.target.value })}
+          onChange={(edit) =>
+            onType(term, { ...worded, term: edit.target.value })
+          }
           {...termSaid(worded.term, term.alikeEarlier === true)}
           slotProps={{
             htmlInput: {
@@ -405,7 +442,9 @@ function EditedRow({
       <TableCell>
         <TextField
           value={worded.meaning}
-          onChange={(edit) => onType({ ...worded, meaning: edit.target.value })}
+          onChange={(edit) =>
+            onType(term, { ...worded, meaning: edit.target.value })
+          }
           {...meaningSaid(worded.meaning)}
           slotProps={{
             htmlInput: {
@@ -419,47 +458,52 @@ function EditedRow({
         />
       </TableCell>
       <TableCell>
-        <Box sx={ACTS_SX}>
+        <Box sx={ROW_ACTS_SX}>
           {changed ? (
             <Press
               label={named("referenceList.save")}
+              variant="contained"
               unavailable={held}
               reason={
                 refused === null
                   ? undefined
-                  : { severity: "info", words: say(refused) }
+                  : { severity: "warning", words: say(refused) }
               }
-              onPress={() => onSave(worded)}
+              onPress={() => onSave(term, worded)}
             >
               {say("referenceList.save")}
             </Press>
           ) : null}
-          <Press
+          <IconPress
+            icon={<ArrowUpwardIcon />}
             label={named("referenceList.up")}
             unavailable={held || position === 1}
-            onPress={() => onMove("up")}
+            onPress={() => onMove(term, "up", position)}
           >
             {say("referenceList.up")}
-          </Press>
-          <Press
+          </IconPress>
+          <IconPress
+            icon={<ArrowDownwardIcon />}
             label={named("referenceList.down")}
             unavailable={held || last}
-            onPress={() => onMove("down")}
+            onPress={() => onMove(term, "down", position)}
           >
             {say("referenceList.down")}
-          </Press>
-          <Press
+          </IconPress>
+          <IconPress
+            icon={<DeleteOutlinedIcon />}
+            warns
             label={named("referenceList.remove")}
             unavailable={held}
-            onPress={onRemove}
+            onPress={() => onRemove(term)}
           >
             {say("referenceList.remove")}
-          </Press>
+          </IconPress>
         </Box>
       </TableCell>
     </TableRow>
   );
-}
+});
 
 /** Alike as the server judged the term saved, which follows each save rather than each keystroke. */
 function termSaid(typed: string, alikeEarlier: boolean) {

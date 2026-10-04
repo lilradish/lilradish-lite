@@ -5,10 +5,12 @@ import static org.lilradish.lite.migration.fixture.SchemaRows.*
 import static org.lilradish.lite.migration.fixture.V10Cases.A_FAILURE
 import static org.lilradish.lite.migration.fixture.V10Cases.A_HOLD
 import static org.lilradish.lite.migration.fixture.V10Cases.A_RUN_STEP
+import static org.lilradish.lite.migration.fixture.V10Cases.A_SEARCH_ATTEMPT
 import static org.lilradish.lite.migration.fixture.V10Cases.A_SEND_ATTEMPT
 import static org.lilradish.lite.migration.fixture.V10Cases.A_SUB_RUN
 import static org.lilradish.lite.migration.fixture.V10Cases.RUN_THE_CODE_STEP
 import static org.lilradish.lite.migration.fixture.V9Cases.A_BINDING
+import static org.lilradish.lite.migration.fixture.V9Cases.SEARCH_STEP
 
 /**
  * V11__production_and_call.sql's rules: the rows they are proved beside, and a case attacking each. A rule of
@@ -36,13 +38,14 @@ final class V11Cases {
         "update app.workflow_versions set may_be_helped = true, helper_model = 'general', helper_mode = 'ordinary'" +
                 " where entry_version_id = '${NEXT_WORKFLOW_VERSION}'",
         "insert into app.runs (run_id, group_id, number, name, entry_id, entry_version_id, root_run_id, depth," +
-                " started_with, created_by) values ('${CODE_RUN}', '${GROUP}', 5, 'Reply to Edsger', '${WORKFLOW_ENTRY}'," +
+                " started_with, created_by) values ('${CODE_RUN}', '${GROUP}', 5, 'Reply to Demo Sample Evan One', '${WORKFLOW_ENTRY}'," +
                 " '${NEXT_WORKFLOW_VERSION}', '${CODE_RUN}', 0, '{}', '${STEWARD}')",
         "insert into app.run_steps (run_step_id, run_id, entry_version_id, workflow_step_id, step_kind, producer," +
                 " reviewed_by_model, tries, created_by) values ('${CODE_RUN_STEP}', '${CODE_RUN}'," +
                 " '${NEXT_WORKFLOW_VERSION}', '${SUB_STEP}', 'code_step', 'code', false, 3, '${WORKFLOW_RUNNER}')," +
                 " ('${REVIEWED_CODE_RUN_STEP}', '${CODE_RUN}', '${NEXT_WORKFLOW_VERSION}', '${REVIEWED_CODE}', 'code_step'," +
                 " 'code', true, 3, '${WORKFLOW_RUNNER}')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.model_calls (model_call_id, run_id, root_run_id, purpose, root_version_id, request, model, mode," +
                 " envelope_version, sent_count, came_back_count, outcome, answer, ended_at, created_by) values" +
                 " ('${HELP_CALL}', '${CODE_RUN}', '${CODE_RUN}', 'help', '${NEXT_WORKFLOW_VERSION}'," +
@@ -57,6 +60,10 @@ final class V11Cases {
                 " reviewed_by_model, tries, may_run_again, pinned_version_id, try_number, producer, created_by) values" +
                 " ('${PRODUCTION}', '${RUN_STEP}', '${RUN}', '${RUN}', 'question', 'model', false, 3, null, '${VERSION}', 1," +
                 " 'model', '${WORKFLOW_RUNNER}')",
+        "insert into app.productions (production_id, run_step_id, run_id, root_run_id, run_step_kind, step_producer," +
+                " reviewed_by_model, tries, try_number, producer, created_by) values ('${SEARCH_PRODUCTION}'," +
+                " '${SEARCH_RUN_STEP}', '${RUN}', '${RUN}', 'search', 'model', true, 3, 1, 'model'," +
+                " '${WORKFLOW_RUNNER}')",
         "insert into app.run_step_send_attempts (run_step_send_attempt_id, run_step_id, run_id, run_step_kind," +
                 " workflow_step_id, purpose, model, mode, production_id, too_long, payload, created_by, created_by_kind)" +
                 " values ('${LONG_ATTEMPT}', '${RUN_STEP}', '${RUN}', 'question', '${STEP}', 'produce', 'general'," +
@@ -68,13 +75,36 @@ final class V11Cases {
                 " workflow_step_id, purpose, model, mode, production_id, payload, created_by, created_by_kind) values" +
                 " ('${SEND_ATTEMPT}', '${RUN_STEP}', '${RUN}', 'question', '${STEP}', 'produce', 'general', 'ordinary'," +
                 " '${PRODUCTION}', '{\"input\": \"Summarise.\"}', '${WORKFLOW_RUNNER}', 'system')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.model_calls (model_call_id, run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id," +
                 " production_id, model, mode, envelope_version, sent_count, came_back_count, outcome, answer, ended_at," +
                 " created_by) values ('${CALL}', '${RUN}', '${RUN}', 'produce', '${SEND_ATTEMPT}', '${RUN_STEP}'," +
                 " '${PRODUCTION}', 'general', 'ordinary', 1, 1200, 300, 'came_back', '{\"details\": {}}', now()," +
                 " '${WORKFLOW_RUNNER}')",
+        "insert into app.run_step_send_attempts (run_step_send_attempt_id, run_step_id, run_id, run_step_kind," +
+                " workflow_step_id, purpose, model, mode, production_id, payload, search_question, created_by," +
+                " created_by_kind) values ('${SEARCH_ATTEMPT}', '${SEARCH_RUN_STEP}', '${RUN}', 'search'," +
+                " '${SEARCH_STEP}', 'produce', 'general', 'ordinary', '${SEARCH_PRODUCTION}', '{}'," +
+                " 'Find the complaint.', '${WORKFLOW_RUNNER}', 'system')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        "insert into app.model_calls (model_call_id, run_id, root_run_id, purpose, run_step_send_attempt_id," +
+                " run_step_id, production_id, model, mode, envelope_version, sent_count, came_back_count," +
+                " outcome, answer, ended_at, created_by) values ('${SEARCH_CALL}', '${RUN}', '${RUN}'," +
+                " 'produce', '${SEARCH_ATTEMPT}', '${SEARCH_RUN_STEP}', '${SEARCH_PRODUCTION}', 'general'," +
+                " 'ordinary', 1, 120, 70, 'came_back', '{}', now(), '${WORKFLOW_RUNNER}')",
+        "insert into app.model_call_tool_uses (model_call_id, run_id, model_call_outcome, tool, most_uses," +
+                " uses, uses_said, searches_cut, searches_not_as_it_came, searches_left_out) values" +
+                " ('${SEARCH_CALL}', '${RUN}', 'came_back', 'web', 5, 2, true, false, false, 0)",
+        "insert into app.model_call_tool_prices (model_call_id, currency, per_use) values" +
+                " ('${SEARCH_CALL}', 'USD', 0.0030)",
+        "insert into app.model_call_searches (model_call_id, position, searched_for, found) values" +
+                " ('${SEARCH_CALL}', 1, 'complaint', 'context')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        "update app.productions set model_call_id = '${SEARCH_CALL}', model_call_outcome = 'came_back'," +
+                " ended_at = now(), ended_by = '${WORKFLOW_RUNNER}' where production_id = '${SEARCH_PRODUCTION}'",
         "insert into app.model_call_turnaways (model_call_turnaway_id, model_call_id, said, created_by)" +
                 " values ('${TURNAWAY}', '${CALL}', 'Rate limit reached.', '${WORKFLOW_RUNNER}')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.model_calls (model_call_id, run_id, root_run_id, purpose, root_version_id, request, model, mode," +
                 " envelope_version, sent_count, outcome, ended_at, created_by) values ('${SPENT_CALL}', '${CODE_RUN}'," +
                 " '${CODE_RUN}', 'help', '${NEXT_WORKFLOW_VERSION}', '{}', 'general', 'ordinary', 1, 800, 'turned_away'," +
@@ -82,8 +112,10 @@ final class V11Cases {
         "insert into app.model_call_turnaways (model_call_turnaway_id, model_call_id, said, spent_up, model_call_outcome," +
                 " created_by) values ('${SPENT_TURNAWAY}', '${SPENT_CALL}', 'Quota exceeded.', true, 'turned_away'," +
                 " '${WORKFLOW_RUNNER}')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "update app.productions set model_call_id = '${CALL}', model_call_outcome = 'came_back', ended_at = now()," +
                 " ended_by = '${WORKFLOW_RUNNER}' where production_id = '${PRODUCTION}'",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.productions (production_id, run_step_id, run_id, root_run_id, run_step_kind, step_producer," +
                 " reviewed_by_model, tries, may_run_again, pinned_version_id, try_number, producer, explanation, created_by," +
                 " created_by_kind, ended_at, ended_by, ended_by_kind) values" +
@@ -96,6 +128,7 @@ final class V11Cases {
                 " '${VERSION}', 2, 'person', null, '${STEWARD}', 'person', null, null, 'person')," +
                 " ('${LONG_ANSWER}', '${REVIEWED_RUN_STEP}', '${RUN}', '${RUN}', 'question', 'model', true, 3, null," +
                 " '${VERSION}', 4, 'person', 'Read in full.', '${MEMBER}', 'person', now(), '${MEMBER}', 'person')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.productions (production_id, run_step_id, run_id, root_run_id, run_step_kind, step_producer," +
                 " reviewed_by_model, tries, may_run_again, try_number, producer, lost_reason, lost_detail, created_by," +
                 " ended_at, ended_by) values ('${CODE_PRODUCTION}', '${CODE_RUN_STEP}', '${CODE_RUN}', '${CODE_RUN}'," +
@@ -111,6 +144,7 @@ final class V11Cases {
                 " 'system'), ('${HELD_REVIEW_ATTEMPT}', '${REVIEWED_RUN_STEP}', '${RUN}', 'question', '${REVIEWED}'," +
                 " 'review', 'general', 'research', '${LONG_ANSWER}', true, '{\"review\": \"Check all of it.\"}'," +
                 " '${WORKFLOW_RUNNER}', 'system')",
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "insert into app.model_calls (model_call_id, run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id," +
                 " production_id, model, mode, envelope_version, sent_count, came_back_count, outcome, answer, ended_at," +
                 " created_by) values ('${REVIEW_CALL}', '${RUN}', '${RUN}', 'review', '${REVIEW_ATTEMPT}'," +
@@ -138,6 +172,9 @@ final class V11Cases {
         "insert into app.production_values (production_value_id, production_id, run_step_kind, producer, field_name," +
                 " field_standing, value) values ('${CODE_VALUE}', '${CODE_PRODUCTION}', 'code_step', 'code', 'receipt'," +
                 " 'always', '\"sent\"')",
+        "insert into app.production_values (production_value_id, production_id, run_step_kind, producer," +
+                " field_name, field_standing, value) values ('${SEARCH_VALUE}', '${SEARCH_PRODUCTION}'," +
+                " 'search', 'model', 'title', 'always', '\"Context\"')",
         "insert into app.reviews (review_id, production_id, run_step_id, root_run_id, production_ended_by," +
                 " reviewed_by_model, created_by) values" +
                 " ('${REVIEW}', '${PRODUCTION}', '${RUN_STEP}', '${RUN}', '${WORKFLOW_RUNNER}', false, '${STEWARD}')," +
@@ -167,10 +204,21 @@ final class V11Cases {
                                                        run_step_id: "'${RUN_STEP}'", production_id: "'${PRODUCTION}'",
                                                        model: "'general'", mode: "'ordinary'", envelope_version: "1",
                                                        sent_count: "1200", created_by: "'${WORKFLOW_RUNNER}'"]
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final Map<String, String> CAME_BACK = [outcome: "'came_back'", came_back_count: "300", answer: "'{}'",
                                                   ended_at: "now()"]
+    // DB-SPECIFIC: now() supplies PostgreSQL's current transaction time.
+    static final Map<String, String> ERRORED = [outcome: "'errored'", error_detail: "'Demo Sample error'",
+                                              ended_at: "now()"]
     static final Map<String, String> A_TURNAWAY = [model_call_id: "'${CALL}'", said: "'Busy.'",
                                                    created_by: "'${WORKFLOW_RUNNER}'"]
+    static final Map<String, String> A_TOOL_USE = [model_call_id: "'${SEARCH_CALL}'", run_id: "'${RUN}'",
+                                                 model_call_outcome: "'came_back'", tool: "'web'", most_uses: "5",
+                                                 uses: "2", uses_said: "true"]
+    static final Map<String, String> A_TOOL_PRICE = [model_call_id: "'${SEARCH_CALL}'", currency: "'EUR'",
+                                                   per_use: "0.0040"]
+    static final Map<String, String> A_SEARCH_RECORD = [model_call_id: "'${SEARCH_CALL}'", position: "2",
+                                                      searched_for: "'complaint'", found: "'details'"]
     static final Map<String, String> A_HELP = [run_id: "'${CODE_RUN}'", root_run_id: "'${CODE_RUN}'",
                                                question: "'Which server was it?'", model_call_id: "'${SPARE_HELP_CALL}'",
                                                created_by: "'${STEWARD}'"]
@@ -182,6 +230,7 @@ final class V11Cases {
                                                      try_number: "3",
                                                      producer: "'person'", explanation: "'Read from the invoice.'",
                                                      created_by: "'${MEMBER}'", created_by_kind: "'person'",
+                                                     // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
                                                      ended_at: "now()", ended_by: "'${MEMBER}'",
                                                      ended_by_kind: "'person'"]
     /** A model's try of RUN_STEP whose call came back, save the call A_PRODUCTION's own rules keep it from naming. */
@@ -196,6 +245,9 @@ final class V11Cases {
     static final Map<String, String> A_CODE_VALUE = [production_id: "'${CODE_PRODUCTION}'", run_step_kind: "'code_step'",
                                                      producer: "'code'", field_name: "'reference'",
                                                      field_standing: "'always'", value: "'\"R-1\"'"]
+    static final Map<String, String> A_SEARCH_VALUE = [production_id: "'${SEARCH_PRODUCTION}'",
+            run_step_kind: "'search'", producer: "'model'", field_name: "'body'",
+            field_standing: "'never'", value: "'\"Text\"'"]
     /** STEWARD reviewing CODE_PRODUCTION, which nobody has reviewed yet. */
     static final Map<String, String> A_REVIEW = [production_id: "'${CODE_PRODUCTION}'", run_step_id: "'${CODE_RUN_STEP}'",
                                                  root_run_id: "'${CODE_RUN}'", production_ended_by: "'${WORKFLOW_RUNNER}'",
@@ -276,6 +328,7 @@ final class V11Cases {
     static final Map<String, String> A_CODE_REVIEW_CALL = A_PRODUCE_CALL + [run_id: "'${CODE_RUN}'",
             root_run_id: "'${CODE_RUN}'", purpose: "'review'", run_step_id: "'${REVIEWED_CODE_RUN_STEP}'",
             production_id: "'${CLOSED}'"]
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final String TURN_AWAY_THE_CALL_OUT = "update app.model_calls set outcome = 'turned_away', ended_at = now()" +
             " where model_call_id = '${OUT_CALL}'; "
     /** OUT_CALL turned away, and a turnaway naming it that says nothing of what may be spent. */
@@ -311,6 +364,7 @@ final class V11Cases {
     static final String A_VALUE_OF_REVIEWED_ANSWER = insertInto("production_values", A_VALUE + [
             production_value_id: "'${SPARE_VALUE}'", production_id: "'${REVIEWED_ANSWER}'",
             declaration_field_id: "'${PARENT}'", field_standing: "'never'", standing_threshold: "null"]) + "; "
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final String ANSWER_THE_WAITING_TRY = "update app.productions set ended_at = now(), ended_by = '${MEMBER}'," +
             " explanation = 'Checked.' where production_id = '${PENDING}'; "
     /**
@@ -325,7 +379,7 @@ final class V11Cases {
                     step_kind: "'entry'", pinned_version_id: "'${VERSION}'", pinned_kind: "'question'",
                     producer: "'model'"]) + "; " +
             insertInto("productions", A_PRODUCTION + BY_A_MODEL + [production_id: "'${SPARE_PRODUCTION}'",
-                    run_step_id: "'${SPARE_RUN_STEP}'", run_id: "'${SUB_RUN}'", try_number: "1", model_call_outcome: "null",
+                    run_step_id: "'${SPARE_RUN_STEP}'", run_id: "'${SUB_RUN}'", try_number: "null", model_call_outcome: "null",
                     ended_at: "null", ended_by: "null"]) + "; " +
             insertInto("run_step_send_attempts", A_SEND_ATTEMPT + [run_step_send_attempt_id: "'${SPARE_ATTEMPT}'",
                     run_step_id: "'${SPARE_RUN_STEP}'", run_id: "'${SUB_RUN}'", workflow_step_id: "'${SPARE_STEP}'",
@@ -345,7 +399,7 @@ final class V11Cases {
                     step_kind: "'entry'", pinned_version_id: "'${VERSION}'", pinned_kind: "'question'",
                     producer: "'model'"]) + "; " +
             insertInto("productions", A_PRODUCTION + BY_A_MODEL + [production_id: "'${SPARE_PRODUCTION}'",
-                    run_step_id: "'${SPARE_RUN_STEP}'", run_id: "'${SUB_RUN}'", try_number: "1", model_call_outcome: "null",
+                    run_step_id: "'${SPARE_RUN_STEP}'", run_id: "'${SUB_RUN}'", try_number: "null", model_call_outcome: "null",
                     ended_at: "null", ended_by: "null"]) + "; "
     /** SPARE_EXCHANGE, a question to the helper on CODE_RUN still waiting for its answer. */
     static final String ASK_WITHOUT_AN_ANSWER = "insert into app.run_help_exchanges (run_help_exchange_id, run_id," +
@@ -363,7 +417,7 @@ final class V11Cases {
      * SPARE_PRODUCTION, the model's try of RUN_STEP, tried sending in SPARE_ATTEMPT, and SPARE_FAILURE, the step
      * failing on it for its model.
      */
-    static final String A_TRY_LEFT_WAITING_BY_A_FAILURE = insertInto("productions", aTry(RUN_STEP, "model") + [
+    static final String A_TRY_LEFT_WAITING_BY_A_FAILURE = insertInto("productions", aTry(RUN_STEP, "model") + [try_number: "null",
             production_id: literal(SPARE_PRODUCTION)]) + "; " +
             attemptAtSending(SPARE_ATTEMPT, RUN_STEP, "produce", SPARE_PRODUCTION) +
             insertInto("run_step_failures", A_FAILURE + [run_step_failure_id: literal(SPARE_FAILURE),
@@ -410,26 +464,55 @@ final class V11Cases {
                 A_HELP_CALL + [request: "null"])),
         attack("model_calls_request_is_json", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [request: "'Which server was it?'"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("model_calls_request_bounded", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [request: "'\"' || repeat('a', 8388607) || '\"'"])),
         attack("model_calls_envelope_version_positive", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [envelope_version: "0"])),
         attack("model_calls_sent_count_positive", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [sent_count: "0"])),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("model_calls_came_back_count_not_negative", "model_calls", insertInto("model_calls", A_HELP_CALL + [
                 outcome: "'came_back'", came_back_count: "-1", answer: "'{}'", ended_at: "now()"])),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("model_calls_came_back_count_exactly_for_came_back", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'came_back'", answer: "'{}'", ended_at: "now()"])),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("model_calls_answer_exactly_for_came_back", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'came_back'", came_back_count: "1", ended_at: "now()"])),
+        // DB-SPECIFIC: repeat() and now() use PostgreSQL's syntax and semantics.
         attack("model_calls_answer_bounded", "model_calls", insertInto("model_calls", A_HELP_CALL + [
                 outcome: "'came_back'", came_back_count: "1", answer: "repeat('a', 8388609)", ended_at: "now()"])),
         attack("model_calls_answer_altered_only_for_answer", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [answer_altered: "true"])),
+        attack("model_calls_answer_truncated_only_for_altered_answer", "model_calls", insertInto("model_calls",
+                A_HELP_CALL + CAME_BACK + [answer_truncated: "true"])),
+        attack("model_calls_declined_words_only_for_came_back", "model_calls", insertInto("model_calls",
+                A_HELP_CALL + [declined_words: "'Demo Sample'"])),
+        // DB-SPECIFIC: repeat() builds the text on PostgreSQL's server.
+        attack("model_calls_declined_words_bounded", "model_calls", insertInto("model_calls",
+                A_HELP_CALL + CAME_BACK + [declined_words: "repeat('a', 8388609)"])),
+        attack("model_calls_declined_words_altered_only_for_declined_words", "model_calls", insertInto("model_calls",
+                A_HELP_CALL + CAME_BACK + [declined_words_altered: "true"])),
+        attack("model_calls_declined_words_truncated_only_for_altered_words", "model_calls", insertInto("model_calls",
+                A_HELP_CALL + CAME_BACK + [declined_words: "'Demo Sample'", declined_words_truncated: "true"])),
+        attack("model_calls_unreadable_response_only_for_errored", "model_calls",
+                insertInto("model_calls", A_HELP_CALL + [unreadable_response: "''"])),
+        // DB-SPECIFIC: repeat() builds the oversized text on PostgreSQL's server.
+        attack("model_calls_unreadable_response_bounded", "model_calls",
+                insertInto("model_calls", A_HELP_CALL + ERRORED + [unreadable_response: "repeat('a', 8388609)"])),
+        attack("model_calls_unreadable_response_altered_only_for_response", "model_calls",
+                insertInto("model_calls", A_HELP_CALL + ERRORED + [unreadable_response_altered: "true"])),
+        attack("model_calls_unreadable_response_truncated_only_for_altered", "model_calls",
+                insertInto("model_calls", A_HELP_CALL + ERRORED + [unreadable_response: "''",
+                                                                 unreadable_response_truncated: "true"])),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("model_calls_error_detail_exactly_for_errored", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'errored'", ended_at: "now()"])),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         attack("model_calls_error_detail_visible", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'errored'", error_detail: "''", ended_at: "now()"])),
+        // DB-SPECIFIC: repeat() and now() use PostgreSQL's syntax and semantics.
         attack("model_calls_error_detail_bounded", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'errored'", error_detail: "repeat('a', 2049)", ended_at: "now()"])),
         attack("model_calls_truncated_only_for_error_detail", "model_calls", insertInto("model_calls",
@@ -438,6 +521,7 @@ final class V11Cases {
                 A_HELP_CALL + [counted_by_model: "true"])),
         attack("model_calls_ended_together", "model_calls", insertInto("model_calls",
                 A_HELP_CALL + [outcome: "'turned_away'"])),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("model_calls_ended_after_created", "model_calls",
                 setting("model_calls", "ended_at = created_at - interval '1 day'")),
         attack("model_calls_author_system_fk", "model_calls", insertInto("model_calls",
@@ -455,12 +539,15 @@ final class V11Cases {
                 A_TURNAWAY + [created_by: "'${STEWARD}'"])),
         attack("model_call_turnaways_author_is_system", "model_call_turnaways", insertInto("model_call_turnaways",
                 A_TURNAWAY + [created_by: "'${STEWARD}'", created_by_kind: "'person'"])),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("model_call_turnaways_said_visible", "model_call_turnaways",
                 setting("model_call_turnaways", "said = 'Busy' || chr(7)")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("model_call_turnaways_said_bounded", "model_call_turnaways",
                 setting("model_call_turnaways", "said = repeat('a', 2049)")),
         attack("model_call_turnaways_truncated_only_for_said", "model_call_turnaways",
                 setting("model_call_turnaways", "said = null, said_truncated = true")),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("model_call_turnaways_resent_after_turned_away", "model_call_turnaways",
                 setting("model_call_turnaways", "resent_at = created_at - interval '1 second'")),
         attack("model_call_turnaways_model_call_outcome_fk", "model_call_turnaways", insertInto("model_call_turnaways",
@@ -488,12 +575,15 @@ final class V11Cases {
                 A_HELP + [model_call_outcome: "'came_back'"])),
         attack("run_help_exchanges_answer_only_for_came_back", "run_help_exchanges", insertInto("run_help_exchanges",
                 A_HELP + [answer: "'It was the mail server.'"])),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("run_help_exchanges_question_visible", "run_help_exchanges",
                 setting("run_help_exchanges", "question = 'Why' || chr(13)")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("run_help_exchanges_question_bounded", "run_help_exchanges",
                 setting("run_help_exchanges", "question = repeat('a', 2049)")),
         attack("run_help_exchanges_answer_visible", "run_help_exchanges",
                 setting("run_help_exchanges", "answer = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("run_help_exchanges_answer_bounded", "run_help_exchanges",
                 setting("run_help_exchanges", "answer = repeat('a', 8388609)")),
         attack("run_help_exchanges_author_person_fk", "run_help_exchanges", insertInto("run_help_exchanges",
@@ -513,6 +603,8 @@ final class V11Cases {
                 A_PRODUCTION + [pinned_version_id: "null"])),
         attack("productions_try_number_unique", "productions", insertInto("productions",
                 A_PRODUCTION + [try_number: "1"])),
+        attack("productions_try_number_absent_only_for_open_model", "productions", insertInto("productions",
+                A_PRODUCTION + [try_number: "null"])),
         attack("productions_try_number_positive", "productions", insertInto("productions",
                 A_PRODUCTION + [try_number: "0"])),
         attack("productions_producer_is_step_producer_or_person", "productions", insertInto("productions",
@@ -560,11 +652,13 @@ final class V11Cases {
                 A_PRODUCTION + [ended_by: "'${WORKFLOW_RUNNER}'", ended_by_kind: "'system'"])),
         attack("productions_ended_together", "productions", insertInto("productions",
                 A_PRODUCTION + [ended_at: "null"])),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
         attack("productions_ended_after_created", "productions",
                 setting("productions", "ended_at = created_at - interval '1 day'")),
         attack("productions_explanation_exactly_for_ended_by_person", "productions", insertInto("productions",
                 A_PRODUCTION + [explanation: "null"])),
         attack("productions_explanation_visible", "productions", setting("productions", "explanation = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("productions_explanation_bounded", "productions",
                 setting("productions", "explanation = repeat('a', 2049)")),
         attack("productions_lost_only_for_model_or_code", "productions", insertInto("productions",
@@ -575,8 +669,9 @@ final class V11Cases {
                 " set lost_reason = 'did_not_fit', lost_detail = null where production_id = '${CODE_FAILED}'"),
         attack("productions_returned_by_code_only_for_code_errored", "productions",
                 insertInto("productions", A_PRODUCTION + [returned_by_code: "'{}'"])),
-        attack("productions_returned_by_code_bounded", "productions", "update app.productions" +
-                " set returned_by_code = repeat('a', 8388609) where production_id = '${CODE_FAILED}'"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("productions_returned_by_code_bounded", "productions", insertInto("productions",
+                A_CODE_FAULT + [returned_by_code: "repeat('a', 8388609)"])),
         attack("productions_code_error_reason_only_for_code_errored", "productions", insertInto("productions",
                 A_CODE_FAULT + [lost_reason: "'nothing_came_back'", code_error_reason: "'gave_nothing'",
                                 code_error_path: "null"])),
@@ -586,25 +681,36 @@ final class V11Cases {
                 A_CODE_FAULT + [code_error_path: "null"])),
         attack("productions_code_error_path_shape", "productions", insertInto("productions",
                 A_CODE_FAULT + [code_error_path: "'Receipt'"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("productions_code_error_path_bounded", "productions", insertInto("productions",
                 A_CODE_FAULT + [code_error_path: "'ab' || repeat('.a', 511)"])),
         attack("productions_code_error_member_exactly_for_not_declared", "productions", insertInto("productions",
                 A_CODE_FAULT + [code_error_member: "'extra'"])),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("productions_code_error_member_one_line", "productions", insertInto("productions",
                 A_CODE_FAULT + [code_error_reason: "'not_declared'", code_error_member: "'a' || chr(9)"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("productions_code_error_member_bounded", "productions", insertInto("productions",
-                A_CODE_FAULT + [code_error_reason: "'not_declared'", code_error_member: "repeat('a', 66)"])),
+                A_CODE_FAULT + [code_error_reason: "'not_declared'", code_error_member: "repeat('a', 65)"])),
+        attack("productions_truncated_only_for_code_error_member", "productions", insertInto("productions",
+                A_CODE_FAULT + [code_error_member_truncated: "true"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("productions_code_error_member_truncated_at_bound", "productions", insertInto("productions",
+                A_CODE_FAULT + [code_error_reason: "'not_declared'", code_error_member: "repeat('a', 63)",
+                                code_error_member_truncated: "true"])),
         attack("productions_code_error_read_by_exactly_for_gives_otherwise", "productions", insertInto("productions",
                 A_CODE_FAULT + [code_error_read_by_step: literal(REVIEWED_CODE)])),
         attack("productions_code_error_read_by_step_fk", "productions", insertInto("productions",
                 A_CODE_FAULT_READ + [code_error_read_by_step: literal(ABSENT)])),
         attack("productions_code_error_read_by_output_shape", "productions", insertInto("productions",
                 A_CODE_FAULT_READ + [code_error_read_by_step: "null", code_error_read_by_output: "'Receipt'"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("productions_code_error_read_by_output_bounded", "productions", insertInto("productions",
                 A_CODE_FAULT_READ + [code_error_read_by_step: "null",
                                      code_error_read_by_output: "'ab' || repeat('.a', 511)"])),
         attack("productions_lost_detail_visible", "productions", "update app.productions set lost_detail = ''" +
                 " where production_id = '${CODE_FAILED}'"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("productions_lost_detail_bounded", "productions", "update app.productions" +
                 " set lost_detail = repeat('a', 2049) where production_id = '${CODE_FAILED}'"),
         attack("productions_truncated_only_for_lost_detail", "productions", insertInto("productions",
@@ -644,7 +750,7 @@ final class V11Cases {
                 A_VALUE + [pinned_version_id: "null"])),
         attack("production_values_field_exactly_for_question", "production_values", insertInto("production_values",
                 A_VALUE + [declaration_field_id: "null"])),
-        attack("production_values_field_name_exactly_for_code_step", "production_values",
+        attack("production_values_field_name_exactly_for_code_step_or_search", "production_values",
                 insertInto("production_values", A_VALUE + [field_name: "'category'"])),
         attack("production_values_field_fk", "production_values", insertInto("production_values",
                 A_VALUE + [field_standing: "'never'", standing_threshold: "null"])),
@@ -662,6 +768,7 @@ final class V11Cases {
                 A_CODE_VALUE + [field_name: "'receipt'"])),
         attack("production_values_value_not_json_null", "production_values", insertInto("production_values",
                 A_VALUE + [value: "'null'"])),
+        // DB-SPECIFIC: to_jsonb(), repeat() and chr() use PostgreSQL's syntax and semantics.
         attack("production_values_value_bounded", "production_values", insertInto("production_values",
                 A_VALUE + [value: "to_jsonb(repeat(chr(1), 8388608))"])),
         attack("production_values_confidence_exactly_for_model_above_confidence", "production_values",
@@ -728,8 +835,10 @@ final class V11Cases {
                 A_DECISION + [outcome: "'assured'", explanation: "null"])),
         attack("review_decisions_explanation_exactly_for_refused", "review_decisions",
                 insertInto("review_decisions", A_DECISION + [explanation: "null"])),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("review_decisions_explanation_visible", "review_decisions",
                 setting("review_decisions", "explanation = 'Names' || chr(133)")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("review_decisions_explanation_bounded", "review_decisions",
                 setting("review_decisions", "explanation = repeat('a', 2049)")),
         attack("review_decisions_assurance_fk", "review_decisions", insertInto("review_decisions",
@@ -778,8 +887,8 @@ final class V11Cases {
             workflow_step_id: literal(SUB_STEP), binding_id: literal(SPARE_BINDING),
             source_production_id: literal(PRODUCTION), source_production_value_id: literal(VALUE)]
 
-    static final String DROP_THE_BRANCH_INPUT = "delete from app.production_inputs" +
-            " where production_input_id = '${BRANCH_INPUT}'; "
+    static final String WITH_BRANCH_INPUT = insertInto("production_inputs",
+            A_BRANCH_USE + [production_input_id: literal(BRANCH_INPUT)]) + "; "
     /** SPARE_BINDING, filling an input of ROUTE from what STEP gave back, which a route never reads. */
     static final String BIND_AN_INPUT_OF_THE_ROUTE = insertInto("bindings", A_BINDING + [
             binding_id: literal(SPARE_BINDING), workflow_step_id: literal(ROUTE), constant: "null",
@@ -790,6 +899,7 @@ final class V11Cases {
      * Written ahead of a row, in the same statement: SUB_STEP reached in SUB_RUN as SPARE_RUN_STEP, its try
      * SPARE_PRODUCTION, and SPARE_BINDING filling it from SUB_RUN's own input.
      */
+    // DB-SPECIFIC: data-modifying with uses PostgreSQL's syntax and semantics.
     static final String WITH_A_TRY_BENEATH = "with reached as (" +
             insertInto("run_steps", A_RUN_STEP + [run_step_id: literal(SPARE_RUN_STEP)]) + "), tried as (" +
             insertInto("productions", aTry(SPARE_RUN_STEP, "code") + [production_id: literal(SPARE_PRODUCTION)]) +
@@ -800,16 +910,24 @@ final class V11Cases {
      * Written ahead of a row, in the same statement: SPARE_RUN started by ESCALATE_RUN_STEP, and SPARE_VALUE, made in
      * it by a try of SUB_STEP.
      */
+    // DB-SPECIFIC: data-modifying with uses PostgreSQL's syntax and semantics.
     static final String WITH_A_VALUE_ESCALATE_GAVE_BACK = "with started as (" + insertInto("runs", A_SUB_RUN) + "), " +
             aValueMadeBeneathIn(SPARE_RUN) + " "
     /**
      * Written ahead of a row, in the same statement: SPARE_BINDING filling REVIEWED from what ROUTE gave back, and
      * SPARE_VALUE, made in SUB_RUN beneath ROUTE by a try of SUB_STEP.
      */
+    // DB-SPECIFIC: data-modifying with uses PostgreSQL's syntax and semantics.
     static final String WITH_A_VALUE_THE_ROUTE_GAVE_BACK = "with bound as (" + insertInto("bindings", A_BINDING + [
             binding_id: literal(SPARE_BINDING), workflow_step_id: literal(REVIEWED), target_path: "'category'",
             constant: "null", source_step_id: literal(ROUTE), source_path: "'outcome'"]) + "), " +
             aValueMadeBeneathIn(SUB_RUN) + " "
+
+    static final String SEARCH_READ_PART = "(select search_question_part_id from app.search_question_parts" +
+            " where workflow_step_id = '${SEARCH_STEP}' and position = 1)"
+    static final Map<String, String> A_SEARCH_USE = A_USE + [production_id: literal(SEARCH_PRODUCTION),
+            run_step_id: literal(SEARCH_RUN_STEP), run_step_kind: "'search'", workflow_step_id: literal(SEARCH_STEP),
+            binding_id: "null", search_question_part_id: SEARCH_READ_PART]
 
     static final List<String> INPUT_FIXTURE = [
         "insert into app.bindings (binding_id, entry_version_id, workflow_step_id, target_path, constant, created_by)" +
@@ -819,8 +937,12 @@ final class V11Cases {
                 " 'complaint', '${STEP}', 'details', '${STEWARD}'), ('${ESCALATED_BINDING}', '${WORKFLOW_VERSION}'," +
                 " '${REVIEWED}', 'channel', '${ESCALATE}', 'outcome', '${STEWARD}')",
         insertInto("production_inputs", A_CONSTANT_USE + [production_input_id: literal(INPUT)]),
-        insertInto("production_inputs", A_BRANCH_USE + [production_input_id: literal(BRANCH_INPUT)]),
+        insertInto("production_inputs", A_SEARCH_USE + [production_input_id: literal(SEARCH_INPUT)]),
     ]
+
+    static final Map<String, String> A_INPUT_PART = [production_input_id: literal(INPUT),
+            root_run_id: literal(RUN), target_path: "'customer.name'",
+            source_production_id: literal(PRODUCTION), source_production_value_id: literal(VALUE)]
 
     static final List<Map<String, String>> INPUT_CASES = [
         attack("production_inputs_pk", "production_inputs", insertInto("production_inputs",
@@ -839,8 +961,8 @@ final class V11Cases {
                 A_USE + FROM_NO_VALUE)),
         attack("production_inputs_try_binding_unique", "production_inputs", insertInto("production_inputs",
                 A_CONSTANT_USE)),
-        attack("production_inputs_branch_binding_unique", "production_inputs", insertInto("production_inputs",
-                A_BRANCH_USE)),
+        attack("production_inputs_branch_binding_unique", "production_inputs", WITH_BRANCH_INPUT +
+                insertInto("production_inputs", A_BRANCH_USE)),
         attack("production_inputs_source_step_fk", "production_inputs", insertInto("production_inputs",
                 A_USE + [binding_id: literal(ESCALATED_BINDING)])),
         attack("production_inputs_source_value_together", "production_inputs", insertInto("production_inputs",
@@ -857,6 +979,7 @@ final class V11Cases {
                                                                   source_production_value_id: literal(VALUE)])),
         attack("production_inputs_source_value_fk", "production_inputs", insertInto("production_inputs",
                 A_USE + [source_production_value_id: literal(ANSWERED_VALUE)])),
+        // DB-SPECIFIC: data-modifying with uses PostgreSQL's syntax and semantics.
         attack("production_inputs_source_production_fk", "production_inputs", "with valued as (" +
                 insertInto("production_values", A_VALUE + [production_value_id: literal(SPARE_VALUE),
                         production_id: literal(REVIEWED_ANSWER), declaration_field_id: literal(PARENT),
@@ -870,9 +993,118 @@ final class V11Cases {
                         source_production_value_id: literal(CODE_VALUE)])),
     ]
 
-    static final List<String> FIXTURE = [*TRY_FIXTURE, *INPUT_FIXTURE]
+    static final List<String> INPUT_PART_FIXTURE = [insertInto("production_input_parts", A_INPUT_PART)]
 
-    static final List<Map<String, String>> CASES = [*TRY_CASES, *INPUT_CASES]
+    static final List<Map<String, String>> INPUT_IMMUTABILITY_CASES = [
+        attack("production_inputs_immutable", "production_inputs",
+                "update app.production_inputs set source_production_id = null where production_input_id = '${INPUT}'"),
+        attack("production_input_parts_immutable", "production_input_parts",
+                "update app.production_input_parts set source_production_id = null" +
+                        " where production_input_id = '${INPUT}' and target_path = 'customer.name'"),
+    ]
+
+    static final List<Map<String, String>> INPUT_PART_CASES = [
+        attack("production_input_parts_pk", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART)),
+        attack("production_input_parts_input_fk", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART + [root_run_id: literal(CODE_RUN),
+                        target_path: "'customer.id'", source_production_id: "null",
+                        source_production_value_id: "null"])),
+        attack("production_input_parts_target_path_shape", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer..id'"])),
+        attack("production_input_parts_source_together", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer.id'",
+                        source_production_id: "null"])),
+        attack("production_input_parts_source_value_fk", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer.id'",
+                        source_production_value_id: literal(ANSWERED_VALUE)])),
+        attack("production_input_parts_source_root_fk", "production_input_parts",
+                insertInto("production_input_parts", A_INPUT_PART + [target_path: "'customer.id'",
+                        source_production_id: literal(CODE_PRODUCTION),
+                        source_production_value_id: literal(CODE_VALUE)])),
+    ]
+
+    static final String WITH_PENDING_TOOL_USE =
+            insertInto("run_step_send_attempts", A_SEARCH_ATTEMPT +
+                    [run_step_send_attempt_id: literal(SPARE_NEXT_ATTEMPT)]) + "; " +
+            insertInto("model_calls", A_PRODUCE_CALL + [model_call_id: literal(SPARE_CALL),
+                    run_step_send_attempt_id: literal(SPARE_NEXT_ATTEMPT), run_step_id: literal(SEARCH_RUN_STEP),
+                    production_id: literal(SEARCH_PRODUCTION)]) + "; " +
+            insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_id: literal(SPARE_CALL),
+                    model_call_outcome: "null", uses: "null", uses_said: "null"] ) + "; "
+
+    static final List<Map<String, String>> SEARCH_CASES = [
+        attack("model_call_tool_uses_pk", "model_call_tool_uses", insertInto("model_call_tool_uses", A_TOOL_USE)),
+        attack("model_call_tool_uses_call_fk", "model_call_tool_uses", insertInto("model_call_tool_uses",
+                A_TOOL_USE + [model_call_id: literal(CALL), run_id: literal(OTHER_RUN)])),
+        attack("model_call_tool_uses_purpose_is_produce", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_purpose: "'review'"])),
+        attack("model_call_tool_uses_outcome_fk", "model_call_tool_uses", insertInto("model_call_tool_uses",
+                A_TOOL_USE + [model_call_id: literal(CALL), model_call_outcome: "'errored'",
+                        uses: "5", uses_said: "false"])),
+        attack("model_call_tool_uses_tool_shape", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [tool: "'Web'"])),
+        attack("model_call_tool_uses_most_uses_positive", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [most_uses: "0"])),
+        attack("model_call_tool_uses_uses_not_negative", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [uses: "-1"])),
+        attack("model_call_tool_uses_counted_together", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [uses_said: "null"])),
+        attack("model_call_tool_uses_counted_exactly_once_taken_up", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [uses: "null", uses_said: "null"])),
+        attack("model_call_tool_uses_said_only_for_came_back", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_outcome: "'errored'"])),
+        attack("model_call_tool_uses_unsaid_at_the_most", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [uses_said: "false"])),
+        attack("model_call_tool_uses_left_out_not_negative", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [searches_left_out: "-1"])),
+        attack("model_call_tool_uses_record_only_for_came_back", "model_call_tool_uses",
+                insertInto("model_call_tool_uses", A_TOOL_USE + [model_call_outcome: "'errored'", uses: "5",
+                        uses_said: "false", searches_cut: "true"])),
+        attack("model_call_tool_prices_pk", "model_call_tool_prices",
+                insertInto("model_call_tool_prices", A_TOOL_PRICE + [currency: "'USD'"])),
+        attack("model_call_tool_prices_uses_fk", "model_call_tool_prices",
+                insertInto("model_call_tool_prices", A_TOOL_PRICE + [model_call_id: literal(ABSENT)])),
+        attack("model_call_tool_prices_currency_shape", "model_call_tool_prices",
+                insertInto("model_call_tool_prices", A_TOOL_PRICE + [currency: "'usd'"])),
+        // DB-SPECIFIC: ::, 'NaN' and numeric use PostgreSQL's syntax and semantics.
+        attack("model_call_tool_prices_per_use_not_negative_and_finite", "model_call_tool_prices",
+                insertInto("model_call_tool_prices", A_TOOL_PRICE + [per_use: "'NaN'::numeric"])),
+        attack("model_call_searches_pk", "model_call_searches", insertInto("model_call_searches",
+                A_SEARCH_RECORD + [position: "1"])),
+        attack("model_call_searches_uses_fk", "model_call_searches", insertInto("model_call_searches",
+                A_SEARCH_RECORD + [model_call_id: literal(CALL)])),
+        attack("model_call_searches_outcome_fk", "model_call_searches", WITH_PENDING_TOOL_USE +
+                insertInto("model_call_searches", A_SEARCH_RECORD + [model_call_id: literal(SPARE_CALL)])),
+        attack("model_call_searches_came_back", "model_call_searches", insertInto("model_call_searches",
+                A_SEARCH_RECORD + [model_call_outcome: "'errored'"])),
+        attack("model_call_searches_position_range", "model_call_searches", insertInto("model_call_searches",
+                A_SEARCH_RECORD + [position: "0"])),
+        attack("model_call_searches_said_something", "model_call_searches", insertInto("model_call_searches",
+                A_SEARCH_RECORD + [searched_for: "null", found: "null"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("model_call_searches_searched_for_bounded", "model_call_searches",
+                insertInto("model_call_searches", A_SEARCH_RECORD + [searched_for: "repeat('a', 8388609)"])),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("model_call_searches_found_bounded", "model_call_searches",
+                insertInto("model_call_searches", A_SEARCH_RECORD + [found: "repeat('a', 8388609)"])),
+        attack("production_values_search_stands_always_or_never", "production_values",
+                insertInto("production_values", A_SEARCH_VALUE + [field_standing: "'above_confidence'",
+                        standing_threshold: "1", confidence: "1"])),
+        attack("production_inputs_exactly_one_binding_or_search_part", "production_inputs",
+                insertInto("production_inputs", A_USE + [binding_id: "null"])),
+        attack("production_inputs_search_part_only_for_search_try", "production_inputs",
+                insertInto("production_inputs", A_SEARCH_USE + FROM_NO_VALUE + [binding_reads_a_constant: "true"])),
+        attack("production_inputs_search_part_fk", "production_inputs",
+                insertInto("production_inputs", A_SEARCH_USE + [search_question_part_id: literal(ABSENT)])),
+        attack("production_inputs_try_search_part_unique", "production_inputs",
+                insertInto("production_inputs", A_SEARCH_USE)),
+    ]
+
+    static final List<String> FIXTURE = [*TRY_FIXTURE, *INPUT_FIXTURE, *INPUT_PART_FIXTURE]
+
+    static final List<Map<String, String>> CASES = [*TRY_CASES, *INPUT_CASES, *INPUT_PART_CASES, *SEARCH_CASES,
+                                                        *INPUT_IMMUTABILITY_CASES]
 
     /** An attempt at sending for a step of SENT_FOR, in the mode its model runs in for the purpose. */
     static Map<String, String> anAttempt(String step, String purpose, String production) {
@@ -897,8 +1129,11 @@ final class V11Cases {
     static String aModelTryWithItsCall(String outcome, String step = RUN_STEP) {
         def ended = [
             came_back        : CAME_BACK,
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             errored          : [outcome: "'errored'", error_detail: "'Timed out.'", ended_at: "now()"],
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             nothing_came_back: [outcome: "'nothing_came_back'", ended_at: "now()"],
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             turned_away      : [outcome: "'turned_away'", ended_at: "now()"],
         ][outcome] ?: [:]
         insertInto("productions", aTry(step, "model") + [production_id: literal(SPARE_PRODUCTION)]) + "; " +
@@ -910,6 +1145,7 @@ final class V11Cases {
 
     /** SPARE_PRODUCTION ended, naming SPARE_CALL and the outcome given, and why it did not fit where it did not. */
     static String endTheModelTry(String outcome, String lost) {
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         "update app.productions set ended_at = now(), ended_by = '${WORKFLOW_RUNNER}', model_call_id = '${SPARE_CALL}'," +
                 " model_call_outcome = ${literal(outcome)}, lost_reason = ${literal(lost)}," +
                 " did_not_fit_reason = ${literal(lost == 'did_not_fit' ? 'not_the_shape' : null)}" +
@@ -929,6 +1165,7 @@ final class V11Cases {
 
     /** SPARE_HELP_CALL ended as named, in one statement, saying whether the model did its counting. */
     static String endTheSpareHelpCall(String outcome, String counted = "false") {
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
         def ended = outcome == "came_back" ? "came_back_count = 40, answer = '{}'" : "error_detail = 'Timed out.'"
         "update app.model_calls set outcome = '${outcome}', ended_at = now(), ${ended}, counted_by_model = ${counted}" +
                 " where model_call_id = '${SPARE_HELP_CALL}'; "
@@ -945,11 +1182,13 @@ final class V11Cases {
         def kind = byPerson ? "person" : "system"
         [run_step_id: literal(step)] + asWritten(TRIED_ON[step]) + [try_number: "3", producer: literal(producer),
          explanation: literal(byPerson ? "Read from the invoice." : null), created_by: literal(author),
+         // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
          created_by_kind: literal(kind), ended_at: byModel ? "null" : "now()", ended_by: literal(byModel ? null : author),
          ended_by_kind: literal(kind)]
     }
 
     /** Common table expressions: SUB_STEP reached in the run as SPARE_RUN_STEP, its try SPARE_PRODUCTION, and SPARE_VALUE. */
+    // DB-SPECIFIC: data-modifying with uses PostgreSQL's syntax and semantics.
     private static String aValueMadeBeneathIn(String run) {
         "reached as (" + insertInto("run_steps", A_RUN_STEP + [run_step_id: literal(SPARE_RUN_STEP), run_id: literal(run)]) +
                 "), tried as (" + insertInto("productions", aTry(SPARE_RUN_STEP, "code") + [

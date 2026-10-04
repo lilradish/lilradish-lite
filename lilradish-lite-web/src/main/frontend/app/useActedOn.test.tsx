@@ -1,9 +1,10 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { RequestFailed, type Problem } from "../api/problem";
-import type { Resource } from "../lib/request/useResource";
+import { useResource, type Resource } from "../lib/request/useResource";
+import { deferred } from "../testutil/deferred";
 import { answered } from "../testutil/standingRead";
 import { StandingProvider } from "./standing/StandingContext";
 import { useActedOn } from "./useActedOn";
@@ -15,6 +16,8 @@ interface Thing {
 const READ: Thing = { name: "as read" };
 
 const ANSWERED: Thing = { name: "as the act answered" };
+
+const EMPTY: Thing = { name: "nothing held" };
 
 function settled(value: Thing, problem: Problem | null = null) {
   return { value, problem, loading: false, reload: vi.fn() };
@@ -70,6 +73,86 @@ describe("useActedOn", () => {
     rerender(settled(again));
     expect(result.current.shown).toBe(again);
   });
+
+  it("guards an action answer from an older read in flight, then takes the fresh answer", async () => {
+    const read = { ...settled(READ), loading: true };
+    const { result, rerender } = actingOn(read);
+
+    await act(async () =>
+      result.current.changing.run(() => Promise.resolve(ANSWERED)),
+    );
+
+    expect(read.reload).toHaveBeenCalledOnce();
+    expect(result.current.shown).toBe(ANSWERED);
+
+    const fresh = { name: "as freshly read" };
+    rerender({ ...read, value: fresh, loading: false });
+    expect(result.current.shown).toBe(fresh);
+    expect(result.current.changing.problem).toBeNull();
+  });
+
+  it("clears an action answer if its guarded fresh read is refused", async () => {
+    const read = { ...settled(READ), loading: true };
+    const { result, rerender } = actingOn(read);
+    await act(async () =>
+      result.current.changing.run(() => Promise.resolve(ANSWERED)),
+    );
+
+    const refusal = { status: 403, code: "THING_NOT_IN_VIEW" };
+    rerender({ ...read, value: EMPTY, problem: refusal, loading: false });
+
+    expect(result.current.shown).toBe(EMPTY);
+    expect(result.current.changing.problem).toBeNull();
+    expect(read.reload).toHaveBeenCalledOnce();
+  });
+
+  it.each(["answer", "refusal"])(
+    "keeps an action answer when an older %s has queued a render in the same turn",
+    async (ending) => {
+      const earlier = deferred<Thing>();
+      const fresh = deferred<Thing>();
+      const load = vi
+        .fn<(signal: AbortSignal) => Promise<Thing>>()
+        .mockResolvedValueOnce(READ)
+        .mockImplementationOnce(() => earlier.promise)
+        .mockImplementationOnce(() => fresh.promise);
+      const standing = answered([]);
+      const { result } = renderHook(
+        () => {
+          const read = useResource(load, EMPTY);
+          return { read, acted: useActedOn(read, movedWhere) };
+        },
+        {
+          wrapper: ({ children }: { readonly children: ReactNode }) => (
+            <StandingProvider read={standing}>{children}</StandingProvider>
+          ),
+        },
+      );
+      await waitFor(() => expect(result.current.read.loading).toBe(false));
+      act(() => result.current.read.reload());
+
+      await act(async () => {
+        if (ending === "answer") {
+          earlier.settle({ name: "obsolete read" });
+        } else {
+          earlier.refuse(
+            new RequestFailed({ status: 403, code: "OBSOLETE_REFUSAL" }),
+          );
+        }
+        await Promise.resolve();
+        result.current.acted.changing.run(() => Promise.resolve(ANSWERED));
+        await Promise.resolve();
+      });
+
+      expect(result.current.read.loading).toBe(true);
+      expect(result.current.read.problem).toBeNull();
+      expect(result.current.acted.shown).toBe(ANSWERED);
+      expect(load).toHaveBeenCalledTimes(3);
+
+      await act(async () => fresh.settle({ name: "fresh read" }));
+      expect(result.current.acted.shown).toEqual({ name: "fresh read" });
+    },
+  );
 
   it("hands the page each answer shown, and never a refusal", async () => {
     const { result, answeredWith } = actingOn(settled(READ));

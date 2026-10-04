@@ -70,6 +70,7 @@ class QuestionsAskedIntegrationSpec extends Specification {
         store.entry(LIST, GROUP, "reference_list", "Categories")
         store.seeded(LIST_VERSION, LIST, 1)
         store.content(LIST_VERSION, "reference_list")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, 1, 'Billing', 'A charge is what is disputed.', ?::uuid)
@@ -77,6 +78,7 @@ class QuestionsAskedIntegrationSpec extends Specification {
         store.entry(QUESTION, GROUP, "question", "Summarise a complaint")
         store.seeded(VERSION, QUESTION, 1)
         store.content(VERSION, "question", "Say which category.")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into declaration_fields (entry_version_id, entry_kind, side, position, name, label, help, kind,
                                                 holds_many, text_limit, many_limit, term_list_version_id,
@@ -215,10 +217,12 @@ class QuestionsAskedIntegrationSpec extends Specification {
         store.entry(FOREIGN_LIST, OTHER_GROUP, "reference_list", "Their categories")
         store.seeded(FOREIGN_LIST_VERSION, FOREIGN_LIST, 1)
         store.content(FOREIGN_LIST_VERSION, "reference_list")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, 1, 'Secret', 'Only they may read this.', ?::uuid)
                 """).params(FOREIGN_LIST_VERSION, SEEDER).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into declaration_fields (entry_version_id, entry_kind, side, position, name, kind, holds_many,
                                                 term_list_version_id, must_be_given, standing, created_by)

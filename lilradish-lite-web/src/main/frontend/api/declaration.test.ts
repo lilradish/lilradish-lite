@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addedFrom, declaredFrom, listVersionFrom } from "./declaration";
+import { declaredFrom, listVersionFrom, MOST_FILE_TYPES } from "./declaration";
 
 const PINNED = {
   name: "Categories",
@@ -42,10 +42,106 @@ const SENDER = {
   ],
 };
 
+const FILE_TYPES_64 = Array.from(
+  { length: MOST_FILE_TYPES },
+  (_, index) => `application/x${index}`,
+);
+
 describe("declaredFrom", () => {
   it("reads every member of a field that arrived, and the fields it holds", () => {
     expect(declaredFrom(CATEGORY)).toEqual(CATEGORY);
     expect(declaredFrom(SENDER)).toEqual(SENDER);
+  });
+
+  it.each(["one", "several"])("reads %s lines at every text depth", (lines) => {
+    const text = { ...SENDER.fields[0], lines };
+    expect(declaredFrom(text)).toEqual(text);
+    expect(declaredFrom({ ...SENDER, fields: [text] })?.fields).toEqual([text]);
+    expect(declaredFrom({ ...text, lines: "later" })).toBeNull();
+    expect(declaredFrom({ ...CATEGORY, lines })).toBeNull();
+  });
+
+  it("reads an ordered file type list and byte limit", () => {
+    const declared = {
+      fieldId: "f4",
+      name: "documents",
+      kind: "file",
+      types: ["application/pdf", "image/png"],
+      maximumBytes: 1048576,
+      many: true,
+      most: 3,
+      mustBeGiven: true,
+    };
+    expect(declaredFrom(declared)).toEqual(declared);
+  });
+
+  it("reads exactly sixty-four types and the largest exact byte count, and refuses either one past", () => {
+    const file = {
+      fieldId: "f4",
+      name: "documents",
+      kind: "file",
+      types: FILE_TYPES_64,
+      maximumBytes: Number.MAX_SAFE_INTEGER,
+      many: false,
+      mustBeGiven: false,
+    };
+
+    expect(declaredFrom(JSON.parse(JSON.stringify(file)))).toEqual(file);
+    expect(
+      declaredFrom({ ...file, types: [...FILE_TYPES_64, "application/extra"] }),
+    ).toBeNull();
+    expect(
+      declaredFrom({ ...file, maximumBytes: Number.MAX_SAFE_INTEGER + 1 }),
+    ).toBeNull();
+  });
+
+  it("reads a file draft without a byte limit but refuses a limit outside positive safe bytes", () => {
+    const file = {
+      fieldId: "f4",
+      name: "documents",
+      kind: "file",
+      types: ["application/pdf"],
+      many: false,
+      mustBeGiven: false,
+    };
+    expect(declaredFrom(file)).toEqual(file);
+    for (const maximumBytes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(declaredFrom({ ...file, maximumBytes })).toBeNull();
+    }
+    expect(declaredFrom({ ...file, maximumBytes: 1 })).toEqual({
+      ...file,
+      maximumBytes: 1,
+    });
+    expect(
+      declaredFrom({ ...file, maximumBytes: Number.MAX_SAFE_INTEGER }),
+    ).toEqual({ ...file, maximumBytes: Number.MAX_SAFE_INTEGER });
+    expect(declaredFrom({ ...file, kind: "text" })).toBeNull();
+    expect(declaredFrom({ ...CATEGORY, maximumBytes: 1 })).toBeNull();
+  });
+
+  it.each([
+    ["missing types", { maximumBytes: 1048576 }],
+    ["empty types", { types: [], maximumBytes: 1048576 }],
+    [
+      "duplicate types",
+      { types: ["image/png", "image/png"], maximumBytes: 1048576 },
+    ],
+    [
+      "parameterized type",
+      { types: ["image/png; charset=utf-8"], maximumBytes: 1048576 },
+    ],
+    ["zero size", { types: ["image/png"], maximumBytes: 0 }],
+  ])("refuses a file field with %s", (_case, limits) => {
+    expect(
+      declaredFrom({
+        fieldId: "f4",
+        name: "documents",
+        kind: "file",
+        many: false,
+        mustBeGiven: false,
+        ...limits,
+      }),
+    ).toBeNull();
   });
 
   /** Absent stays absent rather than arriving as undefined, which `in` would tell apart. */
@@ -97,57 +193,6 @@ describe("declaredFrom", () => {
   });
 });
 
-describe("addedFrom", () => {
-  const ADDED = {
-    name: "category",
-    kind: "term",
-    many: true,
-    most: 2,
-    mustBeGiven: true,
-    terms: [{ term: "Billing", meaning: "A charge." }],
-    note: "Choose one.",
-    confidence: true,
-    fields: [
-      {
-        name: "sku",
-        kind: "text",
-        longest: 32,
-        many: false,
-        mustBeGiven: false,
-        confidence: false,
-      },
-    ],
-  };
-
-  it("reads every member of what a model is told that arrived, and leaves out the rest", () => {
-    expect(addedFrom(ADDED)).toEqual(ADDED);
-    expect(
-      Object.keys(
-        addedFrom({
-          name: "n",
-          kind: "date",
-          many: false,
-          mustBeGiven: false,
-          confidence: false,
-        })!,
-      ).toSorted(),
-    ).toEqual(["confidence", "kind", "many", "mustBeGiven", "name"]);
-  });
-
-  it.each([
-    [
-      "no word on whether it must be given",
-      { ...ADDED, mustBeGiven: undefined },
-    ],
-    ["no word on a confidence", { ...ADDED, confidence: undefined }],
-    ["a term with no meaning", { ...ADDED, terms: [{ term: "Billing" }] }],
-    ["a kind this build does not know", { ...ADDED, kind: "prose" }],
-    ["a note that is no text", { ...ADDED, note: 3 }],
-  ])("reads nothing out of a field with %s", (_case, body) => {
-    expect(addedFrom(body)).toBeNull();
-  });
-});
-
 describe("listVersionFrom", () => {
   it("reads a list version by its name, identifier and number, or nothing of one short of any", () => {
     const list = {
@@ -158,6 +203,19 @@ describe("listVersionFrom", () => {
 
     expect(listVersionFrom(list)).toEqual(list);
     expect(listVersionFrom({ ...list, number: "1" })).toBeNull();
+    expect(listVersionFrom({ ...list, number: 0 })).toBeNull();
+    expect(listVersionFrom({ ...list, number: -1 })).toBeNull();
     expect(listVersionFrom({ ...list, name: undefined })).toBeNull();
+  });
+
+  it("keeps an unknown standing on a pinned list but refuses a bad version number", () => {
+    const pinned = { ...PINNED, standing: "withdrawn_later" };
+    expect(declaredFrom({ ...CATEGORY, list: pinned })?.list).toEqual(pinned);
+    expect(
+      declaredFrom({
+        ...CATEGORY,
+        list: { ...PINNED, newer: { versionId: "v2", number: 0 } },
+      }),
+    ).toBeNull();
   });
 });

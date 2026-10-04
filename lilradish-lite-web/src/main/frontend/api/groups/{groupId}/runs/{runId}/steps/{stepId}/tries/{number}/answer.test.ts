@@ -26,6 +26,8 @@ const DAN = { userId: "000cf2", displayName: "Dan" };
 /** Every field the question gives, in the words a start sends them: none as null, many as a list. */
 const VALUES = { summary: "A printer fire.", note: null, tags: ["a", "b"] };
 
+const SUBMISSION = { values: VALUES, uploads: [], hasFilePositions: false };
+
 /** The step as the server reads it once Dan's answer filled try 2, its summary waiting on review. */
 const ANSWERED = {
   run: {
@@ -124,7 +126,7 @@ describe("answerTry", () => {
       RUN,
       STEP,
       2,
-      VALUES,
+      SUBMISSION,
       "Read it twice.",
       new AbortController().signal,
     );
@@ -146,6 +148,70 @@ describe("answerTry", () => {
     expect(read).not.toHaveProperty("answering");
   });
 
+  it("sends kept and new files as one ordered answer without submitting the old file id", async () => {
+    const sent = answering([JSON.stringify(ANSWERED), 200]);
+    const file = new File(["data"], "Demo Sample.txt", { type: "text/plain" });
+    const submission = {
+      values: {
+        attachments: [{ keep: 2 }, { upload: 0, name: file.name }],
+      },
+      uploads: [file],
+      hasFilePositions: true,
+    };
+
+    await answerTry(
+      GROUP,
+      RUN,
+      STEP,
+      2,
+      submission,
+      "Read it twice.",
+      new AbortController().signal,
+    );
+
+    const [address, init] = sent.mock.calls[0]!;
+    expect(address).toBe(
+      `/api/groups/${GROUP}/runs/${RUN}/steps/${STEP}/tries/2/answer`,
+    );
+    expect(init?.method).toBe("PUT");
+    expect(init?.headers).toEqual({ Accept: "application/json" });
+    const parts = [...(init!.body as FormData).entries()];
+    expect(parts.map(([name]) => name)).toEqual(["document", "upload0"]);
+    expect(JSON.parse(String(parts[0]![1]))).toEqual({
+      values: submission.values,
+      why: "Read it twice.",
+    });
+    expect(String(parts[0]![1])).not.toContain("stored-one");
+    expect((parts[1]![1] as File).name).toBe("file");
+  });
+
+  it("uses multipart for an unchanged kept file even with no new upload", async () => {
+    const sent = answering([JSON.stringify(ANSWERED), 200]);
+
+    await answerTry(
+      GROUP,
+      RUN,
+      STEP,
+      2,
+      {
+        values: { attachment: { keep: 0 } },
+        uploads: [],
+        hasFilePositions: true,
+      },
+      "Why.",
+      new AbortController().signal,
+    );
+
+    const body = sent.mock.calls[0]![1]!.body;
+    expect(body).toBeInstanceOf(FormData);
+    expect([...(body as FormData).entries()]).toEqual([
+      [
+        "document",
+        JSON.stringify({ values: { attachment: { keep: 0 } }, why: "Why." }),
+      ],
+    ]);
+  });
+
   it("escapes the step as one segment of the address", async () => {
     const sent = answering([JSON.stringify(ANSWERED), 200]);
 
@@ -154,7 +220,7 @@ describe("answerTry", () => {
       RUN,
       "a/b",
       3,
-      VALUES,
+      SUBMISSION,
       "Why.",
       new AbortController().signal,
     );
@@ -173,7 +239,7 @@ describe("answerTry", () => {
         RUN,
         "..",
         2,
-        VALUES,
+        SUBMISSION,
         "Why.",
         new AbortController().signal,
       ),
@@ -202,7 +268,7 @@ describe("answerTry", () => {
         RUN,
         STEP,
         2,
-        VALUES,
+        SUBMISSION,
         "Why.",
         new AbortController().signal,
       ),

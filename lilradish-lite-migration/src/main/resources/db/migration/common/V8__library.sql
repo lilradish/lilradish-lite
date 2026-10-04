@@ -1,9 +1,11 @@
 -- A type with no labels holds no value until one is added, and a label added to a type that already
 -- exists cannot be used before it commits: a statement naming it belongs to a later migration.
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type code_step as enum ();
 
 -- ---------------------------------------------------------------- code steps
 
+-- DB-SPECIFIC: text, ~, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table code_step_publications (
     code_step_publication_id uuid         not null default uuidv7(),
     code_step                code_step    not null,
@@ -24,11 +26,13 @@ create table code_step_publications (
     constraint code_step_publications_group_key_unique unique (code_step, group_key)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index code_step_publications_one_every_group
     on code_step_publications (code_step) where every_group;
 
 -- ---------------------------------------------------------------- reference lists
 
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table reference_list_versions (
     entry_version_id uuid         not null,
     -- Carried only to reach entry_versions_kind_unique, as every kind below is.
@@ -58,6 +62,7 @@ create table reference_list_versions (
     constraint reference_list_versions_note_bounded check (length(note) <= 2048)
 );
 
+-- DB-SPECIFIC: deferrable, length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table reference_list_terms (
     reference_list_term_id uuid         not null default uuidv7(),
     entry_version_id       uuid         not null,
@@ -95,10 +100,12 @@ create table reference_list_terms (
 
 -- ---------------------------------------------------------------- questions and workflows
 
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table question_versions (
     entry_version_id uuid         not null,
     entry_kind       entry_kind   not null default 'question',
     instruction      text,
+    drawing          text,
     created_at       timestamptz  not null default now(),
     created_by       uuid         not null,
     updated_at       timestamptz,
@@ -120,9 +127,13 @@ create table question_versions (
     constraint question_versions_instruction_visible check (
         instruction is null
             or (length(instruction) > 0 and instruction !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
-    constraint question_versions_instruction_bounded check (length(instruction) <= 8192)
+    constraint question_versions_instruction_bounded check (length(instruction) <= 8192),
+    constraint question_versions_drawing_visible check (
+        drawing is null or (length(drawing) > 0 and drawing !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
+    constraint question_versions_drawing_bounded check (length(drawing) <= 8192)
 );
 
+-- DB-SPECIFIC: text, ~, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table workflow_versions (
     entry_version_id     uuid         not null,
     entry_kind           entry_kind   not null default 'workflow',

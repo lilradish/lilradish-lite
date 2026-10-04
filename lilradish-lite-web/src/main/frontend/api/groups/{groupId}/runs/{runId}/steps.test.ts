@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { answering, refusalOf } from "../../../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT } from "../../../../problem";
-import { readSteps } from "./steps";
+import { readSteps, stepRowFrom } from "./steps";
 
 const GROUP = "00000003-0000-4000-8000-000000000c71";
+
+const CODE_SOURCE = {
+  runId: "00000008-0000-4000-8000-000000000c73",
+  runNumber: 7,
+  stepId: "00000009-0000-4000-8000-000000000c73",
+  name: "tidy_it",
+  codeStep: "tidy",
+};
 
 const RUN = "00000008-0000-4000-8000-000000000c71";
 
@@ -14,7 +22,7 @@ const QUESTION_VERSION = "00000007-0000-4000-8000-000000000c72";
 
 const SUMMARISE = "00000009-0000-4000-8000-000000000c71";
 
-const ADA = { userId: "000c71", displayName: "Ada" };
+const AVO = { userId: "000c71", displayName: "Avo" };
 
 const TICKET = {
   name: "ticket",
@@ -31,10 +39,6 @@ const SUMMARY = {
   mustBeGiven: true,
 };
 
-/**
- * A step carrying every member a row can that this build reads, a model's spend past what a number holds exactly,
- * what it gave back withheld from the reader, the review it offers with what went in, and an act withheld.
- */
 const EVERY_MEMBER = {
   stepId: SUMMARISE,
   order: 1,
@@ -64,7 +68,7 @@ const EVERY_MEMBER = {
     cameBack: "20",
     spent: "9007199254741013",
     cameBackUnknown: false,
-    measuredHere: true,
+    measuredHere: "partly",
   },
   gaveBack: [{ field: "summary", withheld: true, now: "waiting_on_review" }],
   wentIn: [
@@ -142,12 +146,12 @@ const KEPT_EARLIER = {
   acts: ["review"],
 };
 
-/** Held back on what it runs being stopped, by Ada, while the run was running. */
+/** Held back on what it runs being stopped, by Avo, while the run was running. */
 const HELD_ON_A_STOP = {
   kind: "held_back",
   reason: "entry_stopped",
   since: "2026-09-26T09:00:00Z",
-  stopped: { what: "entry", by: ADA, at: "2026-09-26T08:55:00Z" },
+  stopped: { what: "entry", by: AVO, at: "2026-09-26T08:55:00Z" },
   waitsOn: "starter",
 };
 
@@ -247,6 +251,249 @@ function keptAs(changed: object) {
   };
 }
 
+describe("a held source code step", () => {
+  it("keeps the source's own run and step without attributing it to the held step", () => {
+    const where = {
+      kind: "held_back",
+      reason: "code_step_not_held",
+      source: CODE_SOURCE,
+    };
+    expect(
+      stepRowFrom({ ...NOTHING_LEFT_IN, state: "held_back", where })?.where,
+    ).toEqual(where);
+  });
+
+  it("leaves a current code step's hold without a source", () => {
+    const where = { kind: "held_back", reason: "code_step_not_held" };
+    expect(
+      stepRowFrom({ ...NOTHING_LEFT_IN, state: "held_back", where })?.where,
+    ).toEqual(where);
+  });
+
+  it.each(Object.keys(CODE_SOURCE))("refuses a source missing %s", (member) => {
+    const source = Object.fromEntries(
+      Object.entries(CODE_SOURCE).filter(([key]) => key !== member),
+    );
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "held_back",
+        where: {
+          kind: "held_back",
+          reason: "code_step_not_held",
+          source,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    null,
+    [],
+    "tidy",
+    { ...CODE_SOURCE, runId: null },
+    { ...CODE_SOURCE, stepId: 1 },
+    { ...CODE_SOURCE, name: false },
+    { ...CODE_SOURCE, codeStep: [] },
+    { ...CODE_SOURCE, runNumber: 0 },
+    { ...CODE_SOURCE, runNumber: -1 },
+    { ...CODE_SOURCE, runNumber: 1.5 },
+    { ...CODE_SOURCE, runNumber: "7" },
+    { ...CODE_SOURCE, runNumber: Number.MAX_SAFE_INTEGER + 1 },
+  ])("refuses a malformed held source: %j", (source) => {
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "held_back",
+        where: {
+          kind: "held_back",
+          reason: "code_step_not_held",
+          source,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["held_back", "search_way_not_held"],
+    ["held_back", "entry_stopped"],
+    ["held_back", "turned_away"],
+    ["running", "code_step_not_held"],
+    ["waiting_on_review", "code_step_not_held"],
+    ["failed", "code_step_not_held"],
+  ])("refuses a held source on %s with reason %s", (kind, reason) => {
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "held_back",
+        where: {
+          kind,
+          reason,
+          source: CODE_SOURCE,
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("a source value that no longer matches", () => {
+  const failure = { source: CODE_SOURCE, field: "receipt.number" };
+  const row = { ...NOTHING_LEFT_IN, state: "failed" };
+
+  it("keeps the original source and field under the dedicated failure member", () => {
+    const where = {
+      kind: "failed",
+      reason: "source_no_longer_matches",
+      failedSourceNoLongerMatches: failure,
+    };
+    expect(stepRowFrom({ ...row, where })?.where).toEqual(where);
+    expect(stepRowFrom({ ...row, where })?.where).not.toHaveProperty("source");
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { source: CODE_SOURCE },
+    { field: "receipt" },
+    { ...failure, source: null },
+    { ...failure, field: null },
+    { ...failure, field: 7 },
+    { ...failure, source: { ...CODE_SOURCE, runNumber: 0 } },
+  ])(
+    "refuses an incomplete source failure: %j",
+    (failedSourceNoLongerMatches) => {
+      expect(
+        stepRowFrom({
+          ...row,
+          where: {
+            kind: "failed",
+            reason: "source_no_longer_matches",
+            ...(failedSourceNoLongerMatches === undefined
+              ? {}
+              : { failedSourceNoLongerMatches }),
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    ["held_back", "source_no_longer_matches"],
+    ["waiting_on_review", "source_no_longer_matches"],
+    ["failed", "tries_spent"],
+    ["held_back", "code_step_not_held"],
+  ])("refuses a source failure on %s for %s", (kind, reason) => {
+    expect(
+      stepRowFrom({
+        ...row,
+        where: { kind, reason, failedSourceNoLongerMatches: failure },
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a source failure masquerading as a current source hold", () => {
+    expect(
+      stepRowFrom({
+        ...row,
+        where: {
+          kind: "failed",
+          reason: "source_no_longer_matches",
+          source: CODE_SOURCE,
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("a source term whose reference list is unavailable", () => {
+  const failure = { source: CODE_SOURCE, field: "receipt.category" };
+  const row = { ...NOTHING_LEFT_IN, state: "failed" };
+
+  it("keeps the stored classification separate from a source shape mismatch", () => {
+    const where = {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+    };
+    expect(stepRowFrom({ ...row, where })?.where).toEqual(where);
+    expect(stepRowFrom({ ...row, where })?.where).not.toHaveProperty(
+      "failedSourceNoLongerMatches",
+    );
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { source: CODE_SOURCE },
+    { field: "receipt" },
+    { ...failure, source: null },
+    { ...failure, field: null },
+    { ...failure, field: 7 },
+    { ...failure, source: { ...CODE_SOURCE, runNumber: 0 } },
+    ...["runId", "runNumber", "stepId", "name", "codeStep"].map((member) => ({
+      ...failure,
+      source: Object.fromEntries(
+        Object.entries(CODE_SOURCE).filter(([name]) => name !== member),
+      ),
+    })),
+  ])(
+    "refuses an incomplete list source failure: %j",
+    (failedSourceListNotHere) => {
+      expect(
+        stepRowFrom({
+          ...row,
+          where: {
+            kind: "failed",
+            reason: "source_list_not_here",
+            ...(failedSourceListNotHere === undefined
+              ? {}
+              : { failedSourceListNotHere }),
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    {
+      kind: "held_back",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+    },
+    {
+      kind: "waiting_on_review",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+    },
+    { kind: "failed", reason: "tries_spent", failedSourceListNotHere: failure },
+    {
+      kind: "failed",
+      reason: "source_no_longer_matches",
+      failedSourceListNotHere: failure,
+    },
+    {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceNoLongerMatches: failure,
+    },
+    ...["source_no_longer_matches", "source_list_not_here", "tries_spent"].map(
+      (reason) => ({
+        kind: "failed",
+        reason,
+        failedSourceListNotHere: failure,
+        failedSourceNoLongerMatches: failure,
+      }),
+    ),
+  ])(
+    "refuses exchanged or simultaneous source failure members: %j",
+    (where) => {
+      expect(stepRowFrom({ ...row, where })).toBeNull();
+    },
+  );
+});
+
 describe("readSteps", () => {
   it("reads every step of the run at its address, each count kept as the digits it came as, and nothing it does not read yet", async () => {
     const { sent, read } = reading(RUNNING);
@@ -267,7 +514,7 @@ describe("readSteps", () => {
               cameBack: "20",
               spent: "9007199254741013",
               cameBackUnknown: false,
-              measuredHere: true,
+              measuredHere: "partly",
             },
           },
         },
@@ -278,6 +525,160 @@ describe("readSteps", () => {
     expect(sent.mock.calls[0]![0]).toBe(
       `/api/groups/${GROUP}/runs/${RUN}/steps`,
     );
+  });
+
+  it.each([
+    ["a complete source run", { runId: RUN, runNumber: 3 }],
+    ["declared binding without source run identity", {}],
+  ])("reads %s without changing its source", async (_case, identity) => {
+    const from = { kind: "run_input", path: "ticket", ...identity };
+    const read = await reading({
+      ...RUNNING,
+      steps: [
+        {
+          ...EVERY_MEMBER_SENT,
+          takesFrom: [{ input: "text", from }],
+        },
+        NOTHING_LEFT_IN,
+      ],
+    }).read;
+
+    expect(read.steps[0]?.takesFrom[0]?.from).toEqual(from);
+  });
+
+  it("keeps an earlier searching step's declaration namespace", async () => {
+    const from = {
+      kind: "step",
+      path: "title",
+      stepId: SUMMARISE,
+      name: "look_up",
+      searchWay: "web",
+    };
+    const read = await reading({
+      ...RUNNING,
+      steps: [{ ...EVERY_MEMBER_SENT, takesFrom: [{ input: "text", from }] }],
+    }).read;
+    expect(read.steps[0]?.takesFrom[0]?.from).toEqual(from);
+  });
+
+  it("keeps each read part identity when two parts read the same path", async () => {
+    const from = { kind: "run_input", path: "ticket" };
+    const parts = [SUMMARISE, QUESTION_VERSION].map((sourcePartId) => ({
+      input: "ticket",
+      from,
+      sourcePartId,
+    }));
+    const read = await reading({
+      ...RUNNING,
+      steps: [{ ...EVERY_MEMBER_SENT, takesFrom: parts }],
+    }).read;
+    expect(read.steps[0]?.takesFrom).toEqual(parts);
+  });
+
+  it("refuses a read part identity of another kind", async () => {
+    const failure = await refusalOf(
+      reading({
+        ...RUNNING,
+        steps: [
+          {
+            ...EVERY_MEMBER_SENT,
+            takesFrom: [
+              {
+                input: "ticket",
+                from: { kind: "run_input", path: "ticket" },
+                sourcePartId: 7,
+              },
+            ],
+          },
+        ],
+      }).read,
+    );
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
+  it.each([
+    { kind: "run_input", searchWay: "web" },
+    { kind: "step", searchWay: "web", codeStep: "web" },
+    { kind: "step", searchWay: "web", versionId: RUNNING.run.versionId },
+    { kind: "step", searchWay: 3 },
+  ])("refuses an inconsistent search origin %#", async (from) => {
+    const failure = await refusalOf(
+      reading({
+        ...RUNNING,
+        steps: [{ ...EVERY_MEMBER_SENT, takesFrom: [{ input: "text", from }] }],
+      }).read,
+    );
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
+  it.each([
+    ["a run ID without its number", { runId: RUN }],
+    ["a run number without its ID", { runNumber: 3 }],
+  ])("refuses %s at the steps response boundary", async (_case, identity) => {
+    const failure = await refusalOf(
+      reading({
+        ...RUNNING,
+        steps: [
+          {
+            ...EVERY_MEMBER_SENT,
+            takesFrom: [
+              {
+                input: "text",
+                from: { kind: "run_input", path: "ticket", ...identity },
+              },
+            ],
+          },
+          NOTHING_LEFT_IN,
+        ],
+      }).read,
+    );
+
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
+  it("reads mixed hidden and visible leaves in a step value without hiding its file", async () => {
+    const file = {
+      id: "0000000f-0000-4000-8000-000000000001",
+      name: "Demo Sample.pdf",
+      type: "application/pdf",
+      size: 5,
+    };
+    const value = {
+      privateNote: { withheld: true },
+      attachment: file,
+      visibleNote: "Demo Sample",
+    };
+    const read = await reading(
+      withStep({
+        wentIn: [
+          {
+            input: "ticket",
+            from: { kind: "run_input", path: "ticket" },
+            value,
+          },
+        ],
+        gaveBack: [{ field: "summary", value, now: "stands" }],
+      }),
+    ).read;
+
+    expect(read.steps[0]?.wentIn?.[0]).toMatchObject({
+      input: "ticket",
+      value,
+    });
+    expect(read.steps[0]?.gaveBack?.[0]).toMatchObject({
+      field: "summary",
+      value,
+    });
+    expect(read.steps[0]?.wentIn?.[0]).not.toHaveProperty("withheld");
   });
 
   it("reads a run leaving out what it may, and adds nothing in its place", async () => {
@@ -391,6 +792,25 @@ describe("readSteps", () => {
     expect(step!.where!.stopped).not.toHaveProperty("by");
   });
 
+  it.each([
+    "unsent",
+    "out",
+    "turned_away",
+    "too_long",
+    "list_not_here",
+    "takes_no_longer_declared",
+    "no_longer_declared",
+    "holds_a_file",
+    "later",
+  ])(
+    "reads the model review's %s status without replacing its spelling",
+    async (review) => {
+      const where = { ...EVERY_MEMBER.where, review };
+      const [step] = (await reading(withStep({ where })).read).steps;
+      expect(step!.where).toEqual(where);
+    },
+  );
+
   it("reads a step held back as the model would not take it, its spending used up, and each time it was turned away with what it said, cut or not", async () => {
     const [step] = (
       await reading(withStep({ state: "held_back", where: TURNED_AWAY })).read
@@ -445,6 +865,81 @@ describe("readSteps", () => {
     expect(step!.where).not.toHaveProperty("reviewing");
   });
 
+  it("reads a search's way, current tool and the question held for sending", () => {
+    const where = {
+      kind: "held_back",
+      reason: "too_long",
+      searchQuestion: "Find Demo Sample  ",
+      waitsOn: "starter",
+    };
+    const row = stepRowFrom({
+      ...NOTHING_LEFT_IN,
+      runs: { kind: "search", searchWay: "web", tool: "web_search" },
+      state: "held_back",
+      where,
+    });
+
+    expect(row?.runs).toEqual({
+      kind: "search",
+      searchWay: "web",
+      tool: "web_search",
+    });
+    expect(row?.where).toEqual(where);
+  });
+
+  it("reads the failed search model and the tool it no longer offers", () => {
+    const where = {
+      kind: "failed",
+      reason: "tool_not_offered",
+      model: "general",
+      mode: "research",
+      tool: "web_search",
+    };
+    const row = stepRowFrom({ ...NOTHING_LEFT_IN, state: "failed", where });
+    expect(row?.where).toEqual(where);
+  });
+
+  it("withholds a search question without saying it was empty", () => {
+    const row = stepRowFrom({
+      ...NOTHING_LEFT_IN,
+      state: "held_back",
+      runs: { kind: "search", searchWay: "web" },
+      where: {
+        kind: "held_back",
+        reason: "turned_away",
+        searchQuestionWithheld: true,
+      },
+    });
+    expect(row?.where).toEqual({
+      kind: "held_back",
+      reason: "turned_away",
+      searchQuestionWithheld: true,
+    });
+    expect(row?.where).not.toHaveProperty("searchQuestion");
+  });
+
+  it.each([
+    { kind: "failed", reason: "tool_not_offered" },
+    {
+      kind: "held_back",
+      reason: "search_way_not_held",
+      searchQuestion: "Find",
+    },
+    { kind: "failed", reason: "turned_away", searchQuestion: "Find" },
+    { kind: "failed", reason: "model_not_deployed", tool: "web_search" },
+    {
+      kind: "held_back",
+      reason: "turned_away",
+      searchQuestion: "Find",
+      searchQuestionWithheld: true,
+    },
+    { kind: "held_back", reason: "turned_away", searchQuestionWithheld: false },
+  ])("refuses an impossible search whereabouts: $reason", (where) => {
+    expect(
+      stepRowFrom({ ...NOTHING_LEFT_IN, state: where.kind, where }),
+    ).toBeNull();
+  });
+
   it("reads an input from an earlier step with the version it pins, or the code step it runs, by which the read declares it", async () => {
     const takesFrom = [
       {
@@ -475,6 +970,37 @@ describe("readSteps", () => {
     expect(step!.takesFrom[0]!.from).not.toHaveProperty("codeStep");
     expect(step!.takesFrom[1]!.from).not.toHaveProperty("versionId");
   });
+
+  it.each([
+    [
+      "the later step reading it",
+      { field: "receipt.total", readBy: { step: SUMMARISE } },
+    ],
+    [
+      "what the workflow gives back of it",
+      { field: "receipt.total", readBy: { output: "claim.total" } },
+    ],
+    ["nothing, as a list its terms come from refuses it", { field: "receipt" }],
+  ])(
+    "reads answering a code step held back for the field of what it gives back, and %s, beside an act held back naming neither",
+    async (_case, named) => {
+      const withheld = [
+        { act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE", ...named },
+        { act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" },
+      ];
+
+      const [step] = (await reading(withStep({ withheld })).read).steps;
+
+      expect(step!.withheld).toEqual([
+        {
+          act: "answer",
+          refusal: "CODE_STEP_GIVES_OTHERWISE",
+          givesOtherwise: named,
+        },
+        { act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" },
+      ]);
+    },
+  );
 
   it("reads a field declared of a kind this build does not know as it came, rather than refusing the run with it", async () => {
     const shade = { name: "shade", kind: "colour", mustBeGiven: false };
@@ -529,6 +1055,141 @@ describe("readSteps", () => {
     ]);
     expect(step!.gaveBack!.filter((each) => "value" in each)).toEqual([]);
     expect(step!.wentIn![0]).not.toHaveProperty("value");
+  });
+
+  it("reads a composed input with its whole value and each actual source in order", async () => {
+    const sources = [
+      { targetPath: "name", from: { kind: "constant" } },
+      {
+        targetPath: "id",
+        from: {
+          kind: "step",
+          runId: RUN,
+          runNumber: 7,
+          stepId: SUMMARISE,
+          name: "summarise",
+          path: "summary",
+        },
+      },
+    ];
+    const read = await reading(
+      withStep({
+        wentIn: [
+          {
+            input: "customer",
+            sources,
+            value: { name: "Demo Sample", id: "7" },
+          },
+        ],
+      }),
+    ).read;
+
+    expect(read.steps[0]!.wentIn).toEqual([
+      { input: "customer", sources, value: { name: "Demo Sample", id: "7" } },
+    ]);
+    expect(read.steps[0]!.wentIn![0]).not.toHaveProperty("from");
+    expect(read.steps[0]!.takesFrom).toEqual([]);
+  });
+
+  it.each([
+    [
+      "both kinds of source",
+      {
+        from: { kind: "constant" },
+        sources: [{ targetPath: "name", from: { kind: "constant" } }],
+      },
+    ],
+    ["no source", {}],
+    ["empty sources", { sources: [] }],
+    ["sources not a list", { sources: {} }],
+    ["a source with no path", { sources: [{ from: { kind: "constant" } }] }],
+    [
+      "a path with an empty part",
+      { sources: [{ targetPath: "name.", from: { kind: "constant" } }] },
+    ],
+    ["a source with no maker", { sources: [{ targetPath: "name" }] }],
+    [
+      "a source of an unknown kind",
+      { sources: [{ targetPath: "name", from: { kind: "unknown" } }] },
+    ],
+    [
+      "a maker with only a run identifier",
+      { sources: [{ targetPath: "name", from: { kind: "step", runId: RUN } }] },
+    ],
+    [
+      "a step maker with no run",
+      {
+        sources: [
+          {
+            targetPath: "name",
+            from: {
+              kind: "step",
+              stepId: SUMMARISE,
+              name: "summarise",
+              path: "summary",
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "a step maker with no step identifier",
+      {
+        sources: [
+          {
+            targetPath: "name",
+            from: {
+              kind: "step",
+              runId: RUN,
+              runNumber: 7,
+              name: "summarise",
+              path: "summary",
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "a constant posing as a run value",
+      {
+        sources: [
+          {
+            targetPath: "name",
+            from: { kind: "constant", runId: RUN, runNumber: 7 },
+          },
+        ],
+      },
+    ],
+    [
+      "a run input posing as a step value",
+      {
+        sources: [
+          {
+            targetPath: "name",
+            from: {
+              kind: "run_input",
+              runId: RUN,
+              runNumber: 7,
+              stepId: SUMMARISE,
+              path: "ticket",
+            },
+          },
+        ],
+      },
+    ],
+  ])("refuses an input with %s", async (_case, source) => {
+    const failure = await refusalOf(
+      reading(
+        withStep({
+          wentIn: [{ input: "customer", value: "Demo Sample", ...source }],
+        }),
+      ).read,
+    );
+
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
   });
 
   it.each([
@@ -595,7 +1256,7 @@ describe("readSteps", () => {
       withStep({
         where: {
           ...HELD_ON_A_STOP,
-          stopped: { by: ADA, at: "2026-09-26T08:55:00Z" },
+          stopped: { by: AVO, at: "2026-09-26T08:55:00Z" },
         },
       }),
     ],
@@ -604,7 +1265,7 @@ describe("readSteps", () => {
       withStep({
         where: {
           ...HELD_ON_A_STOP,
-          stopped: { what: "entry", by: ADA },
+          stopped: { what: "entry", by: AVO },
         },
       }),
     ],
@@ -613,13 +1274,17 @@ describe("readSteps", () => {
       withStep({
         where: {
           ...HELD_ON_A_STOP,
-          stopped: { ...HELD_ON_A_STOP.stopped, by: { displayName: "Ada" } },
+          stopped: { ...HELD_ON_A_STOP.stopped, by: { displayName: "Avo" } },
         },
       }),
     ],
     [
       "a hold said to be on spending used up as false, which is only ever left out",
       withStep({ where: { ...TURNED_AWAY, spentUp: false } }),
+    ],
+    [
+      "a review status that is not text",
+      withStep({ where: { ...EVERY_MEMBER.where, review: true } }),
     ],
     [
       "a failure said to be the reviewer's as false, which is only ever left out",
@@ -765,7 +1430,7 @@ describe("readSteps", () => {
     [
       "a producer named by nobody who can be shown",
       withStep({
-        producer: { kind: "person", person: { displayName: "Ada" } },
+        producer: { kind: "person", person: { displayName: "Avo" } },
       }),
     ],
     [
@@ -851,6 +1516,75 @@ describe("readSteps", () => {
       withStep({ withheld: [{ act: "review" }] }),
     ],
     [
+      "what reads the refused field named without the field",
+      withStep({
+        withheld: [
+          {
+            act: "answer",
+            refusal: "CODE_STEP_GIVES_OTHERWISE",
+            readBy: { step: SUMMARISE },
+          },
+        ],
+      }),
+    ],
+    [
+      "answering refused for what code gives back without naming any field",
+      withStep({
+        withheld: [{ act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE" }],
+      }),
+    ],
+    [
+      "the field an answer is held back for named in no text",
+      withStep({
+        withheld: [
+          {
+            act: "answer",
+            refusal: "CODE_STEP_GIVES_OTHERWISE",
+            field: ["receipt"],
+          },
+        ],
+      }),
+    ],
+    [
+      "what reads that field named as a step and as an output both",
+      withStep({
+        withheld: [
+          {
+            act: "answer",
+            refusal: "CODE_STEP_GIVES_OTHERWISE",
+            field: "receipt",
+            readBy: { step: SUMMARISE, output: "total" },
+          },
+        ],
+      }),
+    ],
+    [
+      "what reads that field named as neither a step nor an output",
+      withStep({
+        withheld: [
+          {
+            act: "answer",
+            refusal: "CODE_STEP_GIVES_OTHERWISE",
+            field: "receipt",
+            readBy: {},
+          },
+        ],
+      }),
+    ],
+    [
+      "what reads that field named as a step in no text",
+      withStep({
+        withheld: [
+          {
+            act: "answer",
+            refusal: "CODE_STEP_GIVES_OTHERWISE",
+            field: "receipt",
+            readBy: { step: 7 },
+          },
+        ],
+      }),
+    ],
+    [
       "a step saying nothing of the acts it offers",
       withStep({ acts: undefined }),
     ],
@@ -882,5 +1616,171 @@ describe("readSteps", () => {
       status: 200,
       code: NOT_A_PROBLEM_DOCUMENT,
     });
+  });
+});
+
+describe("child step reading", () => {
+  it("keeps the route and actual child separate, with a deepest action address", () => {
+    const beneath = {
+      runId: "00000008-0000-4000-8000-000000000c72",
+      number: 4,
+      runs: {
+        kind: "workflow",
+        entryId: "00000006-0000-4000-8000-000000000c72",
+        name: "Demo Sample",
+        version: 2,
+        versionId: QUESTION_VERSION,
+      },
+      at: {
+        runId: "00000008-0000-4000-8000-000000000c73",
+        number: 5,
+        stepId: SUMMARISE,
+        name: "decide",
+      },
+    };
+    const row = stepRowFrom({
+      ...NOTHING_LEFT_IN,
+      beneath,
+      takesFrom: [
+        {
+          input: "choice",
+          from: {
+            kind: "step",
+            path: "answer",
+            runId: RUN,
+            runNumber: 3,
+            stepId: SUMMARISE,
+            name: "made",
+          },
+        },
+      ],
+    });
+    expect(row?.runs.kind).toBe("route");
+    expect(row?.beneath).toEqual(beneath);
+    expect(row?.takesFrom[0]?.from.runId).toBe(RUN);
+    expect(stepRowFrom(NOTHING_LEFT_IN)).not.toHaveProperty("beneath");
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        beneath: {
+          ...beneath,
+          at: {
+            ...beneath.at,
+            stepId: null,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("reads a route failure's named, empty, or withheld choice as separate shapes", () => {
+    const failed = { ...NOTHING_LEFT_IN, state: "failed" };
+    for (const failure of [
+      { term: "Demo Sample" },
+      { term: null },
+      { withheld: true },
+    ]) {
+      const row = stepRowFrom({
+        ...failed,
+        where: {
+          kind: "failed",
+          reason: "unclaimed_value",
+          failedUnclaimed: failure,
+        },
+      });
+
+      expect(row?.where?.failedUnclaimed).toEqual(failure);
+      expect(row?.where?.failedUnclaimed).not.toHaveProperty(
+        "term" in failure ? "withheld" : "term",
+      );
+    }
+  });
+
+  it.each([
+    ["the choice omitted", "unclaimed_value", undefined],
+    ["a choice for another failure", "tries_spent", { term: "Demo Sample" }],
+    [
+      "both the choice and withholding",
+      "unclaimed_value",
+      { term: "Demo Sample", withheld: true },
+    ],
+    ["neither shape", "unclaimed_value", {}],
+    ["withholding sent as false", "unclaimed_value", { withheld: false }],
+    ["a choice sent as a number", "unclaimed_value", { term: 3 }],
+    [
+      "an extra member on a withheld choice",
+      "unclaimed_value",
+      { withheld: true, extra: "Demo Sample" },
+    ],
+    [
+      "an extra member on a named choice",
+      "unclaimed_value",
+      { term: "Demo Sample", extra: true },
+    ],
+  ])("refuses a route failure with %s", (_case, reason, failure) => {
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "failed",
+        where: {
+          kind: "failed",
+          reason,
+          ...(failure === undefined ? {} : { failedUnclaimed: failure }),
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["1", 1],
+    ["32", 32],
+    ["9007199254740991", 9007199254740991],
+  ])(
+    "reads how deep runs may go, sent as the digits %s, only where a step failed for going deeper",
+    (sent, most) => {
+      const row = stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "failed",
+        where: {
+          kind: "failed",
+          reason: "too_deep",
+          failedTooDeep: { most: sent },
+        },
+      });
+
+      expect(row?.where).toEqual({
+        kind: "failed",
+        reason: "too_deep",
+        failedTooDeep: { most },
+      });
+      expect(row?.where).not.toHaveProperty("failedUnclaimed");
+    },
+  );
+
+  it.each([
+    ["going deeper, not saying how deep", "too_deep", undefined],
+    ["another reason, saying how deep", "tries_spent", { most: "32" }],
+    ["going deeper, at most none", "too_deep", { most: "0" }],
+    ["going deeper, at most a negative", "too_deep", { most: "-1" }],
+    ["going deeper, at most a fraction", "too_deep", { most: "1.5" }],
+    ["going deeper, at most empty digits", "too_deep", { most: "" }],
+    ["going deeper, at most a number, not digits", "too_deep", { most: 32 }],
+    ["going deeper, with no most", "too_deep", {}],
+    [
+      "going deeper, at most past an exact number",
+      "too_deep",
+      { most: "9007199254740993" },
+    ],
+    ["going deeper, at most with a leading zero", "too_deep", { most: "032" }],
+  ])("refuses a step read as failed for %s", (_case, reason, failedTooDeep) => {
+    const where = {
+      kind: "failed",
+      reason,
+      ...(failedTooDeep === undefined ? {} : { failedTooDeep }),
+    };
+
+    expect(
+      stepRowFrom({ ...NOTHING_LEFT_IN, state: "failed", where }),
+    ).toBeNull();
   });
 });

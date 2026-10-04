@@ -1,5 +1,6 @@
 package org.lilradish.lite.domain.codestep
 
+import java.time.Instant
 import org.lilradish.lite.domain.declaration.Declaration
 import org.lilradish.lite.domain.declaration.DeclarationSide
 import org.lilradish.lite.domain.declaration.Demand
@@ -10,12 +11,17 @@ import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.declaration.TextLines
 import org.lilradish.lite.domain.inference.DidNotFitReason
 import org.lilradish.lite.domain.inference.ForeignProse
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
 import org.lilradish.lite.domain.registry.EntryVersionId
+import org.lilradish.lite.domain.run.ProductionId
+import org.lilradish.lite.domain.run.TryLostReason
+import org.lilradish.lite.domain.run.TryRecord
 import org.lilradish.lite.domain.wire.JsonValue
+import org.lilradish.lite.domain.workflow.StepProducer
 import spock.lang.Specification
 
 class CodeOutcomeSpec extends Specification {
@@ -39,10 +45,10 @@ class CodeOutcomeSpec extends Specification {
 
     /** Files a claim for a ticket, giving back a receipt it must give, and a note, a tier and lines it may. */
     static final CodeCall FILE_CLAIM = new CodeCall(new CodeStepName("file_claim"), declaring([RECEIPT, NOTE, TIER, LINES]),
-            [(TIERS): TIER_TERMS], json([ticket: "T-1"]))
+            [(TIERS): TIER_TERMS], json([ticket: "T-1"]), [:])
 
     /** Takes a ticket and gives back nothing, which is all it declares. */
-    static final CodeCall ARCHIVE = new CodeCall(new CodeStepName("archive"), declaring([]), [:], json([ticket: "T-1"]))
+    static final CodeCall ARCHIVE = new CodeCall(new CodeStepName("archive"), declaring([]), [:], json([ticket: "T-1"]), [:])
 
     /** The store's bound on what came back, less what {"receipt":"R-1","extra":""} takes around the text. */
     static final int LONGEST_KEPT_EXTRA = 8_388_608 - 28
@@ -51,6 +57,26 @@ class CodeOutcomeSpec extends Specification {
     static final String PAIR = Character.toString(0x1F600)
 
     static final String BELL = Character.toString(7)
+
+    def "code giving a line break for text of one line errors with its field and keeps what it gave"() {
+        given:
+        def one = stands("title", new FieldShape.Text(30, TextLines.ONE), new HowMany.One(), false, FieldStanding.ALWAYS, null)
+        def call = new CodeCall(new CodeStepName("sample"), declaring([one]), [:], json([ticket: "Demo Sample"]), [:])
+        def returned = json([title: Character.toString(codePoint)])
+
+        when:
+        def outcome = CodeOutcome.returned(call, returned)
+
+        then:
+        outcome instanceof CodeOutcome.Errored
+        outcome.wentWrong().reason() == CodeErrorReason.LINE_BREAK
+        outcome.wentWrong().path() == [new FieldName("title")]
+        outcome.returned() == org.lilradish.lite.domain.wire.CanonicalJson.write(returned)
+        CodeOutcome.returned(call, json([title: "Demo Sample"])) instanceof CodeOutcome.Gave
+
+        where:
+        codePoint << [0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029]
+    }
 
     def "gives back a value for every field it declares, in declared order, each standing as its field says"() {
         when:
@@ -128,20 +154,22 @@ class CodeOutcomeSpec extends Specification {
     }
 
     /** A member's name is whatever the code wrote, so it is named as one line shows it, and cut alone. */
-    def "names a member it does not declare cleaned for one line, cut alone past 64 characters, where it was found still named"() {
+    def "names a member it does not declare cleaned for one line, cut past 64 characters, where it was found still named"() {
         when:
-        def outcome = CodeOutcome.returned(FILE_CLAIM, json(returned)) as CodeOutcome.Errored
+        def outcome = CodeOutcome.returned(call, json(returned)) as CodeOutcome.Errored
 
         then:
-        outcome.wentWrong() ==
-                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, path.collect { new FieldName(it) }, member, null)
+        outcome.wentWrong() == new CodeError.Fault(CodeErrorReason.NOT_DECLARED, path.collect { new FieldName(it) },
+                new CodeError.UndeclaredMember(member, cut), null)
 
         where:
-        returned                                                  || path      | member
-        [receipt: "R-1", ("bad" + BELL + "bin"): true]            || []        | "badbin"
-        [receipt: "R-1", ("n" * 65): true]                        || []        | "n" * 64 + "…"
-        [receipt: "R-1", lines: [[sku: "A1", ("b" * 3000): 1]]]   || ["lines"] | "b" * 64 + "…"
-        [receipt: "R-1", (PAIR * 65): true]                       || []        | PAIR * 64 + "…"
+        call       | returned                                                || path      | member        | cut
+        FILE_CLAIM | [receipt: "R-1", ("bad" + BELL + "bin"): true]          || []        | "badbin"      | false
+        FILE_CLAIM | [receipt: "R-1", ("n" * 64): true]                      || []        | "n" * 64      | false
+        FILE_CLAIM | [receipt: "R-1", ("n" * 65): true]                      || []        | "n" * 64      | true
+        FILE_CLAIM | [receipt: "R-1", lines: [[sku: "A1", ("b" * 3000): 1]]] || ["lines"] | "b" * 64      | true
+        FILE_CLAIM | [receipt: "R-1", (PAIR * 65): true]                     || []        | PAIR * 64     | true
+        ARCHIVE    | [("n" * 65): true]                                      || []        | "n" * 64      | true
     }
 
     def "what came back is kept up to the store's bound and not past it, the reason the same either way"() {
@@ -149,7 +177,8 @@ class CodeOutcomeSpec extends Specification {
         def outcome = CodeOutcome.returned(FILE_CLAIM, json([receipt: "R-1", extra: "a" * extraLength])) as CodeOutcome.Errored
 
         then:
-        outcome.wentWrong() == new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [], "extra", null)
+        outcome.wentWrong() ==
+                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [], new CodeError.UndeclaredMember("extra", false), null)
         outcome.returned()?.length() == keptLength
 
         where:
@@ -238,7 +267,7 @@ class CodeOutcomeSpec extends Specification {
         refused.message == "What code gave back is never found " + found + ", which only a model's answer is"
 
         where:
-        found << [DidNotFitReason.NOT_THE_SHAPE, DidNotFitReason.CONFIDENCE_MISSING, DidNotFitReason.CONFIDENCE_UNASKED,
+        found << [DidNotFitReason.NOT_THE_SHAPE, DidNotFitReason.MODEL_DECLINED, DidNotFitReason.CONFIDENCE_MISSING, DidNotFitReason.CONFIDENCE_UNASKED,
                   DidNotFitReason.CONFIDENCE_NOT_A_PERCENT, DidNotFitReason.UNDECIDED, DidNotFitReason.WORDS_MISSING,
                   DidNotFitReason.WORDS_TOO_LONG, DidNotFitReason.WORDS_UNKEEPABLE, DidNotFitReason.CUT_OFF,
                   DidNotFitReason.NOT_KEPT_AS_IT_CAME]
@@ -284,7 +313,7 @@ class CodeOutcomeSpec extends Specification {
     /** A driver refuses a null character, and writes half a pair as a question mark nobody gave back. */
     def "refuses code gone wrong it is not told why, and what came back that the store could not hold as it is"() {
         when:
-        new CodeOutcome.Errored(withWhy ? new CodeError.Said(ForeignProse.errorDetail("It broke.")) : null,
+        new CodeOutcome.Errored(withWhy ? new CodeError.Fault(CodeErrorReason.TOO_LONG, [RECEIPT.name()], null, null) : null,
                 count == null ? null : written * count + tail)
 
         then:
@@ -364,9 +393,82 @@ class CodeOutcomeSpec extends Specification {
             stands("receipt", new FieldShape.Text(8), new HowMany.One(), true, null, null)]
     }
 
+    def "a returned value is retained only for faults found in that value by both representations"() {
+        given:
+        def fault = validFault(reason)
+        def returned = keepsReturn ? "{}" : null
+        def allowed = !keepsReturn || reason.aboutWhatCameBack()
+
+        when:
+        def outcome = null
+        def recorded = null
+        def outcomeRefused = false
+        def recordRefused = false
+        try {
+            outcome = new CodeOutcome.Errored(fault, returned)
+        } catch (IllegalArgumentException ignored) {
+            outcomeRefused = true
+        }
+        try {
+            recorded = new TryRecord(new ProductionId(UUID.fromString("00000001-0000-4000-8000-000000000001")),
+                    1, StepProducer.CODE, null, Instant.EPOCH, Instant.EPOCH, null, null, TryLostReason.ERRORED,
+                    fault, null, false, returned, [], [], [], [], [])
+        } catch (IllegalArgumentException ignored) {
+            recordRefused = true
+        }
+
+        then:
+        outcomeRefused == !allowed
+        recordRefused == !allowed
+        !allowed || (outcome.returned() == returned && recorded.returned() == returned)
+
+        where:
+        [reason, keepsReturn] << [CodeErrorReason.values().toList(), [false, true]].combinations()
+    }
+
+    def "code that threw retains its words and has no returned value in either representation"() {
+        when:
+        def outcome = null
+        def recorded = null
+        try {
+            outcome = new CodeOutcome.Errored(new CodeError.Said(ForeignProse.said("The code refused it.")), returned)
+        } catch (IllegalArgumentException ignored) {
+            assert returned != null
+        }
+        try {
+            recorded = new TryRecord(new ProductionId(UUID.fromString("00000001-0000-4000-8000-000000000001")),
+                    1, StepProducer.CODE, null, Instant.EPOCH, Instant.EPOCH, null, null, TryLostReason.ERRORED,
+                    null, "The code refused it.", false, returned, [], [], [], [], [])
+        } catch (IllegalArgumentException ignored) {
+            assert returned != null
+        }
+
+        then:
+        (outcome != null) == (returned == null)
+        (recorded != null) == (returned == null)
+
+        where:
+        returned << [null, "{}"]
+    }
+
+    private static CodeError.Fault validFault(CodeErrorReason reason) {
+        def member = reason == CodeErrorReason.NOT_DECLARED ? new CodeError.UndeclaredMember("extra", false) : null
+        def reader = reason == CodeErrorReason.GIVES_OTHERWISE
+                ? new CodeError.OutputReads([RECEIPT.name()]) : null
+        for (path in [[], [RECEIPT.name()]]) {
+            try {
+                return new CodeError.Fault(reason, path, member, reader)
+            } catch (IllegalArgumentException ignored) {
+                continue
+            }
+        }
+        throw new AssertionError("No valid fault for " + reason)
+    }
+
     /** Code gone wrong for {@code reason}, about the field at {@code path}, keeping {@code kept}. */
     private static CodeOutcome.Errored erred(CodeErrorReason reason, List<String> path, String member, String kept) {
-        new CodeOutcome.Errored(new CodeError.Fault(reason, path.collect { new FieldName(it) }, member, null), kept)
+        new CodeOutcome.Errored(new CodeError.Fault(reason, path.collect { new FieldName(it) },
+                member == null ? null : new CodeError.UndeclaredMember(member, false), null), kept)
     }
 
     private static Field stands(String name, FieldShape shape, HowMany howMany, boolean mustBe, FieldStanding standing,

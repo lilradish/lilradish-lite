@@ -46,6 +46,13 @@ public record Asking(Instruction instruction, List<AskedField> takes, List<Asked
         return asked(half.fields(), lists);
     }
 
+    /** One actual field, needing only the lists that field pins. */
+    public static AskedField told(Field field, Map<EntryVersionId, OfferedTerms> lists) {
+        requireNonNull(field, "Asking field must not be null");
+        requireNonNull(lists, "Asking lists must not be null");
+        return asked(List.of(field), lists).getFirst();
+    }
+
     private static List<AskedField> asked(List<Field> level, Map<EntryVersionId, OfferedTerms> lists) {
         return level.stream()
                 .map(field -> new AskedField(
@@ -59,7 +66,8 @@ public record Asking(Instruction instruction, List<AskedField> takes, List<Asked
                         field.shape() instanceof FieldShape.Nested nested ? asked(nested.fields(), lists) : List.of(),
                         field.demand().mustBe(),
                         field.demand() instanceof Demand.Stands stands
-                                && stands.standing() == FieldStanding.ABOVE_CONFIDENCE))
+                                && stands.standing() == FieldStanding.ABOVE_CONFIDENCE,
+                        field.shape() instanceof FieldShape.Text text ? text.lines() : null))
                 .toList();
     }
 

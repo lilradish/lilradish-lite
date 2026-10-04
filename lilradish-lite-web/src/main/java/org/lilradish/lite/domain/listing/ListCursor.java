@@ -15,15 +15,9 @@ import org.lilradish.lite.domain.wire.Digest;
  * The cursor a reader carries from one page of a list to the next: the position a page ended on, and
  * which query minted it.
  *
- * <p>Only that query honours it. Handed to another, a position means something else: what follows a
- * row in one order, or within one scope, is a different set of rows in the next, and honoured anyway it
- * would answer with rows belonging to neither query under the heading of the one asked. So a cursor
- * opens with a digest of the list's name, the query, and the layout the position is written in; one
- * minted by any other query, or laid out by any other release, is refused like anything else this did
- * not mint.
- *
- * <p>Nothing signs a cursor, and the values it holds are readable to whoever holds it. It holds a
- * position and nothing else, so a forged one reaches no row that reading on would not have reached.
+ * <p>A cursor binds to its list, query, scope and position layout; other bindings are refused. It
+ * carries no authority: every page checks the reader's access again. It must hold no information a
+ * reader of that page is not allowed to see.
  *
  * <p>Static throughout, so that no cursor is ever an argument a woven method logs.
  */
@@ -191,8 +185,7 @@ public final class ListCursor {
     }
 
     /**
-     * Only the one spelling this system writes is read. The decoder also takes padding and ignores the
-     * unused low bits of the last character, which would let one position travel under several cursors.
+     * Only the canonical spelling this system writes is read.
      */
     private static byte[] decoded(String cursor) {
         byte[] decoded;

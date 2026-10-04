@@ -9,6 +9,7 @@ class ContentPartSpec extends Specification {
         expect:
         ContentPart.values().collectEntries { [(it): it.published()] } == [
                 (ContentPart.INSTRUCTION): "instruction",
+                (ContentPart.DRAWING)    : "drawing",
                 (ContentPart.TAKES)      : "takes",
                 (ContentPart.GIVES)      : "gives",
                 (ContentPart.STEPS)      : "steps",

@@ -19,15 +19,15 @@ class ReviewSendingSpec extends Specification {
     def "each way a try can stand with its reviewer is published under its own spelling, in this order"() {
         expect:
         ReviewSending.values()*.published() == ["unsent", "out", "turned_away", "too_long", "list_not_here",
-                                                "takes_no_longer_declared", "no_longer_declared"]
+                                                "takes_no_longer_declared", "no_longer_declared", "holds_a_file"]
     }
 
-    /** Sending again settles none of these, since nothing is ever sent for them. */
+
     def "values are handed to a person exactly where nothing is ever sent for them, too long or not built"() {
         expect:
         ReviewSending.values().findAll { it.toPerson() } == [ReviewSending.TOO_LONG, ReviewSending.LIST_NOT_HERE,
                                                               ReviewSending.TAKES_NO_LONGER_DECLARED,
-                                                              ReviewSending.NO_LONGER_DECLARED]
+                                                              ReviewSending.NO_LONGER_DECLARED, ReviewSending.HOLDS_A_FILE]
         ReviewSending.values().findAll { !it.toPerson() } ==
                 [ReviewSending.UNSENT, ReviewSending.OUT, ReviewSending.TURNED_AWAY]
     }
@@ -48,7 +48,7 @@ class ReviewSendingSpec extends Specification {
         [[true, null], [false, ModelCallOutcome.TURNED_AWAY]] || ReviewSending.TOO_LONG
     }
 
-    /** Written as one too long is, and read apart from it by why nothing could be built. */
+
     def "a try whose review could not be built stands as why, whatever was sent to review it before"() {
         expect:
         ReviewSending.of(reviewing(PRODUCED, sent)) == expected
@@ -56,6 +56,7 @@ class ReviewSendingSpec extends Specification {
         where:
         sent                                                                            || expected
         [[true, null, ReviewUnbuiltReason.NO_LONGER_DECLARED]]                          || ReviewSending.NO_LONGER_DECLARED
+        [[true, null, ReviewUnbuiltReason.HOLDS_A_FILE]]                                || ReviewSending.HOLDS_A_FILE
         [[true, null, ReviewUnbuiltReason.LIST_NOT_HERE]]                               || ReviewSending.LIST_NOT_HERE
         [[true, null, ReviewUnbuiltReason.TAKES_NO_LONGER_DECLARED]]                    ||
                 ReviewSending.TAKES_NO_LONGER_DECLARED
@@ -65,7 +66,7 @@ class ReviewSendingSpec extends Specification {
                 ReviewSending.NO_LONGER_DECLARED
     }
 
-    /** Such a call left a review, so nothing of the try waits on one, and nothing is read as waiting to be sent. */
+
     def "a try whose review call came back, went wrong or never came back stands as nothing waiting to be sent"() {
         expect:
         ReviewSending.of(sentToReview(PRODUCED, false, outcome)) == ReviewSending.UNSENT
@@ -97,7 +98,7 @@ class ReviewSendingSpec extends Specification {
         ReviewSending.newestCall(sentToReview(PRODUCED, true)) == Optional.empty()
     }
 
-    /** What a press on a turnaway names stays the turned-away call's, whatever was left unbuilt after it. */
+
     def "the newest call sent to review a try passes over an attempt that could not be built"() {
         given:
         def unbuilt = reviewing(PRODUCED,
@@ -122,11 +123,7 @@ class ReviewSendingSpec extends Specification {
         refused.message == "Try ${tryId(1).value()} was sent to be reviewed with no call made" as String
     }
 
-    /**
-     * {@code aTry} with one attempt to review it for each of {@code sent}, in order, each whether it was too long, how
-     * its call ended, and why it could not be built where it was not; the attempts are keyed from 60, the calls from
-     * 1160.
-     */
+
     private static TryRecord reviewing(TryRecord aTry, List<List<Object>> sent) {
         def attempts = []
         def calls = []

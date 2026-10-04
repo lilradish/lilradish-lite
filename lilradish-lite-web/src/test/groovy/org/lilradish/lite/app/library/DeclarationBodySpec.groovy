@@ -13,6 +13,7 @@ import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
+import org.lilradish.lite.domain.declaration.TextLines
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.registry.EntryVersionId
 import spock.lang.Specification
@@ -23,6 +24,10 @@ class DeclarationBodySpec extends Specification {
     static final JsonMapper JSON = JsonMapper.builder().build()
 
     static final String LIST = "00000007-0000-4000-8000-000000000106"
+
+    static final List<String> FILE_TYPES_64 = (0..<64).collect { "application/x${it}" as String }
+
+    static final List<String> FILE_TYPES_65 = (0..<65).collect { "application/x${it}" as String }
 
     /** A field of text taken, as a page sends one, with whatever {@code changed} says instead. */
     static Map taken(Map changed = [:]) {
@@ -42,6 +47,10 @@ class DeclarationBodySpec extends Specification {
          mustBeGiven: false] + changed
     }
 
+    static Map file(Map changed = [:]) {
+        without(taken(name: "attachment", kind: "file", types: ["application/pdf"], maximumBytes: 1L), "longest") + changed
+    }
+
     /** A field as sent, but for the member {@code left} out, which a field of another kind takes and this does not. */
     static Map without(Map sent, String left) {
         sent.findAll { it.key != left }
@@ -49,6 +58,31 @@ class DeclarationBodySpec extends Specification {
 
     static Declaration read(List sent, DeclarationSide side) {
         DeclarationBody.read(JSON.valueToTree(sent), side, Demands.ofQuestion(side)).half()
+    }
+
+    def "text reads its lines at every depth and an omitted choice remains several"() {
+        expect:
+        read([taken(lines: lines)], DeclarationSide.TAKES).fields()[0].shape().lines() == expected
+        read([taken()], DeclarationSide.TAKES).fields()[0].shape().lines() == TextLines.SEVERAL
+        read([without(taken(kind: "fields", fields: [held(lines: lines)]), "longest")],
+                DeclarationSide.TAKES).fields()[0].shape().fields()[0].shape().lines() == expected
+
+        where:
+        lines     || expected
+        "one"     || TextLines.ONE
+        "several" || TextLines.SEVERAL
+    }
+
+    def "lines must be one or several and belongs only to text"() {
+        when:
+        read([sent], DeclarationSide.TAKES)
+
+        then:
+        thrown(ApiErrorException)
+
+        where:
+        sent << [taken(lines: null), taken(lines: true), taken(lines: "many"),
+                 taken(lines: 1), without(taken(kind: "number", lines: "one"), "longest")]
     }
 
     /** The key a field was read under goes beside the half, never into it, every field before those it holds. */
@@ -202,6 +236,35 @@ class DeclarationBodySpec extends Specification {
         DeclarationSide.GIVES | [given(stands: "above_confidence", floor: 0)]               || RefusalCode.FIELD_LIMIT_UNUSABLE
         DeclarationSide.GIVES | [given(stands: "above_confidence", floor: 101)]             || RefusalCode.FIELD_LIMIT_UNUSABLE
         DeclarationSide.TAKES | [without(taken(kind: "term", list: "not-a-version"), "longest")] || RefusalCode.VERSION_NOT_PINNABLE
+    }
+
+    def "a file field arrives with sixty-four distinct types and the largest exactly carried byte count"() {
+        when:
+        def declared = read([file(types: FILE_TYPES_64, maximumBytes: 9_007_199_254_740_991L)], DeclarationSide.TAKES)
+        def shape = declared.fields().first().shape() as FieldShape.File
+
+        then:
+        declared.fields().size() == 1
+        shape.types()*.value() == FILE_TYPES_64
+        shape.maximumBytes() == 9_007_199_254_740_991L
+    }
+
+    def "a file field arriving with too many types or an unusable byte count is refused while read"() {
+        when:
+        read([file(types: types, maximumBytes: bytes)], DeclarationSide.TAKES)
+
+        then:
+        def refusal = thrown(ApiErrorException)
+        refusal.errorCode() == code
+
+        where:
+        types                          | bytes                 || code
+        FILE_TYPES_65                  | 1L                    || RefusalCode.FILE_TYPES_TOO_MANY
+        ["bad;type"] + FILE_TYPES_64   | 1L                    || RefusalCode.FILE_TYPES_TOO_MANY
+        ["application/pdf"]           | 9_007_199_254_740_992L || RefusalCode.FILE_SIZE_LIMIT_UNUSABLE
+        ["application/pdf"]           | 1.5G                  || RefusalCode.FILE_SIZE_LIMIT_UNUSABLE
+        ["application/pdf"]           | 0L                    || RefusalCode.FILE_SIZE_LIMIT_UNUSABLE
+        ["application/pdf"]           | -1L                   || RefusalCode.FILE_SIZE_LIMIT_UNUSABLE
     }
 
     /** Sixteen names of 63 joined by dots run to 1023, the most anything may be bound through. */

@@ -21,6 +21,8 @@ import org.lilradish.lite.domain.referencelist.ListNote;
  * @param most the most it holds, only where it holds many
  * @param terms what it offers, only where it is a term
  * @param fields what it holds, only where it holds fields
+ * @param types media types only where it is a file
+ * @param maximumBytes largest single file only where it is a file
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record FillFieldAnswer(
@@ -32,7 +34,35 @@ public record FillFieldAnswer(
         @Nullable Integer most,
         boolean mustBeGiven,
         @Nullable TermsAnswer terms,
-        @Nullable List<FillFieldAnswer> fields) {
+        @Nullable List<FillFieldAnswer> fields,
+        @Nullable List<String> types,
+        @Nullable Long maximumBytes,
+        @Nullable String lines) {
+
+    public FillFieldAnswer(
+            String name,
+            @Nullable String label,
+            @Nullable String help,
+            String kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            boolean mustBeGiven,
+            @Nullable TermsAnswer terms,
+            @Nullable List<FillFieldAnswer> fields) {
+        this(
+                name,
+                label,
+                help,
+                kind,
+                longest,
+                most,
+                mustBeGiven,
+                terms,
+                fields,
+                null,
+                null,
+                kind.equals("text") ? "several" : null);
+    }
 
     public static List<FillFieldAnswer> of(List<FillField> fields) {
         requireNonNull(fields, "FillFieldAnswer fields must not be null");
@@ -52,7 +82,12 @@ public record FillFieldAnswer(
                 field.most(),
                 field.mustBeGiven(),
                 terms == null ? null : TermsAnswer.of(terms),
-                field.fields().isEmpty() ? null : of(field.fields()));
+                field.fields().isEmpty() ? null : of(field.fields()),
+                field.fileTypes() == null
+                        ? null
+                        : field.fileTypes().stream().map(type -> type.value()).toList(),
+                field.maximumBytes(),
+                field.lines() == null ? null : field.lines().published());
     }
 
     /** @param note absent where the list says nothing on choosing */

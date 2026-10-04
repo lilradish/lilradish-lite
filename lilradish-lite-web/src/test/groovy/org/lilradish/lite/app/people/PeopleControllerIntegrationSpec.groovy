@@ -91,12 +91,12 @@ class PeopleControllerIntegrationSpec extends Specification {
     def "answers a caller who may keep the pool with who a search finds, each saying whether they are in it now"() {
         given:
         arriving(EnumSet.of(EstateRole.STEWARD))
-        given(people.search(new PeopleSearch("ada"), 20)).willReturn(new PeopleFound([
-                new People.InDirectory(new UserId("000301"), new PersonName("Ada Lovelace"), new SubjectId(POOLED)),
-                new People.InDirectory(new UserId("000302"), new PersonName("Ada Yonath"), null)], more))
+        given(people.search(new PeopleSearch("ari"), 20)).willReturn(new PeopleFound([
+                new People.InDirectory(new UserId("000301"), new PersonName("Ari Mockvale"), new SubjectId(POOLED)),
+                new People.InDirectory(new UserId("000302"), new PersonName("Ari Zomock"), null)], more))
 
         when:
-        def answered = searchingWith([["search", "ada"]])
+        def answered = searchingWith([["search", "ari"]])
         def document = documentOf(answered)
 
         then:
@@ -109,7 +109,7 @@ class PeopleControllerIntegrationSpec extends Specification {
         membersOf(document.get("items").get(1)) == ["userId", "displayName"]
         document.get("items").get(0).get("subjectId").asString() == POOLED.toString()
         document.get("items").collect { it.get("userId").asString() } == ["000301", "000302"]
-        document.get("items").collect { it.get("displayName").asString() } == ["Ada Lovelace", "Ada Yonath"]
+        document.get("items").collect { it.get("displayName").asString() } == ["Ari Mockvale", "Ari Zomock"]
 
         and: "nothing on it may be kept by anything between"
         answered.response.getHeader("Cache-Control") == "no-store"
@@ -166,7 +166,7 @@ class PeopleControllerIntegrationSpec extends Specification {
         storeAskedOnlyFor(new PeopleSearch(typed))
 
         where:
-        typed << [" Ada ", "000301", "%_\\", "山田" + Character.toString(0x3000) + "太郎"]
+        typed << [" Ari ", "000301", "%_\\", "山田" + Character.toString(0x3000) + "太郎"]
     }
 
     /**
@@ -196,11 +196,11 @@ class PeopleControllerIntegrationSpec extends Specification {
         [["search", ""]]                                    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", "   "]]                                 || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", Character.toString(0x3000)]]            || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["search", "Ada" + Character.toString(0x2028)]]    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
+        [["search", "Ari" + Character.toString(0x2028)]]    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", "a" * 257]]                             || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["search", "ada"], ["search", "grace"]]            || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["q", "ada"]]                                      || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
-        [["search", "ada"], ["filter", "grace"]]            || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
+        [["search", "ari"], ["search", "greno"]]            || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
+        [["q", "ari"]]                                      || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
+        [["search", "ari"], ["filter", "greno"]]            || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
     }
 
     /**
@@ -212,7 +212,7 @@ class PeopleControllerIntegrationSpec extends Specification {
         arriving(held)
 
         when:
-        def answered = searchingWith([["search", "ada"]])
+        def answered = searchingWith([["search", "ari"]])
 
         then:
         answered.response.status == 403
@@ -231,7 +231,7 @@ class PeopleControllerIntegrationSpec extends Specification {
         given(identification.identify(any(HttpServletRequest))).willReturn(Optional.empty())
 
         when:
-        def answered = searchingWith([["search", "ada"]])
+        def answered = searchingWith([["search", "ari"]])
 
         then:
         answered.response.status == 401

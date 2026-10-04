@@ -77,4 +77,16 @@ describe("useListAddress", () => {
     expect(at()).toBe("/list?filter=pa&sort=-key");
     expect(reached()).toBe("REPLACE");
   });
+
+  it("keeps unrelated repeated and encoded parameters while filter and order change", async () => {
+    const { heard, at } = onAddress(
+      "/list?view=a&view=b%20c&filter=pa&sort=name",
+    );
+
+    await act(async () => heard().onFilter(""));
+    expect(at()).toBe("/list?view=a&view=b+c&sort=name");
+
+    await act(async () => heard().onOrder({ column: "key", descending: true }));
+    expect(at()).toBe("/list?view=a&view=b+c&sort=-key");
+  });
 });

@@ -17,10 +17,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What somebody holds in one group, asked of a real server running the real baseline: a join, a
- * partial predicate and one group among several, none of which exists anywhere but in a database.
- */
+/** Locking and stored-role checks require the deployed database engine. */
 class GroupRolesIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -56,6 +53,7 @@ class GroupRolesIntegrationSpec extends Specification {
 
     def setupSpec() {
         server.postgresDatabase.connection.withCloseable { it.createStatement().withCloseable {
+            // DB-SPECIFIC: PostgreSQL CREATE DATABASE.
             it.execute("create database group_roles")
         } }
         source = Baseline.appliedTo(server, "group_roles")
@@ -80,10 +78,7 @@ class GroupRolesIntegrationSpec extends Specification {
         roles.heldBy(ADA, TRIAGE) == EnumSet.of(GroupRole.OPERATOR)
     }
 
-    /**
-     * A role taken is a row still there, the store keeping the history, so the predicate is the only
-     * thing between the taking and its effect.
-     */
+
     def "a role taken or a membership ended is held no longer, though its row remains"() {
         expect:
         !roles.heldBy(ADA, PAYROLL).contains(GroupRole.OVERSEER)
@@ -93,7 +88,7 @@ class GroupRolesIntegrationSpec extends Specification {
         session.sql("select count(*) from group_members where removed_at is not null").query(Long).single() == 2L
     }
 
-    /** Nobody, a group nobody holds and a group somebody holds nothing in are one answer: nothing. */
+
     def "a group that does not exist, a user nobody is, and a group somebody holds nothing in all answer with no role"() {
         expect:
         roles.heldBy(user, group).isEmpty()
@@ -123,7 +118,7 @@ class GroupRolesIntegrationSpec extends Specification {
         roles.heldBy(ADA, TRIAGE) == EnumSet.of(GroupRole.OPERATOR)
     }
 
-    /** An owner reaches every permission; what the operator's role adds changes nothing about it. */
+
     def "a caller still reaching the permission asked is answered with every permission their roles reach there"() {
         expect:
         inTransaction { roles.stillReaching(ADA, PAYROLL, GroupPermission.CHANGE_MEMBERSHIP) } ==
@@ -219,6 +214,7 @@ class GroupRolesIntegrationSpec extends Specification {
         source.connection.withCloseable { connection ->
             try {
                 connection.prepareStatement(
+                        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE; NOWAIT.
                         "select 1 from groups where group_id = '${group.value()}' for no key update nowait")
                         .withCloseable { it.executeQuery().close() }
                 true
@@ -230,18 +226,22 @@ class GroupRolesIntegrationSpec extends Specification {
     }
 
     private void person(String subject, UserId user) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into subjects (subject_id, kind, user_id, created_by) values (?::uuid, 'person', ?, ?::uuid)")
                 .params(subject, user.value(), SEEDER).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                 .params(subject, FIRST_STEWARD).update()
     }
 
     private void group(GroupId group, String key, String name) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into groups (group_id, key, name, created_by) values (?, ?, ?, ?::uuid)")
                 .params(group.value(), key, name, FIRST_STEWARD).update()
     }
 
     private void member(GroupId group, String subject, String role, boolean taken) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role, group_member_removal; now().
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by, removed_at, removed_by, removal)
                 values (?, ?::uuid, ?::group_role, ?::uuid, ${taken ? "now()" : "null"},

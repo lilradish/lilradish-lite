@@ -6,19 +6,20 @@ import {
   atLibrary,
   entryFrom,
   libraryLoader,
-  startEntry,
+  makeEntry,
   type EntryKind,
 } from "./{kind}";
 
 const GROUP = "00000003-0000-4000-8000-000000000a71";
 
-const ADA = { userId: "000a71", displayName: "Ada Lovelace" };
+const AVO = { userId: "000a71", displayName: "Avo Lumerace" };
 
 const NAMELESS = { userId: "000a72" };
 
 const TRIAGE = {
   entryId: "00000006-0000-4000-8000-000000000a71",
   name: "Triage",
+  purpose: "Sorts what comes in.",
   inService: 2,
   submitted: true,
   stopped: false,
@@ -35,7 +36,7 @@ const DRAFT = {
   versionId: "00000007-0000-4000-8000-000000000a73",
   number: 3,
   standing: "draft",
-  writers: [NAMELESS, ADA],
+  writers: [NAMELESS, AVO],
   writtenByMigration: false,
   acts: ["write", "submit"],
   pinnedBy: [],
@@ -45,7 +46,7 @@ const IN_SERVICE = {
   versionId: "00000007-0000-4000-8000-000000000a72",
   number: 2,
   standing: "in_service",
-  writers: [ADA],
+  writers: [AVO],
   writtenByMigration: false,
   approval: { approver: NAMELESS },
   acts: ["retire"],
@@ -76,7 +77,7 @@ const ENTRY = {
   kind: "question",
   name: "Triage",
   purpose: "Sorts what comes in.",
-  stopped: { by: ADA, at: "2026-09-24T08:15:00Z" },
+  stopped: { by: AVO, at: "2026-09-24T08:15:00Z" },
   acts: ["rename", "let_go"],
   versions: [DRAFT, IN_SERVICE, SEEDED],
 };
@@ -149,10 +150,12 @@ describe("libraryLoader", () => {
 
     expect(page).toEqual({ items: [TRIAGE, WAITING] });
     expect("inService" in page.items[1]!).toBe(false);
+    expect("purpose" in page.items[1]!).toBe(false);
   });
 
   it.each([
     ["no name", { ...TRIAGE, name: undefined }],
+    ["a purpose that is not text", { ...TRIAGE, purpose: 7 }],
     ["a version in service that is no number", { ...TRIAGE, inService: "2" }],
     ["a version in service that is none", { ...TRIAGE, inService: 0 }],
     ["no word on whether one waits", { ...TRIAGE, submitted: "yes" }],
@@ -175,25 +178,28 @@ describe("libraryLoader", () => {
   });
 });
 
-describe("startEntry", () => {
+describe("makeEntry", () => {
   it("sends the name and what it is for, and nothing else, to the kind's entries", async () => {
     const sent = answering([JSON.stringify(ENTRY), 201]);
 
-    const started = await startEntry(
+    const signal = new AbortController().signal;
+    const made = await makeEntry(
       GROUP,
       "question",
       { name: "Triage", purpose: null },
-      new AbortController().signal,
+      signal,
     );
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(`/api/groups/${GROUP}/questions`);
     expect(init?.method).toBe("POST");
+    expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
       name: "Triage",
       purpose: null,
     });
-    expect(started).toEqual(READ);
+    expect(made).toEqual(READ);
   });
 });
 
@@ -236,10 +242,26 @@ describe("entryFrom", () => {
     ["no versions", { ...ENTRY, versions: undefined }],
     ["a purpose that is no text", { ...ENTRY, purpose: null }],
     ["a stop naming nobody", { ...ENTRY, stopped: { at: ENTRY.stopped.at } }],
-    ["a stop at no time", { ...ENTRY, stopped: { by: ADA } }],
+    ["a stop at no time", { ...ENTRY, stopped: { by: AVO } }],
     [
       "a version with no number",
       { ...ENTRY, versions: [{ ...DRAFT, number: "3" }] },
+    ],
+    [
+      "a version numbered zero",
+      { ...ENTRY, versions: [{ ...DRAFT, number: 0 }] },
+    ],
+    [
+      "a pin numbered below one",
+      {
+        ...ENTRY,
+        versions: [
+          {
+            ...IN_SERVICE,
+            pinnedBy: [{ ...IN_SERVICE.pinnedBy[0], number: -1 }],
+          },
+        ],
+      },
     ],
     [
       "a version with no acts",
@@ -261,14 +283,14 @@ describe("entryFrom", () => {
       "a writer with no user number",
       {
         ...ENTRY,
-        versions: [{ ...DRAFT, writers: [{ displayName: "Ada" }] }],
+        versions: [{ ...DRAFT, writers: [{ displayName: "Avo" }] }],
       },
     ],
     [
       "a writer whose name is no text",
       {
         ...ENTRY,
-        versions: [{ ...DRAFT, writers: [{ ...ADA, displayName: 7 }] }],
+        versions: [{ ...DRAFT, writers: [{ ...AVO, displayName: 7 }] }],
       },
     ],
     [

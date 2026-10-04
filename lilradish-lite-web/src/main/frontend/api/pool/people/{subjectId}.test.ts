@@ -11,10 +11,10 @@ import {
 
 const SUBJECT = "00000002-0000-4000-8000-00000000014c";
 
-const GRACE = {
+const GLINN = {
   subjectId: SUBJECT,
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: ["watcher"],
   lastGrantingRoles: [],
   groups: ["Payroll", "finance"],
@@ -23,7 +23,7 @@ const GRACE = {
 
 describe("readPerson", () => {
   it("asks the person's own address, the identifier as it arrived", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     await readPerson(SUBJECT, new AbortController().signal);
     await readPerson(SUBJECT.toUpperCase(), new AbortController().signal);
@@ -36,7 +36,7 @@ describe("readPerson", () => {
 
   /** What an address may be is `atPerson`'s to say; here, only that the read goes through it. */
   it("goes through the person's address as atPerson makes it, refusing what it refuses", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     const failure = await refusalOf(
       readPerson("..", new AbortController().signal),
@@ -47,19 +47,19 @@ describe("readPerson", () => {
   });
 
   it("reads what they hold, the groups they are in by name, and whether a migration seeded them", async () => {
-    answering([JSON.stringify(GRACE), 200]);
+    answering([JSON.stringify(GLINN), 200]);
 
     const person = await readPerson(SUBJECT, new AbortController().signal);
 
     expect(person).toEqual({
-      ...GRACE,
+      ...GLINN,
       estateRoles: new Set(["watcher"]),
       lastGrantingRoles: new Set(),
     });
   });
 
   it("refuses an answer that is not a person, under the status it arrived with", async () => {
-    answering([JSON.stringify({ ...GRACE, seeded: "yes" }), 200]);
+    answering([JSON.stringify({ ...GLINN, seeded: "yes" }), 200]);
 
     const failure = await refusalOf(
       readPerson(SUBJECT, new AbortController().signal),
@@ -110,7 +110,7 @@ describe("takeOut", () => {
 
   /** Somebody still here is not gone because a document came back where none was promised. */
   it("refuses a document where no content was promised", async () => {
-    answering([JSON.stringify(GRACE), 200]);
+    answering([JSON.stringify(GLINN), 200]);
 
     const failure = await refusalOf(
       takeOut(SUBJECT, new AbortController().signal),

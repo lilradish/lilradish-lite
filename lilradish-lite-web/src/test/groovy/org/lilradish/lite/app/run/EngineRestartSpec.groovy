@@ -36,6 +36,7 @@ class EngineRestartSpec extends Specification {
     def "runs are not let go on before what was out is settled, and nothing is handed over"() {
         given:
         def executor = EngineExecutors.of(Stub(DataSource))
+        def tasks = EngineTaskBarrier.attach(executor)
         def restart = new EngineRestart(null, null, null, null, null, null, executor)
 
         when:
@@ -47,7 +48,7 @@ class EngineRestartSpec extends Specification {
 
         and:
         !restart.running
-        executor.@pool.threadPoolExecutor.taskCount == 0
+        tasks.submittedCount() == 0
 
         cleanup:
         executor.destroy()

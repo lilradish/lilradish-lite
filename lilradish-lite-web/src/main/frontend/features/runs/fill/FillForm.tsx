@@ -28,20 +28,27 @@ import {
   type FillReason,
 } from "../../../api/filling";
 import { say, type MessageId } from "../../../i18n/app";
+import { visible } from "../../../i18n/visible";
 import { Press } from "../../../lib/action/Press";
 import { isolated, isolatedInText } from "../../../lib/direction/isolated";
+import { drawingOf } from "../../../lib/text/hidden";
+import { SystemHint } from "../../../lib/text/HiddenShownIn";
 import {
   codePointsIn,
+  hasLineBreak,
   FIRST_YEAR,
   FURTHEST_OFFSET_MINUTES,
   LAST_YEAR,
   MOST_DIGITS,
 } from "../../../lib/filling/writing";
-import { QUIET_SX } from "../../../lib/layout/parts";
+import { INSET_SX, QUIET_SX } from "../../../lib/layout/parts";
 import {
+  fileIssueOf,
   offsetOf,
   offsetWritten,
   oneDraftOf,
+  type FileDraft,
+  type FileIssue,
   type FieldDraft,
   type LevelDraft,
   type MomentDraft,
@@ -52,6 +59,7 @@ import {
 const REASONS = {
   missing: "fill.missing",
   malformed: "fill.malformed",
+  line_break: "fill.line_break",
   too_long: "fill.too_long",
   too_many: "fill.too_many",
   not_a_term: "fill.not_a_term",
@@ -67,24 +75,22 @@ const LAST_DAY = `${String(LAST_YEAR).padStart(4, "0")}-12-31`;
 
 const OFFSET_STEP_MINUTES = 15;
 
-const HELD_SX = {
-  pl: 2,
-  borderLeftWidth: 2,
-  borderLeftStyle: "solid",
-  borderLeftColor: "divider",
-};
-
 const ROW_SX = { display: "flex", flexWrap: "wrap", gap: 1, mt: 1 };
 
 const ITEM_SX = { display: "flex", alignItems: "flex-start", gap: 1, mt: 1 };
 
 const ELEMENT_SX = { flex: "1 1 auto", minWidth: 0 };
 
-const BLOCK_SX = { display: "block" };
+const OWN_LINE_SX = { display: "block" };
+
+const REJECTED_PAGE_SIZE = 50;
 
 const MEANING_SX = { ...QUIET_SX, display: "block", mb: 0 };
 
-const TIME_INPUT = { inputLabel: { shrink: true }, htmlInput: { step: 1 } };
+const TIME_INPUT = {
+  inputLabel: { shrink: true },
+  htmlInput: { inputMode: "numeric", dir: "ltr" },
+};
 
 const DATE_INPUT = {
   inputLabel: { shrink: true },
@@ -96,6 +102,12 @@ const TEXT_INPUT = { htmlInput: { dir: "auto" } };
 
 // Not decimal: a keyboard for decimals may have no minus key, and a number may start with one.
 const NUMBER_INPUT = { htmlInput: { inputMode: "text", dir: "ltr" } };
+
+const QUARTER_HOUR_OFFSETS: readonly string[] = Array.from(
+  { length: (2 * FURTHEST_OFFSET_MINUTES) / OFFSET_STEP_MINUTES + 1 },
+  (_, index) =>
+    offsetWritten(-FURTHEST_OFFSET_MINUTES + index * OFFSET_STEP_MINUTES),
+);
 
 /**
  * What now stands at a place the reader changed, which may now say what it lacks; and, where one of many was taken
@@ -169,8 +181,11 @@ export function FillForm({
   readonly onLeave: Left;
   readonly onUnread: Unread;
   readonly marks: ReadonlyMap<string, FillReason>;
-  /** Words said of a field of the first level, by its name, said under its control, which is described by them. */
-  readonly beside?: ReadonlyMap<string, string>;
+  /**
+   * Words said of a field of the first level, by its name, said under its control, which is described by them; the
+   * same map while they are the same, as a handler stays.
+   */
+  readonly beside?: ReadonlyMap<string, ReactNode>;
 }) {
   return (
     <Level
@@ -195,7 +210,7 @@ function Level({
 }: Holding & {
   readonly fields: readonly FillField[];
   readonly draft: LevelDraft;
-  readonly beside?: ReadonlyMap<string, string>;
+  readonly beside?: ReadonlyMap<string, ReactNode>;
 }) {
   return (
     <Stack spacing={2}>
@@ -207,13 +222,23 @@ function Level({
         };
         const said = beside?.get(field.name);
         return Array.isArray(held) ? (
-          <Many
-            key={field.name}
-            field={field}
-            items={held}
-            said={said}
-            {...placed}
-          />
+          field.kind === "file" ? (
+            <FileMany
+              key={field.name}
+              field={field}
+              items={held as readonly FileDraft[]}
+              said={said}
+              {...placed}
+            />
+          ) : (
+            <Many
+              key={field.name}
+              field={field}
+              items={held}
+              said={said}
+              {...placed}
+            />
+          )
         ) : (
           <Element
             key={field.name}
@@ -240,7 +265,7 @@ function Element({
   readonly field: FillField;
   readonly label: string;
   readonly held: OneDraft;
-  readonly said?: string;
+  readonly said?: ReactNode;
 }) {
   return field.kind === "fields" ? (
     <Fields
@@ -275,7 +300,7 @@ const Many = memo(function Many({
 }: Holding & {
   readonly field: FillField;
   readonly items: readonly OneDraft[];
-  readonly said?: string;
+  readonly said?: ReactNode;
 }) {
   const mark = marks.get(pathKey(path));
   const most = field.most ?? 0;
@@ -423,11 +448,31 @@ const One = memo(function One({
   readonly label: string;
   readonly held: OneDraft;
   readonly mark: FillReason | undefined;
-  readonly said?: string;
+  readonly said?: ReactNode;
 }) {
   const id = placeId(formId, path);
-  const typed = (next: string) => onDraft(path, next);
+  const [rejected, setRejected] = useState<{
+    readonly held: OneDraft;
+    readonly field: FillField;
+    readonly formId: string;
+    readonly reason: FillReason;
+  } | null>(null);
+  const typed = (next: string) => {
+    if (field.kind === "text" && codePointsIn(next) > (field.longest ?? 0)) {
+      setRejected({ held, field, formId, reason: "too_long" });
+      return;
+    }
+    setRejected(null);
+    onDraft(path, next);
+  };
   const left = () => onLeave(path);
+  const oneLineText = field.kind === "text" && field.lines === "one";
+  const shownMark =
+    rejected?.held === held &&
+    rejected.field === field &&
+    rejected.formId === formId
+      ? rejected.reason
+      : mark;
   switch (field.kind) {
     case "text":
       return (
@@ -436,12 +481,38 @@ const One = memo(function One({
           label={isolated(label)}
           value={held as string}
           onChange={(edit) => typed(edit.target.value)}
+          onPaste={(event) => {
+            if (
+              oneLineText &&
+              hasLineBreak(event.clipboardData.getData("text"))
+            ) {
+              event.preventDefault();
+              setRejected({ held, field, formId, reason: "line_break" });
+            }
+          }}
+          onBeforeInput={(event) => {
+            const next = (event as typeof event & { data?: string | null })
+              .data;
+            if (oneLineText && typeof next === "string" && hasLineBreak(next)) {
+              event.preventDefault();
+              setRejected({ held, field, formId, reason: "line_break" });
+            }
+          }}
+          onDrop={(event) => {
+            if (
+              oneLineText &&
+              hasLineBreak(event.dataTransfer.getData("text/plain"))
+            ) {
+              event.preventDefault();
+              setRejected({ held, field, formId, reason: "line_break" });
+            }
+          }}
           onBlur={left}
           required={field.mustBeGiven}
-          error={mark !== undefined}
+          error={shownMark !== undefined}
           helperText={
             <Under
-              mark={mark}
+              mark={shownMark}
               said={said}
               help={field.help}
               also={say("fill.count", {
@@ -451,7 +522,8 @@ const One = memo(function One({
             />
           }
           slotProps={TEXT_INPUT}
-          multiline
+          multiline={!oneLineText}
+          minRows={oneLineText ? undefined : 3}
           fullWidth
         />
       );
@@ -536,7 +608,7 @@ const One = memo(function One({
             value: term,
             words: (
               <>
-                <Typography component="span" sx={BLOCK_SX}>
+                <Typography component="span" sx={OWN_LINE_SX}>
                   {isolated(term)}
                 </Typography>
                 <Typography variant="body2" component="span" sx={MEANING_SX}>
@@ -547,9 +619,409 @@ const One = memo(function One({
           }))}
         />
       );
+    case "file":
+      return (
+        <FileOne
+          field={field}
+          label={label}
+          held={held as FileDraft}
+          mark={mark}
+          said={said}
+          formId={formId}
+          path={path}
+          onDraft={onDraft}
+          onLeave={onLeave}
+          onUnread={onUnread}
+        />
+      );
     case "fields":
       return null;
   }
+}, samePlace);
+
+const FILE_ISSUE_HINTS = {
+  name: "fill.fileNameHint",
+  type_missing: "fill.fileTypeMissingHint",
+  type_malformed: "fill.fileTypeMalformedHint",
+  type_not_taken: "fill.fileTypeNotTakenHint",
+  too_large: "fill.fileTooLargeHint",
+  too_many: "fill.fileTooManyHint",
+} as const satisfies Record<FileIssue | "too_many", MessageId>;
+
+function fileNameOf(held: FileDraft): string | undefined {
+  return held === null
+    ? undefined
+    : "pending" in held
+      ? held.pending.name
+      : held.kept.name;
+}
+
+function shownFileName(name: string, drawing = drawingOf([name])): string {
+  if ("kept" in drawing) {
+    return isolatedInText(
+      `${drawing.kept.get(name) ?? ""} ${say("text.leftOut", { count: drawing.leftOut })}`,
+    );
+  }
+  const pieces = drawing.pieces.get(name) ?? [];
+  return isolatedInText(
+    pieces
+      .map((piece) =>
+        "text" in piece
+          ? piece.text
+          : say("text.marker", {
+              code: piece.codePoint.toString(16).toUpperCase().padStart(4, "0"),
+              count: piece.count,
+            }),
+      )
+      .join(""),
+  );
+}
+
+function fileNameVisible(name: string) {
+  const drawing = drawingOf([name]);
+  if ("kept" in drawing) {
+    return (
+      <>
+        <bdi>{isolatedInText(drawing.kept.get(name) ?? "")}</bdi>{" "}
+        <SystemHint>
+          {say("text.leftOut", { count: drawing.leftOut })}
+        </SystemHint>
+      </>
+    );
+  }
+  return <bdi>{shownFileName(name, drawing)}</bdi>;
+}
+
+function fileStatusVisible(name: string, hint: MessageId): ReactNode {
+  return visible("fill.fileStatusVisible", {
+    name: fileNameVisible(name),
+    hint: (
+      <Box component="span" sx={{ typography: "systemHint" }}>
+        {say(hint)}
+      </Box>
+    ),
+  });
+}
+
+function fileIssueVisible(
+  name: string,
+  issue: FileIssue | "too_many",
+): ReactNode {
+  return fileStatusVisible(name, FILE_ISSUE_HINTS[issue]);
+}
+
+function FileLimits({ field }: { readonly field: FillField }) {
+  return (
+    <>
+      <Box component="span" sx={OWN_LINE_SX}>
+        {say("fill.fileTypes", {
+          types: isolatedInText((field.types ?? []).join(", ")),
+        })}
+      </Box>
+      <Box component="span" sx={OWN_LINE_SX}>
+        {say("fill.fileMaximum", { bytes: field.maximumBytes ?? 0 })}
+      </Box>
+    </>
+  );
+}
+
+const FileOne = memo(function FileOne({
+  field,
+  label,
+  held,
+  mark,
+  said,
+  formId,
+  path,
+  onDraft,
+  onLeave,
+}: Placed & {
+  readonly field: FillField;
+  readonly label: string;
+  readonly held: FileDraft;
+  readonly mark: FillReason | undefined;
+  readonly said?: ReactNode;
+}) {
+  const id = placeId(formId, path);
+  const helperId = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const [rejected, setRejected] = useState<{
+    readonly name: string;
+    readonly issue: FileIssue;
+  } | null>(null);
+  const name = fileNameOf(held);
+  const issue =
+    held !== null && "pending" in held
+      ? fileIssueOf(field, held.pending)
+      : null;
+  const status =
+    name === undefined
+      ? undefined
+      : issue !== null
+        ? fileIssueVisible(name, issue)
+        : held !== null && "pending" in held
+          ? fileStatusVisible(name, "fill.filePendingHint")
+          : fileStatusVisible(name, "fill.fileKeptHint");
+  return (
+    <FormControl
+      error={mark !== undefined || issue !== null || rejected !== null}
+      required={field.mustBeGiven}
+    >
+      <FormLabel htmlFor={id}>{isolated(label)}</FormLabel>
+      <input
+        id={id}
+        ref={input}
+        type="file"
+        accept={field.types?.join(",")}
+        aria-describedby={helperId}
+        aria-invalid={
+          mark !== undefined || issue !== null || rejected !== null
+            ? true
+            : undefined
+        }
+        aria-required={field.mustBeGiven ? true : undefined}
+        onChange={(event) => {
+          const chosen = event.currentTarget.files?.[0];
+          if (chosen !== undefined && chosen !== null) {
+            const refused = fileIssueOf(field, chosen);
+            if (refused === null) {
+              setRejected(null);
+              onDraft(path, { pending: chosen });
+            } else {
+              setRejected({ name: chosen.name, issue: refused });
+            }
+            onLeave(path);
+          }
+          event.currentTarget.value = "";
+        }}
+        onBlur={() => onLeave(path)}
+      />
+      <FormHelperText component="div" id={helperId}>
+        <Under
+          mark={held === null ? mark : undefined}
+          said={said}
+          help={field.help}
+        />
+        <FileLimits field={field} />
+        {rejected === null ? null : (
+          <Box component="span" sx={OWN_LINE_SX}>
+            {fileIssueVisible(rejected.name, rejected.issue)}
+          </Box>
+        )}
+        {status === undefined ? null : (
+          <Box component="span" sx={OWN_LINE_SX}>
+            {status}
+          </Box>
+        )}
+      </FormHelperText>
+      {rejected === null ? null : (
+        <Press variant="neutral" onPress={() => setRejected(null)}>
+          {say("fill.fileDismiss")}
+        </Press>
+      )}
+      {name === undefined ? null : (
+        <Press
+          label={say("fill.takeAwayOne", { element: shownFileName(name) })}
+          onPress={() => {
+            setRejected(null);
+            onDraft(path, null);
+            onLeave(path);
+            input.current?.focus();
+          }}
+        >
+          {say("fill.takeAway")}
+        </Press>
+      )}
+    </FormControl>
+  );
+}, samePlace);
+
+const FileMany = memo(function FileMany({
+  field,
+  items,
+  said,
+  formId,
+  path,
+  onDraft,
+  onLeave,
+  onUnread,
+  marks,
+}: Holding & {
+  readonly field: FillField;
+  readonly items: readonly FileDraft[];
+  readonly said?: ReactNode;
+}) {
+  const id = placeId(formId, path);
+  const legendId = useId();
+  const helperId = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const [rejected, setRejected] = useState<
+    readonly { readonly name: string; readonly issue: FileIssue | "too_many" }[]
+  >([]);
+  const [rejectedFrom, setRejectedFrom] = useState(0);
+  const mark = marks.get(pathKey(path));
+  const most = field.most ?? 0;
+  return (
+    <FormControl
+      component="fieldset"
+      error={mark !== undefined || rejected.length > 0}
+      required={field.mustBeGiven}
+      aria-labelledby={legendId}
+      aria-describedby={helperId}
+    >
+      <FormLabel component="legend" id={legendId}>
+        {isolated(labelOf(field))}
+      </FormLabel>
+      <input
+        id={id}
+        ref={input}
+        type="file"
+        multiple
+        accept={field.types?.join(",")}
+        aria-label={say("fill.fileChooseMany", {
+          label: isolatedInText(labelOf(field)),
+        })}
+        aria-describedby={helperId}
+        aria-required={field.mustBeGiven ? true : undefined}
+        aria-invalid={
+          mark !== undefined || rejected.length > 0 ? true : undefined
+        }
+        onChange={(event) => {
+          const chosen = Array.from(event.currentTarget.files ?? []);
+          const refused = chosen
+            .map((file, index) => ({
+              name: file.name,
+              issue:
+                items.length + index >= most
+                  ? ("too_many" as const)
+                  : fileIssueOf(field, file),
+            }))
+            .filter(
+              (
+                entry,
+              ): entry is { name: string; issue: FileIssue | "too_many" } =>
+                entry.issue !== null,
+            );
+          if (refused.length > 0) {
+            setRejected(refused);
+            setRejectedFrom(0);
+            onUnread(path, true);
+          } else if (chosen.length > 0) {
+            setRejected([]);
+            onUnread(path, false);
+            onDraft(path, [
+              ...items,
+              ...chosen.map((file) => ({ pending: file })),
+            ]);
+          }
+          onLeave(path);
+          event.currentTarget.value = "";
+        }}
+        onBlur={() => onLeave(path)}
+      />
+      <FormHelperText component="div" id={helperId}>
+        <Under
+          mark={rejected.length > 0 ? undefined : mark}
+          said={said}
+          help={field.help}
+          also={say("fill.count", { count: items.length, most })}
+        />
+        <FileLimits field={field} />
+        {rejected.length === 0 ? null : (
+          <>
+            <Box component="span" sx={OWN_LINE_SX}>
+              {say("fill.fileBatchRejected")}
+            </Box>
+            {rejected
+              .slice(rejectedFrom, rejectedFrom + REJECTED_PAGE_SIZE)
+              .map(({ name, issue }, index) => (
+                <Box
+                  component="span"
+                  sx={OWN_LINE_SX}
+                  key={rejectedFrom + index}
+                >
+                  {fileIssueVisible(name, issue)}
+                </Box>
+              ))}
+            {rejected.length <= REJECTED_PAGE_SIZE ? null : (
+              <>
+                <Press
+                  navigation
+                  unavailable={rejectedFrom === 0}
+                  onPress={() =>
+                    setRejectedFrom((from) =>
+                      Math.max(0, from - REJECTED_PAGE_SIZE),
+                    )
+                  }
+                >
+                  {say("fill.fileShowPrevious")}
+                </Press>
+                <Press
+                  navigation
+                  unavailable={
+                    rejectedFrom + REJECTED_PAGE_SIZE >= rejected.length
+                  }
+                  onPress={() =>
+                    setRejectedFrom((from) => from + REJECTED_PAGE_SIZE)
+                  }
+                >
+                  {rejectedFrom + REJECTED_PAGE_SIZE >= rejected.length
+                    ? say("fill.fileAllShown")
+                    : say("fill.fileShowMore", {
+                        count: Math.min(
+                          REJECTED_PAGE_SIZE,
+                          rejected.length - rejectedFrom - REJECTED_PAGE_SIZE,
+                        ),
+                        remaining:
+                          rejected.length - rejectedFrom - REJECTED_PAGE_SIZE,
+                      })}
+                </Press>
+              </>
+            )}
+          </>
+        )}
+      </FormHelperText>
+      {items.map((item, index) => {
+        const name = fileNameOf(item);
+        return (
+          <Box key={index} sx={ITEM_SX}>
+            <Typography component="span">
+              {name === undefined
+                ? say("fill.none")
+                : item !== null && "pending" in item
+                  ? fileStatusVisible(name, "fill.filePendingHint")
+                  : fileStatusVisible(name, "fill.fileKeptHint")}
+            </Typography>
+            <Press
+              label={say("fill.takeAwayOne", {
+                element: shownFileName(name ?? labelOf(field)),
+              })}
+              onPress={() => {
+                setRejected([]);
+                onUnread(path, false);
+                onDraft(path, items.toSpliced(index, 1), index);
+                input.current?.focus();
+              }}
+            >
+              {say("fill.takeAway")}
+            </Press>
+          </Box>
+        );
+      })}
+      {rejected.length === 0 ? null : (
+        <Press
+          variant="neutral"
+          onPress={() => {
+            setRejected([]);
+            onUnread(path, false);
+            input.current?.focus();
+          }}
+        >
+          {say("fill.fileDismiss")}
+        </Press>
+      )}
+    </FormControl>
+  );
 }, samePlace);
 
 /** The fields a field holds, drawn under it and named by it. */
@@ -563,7 +1035,7 @@ const Fields = memo(function Fields({
   readonly field: FillField;
   readonly label: string;
   readonly held: LevelDraft;
-  readonly said?: string;
+  readonly said?: ReactNode;
 }) {
   const mark = holding.marks.get(pathKey(holding.path));
   const legendId = useId();
@@ -585,7 +1057,7 @@ const Fields = memo(function Fields({
       <FormHelperText component="div" id={helperId}>
         <Under mark={mark} said={said} help={field.help} />
       </FormHelperText>
-      <Box sx={HELD_SX}>
+      <Box sx={INSET_SX}>
         <Level fields={field.fields ?? []} draft={held} {...holding} />
       </Box>
     </FormControl>
@@ -612,7 +1084,7 @@ function DateControl({
   readonly id: string;
   readonly day: string;
   readonly mark: FillReason | undefined;
-  readonly said: string | undefined;
+  readonly said: ReactNode;
   readonly onDay: (next: string) => void;
   readonly onLeave: () => void;
   readonly onUnread: (unreadable: boolean) => void;
@@ -659,7 +1131,7 @@ function Moment({
   readonly id: string;
   readonly moment: MomentDraft;
   readonly mark: FillReason | undefined;
-  readonly said: string | undefined;
+  readonly said: ReactNode;
   readonly onMoment: (next: MomentDraft) => void;
   readonly onLeave: () => void;
   readonly onUnread: (unreadable: boolean) => void;
@@ -711,7 +1183,7 @@ function Moment({
           }}
         />
         <TextField
-          type="time"
+          type="text"
           size="small"
           label={say("fill.time")}
           value={moment.time}
@@ -752,7 +1224,12 @@ function Moment({
         </TextField>
       </Box>
       <FormHelperText component="div" id={helperId}>
-        <Under mark={mark} said={said} help={field.help} />
+        <Under
+          mark={mark}
+          said={said}
+          help={field.help}
+          also={say("fill.timeHow")}
+        />
       </FormHelperText>
     </FormControl>
   );
@@ -777,7 +1254,7 @@ function Choice({
   readonly id: string;
   readonly chosen: string;
   readonly mark: FillReason | undefined;
-  readonly said: string | undefined;
+  readonly said: ReactNode;
   readonly onChoose: (value: string) => void;
   readonly choices: readonly {
     readonly value: string;
@@ -845,29 +1322,29 @@ function Under({
   also,
 }: {
   readonly mark: FillReason | undefined;
-  readonly said?: string | undefined;
+  readonly said?: ReactNode;
   readonly help: string | undefined;
   readonly also?: string;
 }) {
   return (
     <>
       {mark === undefined ? null : (
-        <Box component="span" sx={BLOCK_SX}>
+        <Box component="span" sx={OWN_LINE_SX}>
           {say(REASONS[mark])}
         </Box>
       )}
       {said === undefined ? null : (
-        <Box component="span" sx={BLOCK_SX}>
+        <Box component="span" sx={OWN_LINE_SX}>
           {said}
         </Box>
       )}
       {help === undefined ? null : (
-        <Box component="span" sx={BLOCK_SX}>
+        <Box component="span" sx={OWN_LINE_SX}>
           {isolated(help)}
         </Box>
       )}
       {also === undefined ? null : (
-        <Box component="span" sx={BLOCK_SX}>
+        <Box component="span" sx={OWN_LINE_SX}>
           {also}
         </Box>
       )}
@@ -901,20 +1378,13 @@ function labelOf(field: FillField): string {
 }
 
 /** Every quarter hour either way as far as an offset goes, and the one standing where it falls between them. */
-function offsetsBeside(standing: string): string[] {
-  const offsets: string[] = [];
-  for (
-    let minutes = -FURTHEST_OFFSET_MINUTES;
-    minutes <= FURTHEST_OFFSET_MINUTES;
-    minutes += OFFSET_STEP_MINUTES
-  ) {
-    offsets.push(offsetWritten(minutes));
+function offsetsBeside(standing: string): readonly string[] {
+  if (QUARTER_HOUR_OFFSETS.includes(standing)) {
+    return QUARTER_HOUR_OFFSETS;
   }
-  if (!offsets.includes(standing)) {
-    offsets.push(standing);
-    offsets.sort((one, other) => minutesOf(one) - minutesOf(other));
-  }
-  return offsets;
+  return [...QUARTER_HOUR_OFFSETS, standing].sort(
+    (one, other) => minutesOf(one) - minutesOf(other),
+  );
 }
 
 function minutesOf(offset: string): number {

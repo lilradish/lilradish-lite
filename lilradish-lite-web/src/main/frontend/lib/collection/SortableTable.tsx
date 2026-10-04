@@ -25,6 +25,8 @@ interface Column<T, K extends string> {
   readonly cell: (row: T) => ReactNode;
   /** Absent where the values have no order to put the rows in. */
   readonly sortKey?: K;
+  /** A figure, set at the trailing end in digits of one width, so a column of them reads by size. */
+  readonly numeric?: true;
 }
 
 type Picking<T> =
@@ -32,15 +34,14 @@ type Picking<T> =
       /** The key of the row the address names, whether or not it is on this page. */
       readonly picked: string | null;
       readonly hrefOf: (row: T) => string;
+      readonly linkNameOf?: (row: T) => string;
+      readonly linkDescriptionOf?: (row: T) => string;
     }
-  | { readonly picked?: never; readonly hrefOf?: never };
-
-/** Where the page in hand is read again as it is kept up, which says nothing new: only a first read says it reads. */
-type Rereading =
-  | { readonly quietWhileAnswered?: false }
   | {
-      readonly quietWhileAnswered: true;
-      readonly page: { readonly answered: object | null };
+      readonly picked?: never;
+      readonly hrefOf?: never;
+      readonly linkNameOf?: never;
+      readonly linkDescriptionOf?: never;
     };
 
 // A press on any of these is its own, and the row going somewhere as well would
@@ -59,6 +60,19 @@ const PICKED_CELL_SX = {
 const STATUS_REGION_SX = { my: 1 };
 
 const STATUS_SX = { color: "text.secondary" };
+
+/** How a cell holding a figure is set, a numeric column's and any other table's alike, its heading's included. */
+export const FIGURE_SETTING = {
+  align: "right",
+  sx: { typography: "figure" },
+} as const;
+
+const WORDS_SETTING = {};
+
+/** How a column's cells are set, its heading's included. */
+function cellSetting<T, K extends string>(column: Column<T, K>) {
+  return column.numeric === true ? FIGURE_SETTING : WORDS_SETTING;
+}
 
 /**
  * One page of a collection, in the order the caller asked the server for. This
@@ -89,71 +103,48 @@ export function SortableTable<T, K extends string>(
      * was on it may have gone since, and the rest is still there.
      */
     readonly empty: string;
-  } & Picking<T> &
-    Rereading,
+  } & Picking<T>,
 ) {
-  const { label, columns, order, onOrder, page, keyOf, picked, hrefOf, empty } =
-    props;
-  const quiet =
-    props.quietWhileAnswered === true && props.page.answered !== null;
+  const {
+    label,
+    columns,
+    order,
+    onOrder,
+    page,
+    keyOf,
+    picked,
+    hrefOf,
+    linkNameOf,
+    linkDescriptionOf,
+    empty,
+  } = props;
   // A wait is a state; nothing found is a hint, which a notice says.
-  const status =
-    page.loading && !quiet ? (
-      <Typography variant="body2" sx={STATUS_SX}>
-        {say("read.pending")}
-      </Typography>
-    ) : page.problem === null && page.items.length === 0 && page.onFirstPage ? (
-      <Notice severity="info">{empty}</Notice>
-    ) : null;
+  const status = page.loading ? (
+    <Typography variant="body2" sx={STATUS_SX}>
+      {say("read.pending")}
+    </Typography>
+  ) : page.problem === null && page.items.length === 0 && page.onFirstPage ? (
+    <Notice severity="info">{empty}</Notice>
+  ) : null;
 
   return (
     <>
       <TableContainer>
-        <Table aria-label={label}>
+        <Table size="small" aria-label={label}>
           <SortingHead columns={columns} order={order} onOrder={onOrder} />
           <TableBody>
             {page.items.map((row) => {
               const key = keyOf(row);
-              if (hrefOf === undefined) {
-                return (
-                  <TableRow key={key}>
-                    {columns.map((column, index) => (
-                      <TableCell key={index}>
-                        {isolated(column.cell(row))}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                );
-              }
-              const current = key === picked;
               return (
-                <TableRow
+                <BodyRow
                   key={key}
-                  hover
-                  onClick={forwardToLink}
-                  sx={OPENING_ROW_SX}
-                >
-                  {columns.map((column, index) =>
-                    index === 0 ? (
-                      <TableCell
-                        key={index}
-                        sx={current ? PICKED_CELL_SX : undefined}
-                      >
-                        <Link
-                          component={RouterLink}
-                          to={hrefOf(row)}
-                          aria-current={current || undefined}
-                        >
-                          {isolated(column.cell(row))}
-                        </Link>
-                      </TableCell>
-                    ) : (
-                      <TableCell key={index}>
-                        {isolated(column.cell(row))}
-                      </TableCell>
-                    ),
-                  )}
-                </TableRow>
+                  row={row}
+                  columns={columns}
+                  href={hrefOf?.(row)}
+                  linkName={linkNameOf?.(row)}
+                  linkDescription={linkDescriptionOf?.(row)}
+                  current={key === picked}
+                />
               );
             })}
           </TableBody>
@@ -167,27 +158,38 @@ export function SortableTable<T, K extends string>(
   );
 }
 
-/** A collection sent whole: with nothing further to read, the order is the caller's to make and to keep. */
-export function WholeTable<T, K extends string>({
-  label,
-  columns,
-  order,
-  onOrder,
-  rows,
-  keyOf,
-  empty,
-}: {
-  readonly label: string;
-  readonly columns: readonly Column<T, K>[];
-  readonly order: Ordering<K>;
-  readonly onOrder: (next: Ordering<K>) => void;
-  readonly rows: readonly T[];
-  readonly keyOf: (row: T) => string;
-  readonly empty: string;
-}) {
+/**
+ * A collection sent whole: with nothing further to read, the order is the
+ * caller's to make and to keep. A picked row is marked as `SortableTable`
+ * marks one.
+ */
+export function WholeTable<T, K extends string>(
+  props: {
+    readonly label: string;
+    readonly columns: readonly Column<T, K>[];
+    readonly order: Ordering<K>;
+    readonly onOrder: (next: Ordering<K>) => void;
+    readonly rows: readonly T[];
+    readonly keyOf: (row: T) => string;
+    readonly empty: string;
+  } & Picking<T>,
+) {
+  const {
+    label,
+    columns,
+    order,
+    onOrder,
+    rows,
+    keyOf,
+    empty,
+    picked,
+    hrefOf,
+    linkNameOf,
+    linkDescriptionOf,
+  } = props;
   return (
     <TableContainer>
-      <Table aria-label={label}>
+      <Table size="small" aria-label={label}>
         <SortingHead columns={columns} order={order} onOrder={onOrder} />
         <TableBody>
           {rows.length === 0 ? (
@@ -197,19 +199,79 @@ export function WholeTable<T, K extends string>({
               </TableCell>
             </TableRow>
           ) : (
-            rows.map((row) => (
-              <TableRow key={keyOf(row)}>
-                {columns.map((column, index) => (
-                  <TableCell key={index}>
-                    {isolated(column.cell(row))}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
+            rows.map((row) => {
+              const key = keyOf(row);
+              return (
+                <BodyRow
+                  key={key}
+                  row={row}
+                  columns={columns}
+                  href={hrefOf?.(row)}
+                  linkName={linkNameOf?.(row)}
+                  linkDescription={linkDescriptionOf?.(row)}
+                  current={key === picked}
+                />
+              );
+            })
           )}
         </TableBody>
       </Table>
     </TableContainer>
+  );
+}
+
+/**
+ * A row that opens somewhere where it has an address: through a link in its
+ * first cell, which a press on the row is a press on.
+ */
+function BodyRow<T, K extends string>({
+  row,
+  columns,
+  href,
+  linkName,
+  linkDescription,
+  current,
+}: {
+  readonly row: T;
+  readonly columns: readonly Column<T, K>[];
+  readonly href: string | undefined;
+  readonly linkName: string | undefined;
+  readonly linkDescription: string | undefined;
+  readonly current: boolean;
+}) {
+  if (href === undefined) {
+    return (
+      <TableRow>
+        {columns.map((column, index) => (
+          <TableCell key={index} {...cellSetting(column)}>
+            {isolated(column.cell(row))}
+          </TableCell>
+        ))}
+      </TableRow>
+    );
+  }
+  return (
+    <TableRow hover onClick={forwardToLink} sx={OPENING_ROW_SX}>
+      {columns.map((column, index) =>
+        index === 0 ? (
+          <TableCell key={index} sx={current ? PICKED_CELL_SX : undefined}>
+            <Link
+              component={RouterLink}
+              to={href}
+              aria-current={current || undefined}
+              aria-label={linkName}
+              aria-description={linkDescription}
+            >
+              {isolated(column.cell(row))}
+            </Link>
+          </TableCell>
+        ) : (
+          <TableCell key={index} {...cellSetting(column)}>
+            {isolated(column.cell(row))}
+          </TableCell>
+        ),
+      )}
+    </TableRow>
   );
 }
 
@@ -233,6 +295,7 @@ function SortingHead<T, K extends string>({
           return (
             <TableCell
               key={index}
+              {...cellSetting(column)}
               sortDirection={
                 sorted ? (order.descending ? "desc" : "asc") : false
               }

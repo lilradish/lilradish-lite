@@ -61,7 +61,7 @@ class SendPastSpec extends Specification {
         def step = asking(STEP, producer, reviewer == null ? null : new ModelChoice(reviewer, null))
 
         when:
-        def found = SendPast.of([step], [(ASKED): ASKING], MODELS)
+        def found = SendPast.of([step], [(ASKED): ASKING], [:], [:], [:], MODELS)
 
         then:
         found == said.collect { role, told -> pastOf(STEP, role, TINY, told) }
@@ -94,7 +94,7 @@ class SendPastSpec extends Specification {
                 : asking(STEP, new Producer.Model(new ModelChoice(TINY, null), true), null)
 
         when:
-        def found = SendPast.of([step], [(ASKED): ASKING], models)
+        def found = SendPast.of([step], [(ASKED): ASKING], [:], [:], [:], models)
 
         then:
         found == (past == 0 ? [] : [new SendPast(STEP, role, TINY, past)])
@@ -125,10 +125,70 @@ class SendPastSpec extends Specification {
                         model, 1, reviewer, []),
                 new StoredWorkflow.Step(STEP, new StepId("untold"),
                         new StoredWorkflow.Runs.Pinned(EntryKind.QUESTION, UNASKED), model, 1, reviewer, [])],
-                [(ASKED): ASKING], MODELS)
+                [(ASKED): ASKING], [:], [:], [:], MODELS)
 
         then:
         found == []
+    }
+
+    /**
+     * One asking of a search measured as submitting measures it, two characters to a unit: 100 characters past 10
+     * units by 40.
+     */
+    def "a step searching is said past the model producing it by what one asking could send, and only that"() {
+        given:
+        def step = new StoredWorkflow.Step(STEP, new StepId("find"), new StoredWorkflow.Runs.Search("web", [], [:]),
+                producer, 1, new ModelChoice(TINY, null), [])
+
+        when:
+        def found = SendPast.of([step], [(ASKED): ASKING], [:], measured, [:], MODELS)
+
+        then:
+        found*.role().every { it == SendingRole.PRODUCING }
+        found*.step().every { it == STEP }
+        found*.model().every { it == TINY }
+        found*.past() == past
+
+        where:
+        producer                                                | measured       || past
+        new Producer.Model(new ModelChoice(TINY, null), true)   | [(STEP): 100L] || [40L]
+        new Producer.Model(new ModelChoice(TINY, null), false)  | [(STEP): 20L]  || []
+        new Producer.Model(new ModelChoice(TINY, null), true)   | [:]            || []
+        new Producer.Model(new ModelChoice(TINY, null), true)   | [(LATER): 100L] || []
+        new Producer.Model(new ModelChoice(VAST, null), true)   | [(STEP): 100L] || []
+        new Producer.Model(new ModelChoice(UNHELD, null), true) | [(STEP): 100L] || []
+        new Producer.Person()                                   | [(STEP): 100L] || []
+    }
+
+    def "a search reports producing and reviewing limits separately, in that order"() {
+        given:
+        def step = new StoredWorkflow.Step(STEP, new StepId("find"), new StoredWorkflow.Runs.Search("web", [], [:]),
+                new Producer.Model(new ModelChoice(TINY, null), false), 1, new ModelChoice(TINY, null), [])
+
+        expect:
+        SendPast.of([step], [:], [:], [(STEP): 100L], [(STEP): 120L], MODELS) == [
+                new SendPast(STEP, SendingRole.PRODUCING, TINY, 40L),
+                new SendPast(STEP, SendingRole.REVIEWING, TINY, 50L)]
+        SendPast.of([step], [:], [:], [:], [:], MODELS) == []
+    }
+
+    def "a code step review is measured from its resolved halves, when both it and its reviewer are held"() {
+        given:
+        def step = new StoredWorkflow.Step(STEP, new StepId("code"),
+                new StoredWorkflow.Runs.Code(codeStep), new Producer.Code(), 1,
+                reviewer == null ? null : new ModelChoice(reviewer, null), [])
+
+        expect:
+        SendPast.of([step], [:], measured, [:], [:], MODELS) == expected
+
+        where:
+        codeStep     | reviewer | measured                  || expected
+        "send_reply" | TINY     | [send_reply: 100L]       || [new SendPast(STEP, SendingRole.REVIEWING, TINY, 40L)]
+        "send_reply" | VAST     | [send_reply: 100L]       || []
+        "send_reply" | UNHELD   | [send_reply: 100L]       || []
+        "send_reply" | null     | [send_reply: 100L]       || []
+        "send_reply" | TINY     | [:]                      || []
+        null         | TINY     | [send_reply: 100L]       || []
     }
 
     def "steps are said in the order they run"() {
@@ -136,7 +196,7 @@ class SendPastSpec extends Specification {
         def model = new Producer.Model(new ModelChoice(TINY, null), false)
 
         when:
-        def found = SendPast.of([asking(STEP, model, null), asking(LATER, model, null)], [(ASKED): ASKING], MODELS)
+        def found = SendPast.of([asking(STEP, model, null), asking(LATER, model, null)], [(ASKED): ASKING], [:], [:], [:], MODELS)
 
         then:
         found == [pastOf(STEP, SendingRole.PRODUCING, TINY, false), pastOf(LATER, SendingRole.PRODUCING, TINY, false)]
@@ -152,7 +212,7 @@ class SendPastSpec extends Specification {
         when:
         def found = SendPast.of(
                 [asking(STEP, new Producer.Model(new ModelChoice(TINY, null), told), new ModelChoice(TINY, null))],
-                [(ASKED): vast], MODELS)
+                [(ASKED): vast], [:], [:], [:], MODELS)
 
         then:
         found == [new SendPast(STEP, SendingRole.PRODUCING, TINY, Long.MAX_VALUE),

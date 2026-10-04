@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.util.concurrent.TimeUnit
 import com.github.gradle.node.npm.task.NpmTask
 import java.lang.classfile.Attributes
 import java.lang.classfile.ClassFile
@@ -75,7 +78,129 @@ val baselineLocation = baselineFiles.flatMap { it.elements }.map { "-Dbaseline.l
 val frontendSources = layout.projectDirectory.dir("src/main/frontend")
 val frontendLocation = "-Dfrontend.location=${frontendSources.asFile}"
 
+
+// The runner can halt before its shutdown hooks; the Gradle task outlives that JVM.
+abstract class StopTaskPostgres : DefaultTask() {
+    @get:Internal abstract val postgresDirectory: DirectoryProperty
+    @get:Internal abstract val ownerTask: Property<String>
+
+    private data class Postmaster(val process: ProcessHandle, val data: java.nio.file.Path, val started: java.time.Instant)
+
+    private fun awaitExit(process: ProcessHandle, deadline: Long) {
+        if (process.isAlive) {
+            process.onExit().get((deadline - System.nanoTime()).coerceAtLeast(1), TimeUnit.NANOSECONDS)
+        }
+    }
+
+    private fun postmaster(process: ProcessHandle, root: java.nio.file.Path, deadline: Long): Postmaster? {
+        if (!process.isAlive) return null
+        val information = process.info()
+        if (information.command().map { File(it).name != "postgres" }.orElse(true)) return null
+        val arguments = information.arguments().orElseThrow { GradleException("Cannot inspect a PostgreSQL process while finishing ${ownerTask.get()}") }
+        val directoryArgument = arguments.indexOf("-D")
+        if (directoryArgument < 0 || directoryArgument + 1 >= arguments.size) return null
+        val data = File(arguments[directoryArgument + 1]).canonicalFile.toPath()
+        if (!data.startsWith(root)) return null
+        val pid = try {
+            Files.readAllLines(data.resolve("postmaster.pid")).first().toLong()
+        } catch (failure: NoSuchFileException) {
+            // PostgreSQL removes its pid file before the process finishes exiting.
+            awaitExit(process, deadline)
+            return null
+        }
+        if (pid != process.pid()) return null
+        return Postmaster(process, data, information.startInstant().orElseThrow { GradleException("Cannot identify a PostgreSQL process while finishing ${ownerTask.get()}") })
+    }
+
+    private fun postmasters(root: java.nio.file.Path, deadline: Long, failures: MutableList<Exception>): List<Postmaster> =
+        ProcessHandle.allProcesses().use { processes ->
+            processes.map { process ->
+                try {
+                    postmaster(process, root, deadline)
+                } catch (failure: Exception) {
+                    if (failure is InterruptedException) throw failure
+                    failures.add(failure)
+                    null
+                }
+            }.filter { it != null }.map { it!! }.toList()
+        }
+
+    @TaskAction
+    fun stop() {
+        val root = postgresDirectory.get().asFile.canonicalFile.toPath()
+        val failures = mutableListOf<Exception>()
+        val inspectionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+        val servers = postmasters(root, inspectionDeadline, failures)
+        logger.warn("{} has {} PostgreSQL postmasters left at task completion", ownerTask.get(), servers.size)
+        servers.forEach { server ->
+            try {
+                val current = postmaster(server.process, root, inspectionDeadline)
+                if (current == null) {
+                    if (server.process.isAlive) throw GradleException("PostgreSQL identity cannot be confirmed while finishing ${ownerTask.get()}")
+                } else {
+                    if (current.data != server.data || current.started != server.started) throw GradleException("PostgreSQL identity changed while finishing ${ownerTask.get()}")
+                    val signal = ProcessBuilder("kill", "-INT", "--", server.process.pid().toString()).start()
+                    if (!signal.waitFor(5, TimeUnit.SECONDS) || signal.exitValue() != 0) {
+                        if (server.process.isAlive) throw GradleException("Cannot stop a PostgreSQL process while finishing ${ownerTask.get()}")
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is InterruptedException) throw failure
+                failures.add(failure)
+            }
+        }
+        // Share one exit budget after attempting every confirmed target.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        servers.forEach { server ->
+            try {
+                awaitExit(server.process, deadline)
+            } catch (failure: Exception) {
+                if (failure is InterruptedException) throw failure
+                failures.add(failure)
+            }
+        }
+        val remaining = postmasters(root, System.nanoTime() + TimeUnit.SECONDS.toNanos(1), failures).size
+        logger.lifecycle("{} PostgreSQL postmasters remaining: {}", ownerTask.get(), remaining)
+        if (remaining != 0 || failures.isNotEmpty()) {
+            val failure = GradleException("Cannot finish PostgreSQL cleanup for ${ownerTask.get()}: $remaining postmasters remain, ${failures.size} failures")
+            failures.forEach { failure.addSuppressed(it) }
+            throw failure
+        }
+    }
+}
+
+val testPostgresDirectory = layout.buildDirectory.dir("tmp/test").get().asFile
+val stopTestPostgres = tasks.register<StopTaskPostgres>("stopTestPostgres") {
+    postgresDirectory.set(testPostgresDirectory)
+    ownerTask.set(":lilradish-lite-web:test")
+}
+
 tasks.named<Test>("test") {
+    if (providers.gradleProperty("skipDatabaseTests").isPresent) {
+        val excludedClassesFile = layout.buildDirectory.file("reports/test/excluded-database-classes.txt").get().asFile
+        val excludedClassNames = objects.listProperty(String::class.java)
+        inputs.property("skipDatabaseTests", true)
+        outputs.file(excludedClassesFile).withPropertyName("excludedDatabaseClasses")
+        onlyIf { task ->
+            val testTask = task as Test
+            val compiled = CompiledClasses.under(testTask.testClassesDirs.elements.get())
+            val excluded = CompiledClasses.closedOver(
+                compiled, CompiledClasses.naming(compiled, listOf("io/zonky/test/db/postgres/embedded/EmbeddedPostgres")))
+            testTask.exclude(CompiledClasses.globsFor(excluded).map { it.replace('.', '/') + ".class" })
+            excludedClassNames.set(excluded.map { it.replace('/', '.') }.sorted())
+            task.logger.lifecycle(
+                "{} excludes {} database-related classes; full class list: {}", task.path, excluded.size, excludedClassesFile)
+            true
+        }
+        doFirst {
+            Files.createDirectories(excludedClassesFile.parentFile.toPath())
+            excludedClassesFile.writeText(excludedClassNames.get().joinToString("\n", postfix = "\n"))
+        }
+    }
+    val postgresDirectory = testPostgresDirectory
+    systemProperty("java.io.tmpdir", postgresDirectory.absolutePath)
+    doFirst { postgresDirectory.toPath().let { Files.createDirectories(it) } }
+    finalizedBy(stopTestPostgres)
     inputs.files(baselineFiles).withPropertyName("baseline")
     inputs.files(developmentSeedFiles).withPropertyName("developmentSeed")
     inputs.dir(frontendSources).withPropertyName("frontend")
@@ -112,9 +237,19 @@ object CompiledClasses {
         }.groupBy({ it.first }, { it.second }).mapValues { entry -> entry.value.flatten().toSet() }
 
     /** Whether any of [constants] names [internalName] itself, rather than a class whose name begins with it. */
-    private fun namesClass(constants: Set<String>, internalName: String): Boolean = constants.any {
-        it == internalName || it.startsWith(internalName + "\$") ||
-            it.contains("L$internalName;") || it.contains("L$internalName\$")
+    private fun namesClass(constants: Set<String>, internalName: String): Boolean {
+        val binaryName = internalName.replace('/', '.')
+        return constants.any {
+            it == internalName || it.startsWith(internalName + "\$") ||
+                it.contains("L$internalName;") || it.contains("L$internalName\$") ||
+                it.contains(binaryName) && it.split('=', ',').any { reference ->
+                    reference == binaryName ||
+                        reference.startsWith(binaryName + "\$") && reference.length > binaryName.length + 1 &&
+                        reference.substring(binaryName.length + 1).codePoints().allMatch {
+                            Character.isJavaIdentifierPart(it) && !Character.isIdentifierIgnorable(it)
+                        }
+                }
+        }
     }
 
     /**
@@ -139,15 +274,37 @@ object CompiledClasses {
         internalNames.map { it.replace('/', '.') }.flatMap { listOf(it, "$it\$*") }.toSet()
 }
 
+val pitestPostgresDirectory = layout.buildDirectory.dir("tmp/pitest").get().asFile
+val stopPitestPostgres = tasks.register<StopTaskPostgres>("stopPitestPostgres") {
+    postgresDirectory.set(pitestPostgresDirectory)
+    ownerTask.set(":lilradish-lite-web:pitest")
+}
+
+tasks.named<JavaExec>("pitest") {
+    val postgresDirectory = pitestPostgresDirectory
+    systemProperty("java.io.tmpdir", postgresDirectory.absolutePath)
+    doFirst { postgresDirectory.toPath().let { Files.createDirectories(it) } }
+    finalizedBy(stopPitestPostgres)
+}
+
 // A spec starting a PostgreSQL server is left out, with every spec reaching one through another: a minion
 // is killed rather than shut down, and the server it started outlives it.
 pitest {
+    jvmArgs.add("-Djava.io.tmpdir=${pitestPostgresDirectory.absolutePath}")
+    threads.set(4)
     jvmArgs.add(baselineLocation)
     jvmArgs.add(frontendLocation)
+    jvmArgs.add("-Xmx2g")
+    jvmArgs.add("-XX:ActiveProcessorCount=2")
     excludedTestClasses.set(sourceSets["test"].output.classesDirs.elements.map { roots ->
         val compiled = CompiledClasses.under(roots)
-        CompiledClasses.globsFor(CompiledClasses.closedOver(
-            compiled, CompiledClasses.naming(compiled, listOf("io/zonky/test/db/postgres/embedded/EmbeddedPostgres"))))
+        // Repeated Spring context startup is traded for less mutation coverage.
+        // These exclusions do not remove any spec from the ordinary test task.
+        CompiledClasses.globsFor(
+            CompiledClasses.closedOver(
+                compiled, CompiledClasses.naming(compiled, listOf("io/zonky/test/db/postgres/embedded/EmbeddedPostgres"))) +
+                CompiledClasses.naming(
+                    compiled, listOf("org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest")))
     })
     // Assumes a class naming JdbcClient is exercised only by specs starting a server. Its pure logic goes
     // unmutated for now, accepted until a server shared from the Gradle process lets those specs run here.
@@ -218,7 +375,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
     inputs.files(developmentOutput).withPropertyName("developmentOutput")
     outputs.upToDateWhen { true }
     doLast {
-        // Dev code is recognised by package: a copy placed in main under another package name is not caught.
+        // Archive isolation does not establish the provenance of main sources.
         // Both spellings: bytecode and entries carry the slashed one; scan directives, YAML and AOT metadata the dotted.
         val developmentPackage = Regex("org[/.]lilradish[/.]lite[/.](?:\\w+[/.])*development[/.]")
         val seedName = Regex("R__dev_.*\\.sql")
@@ -250,8 +407,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
                         "so this check proves nothing — and one moved into src/main would ship")
             }
         }
-        // Not caught, and accepted: a class copied into src/main, out of a development package, with the marker
-        // deleted — which main, not seeing the marker, needs before the copy compiles at all.
+        // Marker coverage is limited to compiled development sources.
         val unmarked = developmentFiles.filter { (path, _) -> path.endsWith(".class") && '$' !in path }
             .filterNot { (_, compiledClass) ->
                 ClassFile.of().parse(compiledClass.toPath()).findAttribute(Attributes.runtimeInvisibleAnnotations())

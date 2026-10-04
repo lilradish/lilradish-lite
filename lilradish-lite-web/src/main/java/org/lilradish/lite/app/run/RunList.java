@@ -6,7 +6,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,25 +55,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Component
 final class RunList {
 
-    // The lateral is pulled up, not fenced: each column or condition naming happened_at reruns its subqueries (a
-    // keyset condition names it twice), and the sort reuses the selected column, so it is selected once, as micros.
-    private static final String LAST_HAPPENED_AT = """
-            greatest(run.created_at,
-                     run.updated_at, -- a renaming's alone
-                     (select max(greatest(stop.created_at, stop.opened_again_at))
-                        from run_stops stop
-                       where stop.run_id = run.run_id),
-                     (select max(greatest(change.created_at, change.decided_at))
-                        from runs member
-                        join run_ceiling_changes change on change.run_id = member.run_id
-                       where member.root_run_id = run.run_id),
-                     %s)""".formatted(StepHappenings.lastAt("run.run_id"));
-
-    // DB-SPECIFIC: greatest passing over nulls, lateral, extract(epoch …), left, substr, search_fold and every
-    // collation named here are PostgreSQL's.
+    // DB-SPECIFIC: extract(epoch …), left, substr, search_fold and every collation named here are PostgreSQL's.
     private static final String RUNS = """
             select listed.run_id, listed.number, listed.name, listed.workflow_name, listed.version_number,
-                   listed.created_at, listed.started, listed.last_happened,
+                   listed.created_at, listed.started,
                    listed.subject_id, listed.user_id, listed.display_name
               from (select run.run_id,
                            run.number,
@@ -85,7 +69,6 @@ final class RunList {
                            version.number as version_number,
                            run.created_at,
                            cast(extract(epoch from run.created_at) * 1000000 as bigint) as started,
-                           cast(extract(epoch from happened.happened_at) * 1000000 as bigint) as last_happened,
                            starter.subject_id,
                            starter.user_id,
                            starter.display_name
@@ -93,7 +76,6 @@ final class RunList {
                       join entries entry on entry.entry_id = run.entry_id
                       join entry_versions version on version.entry_version_id = run.entry_version_id
                       join subjects starter on starter.subject_id = run.created_by
-                     cross join lateral (select %s as happened_at) happened
                      where run.parent_run_id is null and %s) listed
              where true
             """;
@@ -200,17 +182,14 @@ final class RunList {
                 name,
                 RunSortColumn.NUMBER,
                 new ListOrder<>(RunSortColumn.STARTED, true),
-                RUNS.formatted(LAST_HAPPENED_AT, reached),
+                RUNS.formatted(reached),
                 NARROWED,
                 List.of(
                         new SortExpression<>(RunSortColumn.NUMBER, "listed.number", null),
                         new SortExpression<>(RunSortColumn.NAME, "listed.name", "\"unicode\""),
                         new SortExpression<>(RunSortColumn.WORKFLOW, "listed.workflow_name", "\"unicode\""),
                         new SortExpression<>(RunSortColumn.STARTED, "listed.created_at", null, STARTED_AT),
-                        new SortExpression<>(RunSortColumn.STARTED_BY, "listed.display_name", "\"unicode\""),
-                        // Moves while a reader pages, so a run may be skipped or repeated: accepted as for a name
-                        // sort. Do not turn this into offset paging.
-                        new SortExpression<>(RunSortColumn.LAST_HAPPENED, "listed.last_happened", null)),
+                        new SortExpression<>(RunSortColumn.STARTED_BY, "listed.display_name", "\"unicode\"")),
                 Map.of());
     }
 
@@ -226,7 +205,6 @@ final class RunList {
                     result.getInt("version_number"),
                     result.getObject("created_at", OffsetDateTime.class).toInstant(),
                     result.getLong("started"),
-                    result.getLong("last_happened"),
                     starter);
         } catch (IllegalArgumentException refused) {
             throw new IllegalStateException("Run " + run.value() + " holds a name this system will not show", refused);
@@ -267,13 +245,8 @@ final class RunList {
             int version,
             Instant startedAt,
             long startedMicroseconds,
-            long lastHappenedMicroseconds,
             PersonRows.Person startedBy)
             implements ListRow<RunSortColumn> {
-
-        Instant lastHappenedAt() {
-            return Instant.EPOCH.plus(lastHappenedMicroseconds, ChronoUnit.MICROS);
-        }
 
         @Override
         public @Nullable Object valueIn(RunSortColumn column) {
@@ -284,7 +257,6 @@ final class RunList {
                 case WORKFLOW -> workflow.value();
                 case STARTED -> startedMicroseconds;
                 case STARTED_BY -> starterName == null ? null : starterName.value();
-                case LAST_HAPPENED -> lastHappenedMicroseconds;
             };
         }
     }

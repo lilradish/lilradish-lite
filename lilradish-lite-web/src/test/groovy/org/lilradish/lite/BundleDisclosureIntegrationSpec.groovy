@@ -7,24 +7,7 @@ import org.lilradish.lite.testutil.EmittedNames
 import org.lilradish.lite.testutil.ReaderVocabulary
 import spock.lang.Specification
 
-/**
- * One archive ships, and the frontend bundle inside it is served to anyone who reaches the ungated
- * static paths. Only {@code /api} is gated, so whatever the bundle carries is published — and these
- * are the things it must never carry. Read off the classpath rather than out of the source tree,
- * because what a browser is handed is what the bundler emitted, and a value inlined at build time
- * exists in no source file.
- *
- * <p>An inlined build-time value is not caught here: inlining replaces the very text searched for.
- * The build refuses to hold one ({@code inliningNothing} in vite.config.ts), and the lint says so at
- * the source.
- *
- * <p>Deliberately no denylist of secret-sounding words and deliberately no entropy scan. Measured
- * against this bundle, "password", "credential", "BEGIN" and "token" each already match minified
- * dependency code — a MUI input type, React's {@code use-credentials}, an SVG {@code begin}
- * attribute, react-intl's parser — and entropy cannot tell minified JavaScript from a key. A check
- * that cries wolf is a check somebody switches off, after which nothing guards this at all. Every
- * assertion below was measured at zero against the bundle as it stands.
- */
+/** Read the emitted classpath bundle; source checks cover build-time inlining. Secret-word and entropy scans match dependencies. */
 class BundleDisclosureIntegrationSpec extends Specification {
 
     /**

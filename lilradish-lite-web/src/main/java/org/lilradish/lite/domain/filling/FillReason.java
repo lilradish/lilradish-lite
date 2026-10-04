@@ -14,6 +14,7 @@ public enum FillReason {
     TOO_MANY("too_many"),
     /** It is none of the terms its field offers. */
     NOT_A_TERM("not_a_term"),
+    LINE_BREAK("line_break"),
     CRLF("crlf"),
     DIRECTION_CONTROL("direction_control"),
     TAG("tag"),

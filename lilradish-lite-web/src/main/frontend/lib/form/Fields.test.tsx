@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { laysPairsBeside } from "../../testutil/writtenRules";
 import { Field, Fields } from "./Fields";
 
 describe("Fields", () => {
@@ -34,6 +35,22 @@ describe("Fields", () => {
     expect(terms).toEqual(["Outcome", "Tokens"]);
     expect(values).toEqual(["Completed", "1200"]);
   });
+
+  it.each([
+    ["not where asked to stack", true, false],
+    ["where left to the screen's width", undefined, true],
+  ] as const)(
+    "lays each label beside its value on a wider screen %s",
+    (_case, stacked, beside) => {
+      const { container } = render(
+        <Fields stacked={stacked}>
+          <Field label="Outcome">Completed</Field>
+        </Fields>,
+      );
+
+      expect(laysPairsBeside(container.querySelector("dl")!)).toBe(beside);
+    },
+  );
 
   it("breaks a value anywhere rather than let one unbroken identifier overflow, and leaves labels whole", () => {
     render(

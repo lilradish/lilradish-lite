@@ -17,8 +17,8 @@ const FIELDS_SX = { pt: 1 };
 const TYPED_INPUT = { htmlInput: { dir: "auto" } };
 
 /**
- * An entry's name and what it is for, asked for as the one act of starting an
- * entry or of renaming one. Each limit is checked where it is typed, and again
+ * An entry's name and what it is for, asked for as the one act of making an
+ * entry or of editing one. Each limit is checked where it is typed, and again
  * by the server, whose check is the one that holds; an entry's name is held to
  * the rule every name is. Nothing typed of what it is for is sent as none.
  *

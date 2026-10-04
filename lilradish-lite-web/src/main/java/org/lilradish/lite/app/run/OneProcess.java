@@ -24,10 +24,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.stereotype.Component;
 
 /**
- * One process drives runs over a store at a time. It takes a lock on the store before anything settles what a stopped
- * process left out, and lets it go only once its own runs under way are written down, the engine's pools being
- * destroyed first. Another process holding it is waited for as long as it may take to stop in order; then this one
- * refuses to start, naming who holds it. A lock found lost, and held elsewhere, stops this process.
+ * The lock spans startup settlement through the engine's drain. Another holder delays startup; a lost lock not taken
+ * again stops this process so that its manager can restart it.
  */
 @Component(OneProcess.BEAN)
 final class OneProcess implements DisposableBean, ApplicationContextAware {
@@ -37,19 +35,21 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
 
     private static final Logger logger = LoggerFactory.getLogger(OneProcess.class);
 
-    // DB-SPECIFIC: set_config, these settings, session advisory locks, pg_locks and pg_stat_activity are PostgreSQL's.
-    /* Held for the process's life the session idles, which an idle timeout would end, lock and all; and the server
-     * notices a client gone within about 25 s, so the lock of a process that died goes that soon. */
+    // DB-SPECIFIC: PostgreSQL set_config keeps the lock session alive and bounds dead-client recovery.
+    // The TCP settings must fit the retry budget below.
     private static final String KEPT_ALIVE = """
             select set_config('idle_session_timeout', '0', false), set_config('tcp_keepalives_idle', '10', false),
                    set_config('tcp_keepalives_interval', '5', false), set_config('tcp_keepalives_count', '3', false),
                    set_config('tcp_user_timeout', '25000', false)
             """;
 
+    // DB-SPECIFIC: PostgreSQL advisory locks guard one engine per database.
     private static final String TAKE = "select pg_try_advisory_lock(?)";
 
+    // DB-SPECIFIC: PostgreSQL releases the session's advisory lock explicitly.
     private static final String LET_GO = "select pg_advisory_unlock(?)";
 
+    // DB-SPECIFIC: PostgreSQL pg_locks and pg_stat_activity identify the advisory-lock holder.
     /* A bigint key reads as its two halves, in classid and objid, with objsubid 1. */
     private static final String HOLDER = """
             select activity.pid, host(activity.client_addr) as client_addr
@@ -66,6 +66,10 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
     private static final Duration RETRY = Duration.ofSeconds(1);
 
     private static final Duration WATCHED_EVERY = Duration.ofSeconds(10);
+
+    // The lock session's keepalive is 10 + 5 * 3 seconds and tcp_user_timeout is 25 seconds;
+    // allow that reclaim window plus a five-second margin, including after an abort.
+    private static final Duration TAKE_AGAIN_WITHIN = Duration.ofSeconds(30);
 
     private static final int VALID_WITHIN_SECONDS = 5;
 
@@ -107,7 +111,7 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
             try (PreparedStatement keeping = connection.prepareStatement(KEPT_ALIVE)) {
                 keeping.execute();
             }
-            while (!locked(connection, TAKE)) {
+            while (!answered(connection, TAKE)) {
                 long left = deadline - System.nanoTime();
                 if (left <= 0) {
                     throw new IllegalStateException("Another process drives runs over this store: " + holder(connection)
@@ -126,7 +130,7 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
         }
     }
 
-    private static boolean locked(Connection connection, String statement) throws SQLException {
+    private static boolean answered(Connection connection, String statement) throws SQLException {
         try (PreparedStatement asking = connection.prepareStatement(statement)) {
             asking.setLong(1, KEY);
             try (ResultSet answered = asking.executeQuery()) {
@@ -145,7 +149,8 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
                     return "a session gone since";
                 }
                 String from = answered.getString("client_addr");
-                return "session " + answered.getInt("pid") + " from " + (from == null ? "a local socket" : from);
+                return "session " + answered.getInt("pid") + " from "
+                        + (from == null ? "an address not shown here" : from);
             }
         }
     }
@@ -158,8 +163,13 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
     }
 
     private void watched(ApplicationContext context) {
-        // Once closing, the lock goes with the drain; exiting from here then would only race that close.
-        if ((context instanceof ConfigurableApplicationContext closing && closing.isClosed()) || kept()) {
+        if (context instanceof ConfigurableApplicationContext closing && closing.isClosed()) {
+            return;
+        }
+        // A normal close and a failed refresh both stop the watch; a tick waiting in kept may finish after destroy.
+        if (kept()
+                || watch.isShutdown()
+                || (context instanceof ConfigurableApplicationContext closing && closing.isClosed())) {
             return;
         }
         logger.error("The lock keeping a second process off this store was lost and could not be taken again; this"
@@ -169,8 +179,8 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
     }
 
     /**
-     * Whether this process holds the lock still: its session answering, or, where it no longer does, the lock taken
-     * again at once on a new connection. Where it is not held, no connection is left open for it.
+     * Whether the lock survives, or is taken again on one new session after allowing the old session's reclaim window.
+     * A failed attempt leaves no borrowed connection open.
      */
     synchronized boolean kept() {
         Connection current = held;
@@ -183,7 +193,7 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
         discarded(current);
         held = null;
         try {
-            held = lockedWithin(store, Duration.ZERO);
+            held = lockedWithin(store, TAKE_AGAIN_WITHIN);
             return true;
         } catch (SQLException | IllegalStateException refused) {
             return false;
@@ -218,26 +228,30 @@ final class OneProcess implements DisposableBean, ApplicationContextAware {
 
     // Handed back to a pool, the session would live on and the lock with it, so the lock is let go first.
     @Override
-    public synchronized void destroy() throws SQLException {
+    public void destroy() throws SQLException {
+        // A failed refresh destroys beans before marking the context inactive, so stop the watch before waiting.
         watch.shutdown();
-        Connection current = held;
-        if (current == null) {
-            return;
-        }
-        held = null;
-        try {
-            locked(current, LET_GO);
-        } catch (SQLException failed) {
-            // Asked before it is ended, which would make any connection read as dead. A pool's own warn that it
-            // marked the connection broken is expected here, and says no more than this does.
-            boolean alive = answers(current);
-            discarded(current);
-            if (alive) {
-                throw failed;
+        synchronized (this) {
+            Connection current = held;
+            if (current == null) {
+                return;
             }
-            logger.info("The lock keeping a second process off this store went with its session, which ended first");
-            return;
+            held = null;
+            try {
+                answered(current, LET_GO);
+            } catch (SQLException failed) {
+                // Asked before it is ended, which would make any connection read as dead. A pool's own warn that it
+                // marked the connection broken is expected here, and says no more than this does.
+                boolean alive = answers(current);
+                discarded(current);
+                if (alive) {
+                    throw failed;
+                }
+                logger.info(
+                        "The lock keeping a second process off this store went with its session, which ended first");
+                return;
+            }
+            current.close();
         }
-        current.close();
     }
 }

@@ -44,10 +44,17 @@ export function countFrom(said: unknown): number | null {
 /** Only the members that arrived, so one left out stays out rather than arriving as undefined. */
 export function present<T extends Record<string, unknown>>(
   members: T,
-): Partial<{ [K in keyof T]: Exclude<T[K], undefined | null> }> {
+): Partial<{ [K in keyof T]: Exclude<T[K], undefined> }> {
   return Object.fromEntries(
     Object.entries(members).filter(([, value]) => value !== undefined),
-  ) as Partial<{ [K in keyof T]: Exclude<T[K], undefined | null> }>;
+  ) as Partial<{ [K in keyof T]: Exclude<T[K], undefined> }>;
+}
+
+/** An optional member that arrived unreadable refuses its whole document. */
+export function allMembersRead<T extends Record<string, unknown>>(
+  members: T,
+): members is T & { [K in keyof T]: Exclude<T[K], null> } {
+  return Object.values(members).every((value) => value !== null);
 }
 
 /**

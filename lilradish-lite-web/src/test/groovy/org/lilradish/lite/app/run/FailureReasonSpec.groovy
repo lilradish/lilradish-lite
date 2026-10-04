@@ -23,6 +23,9 @@ class FailureReasonSpec extends Specification {
         new StepFailure.Recorded(RunStepFailureReason.UNCLAIMED_VALUE, null)                        || FailureReason.UNCLAIMED_VALUE    | "unclaimed_value"
         new StepFailure.Recorded(RunStepFailureReason.MODEL_NOT_DEPLOYED, ModelCallPurpose.PRODUCE) || FailureReason.MODEL_NOT_DEPLOYED | "model_not_deployed"
         new StepFailure.Recorded(RunStepFailureReason.MODEL_NOT_DEPLOYED, ModelCallPurpose.REVIEW)  || FailureReason.MODEL_NOT_DEPLOYED | "model_not_deployed"
+        new StepFailure.Recorded(RunStepFailureReason.TOO_DEEP, null)                               || FailureReason.TOO_DEEP           | "too_deep"
+        new StepFailure.Recorded(RunStepFailureReason.SOURCE_NO_LONGER_MATCHES, ModelCallPurpose.PRODUCE) || FailureReason.SOURCE_NO_LONGER_MATCHES | "source_no_longer_matches"
+        new StepFailure.Recorded(RunStepFailureReason.SOURCE_LIST_NOT_HERE, ModelCallPurpose.PRODUCE) || FailureReason.SOURCE_LIST_NOT_HERE | "source_list_not_here"
     }
 
     /** One spelling per reason: a failure written down is published as the store's reason publishes itself. */

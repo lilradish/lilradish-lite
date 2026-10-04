@@ -6,6 +6,7 @@ import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import { theme } from "../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../testutil/depths";
 import { FrameError, NoSuchScreen, ScreenError } from "./RouteError";
 
 /**
@@ -82,6 +83,19 @@ describe("NoSuchScreen", () => {
     expect(screen.queryByText(/Something went wrong/)).toBeNull();
   });
 
+  it("is one part of the page, named by its heading, holding the alert and the way back", async () => {
+    await arrivingAt(NAMES_NOTHING);
+
+    const part = screen.getByRole("region", { name: "No such screen" });
+
+    expect(part).toContainElement(screen.getByRole("alert"));
+    expect(part).toContainElement(
+      screen.getByRole("link", { name: "Back to the start" }),
+    );
+    expect(drawnOf(part)).toEqual(drawnAtDepth(1));
+    expect(screen.getAllByRole("region")).toEqual([part]);
+  });
+
   /**
    * The application is running and is the one thing known to be sound, so the
    * way back out of a bad address costs nothing but a render.
@@ -141,5 +155,45 @@ describe("FrameError", () => {
     expect(screen.queryByText(/menu/)).toBeNull();
     expect(screen.queryByText(/reading 'name'/)).toBeNull();
     expect(screen.queryAllByRole("link")).toEqual([]);
+    const containers = document.querySelectorAll(".MuiContainer-root");
+    expect(containers).toHaveLength(1);
+    expect(containers[0]).toHaveClass("MuiContainer-maxWidthXl");
+    expect(containers[0]).toContainElement(screen.getByRole("alert"));
   });
+});
+
+describe("reload from a broken page", () => {
+  it.each([
+    ["screen", BREAKS, "Reload this page", undefined],
+    ["frame", "/", "Reload", aFrameThatBreaks],
+  ] as const)(
+    "asks the browser to reload the %s at its current address",
+    async (_case, address, label, frame) => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const router = await arrivingAt(address, frame);
+      const browserAddress = window.location.href;
+      const pageAddress = router.state.location.pathname;
+      const environment = globalThis as typeof globalThis & {
+        jsdom: {
+          virtualConsole: {
+            on(event: "jsdomError", listener: (error: Error) => void): void;
+            off(event: "jsdomError", listener: (error: Error) => void): void;
+          };
+        };
+      };
+      const reported: Error[] = [];
+      const onError = (error: Error) => reported.push(error);
+      environment.jsdom.virtualConsole.on("jsdomError", onError);
+      try {
+        await userEvent.click(screen.getByRole("button", { name: label }));
+        expect(reported.map((error) => error.message)).toEqual([
+          "Not implemented: navigation to another Document",
+        ]);
+        expect(window.location.href).toBe(browserAddress);
+        expect(router.state.location.pathname).toBe(pageAddress);
+      } finally {
+        environment.jsdom.virtualConsole.off("jsdomError", onError);
+      }
+    },
+  );
 });

@@ -31,6 +31,7 @@ import org.lilradish.lite.domain.run.StepAct
 import org.lilradish.lite.domain.run.WorkflowStepId
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.web.GroupPermissionRequired
+import org.lilradish.lite.web.MultipartFiles
 import org.mockito.Mockito
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration
@@ -77,10 +78,10 @@ class StepActsControllerIntegrationSpec extends Specification {
                     new RunsController.AtAnswer(STEP, "summarise"), ["stop"], new StepAnswers.ProgressAnswer(0, 1)),
             [:],
             new StepAnswers.StepRowAnswer(STEP, 1, "summarise",
-                    new StepAnswers.RunsAnswer("code_step", null, null, null, null, "stamp"),
+                    new StepAnswers.RunsAnswer("code_step", null, null, null, null, "stamp", null, null), null,
                     new StepAnswers.WhoAnswer("code", null, null, null), null, "not_started", null, [], null,
                     new StepAnswers.CostAnswer(false, null, null, null, null, null), null, null, null, null, [], []),
-            null, null, null, [], null, null)
+            null, null, null, [], null, null, null)
 
     /** A character built as it runs, so no source text or tool reading it can turn it into another. */
     private static String character(int codePoint) {
@@ -239,6 +240,25 @@ class StepActsControllerIntegrationSpec extends Specification {
         actedOnlyBy(answered) {
             it.review(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), 1, READER,
                     [summary: new StepActs.ReviewedRecord(ReviewOutcome.REFUSED, "x" * 2048)])
+        }
+    }
+
+    def "a multipart answer passes its bounded document and still unread files to the act"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        String wire = '--Aa\r\nContent-Disposition: form-data; name="document"\r\n\r\n' +
+                '{"values":{},"why":"Done."}\r\n--Aa--\r\n'
+
+        when:
+        def answered = sending(put(ADDRESS + '/2/answer')
+                .contentType('multipart/form-data; boundary=Aa')
+                .content(wire.getBytes(UTF_8)))
+
+        then:
+        actedOnlyBy(answered) {
+            it.answerFiles(Mockito.eq(new GroupId(GROUP)), Mockito.eq(new RunId(RUN)),
+                    Mockito.eq(new WorkflowStepId(STEP)), Mockito.eq(2), Mockito.eq(READER),
+                    Mockito.eq(new JsonValue.JsonObject([])), Mockito.eq('Done.'), any(MultipartFiles))
         }
     }
 

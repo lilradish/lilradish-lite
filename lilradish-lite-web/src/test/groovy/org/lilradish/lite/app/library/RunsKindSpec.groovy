@@ -12,6 +12,7 @@ class RunsKindSpec extends Specification {
                 [RunsKind.WORKFLOW, "workflow"],
                 [RunsKind.CODE_STEP, "code_step"],
                 [RunsKind.ROUTE, "route"],
+                [RunsKind.SEARCH, "search"],
         ]
     }
 
@@ -25,6 +26,7 @@ class RunsKindSpec extends Specification {
         "code_step" || RunsKind.CODE_STEP
         "route"     || RunsKind.ROUTE
         "workflow"  || RunsKind.WORKFLOW
+        "search"    || RunsKind.SEARCH
         "Question"  || null
         "entry"     || null
     }

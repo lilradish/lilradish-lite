@@ -5,6 +5,7 @@ import { answering } from "../testutil/answering";
 import { inGroup } from "../testutil/standingRead";
 import {
   holds,
+  isTheReader,
   mayIn,
   useStandingResource,
   type GroupPermission,
@@ -62,6 +63,7 @@ function permittedIn(permissions: Iterable<string>): GroupPermission[] {
 /** A standing as it arrived, its sets spread so that what was kept can be compared. */
 function spread(standing: Standing) {
   return {
+    userId: standing.userId,
     acts: [...standing.acts],
     groups: standing.groups.map((group) => ({
       ...group,
@@ -128,6 +130,31 @@ describe("mayIn", () => {
   });
 });
 
+describe("isTheReader", () => {
+  const AVO = { userId: "000501", displayName: "Avo Lumerace" };
+
+  it.each([
+    ["the person named by the user the reader is", "000501", AVO, true],
+    ["the same person with no name held", "000501", { userId: "000501" }, true],
+    [
+      "somebody else of the same name",
+      "000501",
+      { userId: "000502", displayName: "Avo Lumerace" },
+      false,
+    ],
+    ["nobody, as a model or code is named", "000501", undefined, false],
+    ["anybody, for a reader known as nobody", undefined, AVO, false],
+  ] as const)("answers whether %s made it", (_case, reader, person, made) => {
+    const standing: Standing = {
+      ...(reader === undefined ? {} : { userId: reader }),
+      acts: new Set(),
+      groups: [],
+    };
+
+    expect(isTheReader(standing, person)).toBe(made);
+  });
+});
+
 describe("useStandingResource", () => {
   it("holds what the server said this reader may do", async () => {
     const { read } = await standingRead(
@@ -139,6 +166,29 @@ describe("useStandingResource", () => {
       groups: [],
     });
     expect(read.problem).toBeNull();
+  });
+
+  it("holds the user the reader is known by, beside what they may do", async () => {
+    const { read } = await standingRead(
+      '{"userId":"000501","acts":["keep_pool"],"groups":[]}',
+    );
+
+    expect(spread(read.value)).toEqual({
+      userId: "000501",
+      acts: ["keep_pool"],
+      groups: [],
+    });
+  });
+
+  /** A reader known as nobody made nothing on any page, which is the side this fails to. */
+  it.each([
+    ["names none", '{"acts":["keep_pool"],"groups":[]}'],
+    ["names one that is not text", '{"userId":501,"acts":["keep_pool"]}'],
+  ])("holds no user where the answer %s", async (_case, body) => {
+    const { read } = await standingRead(body);
+
+    expect(read.value).not.toHaveProperty("userId");
+    expect(spread(read.value)).toEqual({ acts: ["keep_pool"], groups: [] });
   });
 
   /** In the order sent, which is the order the reader is shown them in. */

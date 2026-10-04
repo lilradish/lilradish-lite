@@ -1,7 +1,68 @@
+import { useSyncExternalStore } from "react";
+
 import { readersIntl } from "../../i18n/intl";
 import { say } from "../../i18n/lib";
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
+
+const listeners = new Set<() => void>();
+let day = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+
+function noticeDay(): void {
+  const current = midnight(new Date());
+  if (current !== day) {
+    day = current;
+    listeners.forEach((listener) => listener());
+  }
+}
+
+function scheduleDay(): void {
+  clearTimeout(timer);
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  timer = setTimeout(
+    () => {
+      noticeDay();
+      scheduleDay();
+    },
+    Math.max(1, next.getTime() - now.getTime()),
+  );
+}
+
+function returnedToPage(): void {
+  if (document.visibilityState === "visible") {
+    noticeDay();
+    scheduleDay();
+  }
+}
+
+function subscribeDay(listener: () => void): () => void {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    noticeDay();
+    scheduleDay();
+    document.addEventListener("visibilitychange", returnedToPage);
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      clearTimeout(timer);
+      timer = undefined;
+      document.removeEventListener("visibilitychange", returnedToPage);
+    }
+  };
+}
+
+function daySnapshot(): number {
+  return day;
+}
+
+/** The reader's current calendar date, shared by every time on this page. */
+export function useCalendarNow(): Date {
+  useSyncExternalStore(subscribeDay, daySnapshot, daySnapshot);
+  return new Date();
+}
 
 function midnight(at: Date): number {
   return new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
@@ -44,9 +105,9 @@ function spoken(at: Date, now: Date): string {
  * included, and anything it accepts but the spec does not becomes an invalid
  * `datetime` on the element below.
  */
-export function whenText(iso: string): string {
+export function whenText(iso: string, now = new Date()): string {
   const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : spoken(at, new Date());
+  return Number.isNaN(at.getTime()) ? iso : spoken(at, now);
 }
 
 /**
@@ -58,6 +119,7 @@ export function whenText(iso: string): string {
  * reads the text.
  */
 export function When({ iso }: { readonly iso: string }) {
+  const now = useCalendarNow();
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) {
     // Never "Invalid Date": what arrived is what is shown.
@@ -65,7 +127,7 @@ export function When({ iso }: { readonly iso: string }) {
   }
   return (
     <time dateTime={iso} title={iso}>
-      {spoken(at, new Date())}
+      {spoken(at, now)}
     </time>
   );
 }

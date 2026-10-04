@@ -23,7 +23,7 @@ public final class RunPositions {
         if (run.stopped()) {
             return RunState.STOPPED;
         }
-        return positions.stream().anyMatch(position -> position instanceof StepPosition.Failed)
+        return positions.stream().anyMatch(position -> position.state() == StepState.FAILED)
                 ? RunState.FAILED
                 : RunState.RUNNING;
     }

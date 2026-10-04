@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -8,7 +8,9 @@ import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId
 import type { SentChoice } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
-import { CeilingPart, HelpPart } from "./WorkflowSettings";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { noticesIn } from "../../testutil/notices";
+import { RunSettings } from "./WorkflowSettings";
 
 const WORKFLOW: WorkflowVersion = {
   revision: 2,
@@ -19,16 +21,17 @@ const WORKFLOW: WorkflowVersion = {
   keepsOwnCeiling: false,
   raiseNeedsApproval: true,
   mayBeHelped: false,
-  problems: [{ code: "helper_missing", part: "helper" }],
+  problems: [],
   sendsPast: [],
   offered: {
     lists: [],
     questions: [],
     workflows: [],
     codeSteps: [],
+    searchWays: [],
     models: [
-      { name: "general", modes: ["research"] },
-      { name: "small", modes: [] },
+      { name: "general", modes: ["research"], tools: [] },
+      { name: "small", modes: [], tools: [] },
     ],
   },
   terms: new Map(),
@@ -38,35 +41,19 @@ function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-function ceilingAt(workflow: WorkflowVersion, editable: boolean) {
-  const saved = vi.fn(
-    (ceiling: string | null, keeps: boolean, raise: boolean) =>
-      Promise.resolve({
-        ...workflow,
+function settingsAt(workflow: WorkflowVersion, editable: boolean) {
+  const savedCeiling = vi.fn(
+    (ceiling: string | null, keeps: boolean, raise: boolean) => {
+      const { ceiling: _was, ...withoutCeiling } = workflow;
+      return Promise.resolve({
+        ...withoutCeiling,
         ...(ceiling === null ? {} : { ceiling }),
         keepsOwnCeiling: keeps,
         raiseNeedsApproval: raise,
-      }),
+      });
+    },
   );
-  function Host() {
-    const [shown, setShown] = useState(workflow);
-    const action = useAction<WorkflowVersion>(setShown, () => undefined);
-    return (
-      <CeilingPart
-        workflow={shown}
-        editable={editable}
-        action={action}
-        waiting={false}
-        save={(ceiling, keeps, raise) => saved(ceiling, keeps, raise)}
-      />
-    );
-  }
-  render(<Host />, { wrapper: themed });
-  return saved;
-}
-
-function helpAt(workflow: WorkflowVersion, editable: boolean) {
-  const saved = vi.fn((may: boolean, helper: SentChoice | null) =>
+  const savedHelp = vi.fn((may: boolean, helper: SentChoice | null) =>
     Promise.resolve({
       ...workflow,
       mayBeHelped: may,
@@ -83,19 +70,33 @@ function helpAt(workflow: WorkflowVersion, editable: boolean) {
   );
   function Host() {
     const [shown, setShown] = useState(workflow);
-    const action = useAction<WorkflowVersion>(setShown, () => undefined);
+    const spending = useAction<WorkflowVersion>(setShown, () => undefined);
+    const helping = useAction<WorkflowVersion>(setShown, () => undefined);
     return (
-      <HelpPart
+      <RunSettings
         workflow={shown}
         editable={editable}
-        action={action}
-        waiting={false}
-        save={(may, helper) => saved(may, helper)}
+        spending={spending}
+        helping={helping}
+        waiting={() => false}
+        saveCeiling={(ceiling, keeps, raise) =>
+          savedCeiling(ceiling, keeps, raise)
+        }
+        saveHelp={(may, helper) => savedHelp(may, helper)}
       />
     );
   }
   render(<Host />, { wrapper: themed });
-  return saved;
+  fireEvent.click(screen.getByRole("button", { name: "Run settings" }));
+  return { savedCeiling, savedHelp };
+}
+
+function ceilingAt(workflow: WorkflowVersion, editable: boolean) {
+  return settingsAt(workflow, editable).savedCeiling;
+}
+
+function helpAt(workflow: WorkflowVersion, editable: boolean) {
+  return settingsAt(workflow, editable).savedHelp;
 }
 
 const SAVE_CEILING = "Save what a run may spend";
@@ -109,6 +110,14 @@ const HELPED: WorkflowVersion = {
 };
 
 describe("CeilingPart", () => {
+  it("stands as a block of the version, framed apart from the next", () => {
+    ceilingAt(WORKFLOW, false);
+
+    expect(
+      drawnOf(screen.getByRole("region", { name: "What a run may spend" })),
+    ).toEqual(drawnAtDepth(3));
+  });
+
   it("reads the ceiling and both settings where the draft may not be written", () => {
     ceilingAt({ ...WORKFLOW, ceiling: "5000" }, false);
 
@@ -144,11 +153,34 @@ describe("CeilingPart", () => {
     ).toHaveAccessibleDescription(
       "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
     );
+    expect(
+      noticesIn(
+        screen.getByRole("button", { name: SAVE_CEILING }).parentElement!,
+      ),
+    ).toEqual([
+      {
+        severity: "warning",
+        words:
+          "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
+      },
+    ]);
     expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("holds saving a ceiling as it was read in a quiet line, and in no notice", () => {
+    ceilingAt(WORKFLOW, true);
+    const save = screen.getByRole("button", { name: SAVE_CEILING });
+
+    expect(screen.queryByText("Unsaved")).toBeNull();
+    expect(save).not.toHaveClass("MuiButton-contained");
+    expect(save).toHaveAccessibleDescription("Change something first.");
+    expect(noticesIn(save.parentElement!)).toEqual([]);
   });
 
   it("sends no ceiling as none, with both settings as switched", async () => {
     const saved = ceilingAt({ ...WORKFLOW, ceiling: "100" }, true);
+    const before = "At most 100 sent and came back in all · May not be helped";
+    expect(screen.getByText(before)).toBeVisible();
 
     await userEvent.clear(screen.getByRole("textbox", { name: "Ceiling" }));
     await userEvent.click(
@@ -156,14 +188,36 @@ describe("CeilingPart", () => {
         name: "A run beneath another is held to this ceiling as well",
       }),
     );
+    expect(screen.getByText("Unsaved")).toBeVisible();
+    expect(screen.getByRole("button", { name: SAVE_CEILING })).toHaveClass(
+      "MuiButton-contained",
+    );
     await userEvent.click(screen.getByRole("button", { name: SAVE_CEILING }));
 
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(saved).toHaveBeenCalledWith(null, true, true);
+    expect(
+      await screen.findByText("No ceiling · May not be helped"),
+    ).toBeVisible();
+    expect(screen.queryByText(before)).toBeNull();
+    expect(screen.queryByText("Unsaved")).toBeNull();
+    expect(screen.getByRole("button", { name: SAVE_CEILING })).not.toHaveClass(
+      "MuiButton-contained",
+    );
   });
 });
 
 describe("HelpPart", () => {
+  it("stands as a block of the version, framed apart from the next", () => {
+    helpAt(WORKFLOW, false);
+
+    expect(
+      drawnOf(
+        screen.getByRole("region", { name: "Whether a run may be helped" }),
+      ),
+    ).toEqual(drawnAtDepth(3));
+  });
+
   it("reads that runs may be helped by a model not chosen yet where the draft may not be written", () => {
     helpAt({ ...WORKFLOW, mayBeHelped: true }, false);
 
@@ -174,7 +228,14 @@ describe("HelpPart", () => {
   });
 
   it("says once what submitting refuses of the helper", () => {
-    helpAt({ ...WORKFLOW, mayBeHelped: true }, false);
+    helpAt(
+      {
+        ...WORKFLOW,
+        mayBeHelped: true,
+        problems: [{ code: "helper_missing", part: "helper" }],
+      },
+      false,
+    );
 
     expect(
       screen.getAllByText(

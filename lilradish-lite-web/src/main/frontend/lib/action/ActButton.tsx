@@ -17,12 +17,18 @@ import { Press, type Reason } from "./Press";
 export function ActButton<T>({
   action,
   act,
+  variant,
+  warns,
   waiting,
   reason,
   children,
 }: {
   readonly action: Action<T>;
   readonly act: (signal: AbortSignal) => Promise<T>;
+  /** As `Press` takes it. */
+  readonly variant?: "contained";
+  /** As `Press` takes it. */
+  readonly warns?: boolean;
   /**
    * Unavailable as well while something else the screen waits on is out,
    * which the reader can see is out.
@@ -37,6 +43,8 @@ export function ActButton<T>({
 }) {
   return (
     <Press
+      variant={variant}
+      warns={warns}
       unavailable={action.running || waiting === true}
       reason={reason}
       onPress={() => action.run(act)}

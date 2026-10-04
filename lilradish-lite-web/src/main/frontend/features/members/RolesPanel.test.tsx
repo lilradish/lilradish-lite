@@ -1,3 +1,4 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -8,6 +9,7 @@ import type { MemberPanel } from "../../api/groups/{groupId}/members";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
 import { noticesIn } from "../../testutil/notices";
 import type { Asked, Outcome } from "./changes";
 import { RolesPanel } from "./RolesPanel";
@@ -18,23 +20,23 @@ const SUBJECT = "00000002-0000-4000-8000-0000000009c1";
 
 const MEMBER = `/api/groups/${GROUP}/members/${SUBJECT}`;
 
-const GRACE: MemberPanel = {
+const GLINN: MemberPanel = {
   subjectId: SUBJECT,
   userId: "0009c1",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   roles: new Set(["operator"]),
   lastChangingRoles: new Set(),
   removable: true,
 };
 
 const LAST_OWNER: MemberPanel = {
-  ...GRACE,
+  ...GLINN,
   roles: new Set(["owner", "operator"]),
   lastChangingRoles: new Set(["owner"]),
   removable: false,
 };
 
-const HOLDING_NOTHING: MemberPanel = { ...GRACE, roles: new Set() };
+const HOLDING_NOTHING: MemberPanel = { ...GLINN, roles: new Set() };
 
 const LAST_CHANGER =
   "Nobody else here may change this group's membership, so what lets them is not taken away.";
@@ -64,7 +66,7 @@ interface Reading {
  * the panel. Only the server is stood in for.
  */
 function reading({
-  member = GRACE,
+  member = GLINN,
   mayChange = true,
   routes = {},
 }: Reading = {}) {
@@ -109,35 +111,51 @@ function reading({
   };
 }
 
-/** Each role's row as the reader reads it: its words, whether it is held, and what its control says. */
 function roleRows(): string[][] {
   return within(screen.getByRole("list"))
     .getAllByRole("listitem")
     .map((row) => [
       row.querySelector("bdi")?.textContent ?? "",
       within(row).getByText(/^(Held|Not held)$/).textContent ?? "",
-      within(row).queryByRole("button")?.textContent ?? "",
+      String(
+        within(row).queryByRole<HTMLInputElement>("switch")?.checked ?? "",
+      ),
     ]);
 }
 
 describe("RolesPanel", () => {
   /** Every role the group has, whether or not it is held, and never only the highest held. */
   it("lists every role the group has, whether the member holds each, and a control giving it or taking it away", () => {
-    reading({ member: { ...GRACE, roles: new Set(["operator", "owner"]) } });
+    reading({ member: { ...GLINN, roles: new Set(["operator", "owner"]) } });
 
     expect(
       screen.getByRole("heading", { level: 3, name: "Roles" }),
     ).toBeInTheDocument();
     expect(roleRows()).toEqual([
-      ["Operator", "Held", "Take Operator away"],
-      ["Overseer", "Not held", "Give Overseer"],
-      ["Owner", "Held", "Take Owner away"],
+      ["Operator", "Held", "true"],
+      ["Overseer", "Not held", "false"],
+      ["Owner", "Held", "true"],
     ]);
+  });
+
+  /** Taking a role away and taking somebody out warn; giving a role undoes nothing and is drawn as any other. */
+  it("draws taking a role away and removing the member in the warning colour, and giving a role in none", () => {
+    reading();
+
+    expect(
+      screen.getByRole("switch", { name: "Operator" }).parentElement,
+    ).toHaveClass("MuiSwitch-colorWarning");
+    expect(
+      screen.getByRole("switch", { name: "Overseer" }).parentElement,
+    ).toHaveClass("MuiSwitch-colorPrimary");
+    expect(
+      screen.getByRole("button", { name: "Remove from the group" }),
+    ).toHaveClass(buttonClasses.colorWarning);
   });
 
   /** Spelt by whoever published it; shown, and offered nothing this build cannot address. */
   it("shows a role this build has no words for as it was spelt, held and offering nothing", () => {
-    reading({ member: { ...GRACE, roles: new Set(["captain"]) } });
+    reading({ member: { ...GLINN, roles: new Set(["captain"]) } });
 
     expect(roleRows().at(-1)).toEqual(["captain", "Held", ""]);
   });
@@ -157,18 +175,16 @@ describe("RolesPanel", () => {
   });
 
   it("gives a role not held, and settles as the group now holds the member", async () => {
-    const given = { ...GRACE, roles: new Set(["operator", "overseer"]) };
+    const given = { ...GLINN, roles: new Set(["operator", "overseer"]) };
     const { sent, settled, told } = reading({
       routes: { [`PUT ${MEMBER}/roles/overseer`]: [[documentOf(given), 200]] },
     });
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Give Overseer" }),
-    );
+    await userEvent.click(screen.getByRole("switch", { name: "Overseer" }));
 
     await waitFor(() => expect(settled).toHaveBeenCalledOnce());
     expect(settled).toHaveBeenCalledWith({ changed: given });
-    expect(told).toHaveBeenCalledWith({ place: "roles", of: GRACE });
+    expect(told).toHaveBeenCalledWith({ place: "roles", of: GLINN });
     expect(requestsTo(sent)).toEqual([`PUT ${MEMBER}/roles/overseer`]);
   });
 
@@ -181,9 +197,7 @@ describe("RolesPanel", () => {
       },
     });
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Take Operator away" }),
-    );
+    await userEvent.click(screen.getByRole("switch", { name: "Operator" }));
 
     await waitFor(() =>
       expect(settled).toHaveBeenCalledWith({ changed: HOLDING_NOTHING }),
@@ -191,19 +205,23 @@ describe("RolesPanel", () => {
     expect(requestsTo(sent)).toEqual([`DELETE ${MEMBER}/roles/operator`]);
   });
 
-  /**
-   * Taken from the only one who may change the membership, the group could
-   * never gain anybody who may again: the role is not offered, nor is their
-   * removal, and the panel says why.
-   */
-  it("offers neither taking the last role that lets anybody change the membership nor removing its holder, and says why", () => {
-    reading({ member: LAST_OWNER });
+  it("disables taking the last role that lets anybody change membership and omits removal", async () => {
+    const { sent } = reading({ member: LAST_OWNER });
 
     expect(roleRows()).toEqual([
-      ["Operator", "Held", "Take Operator away"],
-      ["Overseer", "Not held", "Give Overseer"],
-      ["Owner", "Held", ""],
+      ["Operator", "Held", "true"],
+      ["Overseer", "Not held", "false"],
+      ["Owner", "Held", "true"],
     ]);
+    const owner = screen.getByRole<HTMLInputElement>("switch", {
+      name: "Owner",
+    });
+    expect(owner).toBeChecked();
+    expect(owner).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Operator" })).toBeEnabled();
+    await userEvent.click(owner.closest(".MuiSwitch-root")!);
+    expect(owner).toBeChecked();
+    expect(requestsTo(sent)).toEqual([]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
     ).toBeNull();
@@ -220,18 +238,14 @@ describe("RolesPanel", () => {
   it("offers no removal of a member the server says may not be taken out, whatever roles are offered", () => {
     reading({
       member: {
-        ...GRACE,
+        ...GLINN,
         roles: new Set(["owner", "overseer"]),
         lastChangingRoles: new Set(),
         removable: false,
       },
     });
 
-    expect(roleRows().map((row) => row[2])).toEqual([
-      "Give Operator",
-      "Take Overseer away",
-      "Take Owner away",
-    ]);
+    expect(roleRows().map((row) => row[2])).toEqual(["false", "true", "true"]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
     ).toBeNull();
@@ -243,7 +257,7 @@ describe("RolesPanel", () => {
   /** The control the keyboard was on goes with the right to use it, and the keyboard stays in the panel. */
   it("puts the keyboard on the roles' heading when the control it was on goes with the right to change them", async () => {
     const { mayChangeNoLonger } = reading();
-    screen.getByRole("button", { name: "Give Overseer" }).focus();
+    screen.getByRole("switch", { name: "Overseer" }).focus();
 
     await mayChangeNoLonger();
 
@@ -272,6 +286,19 @@ describe("RolesPanel", () => {
     expect(screen.getByRole("list")).toHaveAccessibleName("Roles");
   });
 
+  it("sets the roles apart as a region on a ground of its own, leaving the member's removal outside it", () => {
+    reading();
+
+    const roles = screen.getByRole("region", { name: "Roles" });
+
+    expect(screen.getAllByRole("region")).toEqual([roles]);
+    expect(drawnOf(roles)).toEqual(drawnAtDepth(3));
+    expect(roles).toContainElement(screen.getByRole("list"));
+    expect(roles).not.toContainElement(
+      screen.getByRole("button", { name: "Remove from the group" }),
+    );
+  });
+
   /** Nothing to withhold is said to a reader offered nothing to withhold. */
   it("says nothing of the last who may change the membership to a reader who may not change it", () => {
     reading({ member: LAST_OWNER, mayChange: false });
@@ -281,7 +308,7 @@ describe("RolesPanel", () => {
 
   /** Their last role just taken, the panel stays on them, and a role given makes them a member again. */
   it("shows somebody holding nothing as a member no longer, offering every role and no removal", async () => {
-    const back = { ...GRACE, roles: new Set(["overseer"]) };
+    const back = { ...GLINN, roles: new Set(["overseer"]) };
     const { settled } = reading({
       member: HOLDING_NOTHING,
       routes: { [`PUT ${MEMBER}/roles/overseer`]: [[documentOf(back), 200]] },
@@ -295,21 +322,29 @@ describe("RolesPanel", () => {
       },
     ]);
     expect(roleRows().map((row) => row[2])).toEqual([
-      "Give Operator",
-      "Give Overseer",
-      "Give Owner",
+      "false",
+      "false",
+      "false",
     ]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
     ).toBeNull();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Give Overseer" }),
-    );
+    await userEvent.click(screen.getByRole("switch", { name: "Overseer" }));
 
     await waitFor(() =>
       expect(settled).toHaveBeenCalledWith({ changed: back }),
     );
+  });
+
+  it("cancels removal without sending a request", async () => {
+    const { sent } = reading();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove from the group" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(requestsTo(sent)).toEqual([]);
   });
 
   it("removes the member from the group, and settles as their removal", async () => {
@@ -320,11 +355,20 @@ describe("RolesPanel", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Remove from the group" }),
     );
+    expect(
+      screen.getByRole("dialog", {
+        name: /Remove.*Glinn Havven.*from the group\?/,
+      }),
+    ).toHaveTextContent(
+      "They will hold no role here. Bringing them back means taking them on again.",
+    );
+    expect(requestsTo(sent)).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
-      expect(settled).toHaveBeenCalledWith({ removed: GRACE }),
+      expect(settled).toHaveBeenCalledWith({ removed: GLINN }),
     );
-    expect(told).toHaveBeenCalledWith({ place: "removal", of: GRACE });
+    expect(told).toHaveBeenCalledWith({ place: "removal", of: GLINN });
     expect(requestsTo(sent)).toEqual([`DELETE ${MEMBER}`]);
   });
 
@@ -332,7 +376,7 @@ describe("RolesPanel", () => {
   it.each([
     [
       "a role",
-      "Give Overseer",
+      "Overseer",
       `PUT ${MEMBER}/roles/overseer`,
       '{"code":"ACT_NOT_PERMITTED"}',
       403,
@@ -351,7 +395,14 @@ describe("RolesPanel", () => {
     async (_case, control, route, body, status, said) => {
       const { settled } = reading({ routes: { [route]: [[body, status]] } });
 
-      await userEvent.click(screen.getByRole("button", { name: control }));
+      await userEvent.click(
+        screen.getByRole(_case === "a role" ? "switch" : "button", {
+          name: control,
+        }),
+      );
+      if (_case === "a removal") {
+        await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+      }
 
       expect(await screen.findByRole("alert")).toHaveTextContent(said);
       expect(settled).not.toHaveBeenCalled();

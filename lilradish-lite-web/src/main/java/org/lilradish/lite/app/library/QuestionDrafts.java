@@ -32,6 +32,12 @@ final class QuestionDrafts {
              where entry_version_id = :version
             """.formatted(Author.OF_CALLER);
 
+    private static final String DRAWING = """
+            update question_versions
+               set drawing = :drawing, updated_at = greatest(now(), created_at, updated_at), updated_by = %s
+             where entry_version_id = :version
+            """.formatted(Author.OF_CALLER);
+
     private final JdbcClient database;
 
     private final Drafts drafts;
@@ -55,6 +61,26 @@ final class QuestionDrafts {
         return drafts.write(group, EntryKind.QUESTION, entry, version, caller, seenRevision, draft -> {
             int written = database.sql(INSTRUCTION)
                     .param("instruction", said == null ? null : said.value())
+                    .param("version", draft.version().value())
+                    .param("caller", caller.value())
+                    .update();
+            if (written != 1) {
+                throw new IllegalStateException("Question version " + version.value() + " holds no question content");
+            }
+            return questions.viewIn(group, draft.version(), caller);
+        });
+    }
+
+    Questions.QuestionView draw(
+            GroupId group,
+            EntryId entry,
+            EntryVersionId version,
+            UserId caller,
+            int seenRevision,
+            @Nullable String drawing) {
+        return drafts.write(group, EntryKind.QUESTION, entry, version, caller, seenRevision, draft -> {
+            int written = database.sql(DRAWING)
+                    .param("drawing", drawing)
                     .param("version", draft.version().value())
                     .param("caller", caller.value())
                     .update();

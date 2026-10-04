@@ -100,9 +100,12 @@ describe("RenameGroup", () => {
       await renamedTo(name);
 
       expect(rename()).toHaveAttribute("aria-disabled", "true");
-      expect(noticesIn(rename().parentElement!)).toEqual([
-        { severity: "info", words: reason },
-      ]);
+      expect(rename()).toHaveAccessibleDescription(reason);
+      expect(rename().parentElement).toHaveTextContent(reason);
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).parentElement,
+      ).not.toHaveTextContent(reason);
+      expect(noticesIn(rename().parentElement!)).toEqual([]);
     },
   );
 

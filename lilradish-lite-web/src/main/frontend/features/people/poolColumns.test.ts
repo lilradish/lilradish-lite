@@ -8,10 +8,10 @@ function setApart(words: string): string {
   return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
 }
 
-const GRACE: PoolPerson = {
+const GLINN: PoolPerson = {
   subjectId: "00000002-0000-4000-8000-000000000140",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: new Set(["watcher", "steward"]),
   groupCount: 2,
 };
@@ -43,10 +43,18 @@ describe("poolColumns", () => {
     ]);
   });
 
+  it("sets how many groups as a figure, and no other column", () => {
+    expect(
+      poolColumns()
+        .filter((column) => "numeric" in column && column.numeric)
+        .map((column) => column.label),
+    ).toEqual(["Groups"]);
+  });
+
   it("shows the roles held in the reader's words, in their own order and each set apart, and the groups only as a count", () => {
-    expect(cellsOf(GRACE)).toEqual([
+    expect(cellsOf(GLINN)).toEqual([
       "000140",
-      "Grace Hopper",
+      "Glinn Havven",
       `${setApart("Steward")}, ${setApart("Watcher")}`,
       2,
     ]);

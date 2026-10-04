@@ -2,12 +2,16 @@ package org.lilradish.lite.domain.declaration;
 
 import static java.util.Objects.requireNonNull;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 
 /**
- * Whether what one field holds can be what another takes, and whether two declare the same. A limit or a list
+ * Whether what one field holds can be what another takes or a route gives back. A limit or a list
  * one of them has not chosen yet is judged by nothing here: that field's own problem already names it.
  */
 public final class FieldFit {
@@ -26,7 +30,9 @@ public final class FieldFit {
         }
         return switch (target.shape()) {
             case FieldShape.Text text ->
-                source.shape() instanceof FieldShape.Text given && within(given.longest(), text.longest());
+                source.shape() instanceof FieldShape.Text given
+                        && within(given.longest(), text.longest())
+                        && (text.lines() == TextLines.SEVERAL || given.lines() == TextLines.ONE);
             case FieldShape.Term term ->
                 source.shape() instanceof FieldShape.Term given && sameList(given.list(), term);
             case FieldShape.Nested nested ->
@@ -36,6 +42,10 @@ public final class FieldFit {
                             Field held = Field.named(given.fields(), taken.name());
                             return held != null && fits(held, taken);
                         });
+            case FieldShape.File file ->
+                source.shape() instanceof FieldShape.File given
+                        && file.types().containsAll(given.types())
+                        && within(given.maximumBytes(), file.maximumBytes());
             case FieldShape.Plain ignored -> true;
         };
     }
@@ -57,30 +67,86 @@ public final class FieldFit {
         });
     }
 
-    /**
-     * Whether {@code one} declares the fields {@code other} does by name, each of the same kind, count, limits, list
-     * and fields, and gives each that {@code other} must give; what people read a field as, and the order, aside.
-     */
-    public static boolean alike(List<Field> one, List<Field> other) {
-        requireNonNull(one, "FieldFit one must not be null");
-        requireNonNull(other, "FieldFit other must not be null");
-        return one.size() == other.size()
-                && one.stream().allMatch(field -> {
-                    Field match = Field.named(other, field.name());
-                    return match != null && alike(field, match);
-                });
+    /** A case may give only fields the route declares, within its limits and assuring what it requires. */
+    public static void visitCaseDifferences(List<Field> given, List<Field> declared, CaseDifferenceVisitor visitor) {
+        requireNonNull(given, "FieldFit given must not be null");
+        requireNonNull(declared, "FieldFit declared must not be null");
+        requireNonNull(visitor, "FieldFit visitor must not be null");
+        visitCaseDifferences(
+                given, declared, new int[Declaration.MOST_LEVELS], new int[Declaration.MOST_LEVELS], 0, visitor);
     }
 
-    private static boolean alike(Field one, Field other) {
-        if (!one.howMany().equals(other.howMany())
-                || one.shape().kind() != other.shape().kind()
-                || (other.demand().mustBe() && !one.demand().mustBe())) {
-            return false;
+    private static void visitCaseDifferences(
+            List<Field> given,
+            List<Field> declared,
+            int[] givenPath,
+            int[] declaredPath,
+            int depth,
+            CaseDifferenceVisitor visitor) {
+        Map<FieldName, Integer> declaredPositions = HashMap.newHashMap(declared.size());
+        for (int index = 0; index < declared.size(); index++) {
+            declaredPositions.putIfAbsent(declared.get(index).name(), index);
         }
-        if (one.shape() instanceof FieldShape.Nested nested && other.shape() instanceof FieldShape.Nested matched) {
-            return alike(nested.fields(), matched.fields());
+        Set<FieldName> givenNames = new HashSet<>(given.size());
+        for (int index = 0; index < given.size(); index++) {
+            Field field = given.get(index);
+            givenNames.add(field.name());
+            Integer match = declaredPositions.get(field.name());
+            givenPath[depth] = index;
+            if (match == null) {
+                visitor.found(CaseDifferenceKind.UNDECLARED, true, givenPath, depth + 1);
+                continue;
+            }
+            Field routeField = declared.get(match);
+            declaredPath[depth] = match;
+            if (field.shape().kind() != routeField.shape().kind()
+                    || field.howMany().getClass() != routeField.howMany().getClass()
+                    || (routeField.shape() instanceof FieldShape.Term term
+                            && field.shape() instanceof FieldShape.Term givenTerm
+                            && !sameList(givenTerm.list(), term))) {
+                visitor.found(CaseDifferenceKind.OTHER_KIND, true, givenPath, depth + 1);
+                continue;
+            }
+            if (!withinMost(field.howMany(), routeField.howMany())
+                    || (routeField.shape() instanceof FieldShape.File file
+                            && field.shape() instanceof FieldShape.File givenFile
+                            && (!file.types().containsAll(givenFile.types())
+                                    || !within(givenFile.maximumBytes(), file.maximumBytes())))
+                    || (routeField.shape() instanceof FieldShape.Text text
+                            && field.shape() instanceof FieldShape.Text givenText
+                            && (!within(givenText.longest(), text.longest())
+                                    || (text.lines() == TextLines.ONE && givenText.lines() == TextLines.SEVERAL)))) {
+                visitor.found(CaseDifferenceKind.PAST_LIMIT, true, givenPath, depth + 1);
+            } else if (routeField.demand().mustBe() && !field.demand().mustBe()) {
+                visitor.found(CaseDifferenceKind.MAY_GIVE_NOTHING, true, givenPath, depth + 1);
+            }
+            if (field.shape() instanceof FieldShape.Nested nested
+                    && routeField.shape() instanceof FieldShape.Nested routeNested) {
+                visitCaseDifferences(
+                        nested.fields(), routeNested.fields(), givenPath, declaredPath, depth + 1, visitor);
+            }
         }
-        return one.shape().equals(other.shape());
+        for (int index = 0; index < declared.size(); index++) {
+            Field field = declared.get(index);
+            if (field.demand().mustBe() && !givenNames.contains(field.name())) {
+                declaredPath[depth] = index;
+                visitor.found(CaseDifferenceKind.MAY_GIVE_NOTHING, false, declaredPath, depth + 1);
+            }
+        }
+    }
+
+    public enum CaseDifferenceKind {
+        UNDECLARED,
+        OTHER_KIND,
+        PAST_LIMIT,
+        MAY_GIVE_NOTHING
+    }
+
+    /** The path array is reused and valid only during {@link #found}. */
+    @FunctionalInterface
+    public interface CaseDifferenceVisitor {
+
+        void found(CaseDifferenceKind kind, boolean inCase, int[] path, int depth);
     }
 
     private static boolean withinMost(HowMany source, HowMany target) {
@@ -91,6 +157,10 @@ public final class FieldFit {
     }
 
     private static boolean within(@Nullable Integer given, @Nullable Integer taken) {
+        return given == null || taken == null || given <= taken;
+    }
+
+    private static boolean within(@Nullable Long given, @Nullable Long taken) {
         return given == null || taken == null || given <= taken;
     }
 

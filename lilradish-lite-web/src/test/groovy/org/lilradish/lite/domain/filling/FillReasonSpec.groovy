@@ -14,6 +14,7 @@ class FillReasonSpec extends Specification {
                 (FillReason.TOO_LONG)         : "too_long",
                 (FillReason.TOO_MANY)         : "too_many",
                 (FillReason.NOT_A_TERM)       : "not_a_term",
+                (FillReason.LINE_BREAK)       : "line_break",
                 (FillReason.CRLF)             : "crlf",
                 (FillReason.DIRECTION_CONTROL): "direction_control",
                 (FillReason.TAG)              : "tag",

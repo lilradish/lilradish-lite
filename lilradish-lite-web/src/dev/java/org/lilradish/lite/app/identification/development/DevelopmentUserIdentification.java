@@ -10,14 +10,9 @@ import org.lilradish.lite.domain.identity.UserId;
 import org.springframework.stereotype.Component;
 
 /**
- * What identifies a developer running this on their own machine: a cookie they set for themselves,
- * naming the user they want to be. It authenticates nobody — anyone who can reach the port can
- * write it — so there is no deployment it is right for. It is compiled apart from the application,
- * which cannot see it, and the build refuses to package anything under this package into an archive.
- *
- * <p>That refusal is checked against the archive rather than trusted to the setting that produces
- * it. A setting is edited, and an edit that puts this back would otherwise ship a system where
- * naming yourself is enough.
+ * Selects an identity for local development only; it does not authenticate a caller. This implementation
+ * is compiled apart from the application and must never be included in a published archive. The build
+ * checks the archive itself before it is shipped.
  */
 @DevelopmentOnly
 @Component

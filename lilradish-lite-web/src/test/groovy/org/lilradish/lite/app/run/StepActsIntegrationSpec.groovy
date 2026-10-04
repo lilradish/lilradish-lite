@@ -18,14 +18,19 @@ import static org.lilradish.lite.testutil.library.LibraryStore.groupId
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
+import java.nio.charset.StandardCharsets
 import org.libprunus.core.error.ApiErrorException
 import org.lilradish.lite.app.codestep.CodeRuns
+import org.lilradish.lite.app.files.FileDeployment
 import org.lilradish.lite.app.filling.ValueProblemsRefusal
 import org.lilradish.lite.app.group.GroupRoles
+import org.lilradish.lite.app.library.ConstantJson
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.failure.RefusalCode
+import org.lilradish.lite.domain.file.StoredFile
 import org.lilradish.lite.domain.filling.FillPath
 import org.lilradish.lite.domain.filling.FillProblem
 import org.lilradish.lite.domain.filling.FillReason
@@ -36,21 +41,21 @@ import org.lilradish.lite.domain.run.StepPosition
 import org.lilradish.lite.domain.run.StepPositions
 import org.lilradish.lite.domain.run.WorkflowStepId
 import org.lilradish.lite.domain.wire.JsonValue
+import org.lilradish.lite.testutil.CountingDataSource
 import org.lilradish.lite.testutil.SnapshottingAppender
 import org.lilradish.lite.testutil.codestep.CodeStepsHeld
 import org.lilradish.lite.testutil.inference.ScriptedModelCalls
 import org.lilradish.lite.testutil.library.DeployedModels
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.run.RunRows
+import org.lilradish.lite.web.MultipartFiles
 import org.slf4j.LoggerFactory
+import org.springframework.mock.web.MockHttpServletRequest
+import org.springframework.util.unit.DataSize
 import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A person reviewing what waits on them and asking for a step's next try, on a real server running the real
- * baseline, one act at a time; each lands as the caller's act, and the run goes on as far as it goes by itself.
- */
 class StepActsIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -93,15 +98,178 @@ class StepActsIntegrationSpec extends Specification {
     private void wire() {
         def session = store.session
         tree = new RunTree(session)
-        snapshots = new RunSnapshots(session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(session, CodeStepsHeld.NONE, new SearchWays([]))
         executor = EngineExecutors.of(store.database)
         def writes = new EngineWrites(session)
         def ceilings = new CeilingReach(session, DeployedModels.HELD, writes)
+        def heldFiles = EngineWiring.files(store)
         engine = new RunEngine(session, store.transactions(), tree, snapshots, writes, executor,
-                new EngineCalls(new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                DeployedModels.HELD, ceilings, new GroupRoles(session))
-        acts = new StepActs(session, store.transactions(), new GroupRoles(session), tree, snapshots, writes, engine)
+                new EngineCalls(EngineWiring.withoutTools(), new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(session), Deployments.DEEP_ENOUGH, heldFiles)
+        acts = new StepActs(session, store.transactions(), new GroupRoles(session), tree, snapshots, writes, engine,
+                heldFiles, EngineWiring.fileDeployment())
+    }
+
+    def "root text actions add no file gate or promotion snapshot"() {
+        given:
+        def statements = Collections.synchronizedList([])
+        executor.destroy()
+        store = new LibraryStore(new CountingDataSource(store.database, statements))
+        wire()
+        if (action == 'answer') {
+            started()
+        } else {
+            waitingOnReview()
+        }
+        statements.clear()
+
+        when:
+        if (action == 'answer') {
+            acts.answer(groupId(GROUP), runId(), stepId(SUMMARISE), 1, CAT_USER,
+                    ConstantJson.sent('{"summary":"Demo Sample summary"}'), 'Done.')
+        } else {
+            acts.review(groupId(GROUP), runId(), stepId(SUMMARISE), 1, ANN_USER,
+                    action == 'assure' ? assured() : refused())
+        }
+
+        then:
+        statements.count { it.contains('select run.run_id, run.root_run_id, run.parent_run_id') } == snapshotsRead
+        !statements.any { it.contains('with recursive file_fields') }
+        !statements.any { it.contains('insert into run_file_holders') }
+        store.count('select count(*) from run_file_holders') == 0
+
+        where:
+        action   | snapshotsRead
+        'answer' | 3
+        'assure' | 4
+        'refuse' | 3
+    }
+
+    def "Answer it here stores a person's file under the same run"() {
+        given:
+        String question = UUID.randomUUID().toString()
+        String questionVersion = UUID.randomUUID().toString()
+        String field = UUID.randomUUID().toString()
+        String workflow = UUID.randomUUID().toString()
+        String workflowVersion = UUID.randomUUID().toString()
+        String step = UUID.randomUUID().toString()
+        String run = UUID.randomUUID().toString()
+        StepRows.question(store, question, questionVersion, GROUP, 'Demo Sample question')
+        StepRows.field(store, [id: field, owner: questionVersion, ownerKind: 'question', side: 'gives',
+                               position: 1, name: 'photo', kind: 'file', mustBe: true, standing: 'always'])
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("update declaration_fields set file_types = array['image/png'], file_maximum_bytes = 100 " +
+                "where declaration_field_id = ?::uuid").params(field).update()
+        StepRows.workflow(store, workflow, workflowVersion, GROUP, 'Demo Sample workflow')
+        StepRows.step(store, step, workflowVersion, 1, 'attach', questionVersion, 'person', 1)
+        store.transactions().executeWithoutResult {
+            StepRows.run(store, run, GROUP, 1, workflow, workflowVersion, CAT, '{}')
+            engine.planStarted(tree.lock(groupId(GROUP), runId(run)).orElseThrow())
+        }
+        String wire = '--Aa\r\nContent-Disposition: form-data; name="document"\r\n\r\n' +
+                '{"values":{"photo":{"upload":0,"name":"actual.png"}},"why":"Done."}' +
+                '\r\n--Aa\r\nContent-Disposition: form-data; name="upload0"; filename="ignored.txt"\r\n' +
+                'Content-Type: image/png\r\n\r\nabc\r\n--Aa--\r\n'
+        def request = new MockHttpServletRequest('PUT', '/')
+        request.setContentType('multipart/form-data; boundary=Aa')
+        request.setContent(wire.getBytes(StandardCharsets.ISO_8859_1))
+
+        when:
+        MultipartFiles.open(request, 1024).withCloseable { multipart ->
+            def json = multipart.document()
+            acts.answerFiles(groupId(GROUP), runId(run), stepId(step), 1, CAT_USER,
+                    ConstantJson.sent(json.path('values').toString()), json.path('why').asString(), multipart)
+        }
+
+        then:
+        store.texts('select original_name from stored_files') == ['actual.png']
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        def ids = store.texts('select file_id::text from run_file_holders where run_id = ?::uuid', run)
+        ids.size() == 1
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def values = store.texts('select value::text from production_values')
+        values.size() == 1
+        def stored = StoredFile.fromKept(ConstantJson.stored(values[0]))
+        stored.id().toString() == ids[0]
+        stored.name().value() == 'actual.png'
+        stored.type().value() == 'image/png'
+        stored.size() == 3L
+        def opened = EngineWiring.files(store).open(runId(run), groupId(GROUP), stored.id())
+        opened.file() == stored
+        opened.content().withCloseable { it.readAllBytes() == 'abc'.getBytes(StandardCharsets.UTF_8) }
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts('select file_id::text from stored_files') == ids
+
+    }
+
+    def "Answer it here counts all newly uploaded fields and keeps the try untouched when one byte over"() {
+        given:
+        String question = UUID.randomUUID().toString()
+        String questionVersion = UUID.randomUUID().toString()
+        String workflow = UUID.randomUUID().toString()
+        String workflowVersion = UUID.randomUUID().toString()
+        String step = UUID.randomUUID().toString()
+        String run = UUID.randomUUID().toString()
+        StepRows.question(store, question, questionVersion, GROUP, 'Demo Sample upload question')
+        ['photo', 'copy'].eachWithIndex { name, index ->
+            String field = UUID.randomUUID().toString()
+            StepRows.field(store, [id: field, owner: questionVersion, ownerKind: 'question', side: 'gives',
+                                   position: index + 1, name: name, kind: 'file', mustBe: true, standing: 'always'])
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
+            store.session.sql("update declaration_fields set file_types = array['image/png'], file_maximum_bytes = 100 " +
+                    "where declaration_field_id = ?::uuid").params(field).update()
+        }
+        StepRows.workflow(store, workflow, workflowVersion, GROUP, 'Demo Sample upload workflow')
+        StepRows.step(store, step, workflowVersion, 1, 'attach', questionVersion, 'person', 1)
+        store.transactions().executeWithoutResult {
+            StepRows.run(store, run, GROUP, 1, workflow, workflowVersion, CAT, '{}')
+            engine.planStarted(tree.lock(groupId(GROUP), runId(run)).orElseThrow())
+        }
+        def limits = new FileDeployment(DataSize.ofBytes(100), 2, DataSize.ofBytes(100))
+        def boundedFiles = EngineWiring.files(store, limits)
+        def boundedActs = new StepActs(store.session, store.transactions(), new GroupRoles(store.session), tree,
+                snapshots, new EngineWrites(store.session), engine, boundedFiles, limits)
+        def before = stepRows()
+        Closure<Void> answer = { String second ->
+            String wire = '--Aa\r\nContent-Disposition: form-data; name="document"\r\n\r\n' +
+                    '{"values":{"photo":{"upload":0,"name":"one.png"},' +
+                    '"copy":{"upload":1,"name":"two.png"}},"why":"Done."}' +
+                    '\r\n--Aa\r\nContent-Disposition: form-data; name="upload0"; filename="one.png"\r\n' +
+                    'Content-Type: image/png\r\n\r\n' + ('a' * 50) + '\r\n' +
+                    '--Aa\r\nContent-Disposition: form-data; name="upload1"; filename="two.png"\r\n' +
+                    'Content-Type: image/png\r\n\r\n' + second + '\r\n--Aa--\r\n'
+            def request = new MockHttpServletRequest('PUT', '/')
+            request.setContentType('multipart/form-data; boundary=Aa')
+            request.setContent(wire.getBytes(StandardCharsets.ISO_8859_1))
+            MultipartFiles.open(request, 1024).withCloseable { multipart ->
+                def json = multipart.document()
+                boundedActs.answerFiles(groupId(GROUP), runId(run), stepId(step), 1, CAT_USER,
+                        ConstantJson.sent(json.path('values').toString()), json.path('why').asString(), multipart)
+            }
+            null
+        }
+
+        when:
+        answer('b' * 51)
+
+        then:
+        def refusal = thrown(ApiErrorException)
+        refusalOf(refusal) == RefusalCode.BODY_UNUSABLE
+        stepRows() == before
+        store.count('select count(*) from stored_files') == 0
+        store.count('select count(*) from file_contents') == 0
+        store.count('select count(*) from run_file_holders') == 0
+
+        when:
+        answer('b' * 50)
+
+        then:
+        stepRows() != before
+        store.count('select count(*) from stored_files') == 2
+        store.count('select count(*) from file_contents') == 2
+        store.count('select count(*) from run_file_holders') == 2
+        store.count('select count(*) from production_values') == 2
     }
 
     private static RunId runId(String spelled = RUN) {
@@ -120,7 +288,6 @@ class StepActsIntegrationSpec extends Specification {
         }
     }
 
-    /** Summarise asked and answered by Cat, its summary waiting on a review. */
     private void waitingOnReview() {
         started()
         StepRows.answered(store, SUMMARISE, CAT, "Read it twice.", [(SUMMARY): '"A printer fire."'])
@@ -132,6 +299,7 @@ class StepActsIntegrationSpec extends Specification {
     }
 
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open' else 'ended' end
@@ -140,7 +308,6 @@ class StepActsIntegrationSpec extends Specification {
                 """, step)
     }
 
-    /** Every row an act on a step can write, as one string per table. */
     private List<String> stepRows() {
         ["run_steps", "productions", "production_inputs", "production_values", "reviews", "review_decisions",
          "run_step_holds"].collect { store.digestOf(it) }
@@ -173,20 +340,25 @@ class StepActsIntegrationSpec extends Specification {
 
         and: "confirm asked of whoever may answer it, taking the summary that now stands"
         triesOf(CONFIRM) == ["1 person ${SYSTEM} open" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
-                select taken.binding_id || ' ' || value.value::text
+                select taken.binding_id || ' ' || value.value::text || ' '
+                       || (taken.source_run_step_id = source.run_step_id) || ' '
+                       || (taken.source_run_step_id <> taken.run_step_id)
                   from production_inputs taken
                   join production_values value on value.production_value_id = taken.source_production_value_id
-                """) == ["${SUMMARY_IN} \"A printer fire.\"" as String]
+                  join productions source on source.production_id = value.production_id
+                """) == ["${SUMMARY_IN} \"A printer fire.\" true true" as String]
 
         and: "and summarise asked nothing more"
         triesOf(SUMMARISE) == ["1 person ${SYSTEM} ended" as String]
     }
 
-    /** The act has committed by the time the run goes on, so what goes wrong after it is the run's, not the act's. */
+    // The act commits before the run continues, so a later failure belongs to the run.
     def "a review that lands is answered as landed, and a run that then cannot go on by itself is logged where it stopped"() {
         given:
         waitingOnReview()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update bindings set source_path = 'gone' where binding_id = ?::uuid").params(SUMMARY_IN).update()
         def engineLogger = LoggerFactory.getLogger(RunEngine) as Logger
         def logged = new SnapshottingAppender()
@@ -233,6 +405,7 @@ class StepActsIntegrationSpec extends Specification {
 
     def "a value refused on the last try it declares fails the step"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set tries = 1 where workflow_step_id = ?::uuid").params(SUMMARISE).update()
         waitingOnReview()
 
@@ -313,6 +486,7 @@ class StepActsIntegrationSpec extends Specification {
 
     def "values waiting on the model the step names are reviewed by nobody in its place"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set reviewer_model = 'general', reviewer_mode = 'ordinary' where workflow_step_id = ?::uuid")
                 .params(SUMMARISE).update()
         waitingOnReview()
@@ -407,12 +581,14 @@ class StepActsIntegrationSpec extends Specification {
         }
 
         and: "taking the ticket again, and nothing asked of the next step"
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from production_inputs where binding_id = ?::uuid", TicketWorkflow.TICKET_IN) == 2
         triesOf(CONFIRM) == []
     }
 
     def "asking again a step whose tries are spent makes one try beyond them, the step no longer failed"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set tries = 1 where workflow_step_id = ?::uuid").params(SUMMARISE).update()
         waitingOnReview()
         acts.review(groupId(GROUP), runId(), stepId(SUMMARISE), 1, ANN_USER, refused())
@@ -465,6 +641,7 @@ class StepActsIntegrationSpec extends Specification {
     }
 
     private List<String> valuesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || field.name || ' ' || coalesce(value.value::text, '-') || ' '
                        || value.needs_review
@@ -542,11 +719,13 @@ class StepActsIntegrationSpec extends Specification {
         }
 
         and: "the new try took the ticket again"
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from production_inputs where binding_id = ?::uuid", TicketWorkflow.TICKET_IN) == 2
     }
 
     def "answering a step whose tries are spent is a try beyond them, and the step is no longer failed"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_steps set tries = 1 where workflow_step_id = ?::uuid").params(SUMMARISE).update()
         waitingOnReview()
         acts.review(groupId(GROUP), runId(), stepId(SUMMARISE), 1, ANN_USER, refused())
@@ -584,12 +763,12 @@ class StepActsIntegrationSpec extends Specification {
         new JsonValue.JsonString("A fire.")                      || RefusalCode.BODY_UNUSABLE
     }
 
-    /** A let-go whose going on never ran leaves its hold behind; the next act on the run releases it in place. */
     def "a hold left behind by a stop let go with nothing going on after it is released as an answer lands, and the answer is taken"() {
         given:
         store.stopped(TicketWorkflow.CONFIRM_QUESTION, FIRST_STEWARD)
         waitingOnReview()
         acts.review(groupId(GROUP), runId(), stepId(SUMMARISE), 1, ANN_USER, assured())
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid").params(FIRST_STEWARD).update()
 
         expect: "the hold still stands, nothing having gone on after the stop went, yet the try it held reads as owed"

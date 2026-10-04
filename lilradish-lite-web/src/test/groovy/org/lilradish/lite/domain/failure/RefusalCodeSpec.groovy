@@ -32,7 +32,9 @@ class RefusalCodeSpec extends Specification {
                 "VERSION_STANDING_REFUSES", "APPROVER_WROTE_VERSION", "VERSION_NOT_PINNABLE", "VERSION_PINS_RETIRED",
                 "LAST_MEMBERSHIP_CHANGER", "MEMBER_NOT_IN_VIEW", "PERSON_ALREADY_IN_GROUP",
                 "DECLARATION_TOO_DEEP", "FIELD_LIMIT_UNUSABLE", "FIELD_NAME_UNUSABLE", "FIELD_WORDS_UNUSABLE",
-                "INSTRUCTION_UNUSABLE", "VERSION_CONTENT_DOES_NOT_HOLD", "DECLARATION_TOO_LARGE",
+                "INSTRUCTION_UNUSABLE", "DRAWING_UNUSABLE", "DRAWING_TOO_DEEP", "VERSION_CONTENT_DOES_NOT_HOLD",
+                "DECLARATION_TOO_LARGE", "FILE_NAME_UNUSABLE", "FILE_SIZE_LIMIT_UNUSABLE", "FILE_TYPES_TOO_MANY",
+                "FILE_TYPE_UNUSABLE", "FILE_TOO_LARGE", "FILES_TOO_MANY",
                 "PROSE_DIRECTION_CONTROL", "PROSE_LINE_BREAK_CRLF", "PROSE_TAG_CHARACTER", "CURRENCY_NOT_PRICED",
                 "RUN_NOT_IN_VIEW", "RUN_BENEATH_ANOTHER", "RUN_NAME_UNUSABLE", "CEILING_UNUSABLE",
                 "CEILING_RAISE_NOT_WAITING", "CEILING_RAISE_ASKED_BY_CALLER", "CEILING_RAISE_ASKED_BY_ANOTHER",
@@ -43,7 +45,7 @@ class RefusalCodeSpec extends Specification {
                 "ASK_AGAIN_NOT_OFFERED", "ENTRY_STOPPED", "REASON_MISSING", "REASON_UNUSABLE", "REVIEW_INCOMPLETE",
                 "REVIEW_NOT_A_PERSONS", "REVIEW_OWN_PRODUCTION", "RUN_STOPPED", "STEP_MOVED_ON", "STEP_NOT_IN_VIEW",
                 "VALUE_DOES_NOT_FIT", "WORKFLOW_NOT_OFFERED", "SERVICE_BUSY", "BODY_SENT_TOO_SLOWLY",
-                "CODE_STEP_GIVES_OTHERWISE", "TRY_SENDING_NOT_OFFERED",
+                "CODE_STEP_GIVES_OTHERWISE", "TRY_SENDING_NOT_OFFERED", "SEARCH_QUESTION_PARTS_TOO_MANY", "SEARCH_TEXT_UNUSABLE",
         ].toSet()
 
         and: "and no constant carries a code that is anything other than its own name"
@@ -94,6 +96,8 @@ class RefusalCodeSpec extends Specification {
         RefusalCode.DECLARATION_TOO_LARGE               || INVALID_ARGUMENT
         RefusalCode.DRAFT_ALREADY_STARTED               || CONFLICT
         RefusalCode.DRAFT_WRITTEN_SINCE_READ            || CONFLICT
+        RefusalCode.DRAWING_TOO_DEEP                    || INVALID_ARGUMENT
+        RefusalCode.DRAWING_UNUSABLE                    || INVALID_ARGUMENT
         RefusalCode.ENTRY_NAME_TAKEN                    || CONFLICT
         RefusalCode.ENTRY_NAME_UNUSABLE                 || INVALID_ARGUMENT
         RefusalCode.ENTRY_NOT_IN_VIEW                   || NOT_FOUND
@@ -102,6 +106,12 @@ class RefusalCodeSpec extends Specification {
         RefusalCode.FIELD_LIMIT_UNUSABLE                || INVALID_ARGUMENT
         RefusalCode.FIELD_NAME_UNUSABLE                 || INVALID_ARGUMENT
         RefusalCode.FIELD_WORDS_UNUSABLE                || INVALID_ARGUMENT
+        RefusalCode.FILE_NAME_UNUSABLE                  || INVALID_ARGUMENT
+        RefusalCode.FILE_SIZE_LIMIT_UNUSABLE            || INVALID_ARGUMENT
+        RefusalCode.FILE_TYPES_TOO_MANY                 || INVALID_ARGUMENT
+        RefusalCode.FILE_TYPE_UNUSABLE                  || INVALID_ARGUMENT
+        RefusalCode.FILE_TOO_LARGE                     || INVALID_ARGUMENT
+        RefusalCode.FILES_TOO_MANY                     || INVALID_ARGUMENT
         RefusalCode.GROUP_KEY_TAKEN                     || CONFLICT
         RefusalCode.GROUP_KEY_UNUSABLE                  || INVALID_ARGUMENT
         RefusalCode.GROUP_NAME_TAKEN                    || CONFLICT
@@ -139,6 +149,8 @@ class RefusalCodeSpec extends Specification {
         RefusalCode.RUN_NAME_UNUSABLE                   || INVALID_ARGUMENT
         RefusalCode.RUN_NOT_IN_VIEW                     || NOT_FOUND
         RefusalCode.RUN_STOPPED                         || CONFLICT
+        RefusalCode.SEARCH_QUESTION_PARTS_TOO_MANY      || INVALID_ARGUMENT
+        RefusalCode.SEARCH_TEXT_UNUSABLE                || INVALID_ARGUMENT
         RefusalCode.SERVICE_BUSY                        || UNAVAILABLE
         RefusalCode.STEP_MOVED_ON                       || CONFLICT
         RefusalCode.STEP_NAME_UNUSABLE                  || INVALID_ARGUMENT

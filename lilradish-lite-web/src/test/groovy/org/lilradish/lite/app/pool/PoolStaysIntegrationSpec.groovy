@@ -16,10 +16,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A current stay held from outside this package, on a real server running the real baseline: whether
- * somebody is in the pool, and that holding their stay keeps a removal waiting and nobody else.
- */
+
 class PoolStaysIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -46,13 +43,16 @@ class PoolStaysIntegrationSpec extends Specification {
         database = Baseline.appliedTo(server, "postgres")
         def session = JdbcClient.create(database)
         [[PERSON, "000901"], [REMOVED, "000902"], [NEVER_POOLED, "000903"]].each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("""
                     insert into subjects (subject_id, kind, user_id, display_name, created_by)
                     values (?::uuid, 'person', ?, 'Somebody', ?::uuid)
                     """).params(it[0], it[1], SEEDER).update()
         }
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                 .params(PERSON, FIRST_STEWARD).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("""
                 insert into pool_members (subject_id, created_by, removed_at, removed_by)
                 values (?::uuid, ?::uuid, now(), ?::uuid)
@@ -91,6 +91,7 @@ class PoolStaysIntegrationSpec extends Specification {
             def remover = database.connection
             try {
                 remover.createStatement().withCloseable {
+                    // DB-SPECIFIC: PostgreSQL SELECT FOR UPDATE.
                     it.execute("select 1 from pool_members where subject_id = '${PERSON}' and removed_at is null for update")
                 }
             } finally {
@@ -112,7 +113,7 @@ class PoolStaysIntegrationSpec extends Specification {
         another.close()
     }
 
-    /** A transaction of the feature's own, and the stays read inside it. */
+
     private List heldOn() {
         def connection = database.connection
         connection.autoCommit = false
@@ -121,6 +122,7 @@ class PoolStaysIntegrationSpec extends Specification {
 
     private void untilWaiting() {
         def deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        // DB-SPECIFIC: PostgreSQL pg_stat_activity; current_database().
         while (JdbcClient.create(database).sql("""
                 select count(*) from pg_stat_activity
                  where datname = current_database() and wait_event_type = 'Lock'

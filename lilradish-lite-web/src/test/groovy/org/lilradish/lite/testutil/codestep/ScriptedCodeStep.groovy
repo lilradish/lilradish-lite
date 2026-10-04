@@ -31,12 +31,12 @@ final class ScriptedCodeStep implements CodeStep {
 
     private final CodeStepDeclaration declared
 
-    private final Closure<JsonValue.JsonObject> behaviour
+    private final Closure<?> behaviour
 
     private final CountDownLatch gate
 
     ScriptedCodeStep(String name, List<Field> takes, List<Field> gives, boolean mayRunAgain,
-                     Closure<JsonValue.JsonObject> behaviour, CountDownLatch gate = null) {
+                     Closure<?> behaviour, CountDownLatch gate = null) {
         this.name = new CodeStepName(name)
         this.declared = new CodeStepDeclaration(
                 new Declaration(DeclarationSide.TAKES, Demands.ofQuestion(DeclarationSide.TAKES), takes),
@@ -57,13 +57,15 @@ final class ScriptedCodeStep implements CodeStep {
     }
 
     @Override
-    JsonValue.JsonObject run(JsonValue.JsonObject takes) {
+    CodeStep.Output run(CodeStep.Input takes) {
         ran << new Ran(Thread.currentThread().name, TransactionSynchronizationManager.isActualTransactionActive())
         runs.incrementAndGet()
         if (gate != null && !gate.await(LONGEST_GATE_SECONDS, TimeUnit.SECONDS)) {
             throw new GateNeverOpened("ScriptedCodeStep ${name.value()} was never let through its gate")
         }
-        behaviour.call(takes)
+        def returned = behaviour.call(takes.values())
+        returned == null ? null : returned instanceof CodeStep.Output
+                ? returned : CodeStep.Output.plain((JsonValue.JsonObject) returned)
     }
 
     /** An error nothing running a code step catches, so a spec whose gate never opens fails rather than erring. */

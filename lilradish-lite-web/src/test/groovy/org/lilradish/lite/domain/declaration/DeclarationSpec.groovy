@@ -1,5 +1,8 @@
 package org.lilradish.lite.domain.declaration
 
+import static org.lilradish.lite.domain.registry.ContentProblemCode.FILE_LIMIT_PAST_DEPLOYMENT
+import static org.lilradish.lite.domain.registry.ContentProblemCode.FILE_SIZE_MISSING
+import static org.lilradish.lite.domain.registry.ContentProblemCode.FILE_TYPES_TOO_MANY
 import static org.lilradish.lite.domain.registry.ContentProblemCode.FLOOR_MISSING
 import static org.lilradish.lite.domain.registry.ContentProblemCode.LIMIT_PAST_LARGEST
 import static org.lilradish.lite.domain.registry.ContentProblemCode.LIST_MISSING
@@ -9,6 +12,7 @@ import static org.lilradish.lite.domain.registry.ContentProblemCode.NAME_REPEATE
 import static org.lilradish.lite.domain.registry.ContentProblemCode.NO_FIELDS_HELD
 import static org.lilradish.lite.domain.registry.ContentProblemCode.STANDING_MISSING
 
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.registry.EntryVersionId
 import org.lilradish.lite.testutil.OfferedLists
 import spock.lang.Specification
@@ -323,6 +327,68 @@ class DeclarationSpec extends Specification {
         new FieldShape.Text(null)  || LONGEST_MISSING
         new FieldShape.Term(null)  || LIST_MISSING
         new FieldShape.Nested([])  || NO_FIELDS_HELD
+    }
+
+    def "a nested file says its single-file bound and stays within both deployment limits"() {
+        given:
+        def file = field("attachment", new FieldShape.File([new MediaTypeName("application/pdf")], maximumBytes),
+                GIVEN, new HowMany.Many(most))
+        def declared = taken([holding("details", GIVEN, [file])])
+
+        expect:
+        declared.problems([:], 104_857_600L, 100) == named.collect { new FieldProblem(it, [0, 0]) }
+        declared.hasFile()
+        !taken([text("summary", 10)]).hasFile()
+        declared.holds() == (maximumBytes != null)
+
+        where:
+        maximumBytes | most || named
+        null          | 100  || [FILE_SIZE_MISSING]
+        104_857_600L  | 100  || []
+        104_857_601L  | 100  || [FILE_LIMIT_PAST_DEPLOYMENT]
+        104_857_600L  | 101  || [FILE_LIMIT_PAST_DEPLOYMENT]
+        104_857_601L  | 101  || [FILE_LIMIT_PAST_DEPLOYMENT]
+    }
+
+    def "an old file declaration with sixty-five types has a field problem at any depth"() {
+        given:
+        def types = (0..<count).collect { new MediaTypeName("application/x${it}") }
+        def document = field("document", new FieldShape.File(types, 1024L), GIVEN)
+        def declared = taken(nested ? [holding("details", GIVEN, [document])] : [document])
+
+        expect:
+        declared.problems([:]) == (count == 65 ? [new FieldProblem(FILE_TYPES_TOO_MANY, path)] : [])
+        declared.holds() == (count == 64)
+
+        where:
+        count | nested || path
+        64    | false  || [0]
+        65    | false  || [0]
+        64    | true   || [0, 0]
+        65    | true   || [0, 0]
+    }
+
+    def "all files in a declaration count toward one handover, multiplying every surrounding many"() {
+        expect:
+        taken(fields).filesPastTotal(total) == past
+
+        where:
+        fields                                                                                           | total         || past
+        [file("a", 1_073_741_824L)]                                                                       | 1_073_741_824L || false
+        [file("a", 1_073_741_825L)]                                                                       | 1_073_741_824L || true
+        [file("a", 536_870_912L), file("b", 536_870_912L)]                                               | 1_073_741_824L || false
+        [file("a", 536_870_912L), file("b", 536_870_913L)]                                               | 1_073_741_824L || true
+        [field("outer", new FieldShape.Nested([file("a", 20L, 3)]), GIVEN, new HowMany.Many(2))]          | 120L          || false
+        [field("outer", new FieldShape.Nested([file("a", 21L, 3)]), GIVEN, new HowMany.Many(2))]          | 120L          || true
+        [field("outer", new FieldShape.Nested([file("a", 2L, Integer.MAX_VALUE)]), GIVEN, MOST)]         | 1_073_741_824L || true
+        [file("unknown", null), file("known", 1_073_741_825L)]                                            | 1_073_741_824L || true
+        [file("unknown", null), file("known", 1_073_741_824L)]                                            | 1_073_741_824L || false
+        [file("unknown_count", 1L, null), file("known", 1_073_741_825L)]                                   | 1_073_741_824L || true
+    }
+
+    private static Field file(String name, Long maximumBytes, Integer most = 1) {
+        field(name, new FieldShape.File([new MediaTypeName("application/pdf")], maximumBytes), GIVEN,
+                new HowMany.Many(most))
     }
 
     /** A name is repeated only beside another: the same name at another level, or under another field, is its own. */

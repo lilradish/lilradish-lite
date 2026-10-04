@@ -31,6 +31,7 @@ import org.lilradish.lite.domain.identity.EstateRole
 import org.lilradish.lite.domain.identity.GroupId
 import org.lilradish.lite.domain.identity.GroupRole
 import org.lilradish.lite.domain.identity.UserId
+import org.lilradish.lite.domain.inference.Envelope
 import org.lilradish.lite.domain.referencelist.ListNote
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
@@ -83,7 +84,7 @@ class QuestionControllerIntegrationSpec extends Specification {
             [new OfferedTerms.Offered(new Term("Billing"), new TermMeaning("A charge."))], new ListNote("Choose one."))
 
     static final Questions.QuestionView READ = new Questions.QuestionView(3,
-            new StoredQuestion(new Instruction("Say which category."),
+            new StoredQuestion(new Instruction("Say which category."), "## {{complaint}}",
                     new StoredDeclarations.Half(new Declaration(DeclarationSide.TAKES, Demands.ofQuestion(DeclarationSide.TAKES), [
                             new Field(new FieldName("complaint"), new FieldLabel("The complaint"),
                                     new FieldHelp("As written."), new FieldShape.Text(4000), new HowMany.One(),
@@ -134,6 +135,7 @@ class QuestionControllerIntegrationSpec extends Specification {
         given(questions.read(new GroupId(GROUP), new EntryId(ENTRY), new EntryVersionId(VERSION), READER))
                 .willReturn(READ)
         given(drafts.instruct(any(), any(), any(), any(), anyInt(), any())).willReturn(READ)
+        given(drafts.draw(any(), any(), any(), any(), anyInt(), any())).willReturn(READ)
         given(drafts.declare(any(), any(), any(), any(), anyInt(), any(), any())).willReturn(READ)
     }
 
@@ -168,8 +170,9 @@ class QuestionControllerIntegrationSpec extends Specification {
     static final Map ANSWER = [
             revision   : 3,
             instruction: "Say which category.",
+            drawing    : "## {{complaint}}",
             takes      : [[fieldId: KEYS[0].toString(), name: "complaint", label: "The complaint", help: "As written.",
-                           kind   : "text", longest: 4000, many: false, mustBeGiven: true]],
+                           kind   : "text", lines: "several", longest: 4000, many: false, mustBeGiven: true]],
             gives      : [[fieldId: KEYS[1].toString(), name: "category", kind: "term",
                            list   : [name: "Categories", versionId: LIST.toString(),
                                      number : 1, standing: "in_service", newer: [versionId: NEWER.toString(), number: 2]],
@@ -177,11 +180,7 @@ class QuestionControllerIntegrationSpec extends Specification {
                           [fieldId: KEYS[2].toString(), name: "details", kind: "fields", many: false, mustBeGiven: false,
                            fields : [[fieldId: KEYS[3].toString(), name: "received", kind: "moment", many: true,
                                       mustBeGiven: false]]]],
-            added      : [[name: "category", kind: "term", many: true, most: 2, mustBeGiven: true,
-                           terms: [[term: "Billing", meaning: "A charge."]], note: "Choose one.", confidence: true],
-                          [name  : "details", kind: "fields", many: false, mustBeGiven: false, confidence: false,
-                           fields: [[name: "sku", kind: "text", longest: 32, many: false, mustBeGiven: true,
-                                     confidence: false]]]],
+            added      : Envelope.toProduce(READ.added()),
             lists      : [[name: "Categories", versionId: NEWER.toString(), number: 2]]]
 
     /** Each field's key beside it, each list it pins named, and every member nothing was chosen for left out. */
@@ -221,6 +220,119 @@ class QuestionControllerIntegrationSpec extends Specification {
         '{"revision":3,"instruction":"Say why.\\n\\tBriefly."}'     || 3          | new Instruction("Say why.\n\tBriefly.")
         '{"instruction":null,"revision":1}'                         || 1          | null
         '{"revision":2147483647,"instruction":null}'                || 2147483647 | null
+    }
+
+    def "writes a drawing beside the revision read and answers with what that change read"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/drawing", body))
+
+        then:
+        answered.response.status == 200
+        JSON.convertValue(documentOf(answered), Map) == ANSWER
+
+        and:
+        writtenAlone {
+            it.draw(new GroupId(GROUP), new EntryId(ENTRY), new EntryVersionId(VERSION), READER, 3, drawing)
+        }
+
+        where:
+        body                                                  || drawing
+        '{"revision":3,"drawing":"## {{complaint}}"}'       || "## {{complaint}}"
+        '{"revision":3,"drawing":null}'                     || null
+    }
+
+    def "a drawing takes a visible character at its limit and keeps direction controls and tags"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/drawing", JSON.writeValueAsString([revision: 3, drawing: drawing])))
+
+        then:
+        answered.response.status == 200
+        writtenAlone {
+            it.draw(new GroupId(GROUP), new EntryId(ENTRY), new EntryVersionId(VERSION), READER, 3, drawing)
+        }
+
+        where:
+        drawing << ["a", "a" * 8192, new String(Character.toChars(0x1F642)) * 8192, "a\n\tb", "a\u202Eb", "a" + new String(Character.toChars(0xE0041)) + "b"]
+    }
+
+    def "a drawing whose lists and quotes, or emphasis, are 32 deep is written as sent"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/drawing", JSON.writeValueAsString([revision: 3, drawing: drawing])))
+
+        then:
+        answered.response.status == 200
+        writtenAlone {
+            it.draw(new GroupId(GROUP), new EntryId(ENTRY), new EntryVersionId(VERSION), READER, 3, drawing)
+        }
+
+        where:
+        drawing << [">" * 32 + " {{complaint}}", "  " * 31 + "- {{complaint}}", "> " * 16 + "- " * 16 + "a",
+                    "- a\n" + "  " * 31 + "- b", "*" * 65, "*a " * 32 + "a* " * 32, "_a " * 64,
+                    ">" * 32 + " " + "_" * 65]
+    }
+
+    def "a drawing is refused at arrival when it cannot be shown, exceeds its limit or nests too deep"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/drawing", JSON.writeValueAsString([revision: 3, drawing: drawing])))
+
+        then:
+        answered.response.status == 400
+        documentOf(answered).get("code").asString() == code
+        Mockito.verifyNoInteractions(drafts, questions)
+
+        where:
+        drawing                                       || code
+        ""                                            || "DRAWING_UNUSABLE"
+        " "                                           || "DRAWING_UNUSABLE"
+        "\n\t"                                        || "DRAWING_UNUSABLE"
+        "a" * 8193                                    || "DRAWING_UNUSABLE"
+        new String(Character.toChars(0x1F642)) * 8193 || "DRAWING_UNUSABLE"
+        "a\r\nb"                                      || "PROSE_LINE_BREAK_CRLF"
+        "a\rb"                                        || "DRAWING_UNUSABLE"
+        "a\u0007b"                                    || "DRAWING_UNUSABLE"
+        "\u202E"                                      || "DRAWING_UNUSABLE"
+        new String(Character.toChars(0xE0041))        || "DRAWING_UNUSABLE"
+        ">" * 33                                      || "DRAWING_TOO_DEEP"
+        "  " * 32 + "- a"                             || "DRAWING_TOO_DEEP"
+        "a\n" + "> " * 33 + "a"                       || "DRAWING_TOO_DEEP"
+        String.valueOf(0xFEFF as char) + ">" * 33     || "DRAWING_TOO_DEEP"
+        "*" * 66                                      || "DRAWING_TOO_DEEP"
+        "_" * 66                                      || "DRAWING_TOO_DEEP"
+        "**\n\n" + "_a " * 66                         || "DRAWING_TOO_DEEP"
+        ">" * 33 + "a" * 8160                         || "DRAWING_UNUSABLE"
+        "*" * 66 + "a" * 8127                         || "DRAWING_UNUSABLE"
+        ">" * 33 + "\u0007"                           || "DRAWING_UNUSABLE"
+        ">" * 33 + "\r\na"                            || "PROSE_LINE_BREAK_CRLF"
+        "*" * 66 + "\r\na"                            || "PROSE_LINE_BREAK_CRLF"
+    }
+
+    def "a drawing write refuses an unusable body before it reaches the draft"() {
+        given:
+        holding(EnumSet.of(GroupRole.OWNER))
+
+        when:
+        def answered = sending(sent(AT_VERSION + "/drawing", body))
+
+        then:
+        answered.response.status == 400
+        documentOf(answered).get("code").asString() == "BODY_UNUSABLE"
+        Mockito.verifyNoInteractions(drafts, questions)
+
+        where:
+        body << ['{"revision":3,"drawing":3}', '{"revision":3,"drawing":null,"other":1}',
+                 '{"revision":3}', '{"revision":0,"drawing":null}']
     }
 
     def "writes the half the address names, read as the body declares it"() {
@@ -270,6 +382,7 @@ class QuestionControllerIntegrationSpec extends Specification {
         held                         | suffix         | body                                  || status | code
         EnumSet.noneOf(GroupRole)    | "/instruction" | '{"revision":1,"instruction":null}'  || 404    | "GROUP_NOT_IN_VIEW"
         EnumSet.noneOf(GroupRole)    | "/takes"       | '{"revision":1,"fields":[]}'         || 404    | "GROUP_NOT_IN_VIEW"
+        EnumSet.noneOf(GroupRole)    | "/drawing"     | '{"revision":1,"drawing":null}'      || 404    | "GROUP_NOT_IN_VIEW"
     }
 
     def "refuses an address naming no version alike whichever identifier names nothing, and never asks the store"() {

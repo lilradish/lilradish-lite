@@ -43,6 +43,16 @@ export function post<T>(
   return exchange(path, withDocument("POST", sent, signal), read);
 }
 
+/** A form sent to be taken in, with the body's media type left to the browser. */
+export function postForm<T>(
+  path: string,
+  body: FormData,
+  signal: AbortSignal,
+  read: (body: unknown) => T | null,
+): Promise<T> {
+  return exchange(path, { method: "POST", body, signal }, read);
+}
+
 /** Something made where the address alone says what, so nothing is sent with it. */
 export function postNothing<T>(
   path: string,
@@ -78,6 +88,16 @@ export function putDocument<T>(
   read: (body: unknown) => T | null,
 ): Promise<T> {
   return exchange(path, withDocument("PUT", sent, signal), read);
+}
+
+/** A form standing whole in place of what the address holds. */
+export function putForm<T>(
+  path: string,
+  body: FormData,
+  signal: AbortSignal,
+  read: (body: unknown) => T | null,
+): Promise<T> {
+  return exchange(path, { method: "PUT", body, signal }, read);
 }
 
 /** `DELETE`, under a name the language leaves free. */
@@ -153,12 +173,8 @@ async function exchange<T>(
  * The document a body carries, or a refusal where what it carries cannot be
  * read as one.
  *
- * The status is stamped on here and not only on a refused response. A `Problem`
- * without one is read downstream as a request that never arrived, so a gateway
- * answering 200 with its own sign-in page, or a proxy putting `application/json`
- * on its own 503, would otherwise reach the reader as "the server could not be
- * reached" — and be retried against a server that answered perfectly well.
- * A body cut off on the way is read the same way: it too was answered.
+ * The status is kept even when a body cannot be read: without it, a response
+ * could be mistaken downstream for a request that never arrived.
  */
 async function documentOf(response: Response): Promise<unknown> {
   try {

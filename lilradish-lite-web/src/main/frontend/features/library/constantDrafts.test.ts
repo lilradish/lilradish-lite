@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { FieldKind } from "../../api/declaration";
 import type { FillReason } from "../../api/filling";
@@ -6,7 +6,12 @@ import type { MessageId } from "../../i18n/app";
 import WRITING from "../../lib/filling/writing.cases.json";
 import { numberWrittenPlainly } from "../../lib/filling/writing";
 import CASES from "./constantDrafts.cases.json";
-import { constantKindOf, constantRead, constantTyped } from "./constantDrafts";
+import {
+  constantHasLineBreak,
+  constantKindOf,
+  constantRead,
+  constantTyped,
+} from "./constantDrafts";
 import { termFits, type Shape } from "./workflowDrafts";
 
 /**
@@ -65,7 +70,79 @@ const BACKSLASH = String.fromCodePoint(0x5c);
 
 const DIGITS_38 = "12345678901234567890123456789012345678";
 
-/** Numbers of 38 digits past their point, before it, and past it with one before, each written plainly. */
+describe("constant text lines", () => {
+  const one: Shape = { ...TEXT, lines: "one" };
+  const several: Shape = { ...TEXT, lines: "several" };
+  const newline = String.fromCodePoint(0x0a);
+
+  it("refuses a scalar line break, but keeps empty and several-line text as written", () => {
+    const typed = `a${newline}b`;
+
+    expect(constantRead(typed, one)).toEqual({ why: "fill.line_break" });
+    expect(constantRead(typed, several)).toEqual({
+      written: JSON.stringify(typed),
+    });
+    expect(constantRead(typed, TEXT)).toEqual({
+      written: JSON.stringify(typed),
+    });
+    expect(constantRead("", one)).toEqual({ written: '""' });
+  });
+
+  it("checks a text inside many and nested JSON values, including a saved value", () => {
+    const value = `a${newline}b`;
+    const many = { ...one, many: true };
+    const nested = { ...FIELDS, fields: [{ ...one, name: "said" }] };
+    const list = JSON.stringify([value]);
+    const object = JSON.stringify({ said: value });
+
+    expect(constantRead(list, many)).toEqual({ why: "fill.line_break" });
+    expect(constantRead(object, nested)).toEqual({ why: "fill.line_break" });
+    expect(constantHasLineBreak(object, nested)).toBe(true);
+    expect(constantHasLineBreak(object, { ...FIELDS, fields: [several] })).toBe(
+      false,
+    );
+    expect(
+      constantHasLineBreak(JSON.stringify({ said: "plain" }), nested),
+    ).toBe(false);
+  });
+
+  it("skips parsing saved values whose declarations hold no one-line text", () => {
+    const numbers = `[${Array(100000).fill("1").join(",")}]`;
+    const onlySeveral = {
+      ...FIELDS,
+      fields: [{ ...TEXT, lines: "several" as const }],
+    };
+    const nested = JSON.stringify({ said: "Demo Sample" });
+    const broken = `Demo${newline}Sample`;
+    const manyOne = JSON.stringify(["Demo Sample", broken]);
+    const nestedOne = JSON.stringify({ said: broken });
+    const parse = vi.spyOn(JSON, "parse");
+
+    try {
+      expect(constantHasLineBreak(numbers, NUMBERS)).toBe(false);
+      expect(constantHasLineBreak(nested, onlySeveral)).toBe(false);
+      expect(constantHasLineBreak(JSON.stringify("Demo Sample"), TEXT)).toBe(
+        false,
+      );
+      expect(parse).not.toHaveBeenCalled();
+
+      expect(constantHasLineBreak(manyOne, { ...one, many: true })).toBe(true);
+      expect(
+        constantHasLineBreak(nestedOne, { ...FIELDS, fields: [one] }),
+      ).toBe(true);
+      expect(parse).toHaveBeenCalledTimes(2);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("keeps direction control refusal before a line break", () => {
+    expect(constantRead(`a${DIRECTION_CONTROL}${newline}`, one)).toEqual({
+      why: "refusal.PROSE_DIRECTION_CONTROL",
+    });
+  });
+});
+
 const EITHER_SIDE_38 =
   "[0." +
   "0".repeat(37) +
@@ -77,7 +154,6 @@ const EITHER_SIDE_38 =
   "0".repeat(38) +
   "]";
 
-/** Numbers of 38 digits in all, a zero before the point counted, as one number filled in is. */
 const IN_ALL_38 =
   "[0." +
   "0".repeat(36) +

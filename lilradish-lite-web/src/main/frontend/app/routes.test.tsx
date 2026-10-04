@@ -49,15 +49,15 @@ const REFUSED = {
     "Measurements is read only by a role that may read what the estate measures.",
 };
 
-const GRACE = {
+const GLINN = {
   subjectId: "00000002-0000-4000-8000-000000000140",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
 };
 
 const POOL: Reply = [
   JSON.stringify({
-    items: [{ ...GRACE, estateRoles: ["steward"], groupCount: 0 }],
+    items: [{ ...GLINN, estateRoles: ["steward"], groupCount: 0 }],
   }),
   200,
 ];
@@ -127,16 +127,16 @@ const TRIAGE_WORK = {
     ['{"items":[],"reading":"own"}', 200],
   ],
   [`GET /api/groups/${SEES_NO_MEMBERS.groupId}/offered-workflows`]: [
-    ['{"workflows":[]}', 200],
+    ['{"items":[]}', 200],
   ],
 } as const satisfies Record<string, readonly Reply[]>;
 
 /** The work page's heading, which names the group set apart as the members page's does. */
 const TRIAGE_WORK_HEADING = `Work of ${String.fromCodePoint(0x2068)}Triage${String.fromCodePoint(0x2069)}`;
 
-const GRACE_PANEL: Reply = [
+const GLINN_PANEL: Reply = [
   JSON.stringify({
-    ...GRACE,
+    ...GLINN,
     estateRoles: ["steward"],
     lastGrantingRoles: [],
     groups: [],
@@ -179,7 +179,7 @@ function opening(
   const sent = serving({
     "GET /api/standing": [[JSON.stringify({ acts, groups }), 200]],
     "GET /api/pool/people": [POOL],
-    [`GET /api/pool/people/${GRACE.subjectId}`]: [GRACE_PANEL],
+    [`GET /api/pool/people/${GLINN.subjectId}`]: [GLINN_PANEL],
     "GET /api/groups": [REGISTER],
     ...routes,
   });
@@ -241,6 +241,13 @@ function breakingTheFrame() {
   vi.spyOn(console, "error").mockImplementation(() => {});
 }
 
+/** The width the frame holds the screen to, by the one class naming it. */
+function heldTo(): string[] {
+  return [...document.querySelector(".MuiContainer-root")!.classList].filter(
+    (name) => name.startsWith("MuiContainer-maxWidth"),
+  );
+}
+
 describe("ROUTES", () => {
   it("opens a screen this reader's standing names, with nothing refused on it", async () => {
     opening("/system/people", OPENS_PEOPLE_AND_GROUPS);
@@ -253,15 +260,15 @@ describe("ROUTES", () => {
 
   /** The row may be on no page in hand, so the person is read on their own. */
   it("opens the pool with the person an address names picked, read on their own", async () => {
-    const sent = opening(`/system/people/${GRACE.subjectId}`, ["keep_pool"]);
+    const sent = opening(`/system/people/${GLINN.subjectId}`, ["keep_pool"]);
 
-    const panel = await screen.findByRole("dialog", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
 
     expect(within(panel).getByText("000140")).toBeInTheDocument();
     expect(requestsTo(sent)).toEqual([
       "GET /api/standing",
       "GET /api/pool/people?sort=userId",
-      `GET /api/pool/people/${GRACE.subjectId}`,
+      `GET /api/pool/people/${GLINN.subjectId}`,
     ]);
   });
 
@@ -276,12 +283,12 @@ describe("ROUTES", () => {
     await userEvent.click(row);
 
     expect(
-      await screen.findByRole("dialog", { name: "Grace Hopper" }),
+      await screen.findByRole("dialog", { name: "Glinn Havven" }),
     ).toBeInTheDocument();
     expect(requestsTo(sent)).toEqual([
       "GET /api/standing",
       "GET /api/pool/people?sort=userId",
-      `GET /api/pool/people/${GRACE.subjectId}`,
+      `GET /api/pool/people/${GLINN.subjectId}`,
     ]);
     expect(row.isConnected).toBe(true);
   });
@@ -289,7 +296,7 @@ describe("ROUTES", () => {
   /** A standing that keeps no pool opens nothing of it. */
   it("refuses the person an address names to a standing that keeps no pool, asking the server nothing about it", async () => {
     const sent = opening(
-      `/system/people/${GRACE.subjectId}`,
+      `/system/people/${GLINN.subjectId}`,
       OPENS_SOUNDNESS_AND_MEASUREMENTS,
     );
 
@@ -304,7 +311,7 @@ describe("ROUTES", () => {
    * rather than controls the server would refuse.
    */
   it("reads the reader's own standing again after an estate role changes, and stops at the wall it now draws", async () => {
-    const sent = opening(`/system/people/${GRACE.subjectId}`, [], {
+    const sent = opening(`/system/people/${GLINN.subjectId}`, [], {
       "GET /api/standing": [
         [
           JSON.stringify({ acts: OPENS_PEOPLE_AND_GROUPS_AND_GRANTS_ROLES }),
@@ -312,10 +319,10 @@ describe("ROUTES", () => {
         ],
         [JSON.stringify({ acts: [] }), 200],
       ],
-      [`DELETE /api/pool/people/${GRACE.subjectId}/estate-roles/steward`]: [
+      [`DELETE /api/pool/people/${GLINN.subjectId}/estate-roles/steward`]: [
         [
           JSON.stringify({
-            ...GRACE,
+            ...GLINN,
             estateRoles: [],
             lastGrantingRoles: [],
             groups: [],
@@ -344,7 +351,7 @@ describe("ROUTES", () => {
    */
   it("offers the destinations a role granted to the reader themselves reaches, keeping the page as it was while it reads", async () => {
     const readAgain = deferred<readonly [string, number]>();
-    opening(`/system/people/${GRACE.subjectId}`, [], {
+    opening(`/system/people/${GLINN.subjectId}`, [], {
       "GET /api/standing": [
         [
           JSON.stringify({ acts: OPENS_PEOPLE_AND_GROUPS_AND_GRANTS_ROLES }),
@@ -352,10 +359,10 @@ describe("ROUTES", () => {
         ],
         readAgain.promise,
       ],
-      [`PUT /api/pool/people/${GRACE.subjectId}/estate-roles/watcher`]: [
+      [`PUT /api/pool/people/${GLINN.subjectId}/estate-roles/watcher`]: [
         [
           JSON.stringify({
-            ...GRACE,
+            ...GLINN,
             estateRoles: ["steward", "watcher"],
             lastGrantingRoles: [],
             groups: [],
@@ -669,6 +676,7 @@ describe("ROUTES", () => {
         await screen.findByRole("heading", { level: 1, name: heading }),
       ).toBeInTheDocument();
       expect(screen.queryByRole("alert")).toBeNull();
+      expect(heldTo()).toEqual(["MuiContainer-maxWidthXl"]);
     },
   );
 
@@ -698,6 +706,7 @@ describe("ROUTES", () => {
         }),
       ).toBeInTheDocument();
       expect(screen.queryByRole("alert")).toBeNull();
+      expect(heldTo()).toEqual(["MuiContainer-maxWidthXl"]);
       expect(requestsTo(sent)).toContain(
         `GET /api/groups/${SEES_NO_MEMBERS.groupId}/${segment}?sort=name`,
       );
@@ -735,6 +744,7 @@ describe("ROUTES", () => {
       screen.queryByRole("table", { name: "The group's questions" }),
     ).toBeNull();
     expect(screen.queryByText("Nothing is built here yet.")).toBeNull();
+    expect(heldTo()).toEqual(["MuiContainer-maxWidthXl"]);
   });
 
   it("answers an entry's page in a group the reader is not in as missing, asking nothing of it", async () => {
@@ -750,9 +760,9 @@ describe("ROUTES", () => {
   });
 
   /** A run opens under Work, reached as Work is; what the reader may read of it is the server's. */
-  it("opens a run under Work in a group the reader is in, by membership alone", async () => {
+  it("opens a run as a page of its own under Work in a group the reader is in, by membership alone, drawing neither tab nor list", async () => {
     const run = "00000008-0000-4000-8000-000000000951";
-    opening(
+    const sent = opening(
       `/groups/${SEES_NO_MEMBERS.groupId}/work/${run}`,
       [],
       {
@@ -780,13 +790,15 @@ describe("ROUTES", () => {
             JSON.stringify({
               runId: run,
               number: 4,
-              name: "Claim from Ada",
+              name: "Claim from Avo",
               workflow: {
                 entryId: "00000006-0000-4000-8000-000000000951",
                 name: "Handle a claim",
                 version: 1,
               },
+              runsAbove: [],
               startedAt: "2026-09-24T08:00:00Z",
+              conversationEvents: [],
               state: "running",
               spend: {
                 sent: "0",
@@ -805,10 +817,26 @@ describe("ROUTES", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { level: 2, name: /Claim from Ada/ }),
+      await screen.findByRole("heading", { level: 1, name: /Claim from Avo/ }),
     ).toBeInTheDocument();
+    expect(heldTo()).toEqual(["MuiContainer-maxWidthXl"]);
+    expect(
+      screen.queryByRole("heading", { name: TRIAGE_WORK_HEADING }),
+    ).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("Nothing is built here yet.")).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("table", { name: "What is running" })).toBeNull();
+    expect(
+      requestsTo(sent).filter(
+        (each) =>
+          each.startsWith(`GET /api/groups/${SEES_NO_MEMBERS.groupId}/runs?`) ||
+          (each.startsWith("GET ") &&
+            new URL(each.slice(4), "http://reader.test").pathname.endsWith(
+              "/offered-workflows",
+            )),
+      ),
+    ).toEqual([]);
   });
 
   it("answers a run's page in a group the reader is not in as missing, asking nothing of it", async () => {
@@ -824,7 +852,7 @@ describe("ROUTES", () => {
   });
 
   /** A step opens in its run's place under Work, reached as Work is. */
-  it("opens a step of a run under Work in a group the reader is in, by membership alone", async () => {
+  it("opens a step of a run under Work in a group the reader is in, by membership alone, drawing neither tab nor list", async () => {
     const run = "00000008-0000-4000-8000-000000000953";
     const step = "00000009-0000-4000-8000-000000000953";
     const row = {
@@ -838,7 +866,7 @@ describe("ROUTES", () => {
       acts: [],
       withheld: [],
     };
-    opening(
+    const sent = opening(
       `/groups/${SEES_NO_MEMBERS.groupId}/work/${run}/steps/${step}`,
       [],
       {
@@ -867,12 +895,25 @@ describe("ROUTES", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { level: 2, name: /file it/ }),
+      await screen.findByRole("heading", { level: 1, name: /file it/ }),
     ).toBeInTheDocument();
+    expect(heldTo()).toEqual(["MuiContainer-maxWidthXl"]);
     expect(
-      screen.getByRole("heading", { level: 1, name: TRIAGE_WORK_HEADING }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { name: TRIAGE_WORK_HEADING }),
+    ).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("table", { name: "What is running" })).toBeNull();
+    expect(
+      requestsTo(sent).filter(
+        (each) =>
+          each.startsWith(`GET /api/groups/${SEES_NO_MEMBERS.groupId}/runs?`) ||
+          (each.startsWith("GET ") &&
+            new URL(each.slice(4), "http://reader.test").pathname.endsWith(
+              "/offered-workflows",
+            )),
+      ),
+    ).toEqual([]);
   });
 
   it("answers a step's page in a group the reader is not in as missing, asking nothing of it", async () => {
@@ -987,7 +1028,7 @@ describe("ROUTES", () => {
         ],
       ],
       "GET /api/pool/search": [
-        [JSON.stringify({ items: [GRACE], more: false }), 200],
+        [JSON.stringify({ items: [GLINN], more: false }), 200],
       ],
       "POST /api/groups": [
         [
@@ -1018,10 +1059,10 @@ describe("ROUTES", () => {
     );
     await userEvent.type(
       screen.getByRole("searchbox", { name: "User number or name" }),
-      "grace",
+      "glinn",
     );
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000140 Grace Hopper" }),
+      await screen.findByRole("radio", { name: "000140 Glinn Havven" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 

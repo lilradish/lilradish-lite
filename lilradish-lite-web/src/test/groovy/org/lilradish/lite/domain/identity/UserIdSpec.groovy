@@ -15,7 +15,7 @@ class UserIdSpec extends Specification {
         new UserId(value).value() == value
 
         where:
-        value << ["overseer@example.com", "CN=Ada Lovelace,OU=Analytics", "004821"]
+        value << ["overseer@example.com", "CN=Ari Mockvale,OU=DemoGroup", "004821"]
     }
 
     /**

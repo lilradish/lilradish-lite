@@ -20,6 +20,8 @@ public final class ModelCatalog {
 
     private final Map<ModelName, Map<Currency, ModelPrice>> pricesByName;
 
+    private final Map<ModelName, Map<ModelToolName, DeployedTool>> toolsByName;
+
     private final List<Currency> currencies;
 
     public ModelCatalog(List<DeployedModel> models) {
@@ -28,6 +30,7 @@ public final class ModelCatalog {
         }
         Map<ModelName, DeployedModel> modelsByName = HashMap.newHashMap(models.size());
         Map<ModelName, Map<Currency, ModelPrice>> pricesByName = HashMap.newHashMap(models.size());
+        Map<ModelName, Map<ModelToolName, DeployedTool>> toolsByName = HashMap.newHashMap(models.size());
         TreeSet<Currency> currencies = new TreeSet<>(Comparator.comparing(Currency::getCurrencyCode));
         for (DeployedModel model : models) {
             if (model == null) {
@@ -44,10 +47,20 @@ public final class ModelCatalog {
                 currencies.add(price.currency());
             }
             pricesByName.put(model.name(), prices);
+            Map<ModelToolName, DeployedTool> tools =
+                    HashMap.newHashMap(model.tools().size());
+            for (DeployedTool tool : model.tools()) {
+                tools.put(tool.name(), tool);
+                for (ToolPrice price : tool.pricesPerUse()) {
+                    currencies.add(price.currency());
+                }
+            }
+            toolsByName.put(model.name(), Map.copyOf(tools));
         }
         this.models = List.copyOf(models);
         this.modelsByName = modelsByName;
         this.pricesByName = pricesByName;
+        this.toolsByName = Map.copyOf(toolsByName);
         this.currencies = List.copyOf(currencies);
     }
 
@@ -66,7 +79,13 @@ public final class ModelCatalog {
         return prices == null ? Optional.empty() : Optional.ofNullable(prices.get(currency));
     }
 
-    /** Each currency any model is priced in, once, ordered by its code. */
+    /** None where the model or its named tool is not held. */
+    public Optional<DeployedTool> tool(ModelName model, ModelToolName tool) {
+        Map<ModelToolName, DeployedTool> offered = toolsByName.get(model);
+        return offered == null ? Optional.empty() : Optional.ofNullable(offered.get(tool));
+    }
+
+    /** Each currency any model or tool is priced in, once, ordered by its code. */
     public List<Currency> currencies() {
         return currencies;
     }

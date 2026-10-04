@@ -127,7 +127,49 @@ async function pickingTriage() {
   await userEvent.click(screen.getByRole("option", { name: "Triage TRIAGE" }));
 }
 
+/** The frame over two routes that share the same page width. */
+function framingAt(path: string) {
+  wideViewport();
+  vi.mocked(useStandingResource).mockReturnValue(answered([]));
+  render(
+    <ThemeProvider theme={theme}>
+      <RouterProvider
+        router={createMemoryRouter(
+          [
+            {
+              path: "/",
+              element: <Frame />,
+              children: [
+                { index: true, element: <p>{SCREEN}</p> },
+                {
+                  path: "another-screen",
+                  element: <p>{SCREEN}</p>,
+                },
+              ],
+            },
+          ],
+          { initialEntries: [path] },
+        )}
+      />
+    </ThemeProvider>,
+  );
+  return screen.getByText(SCREEN).parentElement!;
+}
+
 describe("Frame", () => {
+  it.each(["/another-screen", "/"])(
+    "holds %s to the shared page width",
+    (path) => {
+      const container = framingAt(path);
+
+      expect(container).toHaveClass(
+        "MuiContainer-root",
+        "MuiContainer-maxWidthXl",
+      );
+      expect(container).not.toHaveClass("MuiContainer-maxWidthLg");
+    },
+  );
+
   it("draws the screen underneath once the read has settled, with nothing refused", () => {
     framing(answered(["keep_pool"]));
 

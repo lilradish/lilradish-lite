@@ -22,20 +22,23 @@ describe("approve", () => {
       200,
     ]);
 
-    const read = await approve(
-      GROUP,
-      "reference_list",
-      ENTRY,
-      VERSION,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    const read = await approve(GROUP, "reference_list", ENTRY, VERSION, signal);
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(
       `/api/groups/${GROUP}/reference-lists/${ENTRY}/versions/${VERSION}/approval`,
     );
     expect(init?.method).toBe("PUT");
+    expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
-    expect(read.entryId).toBe(ENTRY);
+    expect(read).toEqual({
+      entryId: ENTRY,
+      kind: "reference_list",
+      name: "Regions",
+      acts: new Set(),
+      versions: [],
+    });
   });
 });

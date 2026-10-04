@@ -6,10 +6,10 @@ import { grant, withdraw } from "./{role}";
 
 const SUBJECT = "00000002-0000-4000-8000-00000000014c";
 
-const GRACE = {
+const GLINN = {
   subjectId: SUBJECT,
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: ["steward"],
   lastGrantingRoles: ["steward"],
   groups: [],
@@ -24,7 +24,7 @@ const CHANGES = [
 
 describe.each(CHANGES)("%s", (_name, change, method) => {
   it("asks for the role at the person's own address, carrying nothing", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     await change(SUBJECT, "watcher", new AbortController().signal);
 
@@ -35,7 +35,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
   });
 
   it("reads the person as the pool now holds them", async () => {
-    answering([JSON.stringify(GRACE), 200]);
+    answering([JSON.stringify(GLINN), 200]);
 
     const person = await change(
       SUBJECT,
@@ -44,7 +44,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
     );
 
     expect(person).toEqual({
-      ...GRACE,
+      ...GLINN,
       estateRoles: new Set(["steward"]),
       lastGrantingRoles: new Set(["steward"]),
     });
@@ -65,7 +65,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
 
   /** What an address may be is `atPerson`'s to say; here, only that the change goes through it. */
   it("goes through the person's address as atPerson makes it, refusing what it refuses", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     const failure = await refusalOf(
       change("..", "steward", new AbortController().signal),

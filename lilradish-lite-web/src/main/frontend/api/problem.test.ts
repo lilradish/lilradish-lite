@@ -120,7 +120,11 @@ describe("requestFailed", () => {
     const { problem } = await requestFailed(response);
 
     expect(problem.code).toBe("BAD_REQUEST");
-    expect(problem.errors).toHaveLength(3);
+    expect(problem.errors).toEqual([
+      { detail: "must be present", source: { header: "X-Purpose" } },
+      { detail: "must be positive", source: { parameter: "limit" } },
+      { detail: "the window has to start before it ends" },
+    ]);
   });
 
   /** What only the refusal's own reader knows arrives as it came, and nothing the document names twice. */

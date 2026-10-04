@@ -3,6 +3,7 @@ package org.lilradish.lite.app.run
 import org.lilradish.lite.domain.identity.GroupId
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.inference.ModelCallPurpose
+import org.lilradish.lite.domain.run.ProductionId
 import org.lilradish.lite.domain.run.RunId
 import org.lilradish.lite.domain.run.RunStepFailureId
 import org.lilradish.lite.domain.run.RunStepSendAttemptId
@@ -16,6 +17,8 @@ class PendingSendSpec extends Specification {
     static final RunId RUN = new RunId(UUID.fromString("00000008-0000-4000-8000-000000000f01"))
 
     static final WorkflowStepId STEP = new WorkflowStepId(UUID.fromString("00000009-0000-4000-8000-000000000f01"))
+
+    static final ProductionId PRODUCTION = new ProductionId(UUID.fromString("0000000a-0000-4000-8000-000000000f01"))
 
     static final UserId PRESSER = new UserId("000f01")
 
@@ -31,14 +34,14 @@ class PendingSendSpec extends Specification {
      */
     def "a send the run makes by itself names nothing pressed on, and a pressed one names exactly the attempt or failure pressed"() {
         when:
-        def send = new PendingSend(GROUP, RUN, RUN, STEP, 2, purpose, presser, attemptOn, failedOn)
+        def send = new PendingSend(GROUP, RUN, RUN, STEP, PRODUCTION, purpose, presser, attemptOn, failedOn)
 
         then:
         send.group() == GROUP
         send.root() == RUN
         send.run() == RUN
         send.step() == STEP
-        send.number() == 2
+        send.aTry() == PRODUCTION
         send.purpose() == purpose
         send.presser() == presser
         send.attemptOn() == attemptOn
@@ -57,7 +60,7 @@ class PendingSendSpec extends Specification {
         PendingSend send = null
 
         when:
-        send = new PendingSend(GROUP, RUN, RUN, STEP, 2, purpose, presser, attemptOn, failedOn)
+        send = new PendingSend(GROUP, RUN, RUN, STEP, PRODUCTION, purpose, presser, attemptOn, failedOn)
 
         then:
         def refused = thrown(IllegalArgumentException)
@@ -79,7 +82,7 @@ class PendingSendSpec extends Specification {
         PendingSend send = null
 
         when:
-        send = new PendingSend(GROUP, RUN, RUN, STEP, 2, ModelCallPurpose.HELP, presser, attemptOn, null)
+        send = new PendingSend(GROUP, RUN, RUN, STEP, PRODUCTION, ModelCallPurpose.HELP, presser, attemptOn, null)
 
         then:
         def refused = thrown(IllegalArgumentException)

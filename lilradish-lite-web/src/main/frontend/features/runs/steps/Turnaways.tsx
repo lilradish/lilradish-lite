@@ -1,49 +1,53 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 
-import type {
-  StepRow,
-  Turnaway,
-} from "../../../api/groups/{groupId}/runs/{runId}/steps";
-import type { Try } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
+import type { Turnaway } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import { say } from "../../../i18n/app";
 import { QUIET_SX } from "../../../lib/layout/parts";
+import { HiddenShownIn } from "../../../lib/text/HiddenShownIn";
+import { useCalendarNow } from "../../../lib/time/When";
 import { turnawaySaid } from "./stepStates";
 
 const LIST_SX = { m: 0, pl: 2 };
 
-/**
- * The try a step held back on being turned away holds: never sent, so what turned it away is said with the hold,
- * and never again in the try.
- */
-export function heldTry(
-  step: StepRow,
-  tries: readonly Try[],
-): number | undefined {
-  return step.where?.kind === "held_back" && step.where.turnedAway !== undefined
-    ? tries.at(-1)?.number
-    : undefined;
-}
-
-/** Each time a model turned a call away, oldest first; none of them is a try, and none cost anything. */
+// A turnaway is outside the numbered tries and carries no try cost.
 export function Turnaways({
   turnedAway,
 }: {
   readonly turnedAway: readonly Turnaway[];
 }) {
+  const now = useCalendarNow();
   return (
     <>
       <Box component="ul" sx={LIST_SX}>
         {turnedAway.map((each, at) => {
-          const [when, ...said] = turnawaySaid(each);
+          const [when, ...said] = turnawaySaid(each, now);
+          const { said: words, cut, withheld } = each;
           return (
             <li key={at}>
               {when}
-              {said.map((line) => (
-                <Typography key={line} variant="body2" sx={QUIET_SX}>
-                  {line}
+              {words === undefined || withheld === true ? (
+                said.map((line) => (
+                  <Typography key={line} variant="body2" sx={QUIET_SX}>
+                    {line}
+                  </Typography>
+                ))
+              ) : (
+                <Typography variant="body2" sx={QUIET_SX}>
+                  <HiddenShownIn
+                    hint
+                    sentence={(place) =>
+                      say(
+                        cut === true
+                          ? "step.turnedAwaySaidCut"
+                          : "step.turnedAwaySaid",
+                        { said: place },
+                      )
+                    }
+                    text={words}
+                  />
                 </Typography>
-              ))}
+              )}
             </li>
           );
         })}

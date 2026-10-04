@@ -10,9 +10,11 @@ import {
   get,
   patch,
   post,
+  postForm,
   postNothing,
   put,
   putDocument,
+  putForm,
   remove,
 } from "./http";
 
@@ -286,8 +288,10 @@ describe("remove", () => {
 type RequestKind =
   | "a read"
   | "a document sent in"
+  | "a form sent in"
   | "a document naming a change"
   | "a document standing in place of another"
+  | "a form standing in place of another"
   | "a making carrying nothing"
   | "a change carrying nothing"
   | "a removal";
@@ -299,12 +303,15 @@ interface Outgoing {
   /** Absent for a read, which is what a request with no method is. */
   readonly method: string | undefined;
   readonly headers: Record<string, string>;
-  readonly body: string | undefined;
+  readonly body: string | FormData | undefined;
   /** What the request says about being stored. */
   readonly cache: RequestCache | undefined;
   /** Sorted. Every member of the request, so an unlisted one fails here. */
   readonly members: readonly string[];
 }
+
+const FORM = new FormData();
+FORM.append("document", "{}");
 
 const REQUESTS = {
   "a read": {
@@ -326,6 +333,15 @@ const REQUESTS = {
       "Content-Type": "application/json",
     },
     body: '{"userId":"000140"}',
+    cache: "no-store",
+    members: ["body", "cache", "headers", "method", "signal"],
+  },
+  "a form sent in": {
+    request: (signal: AbortSignal) => postForm(PATH, FORM, signal, AS_SENT),
+    of: postForm,
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: FORM,
     cache: "no-store",
     members: ["body", "cache", "headers", "method", "signal"],
   },
@@ -352,6 +368,15 @@ const REQUESTS = {
       "Content-Type": "application/json",
     },
     body: '[{"name":"complaint"}]',
+    cache: "no-store",
+    members: ["body", "cache", "headers", "method", "signal"],
+  },
+  "a form standing in place of another": {
+    request: (signal: AbortSignal) => putForm(PATH, FORM, signal, AS_SENT),
+    of: putForm,
+    method: "PUT",
+    headers: { Accept: "application/json" },
+    body: FORM,
     cache: "no-store",
     members: ["body", "cache", "headers", "method", "signal"],
   },

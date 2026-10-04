@@ -6,24 +6,27 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 
-import type { ReadField } from "../../../api/filling";
+import type { Declared } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { Declaring } from "./declared";
 import type { Try } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import { say } from "../../../i18n/app";
 import { RowPanel } from "../../../lib/collection/RowPanel";
 import { CostDrawn } from "../spend";
-import { endedSaid, reviewSaid, whoSaid } from "./stepStates";
+import {
+  tryBeyondVisible,
+  tryResultVisible,
+  reviewVisible,
+  whoSaid,
+} from "./stepStates";
 import { TryPanel } from "./TryPanel";
 
-/**
- * One row per try, oldest first, which is the order they happened in, so nothing sorts it; a row picked opens
- * everything of that try beside the list, or over it where there is no room.
- */
+/** One row per try, oldest first, which is the order they happened in, so nothing sorts it. */
 export function TriesList({
   tries,
   allowed,
-  heldTry,
   field,
-  gives,
+  declared,
+  declaring,
   labelledBy,
   picked,
   onPick,
@@ -31,11 +34,10 @@ export function TriesList({
   readonly tries: readonly Try[];
   /** How many tries the step allows, where it makes any. */
   readonly allowed: number | undefined;
-  /** The try a hold on its being turned away holds, if one does. */
-  readonly heldTry: number | undefined;
   /** The value whose part in each try is drawn; none where the step gives nothing back. */
   readonly field: string | undefined;
-  readonly gives: readonly ReadField[] | undefined;
+  readonly declared: Declared | undefined;
+  readonly declaring: Declaring;
   readonly labelledBy: string;
   /** The number of the try open, if any is. */
   readonly picked: number | null;
@@ -66,12 +68,14 @@ export function TriesList({
                 aria-current={each.number === picked || undefined}
                 onClick={() => onPick(each.number)}
               >
-                {trySaid(each, allowed)}
+                {each.beyond && allowed !== undefined
+                  ? tryBeyondVisible(each.number, allowed)
+                  : trySaid(each, allowed)}
               </Link>
             </TableCell>
             <TableCell>{whoSaid(each.producedBy)}</TableCell>
-            <TableCell>{reviewSaid(each.review)}</TableCell>
-            <TableCell>{endedSaid(each.ended)}</TableCell>
+            <TableCell>{reviewVisible(each.review)}</TableCell>
+            <TableCell>{tryResultVisible(each, field)}</TableCell>
             <TableCell>
               <CostDrawn cost={each.cost} />
             </TableCell>
@@ -85,7 +89,12 @@ export function TriesList({
       open={shown !== undefined}
       onClose={() => onPick(null)}
       title={shown === undefined ? "" : trySaid(shown, allowed)}
-      headingLevel="h4"
+      visibleTitle={
+        shown?.beyond === true && allowed !== undefined
+          ? tryBeyondVisible(shown.number, allowed)
+          : undefined
+      }
+      headingLevel="h3"
       list={table}
       listLabel={say("step.theTries")}
     >
@@ -93,8 +102,8 @@ export function TriesList({
         <TryPanel
           aTry={shown}
           field={field}
-          gives={gives}
-          turnawaysWithHold={shown.number === heldTry}
+          declared={declared}
+          declaring={declaring}
         />
       )}
     </RowPanel>

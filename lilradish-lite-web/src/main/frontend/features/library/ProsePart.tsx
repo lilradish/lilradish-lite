@@ -1,20 +1,18 @@
 import Box from "@mui/material/Box";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import type { GroupRule } from "../../app/standing/actRules";
 import { say, type MessageId } from "../../i18n/app";
 import { ActButton } from "../../lib/action/ActButton";
+import { Part } from "../../lib/layout/Part";
 import { QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import type { Action } from "../../lib/request/useAction";
 import { usePartFocus } from "./usePartFocus";
+import { useDraftPartStatus } from "./useDraftStatus";
 import { WriteRefused } from "./WriteRefused";
-
-const PART_SX = { mb: 3 };
-
-const HEADING_SX = { mb: 1 };
 
 // Prose keeps its lines, and takes its direction from what is in it.
 const PROSE_SX = { whiteSpace: "pre-wrap", overflowWrap: "anywhere", m: 0 };
@@ -31,7 +29,7 @@ export interface ProseWords {
   readonly underway: MessageId;
 }
 
-/** Prose sent to a model: emptied, it is saved as none rather than as an empty one. */
+/** Optional prose is saved as none when emptied. */
 export function ProsePart<T>({
   words,
   said,
@@ -61,7 +59,6 @@ export function ProsePart<T>({
   readonly focusOnArrival: boolean;
   readonly onReadAfresh: () => void;
 }) {
-  const headingId = useId();
   const { section, heading } = usePartFocus(focusOnArrival, editable);
   const [typed, setTyped] = useState(said ?? "");
   const [readAs, setReadAs] = useState(said);
@@ -71,23 +68,23 @@ export function ProsePart<T>({
   }
   const [asked, setAsked] = useState(false);
   const refused = typed === "" ? null : refusalOf(typed);
+  const unsaved = typed !== (said ?? "");
+  useDraftPartStatus(words.title, unsaved, action.running || waiting);
   return (
-    <Box
-      component="section"
+    <Part
+      title={say(words.title)}
+      actions={
+        editable && unsaved ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {say("draft.unsaved")}
+          </Typography>
+        ) : undefined
+      }
+      level="h3"
+      depth={2}
+      headingRef={heading}
       ref={section}
-      aria-labelledby={headingId}
-      sx={PART_SX}
     >
-      <Typography
-        id={headingId}
-        ref={heading}
-        tabIndex={-1}
-        variant="h6"
-        component="h3"
-        sx={HEADING_SX}
-      >
-        {say(words.title)}
-      </Typography>
       {!editable ? (
         said === undefined ? (
           <Typography variant="body2" sx={QUIET_SX}>
@@ -120,10 +117,11 @@ export function ProsePart<T>({
           <Box sx={{ mt: 1 }}>
             <ActButton
               action={action}
+              variant={unsaved ? "contained" : undefined}
               waiting={waiting}
               reason={
                 refused !== null
-                  ? { severity: "info", words: say(refused) }
+                  ? { severity: "warning", words: say(refused) }
                   : typed === (said ?? "")
                     ? { severity: "info", words: say(words.unchanged) }
                     : undefined
@@ -149,6 +147,6 @@ export function ProsePart<T>({
           onReadAfresh={onReadAfresh}
         />
       )}
-    </Box>
+    </Part>
   );
 }

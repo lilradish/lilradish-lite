@@ -22,16 +22,14 @@ describe.each([
   it(`asks ${method} of the entry's stop, sending nothing, and reads the entry it answers with`, async () => {
     const sent = answering([JSON.stringify(READ), 200]);
 
-    const read = await change(
-      GROUP,
-      "question",
-      ENTRY,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    const read = await change(GROUP, "question", ENTRY, signal);
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(`/api/groups/${GROUP}/questions/${ENTRY}/stop`);
     expect(init?.method).toBe(method);
+    expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
     expect(read).toEqual({ ...READ, acts: new Set(["let_go"]) });
   });

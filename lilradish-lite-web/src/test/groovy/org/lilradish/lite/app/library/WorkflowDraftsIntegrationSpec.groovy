@@ -10,6 +10,7 @@ import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import org.libprunus.core.error.ApiErrorException
 import org.lilradish.lite.app.codestep.CodeSteps
 import org.lilradish.lite.app.group.GroupRoles
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.declaration.Declaration
 import org.lilradish.lite.domain.declaration.DeclarationSide
 import org.lilradish.lite.domain.declaration.Demand
@@ -17,18 +18,22 @@ import org.lilradish.lite.domain.declaration.Demands
 import org.lilradish.lite.domain.declaration.Field
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
+import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.failure.RefusalCode
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.model.ModelMode
 import org.lilradish.lite.domain.model.ModelName
 import org.lilradish.lite.domain.registry.EntryKind
 import org.lilradish.lite.domain.run.Ceiling
+import org.lilradish.lite.domain.search.SearchWay
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.domain.workflow.BindingSource
 import org.lilradish.lite.domain.workflow.ModelChoice
 import org.lilradish.lite.domain.workflow.Pointer
 import org.lilradish.lite.domain.workflow.Producer
+import org.lilradish.lite.domain.workflow.SearchQuestionPart
 import org.lilradish.lite.domain.workflow.StepId
 import org.lilradish.lite.testutil.codestep.SpecCodeStep
 import org.lilradish.lite.testutil.library.LibraryStore
@@ -36,17 +41,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Writing a workflow draft's halves, its steps with what fills them, its ceiling and whether its runs may be
- * helped, on a real server running the real baseline, and reading each back as the store then holds it.
- */
+
 class WorkflowDraftsIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000b01"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000000b02"
 
-    /** An operator: may write an entry. */
+
     static final String ANN = "00000002-0000-4000-8000-000000000b01"
 
     static final UserId ANN_USER = new UserId("000b01")
@@ -79,7 +81,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
     static final String CONTENTLESS_WORKFLOW = "00000006-0000-4000-8000-000000000b09"
 
-    /** A draft's version row with no workflow content beside it. */
+
     static final String CONTENTLESS = "00000007-0000-4000-8000-000000000b09"
 
     static final String KEPT_STEP = "0000000c-0000-4000-8000-000000000b01"
@@ -90,6 +92,12 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
     static final Map<String, Object> COMPLAINT_INPUT =
             [target: "complaint", source: new FlowBody.SentSource.Input(Pointer.parse("grievance"))]
+
+    static final List<FlowBody.SentPart> ASKED_OF_THE_WEB = [
+            new FlowBody.SentPart.Text("Find "),
+            new FlowBody.SentPart.Read(new FlowBody.SentSource.Input(Pointer.parse("grievance"))),
+            new FlowBody.SentPart.Text(" "),
+            new FlowBody.SentPart.Read(new FlowBody.SentSource.Step(0, Pointer.parse("summary")))]
 
     @Shared
     @AutoCleanup
@@ -159,12 +167,39 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         answered.stored().gives().declaration() == gives
         answered.stored().takes().declaration().fields().isEmpty()
         StoredWorkflow.read(store.session, versionId(DRAFT)).get().gives().declaration() == gives
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select name || ' ' || must_be_given || ' ' || coalesce(standing::text, '-') from declaration_fields where entry_version_id = ?::uuid order by position", DRAFT) ==
                 ["summary false -", "category true -"]
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select created_by::text from entry_version_writers where entry_version_id = ?::uuid", DRAFT) == [ANN]
     }
 
-    /** A key read under that names more fields than were sent is a caller gone wrong, and nothing is written. */
+    def "file declarations with different type counts survive the same stored half"() {
+        given:
+        def takes = new Declaration(DeclarationSide.TAKES, Demands.ofWorkflow(DeclarationSide.TAKES), [
+                new Field(new FieldName("pictures"), null, null,
+                        new FieldShape.File([new MediaTypeName("IMAGE/PNG")], 1_048_576L),
+                        new HowMany.Many(3), new Demand.Given(true)),
+                new Field(new FieldName("documents"), null, null,
+                        new FieldShape.File([new MediaTypeName("application/pdf"), new MediaTypeName("text/plain")],
+                                2_097_152L), new HowMany.One(), new Demand.Given(false))])
+
+        when:
+        def answered = drafts.declare(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER, 1,
+                takes, [null, null])
+        def read = StoredWorkflow.read(store.session, versionId(DRAFT)).get().takes().declaration()
+
+        then:
+        answered.stored().takes().declaration() == takes
+        read == takes
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; array_to_string().
+        store.texts("""
+                select name || ' ' || array_to_string(file_types, ',') || ' ' || file_maximum_bytes
+                  from declaration_fields where entry_version_id = ?::uuid order by position
+                """, DRAFT) == ["pictures image/png 1048576", "documents application/pdf,text/plain 2097152"]
+    }
+
+
     def "a half sent with more keys read than fields is refused as a caller's fault, and nothing is written"() {
         given:
         def before = store.contents()
@@ -179,10 +214,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /**
-     * Written back as it was sent, so reading it is what was sent: every step in its place, what each runs and who
-     * produces and reviews it, what fills each input. The model running as it is is stored under the store's word.
-     */
+
     def "writes every step in the order sent, and reads each back as it was written"() {
         given:
         field(DRAFT, "workflow", "gives", 1, "summary", "text", 500, null, true, null)
@@ -254,17 +286,92 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 [bound("summary", new FlowBody.SentSource.Step(0, Pointer.parse("summary")))]))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("""
                 select position || ' ' || name || ' ' || coalesce(kind::text, '-') || ' ' ||
                        coalesce(producer::text, '-') || ' ' || coalesce(producer_mode, '-') || ' ' || tells_what_happened
                   from workflow_steps where entry_version_id = ?::uuid order by position""", DRAFT) ==
                 ["1 classify entry model ordinary true", "2 route route - - false", "3 escalate entry - - false",
                  "4 later - - - false"]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from bindings where entry_version_id = ?::uuid", DRAFT) == 6
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select distinct created_by::text from workflow_steps") == [ANN]
     }
 
-    /** The list a route chooses by offers two terms, so it holds two cases on them and a fallback at most. */
+    def "a search is written with its way, how its fields stand and its question in order, and read back as written"() {
+        when:
+        def answered = drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER,
+                flow([asking(null), searching()], []))
+        def read = StoredWorkflow.read(store.session, versionId(DRAFT)).get()
+
+        then:
+        answered.stored() == read
+        def search = read.steps()[1].runs() as StoredWorkflow.Runs.Search
+        search.way() == "web_search"
+        search.standings() == [(SearchWay.TITLE): FieldStanding.ALWAYS, (SearchWay.BODY): FieldStanding.NEVER]
+        search.question().collect { it instanceof SearchQuestionPart.Read ? it.source() : it } == [
+                new SearchQuestionPart.LiteralPart("Find "),
+                new BindingSource.WorkflowInput(Pointer.parse("grievance")),
+                new SearchQuestionPart.LiteralPart(" "),
+                new BindingSource.StepOutput(read.steps()[0].id(), Pointer.parse("summary"))]
+        read.steps()[1].producer() == new Producer.Model(new ModelChoice(new ModelName("general"), null), false)
+        read.steps()[1].tries() == 2
+        read.steps()[1].bindings().isEmpty()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.texts("""
+                select position || ' ' || coalesce(literal_text, '-') || ' ' || coalesce(source_path, '-') || ' ' ||
+                       created_by
+                  from search_question_parts where entry_version_id = ?::uuid order by position""", DRAFT) ==
+                ["0 Find  - ${ANN}", "1 - grievance ${ANN}", "2   - ${ANN}", "3 - summary ${ANN}"]*.toString()
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
+        store.texts("""
+                select coalesce(search_references_standing::text, '-') || ' ' ||
+                       coalesce(search_other_standing::text, '-') || ' ' || kind
+                  from workflow_steps where entry_version_id = ?::uuid and position = 2""", DRAFT) == ["- - search"]
+    }
+
+    /** Parts name the steps they are in and read from with no cascade, so they have to go before the steps do. */
+    def "a draft holding a search is written again, every part drawn anew, and none left once no step searches"() {
+        given:
+        def first = drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER,
+                flow([asking(null), searching()], []))
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
+        def before = store.texts("select search_question_part_id::text from search_question_parts")
+
+        when:
+        def again = drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER,
+                flow([asking(null), searching()], [], first.stored().revision()))
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
+        def after = store.texts("select search_question_part_id::text from search_question_parts")
+        drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER,
+                flow([beneath()], [], again.stored().revision()))
+
+        then:
+        before.size() == ASKED_OF_THE_WEB.size()
+        after.size() == ASKED_OF_THE_WEB.size()
+        after.disjoint(before)
+        store.count("select count(*) from search_question_parts") == 0
+        StoredWorkflow.read(store.session, versionId(DRAFT)).get().steps()*.name() == [new StepId("escalate")]
+    }
+
+    def "a search's question of as many parts as one holds is written, each at its place"() {
+        given:
+        def parts = (1..FlowBody.MOST_QUESTION_PARTS).collect { new FlowBody.SentPart.Text("part " + it) }
+
+        when:
+        drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER, flow([searching(parts)], []))
+
+        then:
+        def question = (StoredWorkflow.read(store.session, versionId(DRAFT)).get().steps()[0].runs()
+                as StoredWorkflow.Runs.Search).question()
+        question.size() == FlowBody.MOST_QUESTION_PARTS
+        question.first() == new SearchQuestionPart.LiteralPart("part 1")
+        question.last() == new SearchQuestionPart.LiteralPart("part " + FlowBody.MOST_QUESTION_PARTS)
+        store.count("select max(position) from search_question_parts") == FlowBody.MOST_QUESTION_PARTS - 1
+    }
+
+
     def "a route holding a case for every term its list offers and a fallback is written, and one more refused"() {
         given:
         def before = store.contents()
@@ -286,10 +393,11 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 flow([asking(null), routedOver(cases(["Billing", "Delivery", null]))], []))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from route_cases where entry_version_id = ?::uuid", DRAFT) == 3
     }
 
-    /** Where the list a route chooses by is not known yet, any list's most bounds its cases. */
+
     def "a route choosing by nothing yet holds as many cases as any list offers terms, and a fallback"() {
         given:
         def cases = { int count ->
@@ -310,10 +418,11 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 flow([routedOver(cases(256), null)], []))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from route_cases where entry_version_id = ?::uuid", DRAFT) == 257
     }
 
-    /** Each binding fills a field of its own, so what it fills declares at least as many fields as it has bindings. */
+
     def "more bindings than what they fill declares fields are refused, and nothing is written"() {
         given:
         def before = store.contents()
@@ -335,10 +444,12 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 flow([asking(null), routedOver([], new FlowBody.SentSource.Step(0, Pointer.parse("category")),
                         [bound("note", new FlowBody.SentSource.Written('"x"'))])], []),
                 flow([asking(null)], [bound("summary", new FlowBody.SentSource.Step(0, Pointer.parse("summary")))]),
+                flow([asking(null), searching(ASKED_OF_THE_WEB,
+                        [bound("complaint", new FlowBody.SentSource.Written('"x"'))])], []),
         ]
     }
 
-    /** Every key is drawn anew, so what the page read before names nothing now; the halves are left as they were. */
+
     def "writing the steps again replaces every step, case, field and binding the draft held, and nothing else"() {
         given:
         field(DRAFT, "workflow", "takes", 1, "complaint", "text", 4000, null, true, null)
@@ -360,7 +471,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.count("select count(*) from bindings") == 1
     }
 
-    /** A pin is kept only by the row that holds it already; everything else pins anew, and only what is in service here. */
+
     def "a step and a case keep the version they pin already, retired since, sent back under the key they were read under"() {
         given:
         pinnedStep(KEPT_STEP, ASKED_RETIRED)
@@ -374,13 +485,11 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         def read = StoredWorkflow.read(store.session, versionId(DRAFT)).get()
         read.steps()[0].runs() == new StoredWorkflow.Runs.Pinned(EntryKind.QUESTION, versionId(ASKED_RETIRED))
         (read.steps()[1].runs() as StoredWorkflow.Runs.Route).cases()*.target() == [versionId(LED_RETIRED), versionId(LED)]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from workflow_steps where workflow_step_id = ?::uuid", KEPT_STEP) == 0
     }
 
-    /**
-     * A version retired and pinned by nothing here, a draft, another group's, one of the wrong kind and one
-     * nobody holds are one refusal, and the draft is left as it was.
-     */
+
     def "a step or a case pinning what is not this group's in service of its kind is refused, and nothing is written"() {
         given:
         pinnedStep(KEPT_STEP, ASKED_RETIRED)
@@ -407,10 +516,12 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         ]
     }
 
-    /** A code step no migration published to this group is refused where it is written, not only at submitting. */
+
     def "a code step is written only where it was published to the group, by key or to every group"() {
         given:
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'send_reply'").update()
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'archive'").update()
         publish(key)
 
@@ -418,6 +529,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER, flow([coded("send_reply")], []))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select code_step::text || ' ' || producer::text || ' ' || tries from workflow_steps") ==
                 ["send_reply code 1"]
 
@@ -427,6 +539,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
     def "a code step's values are produced by code, by a person saying it was done, or by nobody chosen yet"() {
         given:
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'send_reply'").update()
         publish("SUPPORT")
 
@@ -436,6 +549,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
         then:
         answered.stored().steps()*.producer() == [producer]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select coalesce(producer::text, '-') from workflow_steps") == [stored]
 
         where:
@@ -447,6 +561,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
     def "a code step published to no group of this one's is refused, and nothing is written"() {
         given:
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'send_reply'").update()
         publish("BILLING")
         def before = store.contents()
@@ -468,6 +583,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.entry(theirs, OTHER_GROUP, "reference_list", "Their categories")
         store.seeded(theirsListed, theirs, 1)
         store.content(theirsListed, "reference_list")
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'sort_out'").update()
         publish("SUPPORT", "sort_out")
         def sorting = holding(sortingBy(theirsListed))
@@ -485,6 +601,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
     /** A draft may hold what submitting would refuse: a list not in service is named there, not where it is written. */
     def "a code step taking a term from the group's own list, or from a list not here, is written, in service or not"() {
         given:
+        // DB-SPECIFIC: PostgreSQL enum ADD VALUE.
         store.session.sql("alter type code_step add value 'sort_out'").update()
         publish("SUPPORT", "sort_out")
 
@@ -493,6 +610,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 flow([coded("sort_out")], []))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select code_step::text from workflow_steps") == ["sort_out"]
 
         where:
@@ -508,6 +626,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         answered.stored().ceiling() == ceiling
         answered.stored().keepsOwnCeiling()
         !answered.stored().raiseNeedsApproval()
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select coalesce(ceiling::text, '-') || ' ' || updated_by from workflow_versions where entry_version_id = ?::uuid", DRAFT) ==
                 ["${ceiling == null ? '-' : ceiling.value()} ${ANN}" as String]
 
@@ -522,6 +641,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         then:
         answered.stored().mayBeHelped() == may
         answered.stored().helper() == helper
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select may_be_helped || ' ' || coalesce(helper_model, '-') || ' ' || coalesce(helper_mode, '-') from workflow_versions where entry_version_id = ?::uuid", DRAFT) ==
                 [stored]
 
@@ -547,7 +667,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /** A version whose draft row stands without the workflow content it should hold is a store gone wrong. */
+
     def "a ceiling written to a draft holding no workflow content fails, and nothing is written"() {
         given:
         store.entry(CONTENTLESS_WORKFLOW, GROUP, "workflow", "Archive a complaint")
@@ -579,16 +699,18 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /** The answer is what the change itself read, holding the draft, and it names the revision it read. */
+
     def "each write answers with the version as the change writing it then reads it"() {
         when:
         def answered = drafts.flow(groupId(GROUP), entryId(WORKFLOW), versionId(DRAFT), ANN_USER,
                 flow([asking(null)], []))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         answered.stored().revision() == store.count("select revision from entry_versions where entry_version_id = ?::uuid", DRAFT)
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         answered.stored().steps()*.id() == store.texts("select workflow_step_id::text from workflow_steps").collect { UUID.fromString(it) }
-        answered.problems()*.code()*.published() == ["source_unknown"]
+        answered.problems().problems()*.code()*.published() == ["source_unknown"]
     }
 
     def "a workflow version that is no longer a draft is written by nobody, and holds what it held"() {
@@ -605,7 +727,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /** Written over the revision a draft no other write has touched yet stands at, unless another is named. */
+
     private static FlowBody.Sent flow(List<FlowBody.SentStep> steps, List<FlowBody.SentBinding> outputs, int revision = 1) {
         new FlowBody.Sent(revision, steps, outputs)
     }
@@ -618,14 +740,14 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 [bound(COMPLAINT_INPUT.target as String, COMPLAINT_INPUT.source as FlowBody.SentSource)])
     }
 
-    /** The step {@link #asking} writes, filling one field more than the question it runs takes. */
+
     private static FlowBody.SentStep askingAlso(FlowBody.SentBinding extra) {
         def asked = asking(null)
         new FlowBody.SentStep(null, asked.name(), asked.runs(), asked.producer(), asked.tries(), asked.reviewer(),
                 asked.bindings() + [extra])
     }
 
-    /** A route giving back nothing, choosing by {@code chosenBy} between {@code cases}. */
+
     private static FlowBody.SentStep routedOver(
             List<FlowBody.SentCase> cases,
             FlowBody.SentSource chosenBy = new FlowBody.SentSource.Step(0, Pointer.parse("category")),
@@ -655,6 +777,15 @@ class WorkflowDraftsIntegrationSpec extends Specification {
                 null, null, null, [bound("complaint", new FlowBody.SentSource.Written('"Kind regards"'))])
     }
 
+
+    private static FlowBody.SentStep searching(
+            List<FlowBody.SentPart> question = ASKED_OF_THE_WEB, List<FlowBody.SentBinding> bindings = []) {
+        new FlowBody.SentStep(null, new StepId("find_context"),
+                new FlowBody.SentRuns.Search("web_search", question,
+                        [(SearchWay.TITLE): FieldStanding.ALWAYS, (SearchWay.BODY): FieldStanding.NEVER]),
+                new Producer.Model(new ModelChoice(new ModelName("general"), null), false), 2, null, bindings)
+    }
+
     private static FlowBody.SentStep unchosen() {
         new FlowBody.SentStep(null, new StepId("later"), new FlowBody.SentRuns.Unchosen(), null, null, null, [])
     }
@@ -669,6 +800,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
 
     private void field(String version, String kind, String side, int position, String name, String fieldKind,
                        Integer longest, String list, Boolean mustBeGiven, String standing) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, entry_kind, declaration_side, field_kind, field_standing.
         store.session.sql("""
                 insert into declaration_fields (entry_version_id, entry_kind, side, position, name, kind, text_limit,
                                                 term_list_version_id, must_be_given, standing, created_by)
@@ -679,6 +811,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
     }
 
     private void term(String list, int position, String term) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, ?, ?, 'When it is.', ?::uuid)
@@ -686,6 +819,7 @@ class WorkflowDraftsIntegrationSpec extends Specification {
     }
 
     private void pinnedStep(String step, String pinned) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("""
                 insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind, pinned_version_id,
                                             pinned_kind, created_by)
@@ -698,21 +832,22 @@ class WorkflowDraftsIntegrationSpec extends Specification {
     }
 
     private void publish(String key, String codeStep = "send_reply") {
+        // DB-SPECIFIC: PostgreSQL :: casts to code_step, uuid.
         store.session.sql("""
                 insert into code_step_publications (code_step, group_key, every_group, created_by)
                 values (?::code_step, ?, ?, ?::uuid)
                 """).params(codeStep, key, key == null, SEEDER).update()
     }
 
-    /** The drafts of a release holding {@code codeSteps}. */
+
     private WorkflowDrafts holding(CodeSteps codeSteps) {
         def roles = new GroupRoles(store.session)
         def released = new ReleasedCodeSteps(codeSteps)
         new WorkflowDrafts(store.session, new Drafts(store.session, store.transactions(), roles),
-                new Workflows(store.session, roles, LibraryStore.MODELS, released, store.transactionManager()), released)
+                new Workflows(store.session, roles, LibraryStore.MODELS, released, LibraryStore.FILES, new SearchWays([]), store.transactionManager()), released)
     }
 
-    /** A code step taking a reply, and giving back a category from {@code list}. */
+
     private static CodeSteps sortingBy(String list) {
         new CodeSteps([new SpecCodeStep("sort_out", [SpecCodeStep.given("reply", new FieldShape.Text(2000))],
                 [SpecCodeStep.standing("category", new FieldShape.Term(versionId(list)))], false)])

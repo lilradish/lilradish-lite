@@ -99,12 +99,12 @@ class PoolSearchControllerIntegrationSpec extends Specification {
     def "answers a caller who may keep the register of groups with who in the pool a search finds, and nothing they hold"() {
         given:
         arriving(EnumSet.of(EstateRole.STEWARD))
-        given(people.search(new PeopleSearch("ada"), 20)).willReturn(new PeopleFound([
-                new PoolPeople.InPool(new SubjectId(ADA), new UserId("000301"), new PersonName("Ada Lovelace")),
+        given(people.search(new PeopleSearch("ari"), 20)).willReturn(new PeopleFound([
+                new PoolPeople.InPool(new SubjectId(ADA), new UserId("000301"), new PersonName("Ari Mockvale")),
                 new PoolPeople.InPool(new SubjectId(NAMELESS), new UserId("000303"), null)], more))
 
         when:
-        def answered = searchingWith([["search", "ada"]])
+        def answered = searchingWith([["search", "ari"]])
         def document = documentOf(answered)
 
         then:
@@ -117,7 +117,7 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         membersOf(document.get("items").get(1)) == ["subjectId", "userId"]
         document.get("items").collect { it.get("subjectId").asString() } == [ADA.toString(), NAMELESS.toString()]
         document.get("items").collect { it.get("userId").asString() } == ["000301", "000303"]
-        document.get("items").get(0).get("displayName").asString() == "Ada Lovelace"
+        document.get("items").get(0).get("displayName").asString() == "Ari Mockvale"
 
         and: "no role of any kind named anywhere in it"
         (EstateRole.values()*.published() + GroupRole.values()*.name()*.toLowerCase(Locale.ROOT)).every {
@@ -159,7 +159,7 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         storeAskedOnlyFor(new PeopleSearch(typed))
 
         where:
-        typed << [" Ada ", "000301", "%_\\", "山田" + Character.toString(0x3000) + "太郎"]
+        typed << [" Ari ", "000301", "%_\\", "山田" + Character.toString(0x3000) + "太郎"]
     }
 
     def "refuses a search it cannot read as asked, and never asks the store"() {
@@ -184,11 +184,11 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         []                                                  || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", ""]]                                    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", "   "]]                                 || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["search", "Ada" + Character.toString(0x2028)]]    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
+        [["search", "Ari" + Character.toString(0x2028)]]    || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
         [["search", "a" * 257]]                             || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["search", "ada"], ["search", "grace"]]            || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
-        [["q", "ada"]]                                      || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
-        [["search", "ada"], ["filter", "grace"]]            || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
+        [["search", "ari"], ["search", "greno"]]            || "PEOPLE_SEARCH_UNUSABLE" | SEARCH_REFUSED
+        [["q", "ari"]]                                      || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
+        [["search", "ari"], ["filter", "greno"]]            || "PARAMETER_UNKNOWN"      | PARAMETER_REFUSED
     }
 
     /** The search belongs to creating a group, so the act that creates one is what reaches it. */
@@ -197,7 +197,7 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         arriving(held)
 
         when:
-        def answered = searchingWith([["search", "ada"]])
+        def answered = searchingWith([["search", "ari"]])
 
         then:
         answered.response.status == 403
@@ -232,11 +232,11 @@ class PoolSearchControllerIntegrationSpec extends Specification {
     def "answers a member who may change a group's membership with whom the pool's search finds outside that group"() {
         given:
         inGroup(EnumSet.of(GroupRole.OWNER))
-        given(people.searchOutside(new GroupId(GROUP), new PeopleSearch("ada"), 20)).willReturn(new PeopleFound([
-                new PoolPeople.InPool(new SubjectId(ADA), new UserId("000301"), new PersonName("Ada Lovelace"))], true))
+        given(people.searchOutside(new GroupId(GROUP), new PeopleSearch("ari"), 20)).willReturn(new PeopleFound([
+                new PoolPeople.InPool(new SubjectId(ADA), new UserId("000301"), new PersonName("Ari Mockvale"))], true))
 
         when:
-        def answered = searchingIn(GROUP.toString(), [["search", "ada"]])
+        def answered = searchingIn(GROUP.toString(), [["search", "ari"]])
         def document = documentOf(answered)
 
         then:
@@ -247,7 +247,7 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         document.get("items").get(0).get("subjectId").asString() == ADA.toString()
 
         and: "the pool's own search never asked, nor what the caller holds in the estate"
-        storeAskedOnlyOutside(new GroupId(GROUP), new PeopleSearch("ada"))
+        storeAskedOnlyOutside(new GroupId(GROUP), new PeopleSearch("ari"))
         Mockito.verifyNoInteractions(grants)
 
         and:
@@ -260,7 +260,7 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         inGroup(held)
 
         when:
-        def answered = searchingIn(GROUP.toString(), [["search", "ada"]])
+        def answered = searchingIn(GROUP.toString(), [["search", "ari"]])
 
         then:
         answered.response.status == status
@@ -292,8 +292,8 @@ class PoolSearchControllerIntegrationSpec extends Specification {
         where:
         sent                                     || code
         []                                       || "PEOPLE_SEARCH_UNUSABLE"
-        [["search", "ada"], ["search", "ada"]]   || "PEOPLE_SEARCH_UNUSABLE"
-        [["search", "ada"], ["filter", "grace"]] || "PARAMETER_UNKNOWN"
+        [["search", "ari"], ["search", "ari"]]   || "PEOPLE_SEARCH_UNUSABLE"
+        [["search", "ari"], ["filter", "greno"]] || "PARAMETER_UNKNOWN"
     }
 
     /** Void, so the verification is what fails rather than the null a mock's answer would assert as. */

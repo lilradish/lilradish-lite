@@ -13,10 +13,12 @@ import type { VersionStanding } from "./groups/{groupId}/{kind}";
  * with the server's list for the reason `SurfaceAct` gives.
  */
 export type FieldKind =
-  "text" | "number" | "date" | "moment" | "yes_no" | "term" | "fields";
+  "text" | "number" | "date" | "moment" | "yes_no" | "term" | "fields" | "file";
 
 /** What lets a value stand without review, spelt and held level as `FieldKind` is. */
 export type FieldStanding = "always" | "never" | "above_confidence";
+
+export type TextLines = "one" | "several";
 
 /** The two halves of a declaration, each addressed by its spelling, held level as `FieldKind` is. */
 export type DeclarationSide = "takes" | "gives";
@@ -30,6 +32,7 @@ const KNOWN_KINDS = {
   yes_no: true,
   term: true,
   fields: true,
+  file: true,
 } satisfies Record<FieldKind, true>;
 
 /** Every standing, closed over the union in both directions. */
@@ -68,7 +71,10 @@ export interface DeclaredField {
   readonly help?: string;
   readonly kind: FieldKind;
   readonly longest?: number;
+  readonly lines?: TextLines;
   readonly list?: PinnedList;
+  readonly types?: readonly string[];
+  readonly maximumBytes?: number;
   readonly many: boolean;
   readonly most?: number;
   readonly mustBeGiven: boolean;
@@ -93,33 +99,14 @@ export interface SentField {
   readonly many: boolean;
   readonly most: number | null;
   readonly longest?: number | null;
+  readonly lines?: TextLines;
   readonly list?: string | null;
+  readonly types?: readonly string[];
+  readonly maximumBytes?: number | null;
   readonly fields?: readonly SentField[];
   readonly mustBeGiven: boolean;
   readonly stands?: FieldStanding | null;
   readonly floor?: number | null;
-}
-
-/**
- * One field as a model is told it when it is asked: never a label, a help or
- * the figure a value stands above.
- */
-export interface AddedField {
-  readonly name: string;
-  readonly kind: FieldKind;
-  readonly longest?: number;
-  readonly many: boolean;
-  readonly most?: number;
-  /** Whether it is told it may not give nothing. */
-  readonly mustBeGiven: boolean;
-  readonly terms?: readonly {
-    readonly term: string;
-    readonly meaning: string;
-  }[];
-  readonly note?: string;
-  /** Whether it is asked how sure its maker was; never above what. */
-  readonly confidence: boolean;
-  readonly fields?: readonly AddedField[];
 }
 
 const KINDS: ReadonlySet<string> = new Set(Object.keys(KNOWN_KINDS));
@@ -138,7 +125,10 @@ export function declaredFrom(body: unknown): DeclaredField | null {
   const label = optional(body, "label", textFrom);
   const help = optional(body, "help", textFrom);
   const longest = optional(body, "longest", countFrom);
+  const lines = optional(body, "lines", textLinesFrom);
   const list = optional(body, "list", pinnedFrom);
+  const types = optional(body, "types", fileTypesFrom);
+  const maximumBytes = optional(body, "maximumBytes", countFrom);
   const most = optional(body, "most", countFrom);
   const stands = optional(body, "stands", standingFrom);
   const floor = optional(body, "floor", countFrom);
@@ -150,7 +140,22 @@ export function declaredFrom(body: unknown): DeclaredField | null {
     !KINDS.has(kind) ||
     typeof many !== "boolean" ||
     typeof mustBeGiven !== "boolean" ||
-    [label, help, longest, list, most, stands, floor].includes(null) ||
+    label === null ||
+    help === null ||
+    longest === null ||
+    lines === null ||
+    list === null ||
+    types === null ||
+    maximumBytes === null ||
+    most === null ||
+    stands === null ||
+    floor === null ||
+    (kind !== "text" && lines !== undefined) ||
+    (kind !== "file" && (types !== undefined || maximumBytes !== undefined)) ||
+    (kind === "file" &&
+      (types === undefined ||
+        (maximumBytes !== undefined &&
+          (maximumBytes === null || maximumBytes < 1)))) ||
     fields === null
   ) {
     return null;
@@ -161,42 +166,23 @@ export function declaredFrom(body: unknown): DeclaredField | null {
     kind: kind as FieldKind,
     many,
     mustBeGiven,
-    ...present({ label, help, longest, list, most, stands }),
+    ...present({
+      label,
+      help,
+      longest,
+      lines,
+      list,
+      types,
+      maximumBytes,
+      most,
+      stands,
+    }),
     ...present({ floor, fields }),
   };
 }
 
-/** Built member by member, as `declaredFrom` builds a field. */
-export function addedFrom(body: unknown): AddedField | null {
-  if (!isUnchecked(body)) {
-    return null;
-  }
-  const { name, kind, many, mustBeGiven, confidence } = body;
-  const longest = optional(body, "longest", countFrom);
-  const most = optional(body, "most", countFrom);
-  const note = optional(body, "note", textFrom);
-  const terms = optional(body, "terms", (listed) => listOf(listed, termFrom));
-  const fields = optional(body, "fields", (held) => listOf(held, addedFrom));
-  if (
-    typeof name !== "string" ||
-    typeof kind !== "string" ||
-    !KINDS.has(kind) ||
-    typeof many !== "boolean" ||
-    typeof mustBeGiven !== "boolean" ||
-    typeof confidence !== "boolean" ||
-    [longest, most, note, terms, fields].includes(null)
-  ) {
-    return null;
-  }
-  return {
-    name,
-    kind: kind as FieldKind,
-    many,
-    mustBeGiven,
-    confidence,
-    ...present({ longest, most, note }),
-    ...present({ terms, fields }),
-  };
+export function textLinesFrom(value: unknown): TextLines | null {
+  return value === "one" || value === "several" ? value : null;
 }
 
 export function listVersionFrom(body: unknown): ListVersion | null {
@@ -206,7 +192,8 @@ export function listVersionFrom(body: unknown): ListVersion | null {
   const { name, versionId, number } = body;
   return typeof name === "string" &&
     typeof versionId === "string" &&
-    Number.isSafeInteger(number)
+    Number.isSafeInteger(number) &&
+    (number as number) > 0
     ? { name, versionId, number: number as number }
     : null;
 }
@@ -220,7 +207,8 @@ export function pinnedFrom(body: unknown): PinnedList | null {
   const newer = optional(body, "newer", (said) =>
     isUnchecked(said) &&
     typeof said.versionId === "string" &&
-    Number.isSafeInteger(said.number)
+    Number.isSafeInteger(said.number) &&
+    (said.number as number) > 0
       ? { versionId: said.versionId, number: said.number as number }
       : null,
   );
@@ -231,16 +219,30 @@ export function pinnedFrom(body: unknown): PinnedList | null {
   return newer === undefined ? pinned : { ...pinned, newer };
 }
 
-function termFrom(body: unknown): { term: string; meaning: string } | null {
-  return isUnchecked(body) &&
-    typeof body.term === "string" &&
-    typeof body.meaning === "string"
-    ? { term: body.term, meaning: body.meaning }
-    : null;
-}
-
 function standingFrom(said: unknown): FieldStanding | null {
   return typeof said === "string" && STANDINGS.has(said)
     ? (said as FieldStanding)
+    : null;
+}
+
+export const MOST_FILE_TYPES = 64;
+
+const FILE_TYPE =
+  /^[a-z0-9][a-z0-9!#$&.^_+-]{0,126}\/[a-z0-9][a-z0-9!#$&.^_+-]{0,126}$/;
+
+export function fileTypeFits(type: string): boolean {
+  return FILE_TYPE.test(type);
+}
+
+function fileTypesFrom(body: unknown): readonly string[] | null {
+  if (!Array.isArray(body) || body.length > MOST_FILE_TYPES) {
+    return null;
+  }
+  const types = listOf(body, textFrom);
+  return types !== null &&
+    types.length > 0 &&
+    types.every(fileTypeFits) &&
+    new Set(types).size === types.length
+    ? types
     : null;
 }

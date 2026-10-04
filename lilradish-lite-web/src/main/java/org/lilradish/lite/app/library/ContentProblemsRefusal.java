@@ -7,28 +7,32 @@ import org.libprunus.core.error.ApiErrorException;
 import org.lilradish.lite.domain.registry.ContentProblem;
 
 /**
- * A version refused at submitting for what its stored content holds, carrying every place that does not
- * hold, and every pin retired since beside them, and never any of it in its sentence.
+ * A version refused at submitting for what its stored content holds, carrying the first listed places,
+ * their total count, and every pin retired since beside them, and never any of it in its sentence.
  */
 final class ContentProblemsRefusal extends ApiErrorException {
 
-    private final transient List<ContentProblem> problems;
+    private final transient ContentProblemReport.Result report;
 
     private final transient List<RetiredPinsRefusal.RetiredPin> pins;
 
-    ContentProblemsRefusal(List<ContentProblem> problems, List<RetiredPinsRefusal.RetiredPin> pins) {
+    ContentProblemsRefusal(ContentProblemReport.Result report, List<RetiredPinsRefusal.RetiredPin> pins) {
         super(
                 LibraryRefusal.VERSION_CONTENT_DOES_NOT_HOLD.code(),
                 LibraryRefusal.VERSION_CONTENT_DOES_NOT_HOLD.sentence());
-        this.problems = List.copyOf(requireNonNull(problems, "ContentProblemsRefusal problems must not be null"));
+        this.report = requireNonNull(report, "ContentProblemsRefusal report must not be null");
         this.pins = List.copyOf(requireNonNull(pins, "ContentProblemsRefusal pins must not be null"));
-        if (this.problems.isEmpty()) {
+        if (this.report.total() == 0) {
             throw new IllegalArgumentException("ContentProblemsRefusal names at least one problem");
         }
     }
 
     List<ContentProblem> problems() {
-        return problems;
+        return report.problems();
+    }
+
+    long problemTotal() {
+        return report.total();
     }
 
     /** None where every pin is in service. */

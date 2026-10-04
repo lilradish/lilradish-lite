@@ -1,8 +1,21 @@
+import Link from "@mui/material/Link";
+import {
+  Fragment,
+  createElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import type { Theme } from "@mui/material/styles";
+import { Link as RouterLink } from "react-router";
+
 import type { ReadField } from "../../../api/filling";
 import type {
+  Declared,
+  GivesOtherwise,
   FailureReason,
   HoldReason,
   RunningOn,
+  ReviewSending,
   StepAct,
   StepRow,
   StepState,
@@ -17,16 +30,29 @@ import type {
 import type {
   DidNotFitReason,
   Ended,
+  ErroredFor,
+  ErroredForReason,
   Standing,
   TriedValue,
   Try,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import { say, type MessageId } from "../../../i18n/app";
+import { visible } from "../../../i18n/visible";
+import { intl } from "../../../i18n/intl";
 import { isolatedInText } from "../../../lib/direction/isolated";
+import { HiddenShownIn, SystemHint } from "../../../lib/text/HiddenShownIn";
 import type { ProseRefusal } from "../../../lib/text/legibility";
 import { nameOrNumber } from "../../../lib/text/names";
 import { whenText } from "../../../lib/time/When";
-import { labelAt } from "./declared";
+import { listQuery, stepHref, WITHIN_THE_RUN } from "../runAddress";
+import {
+  declaredFor,
+  labelAt,
+  laterStepSaid,
+  outputSaid,
+  type Declaring,
+} from "./declared";
+import { spokenName } from "./stepTitle";
 
 /** The words each state is said in, closed over the states the server works out. */
 const STATES = {
@@ -57,13 +83,26 @@ const ENDINGS = {
   nothing_came_back: "step.nothingCameBack",
 } as const satisfies Record<Ended, MessageId>;
 
+const REVIEW_SENDING = {
+  unsent: "step.reviewUnsent",
+  out: "step.reviewOut",
+  turned_away: "step.reviewTurnedAway",
+  too_long: "step.reviewTooLong",
+  list_not_here: "step.reviewListNotHere",
+  takes_no_longer_declared: "step.reviewTakesNoLongerDeclared",
+  no_longer_declared: "step.reviewNoLongerDeclared",
+  holds_a_file: "step.reviewHoldsAFile",
+} as const satisfies Record<ReviewSending, MessageId>;
+
 /** Which way a model's answer did not fit, in the reader's words and never as its spelling. */
 const MISFITS = {
   not_the_shape: "step.misfitNotTheShape",
+  model_declined: "step.misfitModelDeclined",
   field_missing: "step.misfitFieldMissing",
   field_unknown: "step.misfitFieldUnknown",
   nothing_given: "step.misfitNothingGiven",
   not_its_kind: "step.misfitNotItsKind",
+  line_break: "step.misfitLineBreak",
   too_long: "step.misfitTooLong",
   too_many: "step.misfitTooMany",
   not_a_term: "step.misfitNotATerm",
@@ -79,6 +118,44 @@ const MISFITS = {
   cut_off: "step.misfitCutOff",
   not_kept_as_it_came: "step.misfitNotKeptAsItCame",
 } as const satisfies Record<DidNotFitReason, MessageId>;
+
+/** Which way code went wrong where this system found it so, in the reader's words and never as its spelling. */
+const ERRORED_FOR = {
+  gave_nothing: "step.erroredForGaveNothing",
+  not_declared: "step.erroredForNotDeclared",
+  nothing_given: "step.erroredForNothingGiven",
+  not_its_kind: "step.erroredForNotItsKind",
+  line_break: "step.erroredForLineBreak",
+  too_long: "step.erroredForTooLong",
+  too_many: "step.erroredForTooMany",
+  not_a_term: "step.erroredForNotATerm",
+  unkeepable: "step.erroredForUnkeepable",
+  too_long_to_keep: "step.erroredForTooLongToKeep",
+  file_type_unusable: "step.erroredForFileTypeUnusable",
+  file_name_unusable: "step.erroredForFileNameUnusable",
+  file_too_large: "step.erroredForFileTooLarge",
+  file_total_too_large: "step.erroredForFileTotalTooLarge",
+  takes_a_list_not_here: "step.erroredForTakesAListNotHere",
+  gives_a_list_not_here: "step.erroredForGivesAListNotHere",
+  takes_otherwise: "step.erroredForTakesOtherwise",
+  gives_otherwise: "step.erroredForGivesOtherwise",
+  failed_on_this_side: "step.erroredForFailedOnThisSide",
+  said_nothing: "step.erroredForSaidNothing",
+} as const satisfies Record<ErroredForReason, MessageId>;
+
+/** The reasons whose sentence names no field of the code step's. */
+const NAMING_NO_FIELD: ReadonlySet<string> = new Set([
+  "gave_nothing",
+  "file_total_too_large",
+  "failed_on_this_side",
+  "said_nothing",
+] satisfies readonly ErroredForReason[]);
+
+/** The reasons about a field of what the code step takes; every other field named is one of what it gives back. */
+const ABOUT_WHAT_IT_TAKES: ReadonlySet<string> = new Set([
+  "takes_a_list_not_here",
+  "takes_otherwise",
+] satisfies readonly ErroredForReason[]);
 
 const WAITERS = {
   review_at_gate: "step.waitsOnReviewer",
@@ -99,6 +176,7 @@ const HOLDS = {
   too_long: "step.heldTooLong",
   turned_away: "step.heldTurnedAway",
   code_step_not_held: "step.heldCodeStepNotHeld",
+  search_way_not_held: "step.heldSearchWayNotHeld",
 } as const satisfies Record<HoldReason, MessageId>;
 
 /** A stop holding a step back: the run's own workflow, which holds whatever it runs, or only what it runs. */
@@ -107,18 +185,29 @@ const STOPPED = {
   entry: "step.heldEntryStopped",
 } as const satisfies Record<StoppedWhat, MessageId>;
 
-/** A route's unclaimed value is never said without the value, which the wire does not carry yet. */
 const FAILURES = {
   tries_spent: "step.failedTriesSpent",
   uncuttable_length: "step.failedUncuttable",
-  unclaimed_value: "step.unknown",
+  unclaimed_value: "step.failedUnclaimed",
   model_not_deployed: "step.failedModelNotHeld",
-} as const satisfies Record<FailureReason, MessageId>;
+} as const satisfies Record<
+  Exclude<
+    FailureReason,
+    | "too_deep"
+    | "tool_not_offered"
+    | "source_no_longer_matches"
+    | "source_list_not_here"
+  >,
+  MessageId
+>;
 
-/** The failures Try sending may mend, so a stop stands in front of them; the rest are final, whatever is stopped. */
+/** These failures can be mended by sending; spending every try instead calls for another try. */
 const MENDED_BY_SENDING: ReadonlySet<string> = new Set<FailureReason>([
   "uncuttable_length",
   "model_not_deployed",
+  "tool_not_offered",
+  "source_no_longer_matches",
+  "source_list_not_here",
 ]);
 
 /** An act the reader's roles do not reach; whom it waits on instead is said where the step is. */
@@ -175,6 +264,10 @@ export function stepStateWorded(state: string): string | null {
   return wordedIfKnown(STATES, state);
 }
 
+export function stepStateColour(state: StepState, theme: Theme): string {
+  return theme.palette.stepState[state];
+}
+
 export function standingSaid(now: string): string {
   return worded(STANDINGS, now);
 }
@@ -183,9 +276,136 @@ export function endedSaid(ended: string): string {
   return worded(ENDINGS, ended);
 }
 
+export function tryEndedSaid(aTry: Try): string {
+  switch (aTry.review.lost) {
+    case undefined:
+      return endedSaid(aTry.ended);
+    case "did_not_fit":
+      return say("step.reviewDidNotFit");
+    case "nothing_came_back":
+      return say("step.reviewNothingCameBack");
+    case "errored":
+      return reviewSaid(aTry.review);
+    default:
+      return say("step.unknown");
+  }
+}
+
+/** A picked value speaks for its own standing; a try without that value speaks for itself. */
+export function tryResultSaid(aTry: Try, field: string | undefined): string {
+  const value = pickedValueOf(aTry, field);
+  return value === undefined ? tryEndedSaid(aTry) : standingSaid(value.now);
+}
+
+function pickedValueOf(
+  aTry: Try,
+  field: string | undefined,
+): Try["values"][number] | undefined {
+  return field === undefined
+    ? undefined
+    : aTry.values.find((each) => each.field === field);
+}
+
 export function misfitSaid(didNotFit: string): string {
   return worded(MISFITS, didNotFit);
 }
+
+/**
+ * Why code went wrong where this system found it so, its field labelled as the code step declares it now; a sentence
+ * whose field, member or reader did not come is one this page cannot say.
+ */
+export function erroredForSaid(
+  erroredFor: ErroredFor,
+  declared: Declared | undefined,
+  declaring: Declaring,
+): string {
+  const { reason, field, member, readBy } = erroredFor;
+  if (!Object.hasOwn(ERRORED_FOR, reason)) {
+    return say("step.unknown");
+  }
+  const known = reason as ErroredForReason;
+  if (NAMING_NO_FIELD.has(known)) {
+    return say(ERRORED_FOR[known]);
+  }
+  const named =
+    field === undefined
+      ? undefined
+      : labelAt(
+          ABOUT_WHAT_IT_TAKES.has(known) ? declared?.takes : declared?.gives,
+          field,
+        );
+  if (known === "not_declared") {
+    if (member === undefined) {
+      return say("step.unknown");
+    }
+    return named === undefined
+      ? say(ERRORED_FOR.not_declared, {
+          member: memberSaid(member, erroredFor.memberCut),
+        })
+      : say("step.erroredForNotDeclaredWithin", {
+          member: memberSaid(member, erroredFor.memberCut),
+          field: named,
+        });
+  }
+  if (named === undefined) {
+    return say("step.unknown");
+  }
+  if (known !== "gives_otherwise") {
+    return say(ERRORED_FOR[known], { field: named });
+  }
+  if (readBy === undefined) {
+    return say("step.unknown");
+  }
+  if ("step" in readBy) {
+    const step = laterStepSaid(readBy.step, declaring);
+    return step === null
+      ? say("step.unknown")
+      : say(ERRORED_FOR.gives_otherwise, { field: named, step });
+  }
+  return say("step.erroredForGivesOtherwiseOutput", {
+    field: named,
+    output: outputSaid(readBy.output, declaring),
+  });
+}
+
+/** A member nothing declares, as the code named it; a name cut, or none that can be shown, said so. */
+function memberSaid(member: string, cut: true | undefined): string {
+  if (member === "") {
+    return say("step.erroredForUnnamedMember");
+  }
+  return say(cut ? "step.erroredForMemberCut" : "step.erroredForMember", {
+    name: isolatedInText(member),
+  });
+}
+
+/**
+ * The field of what a code step gives back that refuses an answer here, and what reads it.
+ * A field with no reader is refused for the list its terms come from, which nothing reads.
+ */
+export function givesOtherwiseSaid(
+  refused: GivesOtherwise,
+  declared: Declared | undefined,
+  declaring: Declaring,
+): string {
+  const { readBy } = refused;
+  const field = labelAt(declared?.gives, refused.field);
+  if (readBy === undefined) {
+    return say("step.erroredForNowGivesAListNotHere", { field });
+  }
+  if ("step" in readBy) {
+    const step = laterStepSaid(readBy.step, declaring);
+    return step === null
+      ? say("step.unknown")
+      : say("step.erroredForNowGivesOtherwise", { field, step });
+  }
+  return say("step.erroredForNowGivesOtherwiseOutput", {
+    field,
+    output: outputSaid(readBy.output, declaring),
+  });
+}
+
+/** A line of where a step is: words, or words with a value a model may have written drawn in them, never to be joined. */
+export type WhereLine = string | ReactElement;
 
 /**
  * Where a step is, first; then why, each value waiting by its label in what the step gives back; then whom it waits
@@ -194,8 +414,11 @@ export function misfitSaid(didNotFit: string): string {
 export function whereSaid(
   step: StepRow,
   gives: readonly ReadField[] | undefined,
-): string[] {
-  const said = [stepStateSaid(step.state)];
+  groupId?: string,
+  now = new Date(),
+  search = "",
+): WhereLine[] {
+  const said: WhereLine[] = [stepStateSaid(step.state)];
   const where = step.where;
   if (where === undefined) {
     return said;
@@ -205,7 +428,7 @@ export function whereSaid(
       where.on === undefined ? null : wordedIfKnown(RUNNING, where.on);
     return out === null ? said : [...said, out];
   }
-  const why = whySaid(where, step.next?.number, gives);
+  const why = whySaid(where, step.next?.number, gives, groupId, now, search);
   if (why === null) {
     return Object.hasOwn(STATES, step.state)
       ? [...said, say("step.unknown")]
@@ -214,6 +437,13 @@ export function whereSaid(
   if (where.kind === "held_back" || where.kind === "failed") {
     const dealt = dealtSaid(step, where);
     return dealt === null ? [...said, ...why] : [...said, ...why, dealt];
+  }
+  if (
+    where.kind === "waiting_on_review" &&
+    where.review !== undefined &&
+    where.waitsOn !== undefined
+  ) {
+    return [...said, ...why];
   }
   return [
     ...said,
@@ -226,11 +456,23 @@ export function whereSaid(
 
 /**
  * Who can deal with a step held back or failed, which waits on nobody: none while the run is stopped; else who lets
- * a stop said go, then who may send it where it offers sending; nothing where nothing mends it.
+ * a stop said go, then who may send or try it again; unknown reasons and terminal failures promise no way on.
  */
 function dealtSaid(step: StepRow, where: Where): string | null {
+  if (!hasWayOn(where)) {
+    return null;
+  }
   if (where.waitsOn === undefined) {
     return say("step.nobodyWhileStopped");
+  }
+  if (
+    where.reason === "code_step_not_held" ||
+    where.reason === "search_way_not_held"
+  ) {
+    return null;
+  }
+  if (where.kind === "failed" && where.reason === "tries_spent") {
+    return say(stopSaid(where) ? "step.letGoThenTryAgain" : "step.tryAgainBy");
   }
   const sending =
     step.acts.includes("try_sending") ||
@@ -241,19 +483,29 @@ function dealtSaid(step: StepRow, where: Where): string | null {
   return sending ? say("step.trySendingBy") : null;
 }
 
-/**
- * Why each act the step holds back from the reader is held back, each saying once however many acts it holds, and
- * none that where it is already says: a stop, or a model's review, said there is not said again.
- */
-export function withheldSaid(step: StepRow): string[] {
+/** Why each act is withheld, said once; code's mismatched field is named beside the refusal. */
+export function withheldSaid(step: StepRow, declaring: Declaring): string[] {
   const saidWhere = stopsSaidWhere(step.where);
   const said = step.withheld
     .filter(({ refusal }) => !saidWhere.includes(refusal))
-    .map(({ act, refusal }) =>
-      refusal === ("ACT_NOT_PERMITTED" satisfies WithheldRefusal)
-        ? worded(NOT_PERMITTED, act)
-        : worded(WITHHELD_FOR, refusal),
-    );
+    .flatMap((withheld) => {
+      const { act, refusal } = withheld;
+      if (refusal === ("ACT_NOT_PERMITTED" satisfies WithheldRefusal)) {
+        return [worded(NOT_PERMITTED, act)];
+      }
+      const which =
+        refusal === ("CODE_STEP_GIVES_OTHERWISE" satisfies WithheldRefusal) &&
+        withheld.givesOtherwise !== undefined
+          ? givesOtherwiseSaid(
+              withheld.givesOtherwise,
+              declaredFor(step, declaring.declarations),
+              declaring,
+            )
+          : null;
+      return which === null
+        ? [worded(WITHHELD_FOR, refusal)]
+        : [worded(WITHHELD_FOR, refusal), which];
+    });
   return [...new Set(said)];
 }
 
@@ -266,7 +518,12 @@ function stopsSaidWhere(where: Where | undefined): readonly string[] {
     return [];
   }
   const said: WithheldRefusal[] = [
-    ...(where.waitsOn === undefined ? ["RUN_STOPPED" as const] : []),
+    ...(where.waitsOn === undefined &&
+    (where.kind === "waiting_on_review" ||
+      where.kind === "owed_try" ||
+      hasWayOn(where))
+      ? ["RUN_STOPPED" as const]
+      : []),
     ...(where.waitsOn === "model" ? ["REVIEW_NOT_A_PERSONS" as const] : []),
     ...((where.kind === "held_back" && where.reason === "entry_stopped") ||
     stopSaid(where)
@@ -276,15 +533,20 @@ function stopsSaidWhere(where: Where | undefined): readonly string[] {
   return said;
 }
 
-/** Whether a stop in force is said first: wherever it holds a step back, and on a failure sending may mend. */
-function stopSaid(where: Where): boolean {
+function hasWayOn(where: Where): boolean {
+  const { kind, reason } = where;
   return (
-    where.stopped !== undefined &&
-    (where.kind === "held_back" ||
-      (where.kind === "failed" &&
-        where.reason !== undefined &&
-        MENDED_BY_SENDING.has(where.reason)))
+    reason !== undefined &&
+    (kind === "held_back"
+      ? Object.hasOwn(HOLDS, reason)
+      : kind === "failed" &&
+        (reason === "tries_spent" || MENDED_BY_SENDING.has(reason)))
   );
+}
+
+/** A stop matters before a reason that can be mended; a terminal failure cannot be released or tried again. */
+function stopSaid(where: Where): boolean {
+  return where.stopped !== undefined && hasWayOn(where);
 }
 
 type KnownWhere = Exclude<WhereKind, "running">;
@@ -306,20 +568,34 @@ function whySaid(
   where: Where,
   next: number | undefined,
   gives: readonly ReadField[] | undefined,
-): string[] | null {
+  groupId: string | undefined,
+  now: Date,
+  search: string,
+): WhereLine[] | null {
   const { kind } = where;
   if (!isKnownWhere(kind)) {
     return null;
   }
   switch (kind) {
-    case "waiting_on_review":
-      return (where.values ?? []).map(({ field }) =>
+    case "waiting_on_review": {
+      const values = (where.values ?? []).map(({ field }) =>
         say("step.notReviewedYetOf", { field: labelAt(gives, field) }),
       );
+      if (where.review === undefined) {
+        return values;
+      }
+      const review =
+        where.review === "turned_away" && where.spentUp === true
+          ? say("step.reviewSpentUp")
+          : worded(REVIEW_SENDING, where.review);
+      return where.review === "turned_away" && where.waitsOn !== undefined
+        ? [...values, review, say("step.trySendingBy")]
+        : [...values, review];
+    }
     case "held_back":
-      return stoppedFirst(where, heldSaid(where));
+      return stoppedFirst(where, heldSaid(where, groupId, search), now);
     case "failed":
-      return stoppedFirst(where, failedSaid(where));
+      return stoppedFirst(where, failedSaid(where, groupId, search), now);
     case "owed_try":
       return [
         next === undefined
@@ -335,21 +611,72 @@ function whySaid(
  * A stop in force said first, by what it stopped, then who stopped it and when; then `why`, what held it back or
  * failed it before, unless the stop is all that holds it.
  */
-function stoppedFirst(where: Where, why: string): string[] {
+function stoppedFirst(where: Where, why: WhereLine, now: Date): WhereLine[] {
   const { stopped } = where;
   if (stopped === undefined || !stopSaid(where)) {
     return [why];
   }
-  const stop = [
-    wordedIfKnown(STOPPED, stopped.what) ?? say(HOLDS.entry_stopped),
-    stoppedSaid(stopped),
-  ];
+  const stop = [worded(STOPPED, stopped.what), stoppedSaid(stopped, now)];
   return where.reason === "entry_stopped" ? stop : [...stop, why];
 }
 
-/** Why a step failed; a model not held by its name and mode, and whether it was to produce or to review. */
-function failedSaid(where: Where): string {
+/**
+ * Why a step failed; a route's value no branch took drawn as a model's words are; a model not held by its name and
+ * mode, and whether it was to produce or to review.
+ */
+function failedSaid(
+  where: Where,
+  groupId: string | undefined,
+  search: string,
+): WhereLine {
   const { reason, model, mode } = where;
+  if (reason === "source_no_longer_matches") {
+    const mismatch = where.failedSourceNoLongerMatches;
+    return mismatch === undefined
+      ? say("step.unknown")
+      : sourceSaid(
+          "step.failedSourceNoLongerMatches",
+          mismatch.source,
+          groupId,
+          mismatch.field,
+          search,
+        );
+  }
+  if (reason === "source_list_not_here") {
+    const missing = where.failedSourceListNotHere;
+    return missing === undefined
+      ? say("step.unknown")
+      : sourceSaid(
+          "step.failedSourceListNotHere",
+          missing.source,
+          groupId,
+          missing.field,
+          search,
+        );
+  }
+  if (reason === "tool_not_offered") {
+    return model === undefined || where.tool === undefined
+      ? say("step.unknown")
+      : say("step.failedToolNotOffered", {
+          model: whoSaid({ kind: "model", model, mode }),
+          tool: isolatedInText(where.tool),
+        });
+  }
+  if (reason === "unclaimed_value") {
+    if (where.failedUnclaimed?.withheld === true) {
+      return say("step.failedUnclaimedWithheld");
+    }
+    const term = where.failedUnclaimed?.term;
+    return term === null
+      ? say("step.failedUnclaimedEmpty")
+      : term === undefined
+        ? say("step.unknown")
+        : createElement(HiddenShownIn, {
+            sentence: (place: string) =>
+              say("step.failedUnclaimed", { term: place }),
+            text: term,
+          });
+  }
   if (reason === "model_not_deployed" && model !== undefined) {
     return say(
       where.reviewing === true
@@ -358,6 +685,12 @@ function failedSaid(where: Where): string {
       { model: whoSaid({ kind: "model", model, mode }) },
     );
   }
+  if (
+    reason === ("too_deep" satisfies FailureReason) &&
+    where.failedTooDeep !== undefined
+  ) {
+    return say("step.failedTooDeep", { most: where.failedTooDeep.most });
+  }
   return reason === undefined ? say("step.unknown") : worded(FAILURES, reason);
 }
 
@@ -365,8 +698,21 @@ function failedSaid(where: Where): string {
  * What holds a step back; a model turning it away as its spending is used up, as that; a stop no longer in force
  * holds it only until the run next goes on.
  */
-function heldSaid(where: Where): string {
+function heldSaid(
+  where: Where,
+  groupId: string | undefined,
+  search: string,
+): WhereLine {
   const { reason } = where;
+  if (reason === "code_step_not_held" && where.source !== undefined) {
+    return sourceSaid(
+      "step.heldSourceCodeStepNotHeld",
+      where.source,
+      groupId,
+      undefined,
+      search,
+    );
+  }
   if (reason === "turned_away" && where.spentUp === true) {
     return say("step.heldSpentUp");
   }
@@ -376,9 +722,44 @@ function heldSaid(where: Where): string {
   return reason === undefined ? say("step.unknown") : worded(HOLDS, reason);
 }
 
+function sourceSaid(
+  id: MessageId,
+  source: NonNullable<Where["source"]>,
+  groupId: string | undefined,
+  field?: string,
+  search = "",
+): WhereLine {
+  const values: Record<string, string> =
+    field === undefined ? {} : { field: isolatedInText(field) };
+  if (groupId === undefined) {
+    return say(id, {
+      ...values,
+      step: isolatedInText(spokenName(source.name)),
+    });
+  }
+  const step = createElement(
+    Link<typeof RouterLink>,
+    {
+      component: RouterLink,
+      to: `${stepHref(groupId, source.runId, source.stepId)}${listQuery(search)}`,
+      state: WITHIN_THE_RUN,
+      title: say("run.title", { number: source.runNumber }),
+    },
+    createElement("bdi", null, spokenName(source.name)),
+  );
+  return createElement(
+    Fragment,
+    null,
+    intl.formatMessage({ id }, { ...values, step }),
+  );
+}
+
 /** Who stopped what holds a step back, and when; one no longer to be found is said to be so. */
-function stoppedSaid(stopped: NonNullable<Where["stopped"]>): string {
-  const when = whenText(stopped.at);
+function stoppedSaid(
+  stopped: NonNullable<Where["stopped"]>,
+  now: Date,
+): string {
+  const when = whenText(stopped.at, now);
   return stopped.by === undefined
     ? say("step.stoppedByGone", { when })
     : say("step.stoppedBy", {
@@ -418,7 +799,84 @@ export function reviewSaid(review: Try["review"]): string {
     : whoSaid(review.by);
 }
 
-/** What what they said was: assured, or refused and in which words, which are withheld where a model said them. */
+function hint(words: string): ReactElement {
+  return createElement(SystemHint, null, words);
+}
+
+export function tryBeyondVisible(number: number, allowed: number): ReactNode {
+  return visible("step.tryBeyondVisible", {
+    number,
+    past: hint(say("step.tryBeyondPast")),
+    allowed,
+    allows: hint(say("step.tryBeyondAllows")),
+  });
+}
+
+export function reviewVisible(review: Try["review"]): ReactNode {
+  return review.by === undefined || review.wentWrong !== true
+    ? reviewSaid(review)
+    : visible("step.reviewWentWrongVisible", {
+        who: createElement("bdi", null, whoSaid(review.by)),
+        hint: hint(say("step.reviewWentWrongHint")),
+      });
+}
+
+export function tryEndedVisible(aTry: Try): ReactNode {
+  return aTry.review.lost === "errored"
+    ? reviewVisible(aTry.review)
+    : tryEndedSaid(aTry);
+}
+
+export function tryResultVisible(
+  aTry: Try,
+  field: string | undefined,
+): ReactNode {
+  const value = pickedValueOf(aTry, field);
+  return value === undefined ? tryEndedVisible(aTry) : standingSaid(value.now);
+}
+
+export function erroredForVisible(
+  erroredFor: ErroredFor,
+  declared: Declared | undefined,
+  declaring: Declaring,
+): ReactNode {
+  if (
+    erroredFor.reason !== "not_declared" ||
+    erroredFor.memberCut !== true ||
+    erroredFor.member === undefined ||
+    erroredFor.member === ""
+  ) {
+    return erroredForSaid(erroredFor, declared, declaring);
+  }
+  const field =
+    erroredFor.field === undefined
+      ? undefined
+      : labelAt(declared?.gives, erroredFor.field);
+  const member = visible("step.erroredForMemberCutVisible", {
+    member: createElement(
+      Fragment,
+      null,
+      visible("step.erroredForMember", {
+        name: createElement("bdi", null, isolatedInText(erroredFor.member)),
+      }),
+    ),
+    hint: hint(say("step.erroredForMemberCutHint")),
+  });
+  return visible(
+    field === undefined
+      ? "step.erroredForNotDeclared"
+      : "step.erroredForNotDeclaredWithin",
+    {
+      member: createElement(Fragment, null, member),
+      ...(field === undefined ? {} : { field }),
+    },
+  );
+}
+
+/**
+ * What what they said was: assured, or refused, or refused in words withheld where a model said them. Words a value
+ * was refused in are never said here: only `DecisionDrawn` draws them, showing what in them hides.
+ */
 export function decisionSaid(
   decision: TriedValue["decision"] & object,
 ): string {
@@ -428,30 +886,19 @@ export function decisionSaid(
   if (decision.outcome !== "refused") {
     return say("step.unknown");
   }
-  if (decision.why !== undefined) {
-    return say("step.refusedWith", { why: isolatedInText(decision.why) });
-  }
   return say(decision.withheld === true ? "step.whyWithheld" : "step.refused");
 }
 
-/** When a model turned a call away, and whether it was sent again by itself; then what it said, or that that is withheld. */
-export function turnawaySaid(turnaway: Turnaway): string[] {
+/**
+ * When a model turned a call away, and whether it was sent again by itself; then that what it said is withheld, where
+ * it is. What it said is never said here: only `Turnaways` draws it, showing what in it hides.
+ */
+export function turnawaySaid(turnaway: Turnaway, now = new Date()): string[] {
   const when = say(
     turnaway.sentAgain ? "step.turnedAwaySentAgain" : "step.turnedAwayAt",
-    { when: whenText(turnaway.at) },
+    { when: whenText(turnaway.at, now) },
   );
-  if (turnaway.withheld === true) {
-    return [when, say("step.turnedAwayWithheld")];
-  }
-  if (turnaway.said === undefined) {
-    return [when];
-  }
-  const said = isolatedInText(turnaway.said);
-  return [
-    when,
-    say(
-      turnaway.cut === true ? "step.turnedAwaySaidCut" : "step.turnedAwaySaid",
-      { said },
-    ),
-  ];
+  return turnaway.withheld === true
+    ? [when, say("step.turnedAwayWithheld")]
+    : [when];
 }

@@ -43,14 +43,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/** A group's library as it is read, on a real server running the real baseline. */
+
 class LibraryIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000801"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000000802"
 
-    /** Ann and Ben are overseers; Cat is an operator; Dan is in no role here. */
+
     static final String ANN = "00000002-0000-4000-8000-000000000801"
 
     static final String BEN = "00000002-0000-4000-8000-000000000802"
@@ -116,7 +116,7 @@ class LibraryIntegrationSpec extends Specification {
         EntryKind.values().collect { Library.listed(it).name() }.toSet().size() == EntryKind.values().size()
     }
 
-    /** One list per kind, so a cursor minted for one kind's page is refused by another's. */
+
     def "a cursor minted for one kind's list is refused by another kind's"() {
         when:
         def query = new ListQuery<>(GroupLists.within(groupId(GROUP)), ascending(LibrarySortColumn.NAME), null)
@@ -127,10 +127,7 @@ class LibraryIntegrationSpec extends Specification {
         thrown(IllegalArgumentException)
     }
 
-    /**
-     * Triage's newest is submitted over one in service; Escalate's newest in service was retired over an older
-     * one still serving, and it is stopped; Archive's one version was approved with its submission left open.
-     */
+
     def "lists every entry of the kind the group owns, and none of another kind or group"() {
         given:
         questions()
@@ -147,6 +144,18 @@ class LibraryIntegrationSpec extends Specification {
         page.next() == null
     }
 
+    def "a library row reads its purpose where one was said and none where it was not"() {
+        given:
+        store.entry(TRIAGE, GROUP, "question", "Triage", "Sorts claims.")
+        store.entry(ARCHIVE, GROUP, "question", "Archive")
+
+        when:
+        def rows = library.page(EntryKind.QUESTION, query(GROUP, ascending(LibrarySortColumn.NAME)), null).rows()
+
+        then:
+        rows*.purpose() == [null, new EntryPurpose("Sorts claims.")]
+    }
+
     def "an entry with nothing in service lists none, and one waiting on nothing lists no submission"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -160,7 +169,7 @@ class LibraryIntegrationSpec extends Specification {
         rows*.submitted() == [false]
     }
 
-    /** Approving a newer version retires nothing, so several may serve at once; the row names the newest. */
+
     def "an entry with several versions in service lists the newest of them"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -193,10 +202,11 @@ class LibraryIntegrationSpec extends Specification {
         "zzz" || []
     }
 
-    /** Whether one is in service, waiting or stopped gathers the rows at one end, ties in name order. */
-    def "sorted by what is in service, what is waiting or what is stopped, the rows gather by it"() {
+
+    def "sorted by what is in service or status, the rows gather by it"() {
         given:
         questions()
+        store.stopped(TRIAGE, ANN)
         store.entry("00000006-0000-4000-8000-000000000809", GROUP, "question", "Blank")
         store.version(version(20), "00000006-0000-4000-8000-000000000809", 1, ANN)
 
@@ -210,9 +220,73 @@ class LibraryIntegrationSpec extends Specification {
         column                       | descending || names
         LibrarySortColumn.IN_SERVICE | false      || ["Blank", "Archive", "Escalate", "Triage"]
         LibrarySortColumn.IN_SERVICE | true       || ["Archive", "Escalate", "Triage", "Blank"]
-        LibrarySortColumn.SUBMITTED  | true       || ["Triage", "Archive", "Blank", "Escalate"]
-        LibrarySortColumn.STOPPED    | true       || ["Escalate", "Archive", "Blank", "Triage"]
+        LibrarySortColumn.STATUS     | false      || ["Triage", "Escalate", "Archive", "Blank"]
+        LibrarySortColumn.STATUS     | true       || ["Archive", "Blank", "Escalate", "Triage"]
         LibrarySortColumn.NAME       | true       || ["Triage", "Escalate", "Blank", "Archive"]
+    }
+
+    def "status order crosses pages with differently cased names without a row repeated or lost"() {
+        given:
+        questions()
+        def names = (1..ListPage.SIZE + 1).collect { number ->
+            number % 2 == 0 ? String.format("Case %03d", number) : String.format("case %03d", number)
+        }
+        names.eachWithIndex { name, index ->
+            store.entry(String.format("00000006-0000-4000-8000-%012d", 1900 + index), GROUP, "question", name)
+        }
+        def query = query(GROUP, ascending(LibrarySortColumn.STATUS))
+
+        when:
+        def first = library.page(EntryKind.QUESTION, query, null)
+        def second = library.page(EntryKind.QUESTION, query, first.next())
+        def listed = (first.rows() + second.rows())*.name()*.value()
+
+        then:
+        first.rows().size() == ListPage.SIZE
+        second.next() == null
+        listed.size() == names.size() + 3
+        listed.toSet() == (names + ["Triage", "Escalate", "Archive"]).toSet()
+        listed[0..1] == ["Triage", "Escalate"]
+    }
+
+    def "status pages cross each group boundary without a row repeated or lost"() {
+        given:
+        questions()
+        def waiting = waitingAdded == 0 ? [] : (1..waitingAdded).collect { number -> String.format("Waiting %03d", number) }
+        waiting.eachWithIndex { name, index ->
+            def entry = String.format("00000006-0000-4000-8000-%012d", 2100 + index)
+            store.entry(entry, GROUP, "question", name)
+            def draft = version(100 + index)
+            store.version(draft, entry, 1, ANN)
+            store.submitted(draft, ANN)
+        }
+        def stopped = stoppedAdded == 0 ? [] : (1..stoppedAdded).collect { number -> String.format("Stopped %03d", number) }
+        stopped.eachWithIndex { name, index ->
+            def entry = String.format("00000006-0000-4000-8000-%012d", 2200 + index)
+            store.entry(entry, GROUP, "question", name)
+            store.seeded(version(200 + index), entry, 1)
+            store.stopped(entry, ANN)
+        }
+        def expected = (["Triage"] + waiting).sort() + (["Escalate"] + stopped).sort() + ["Archive"]
+        def query = query(GROUP, ascending(LibrarySortColumn.STATUS))
+
+        when:
+        def first = library.page(EntryKind.QUESTION, query, null)
+        def second = library.page(EntryKind.QUESTION, query, first.next())
+        def listed = (first.rows() + second.rows())*.name()*.value()
+
+        then:
+        first.rows().size() == ListPage.SIZE
+        first.rows().last().statusRank() == beforeRank
+        second.rows().first().statusRank() == afterRank
+        second.next() == null
+        listed == expected
+        listed.toSet().size() == expected.size()
+
+        where:
+        waitingAdded | stoppedAdded || beforeRank | afterRank
+        49           | 0            || 0L         | 1L
+        0            | 48           || 1L         | 2L
     }
 
     def "the second page of a library goes on within the group and the kind, and ends where they do"() {
@@ -235,7 +309,7 @@ class LibraryIntegrationSpec extends Specification {
         second.next() == null
     }
 
-    /** What a page is narrowed within is the query's own scope, the value its cursors are bound to. */
+
     def "a page is read within the group its query names, and one statement reads it however many rows it holds"() {
         given:
         questions()
@@ -288,10 +362,7 @@ class LibraryIntegrationSpec extends Specification {
         running.stop() == null
     }
 
-    /**
-     * A migration started version 1 and put it into service, so nobody wrote or approved it; Ann started 2,
-     * Ben wrote it and the steward approved it; Ann started 3, which Ben submitted.
-     */
+
     def "reads every version newest first: its standing, everyone who wrote it and how it came into service"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -302,6 +373,7 @@ class LibraryIntegrationSpec extends Specification {
         store.approved(version(2), FIRST_STEWARD)
         store.version(version(3), TRIAGE, 3, ANN)
         store.submitted(version(3), BEN)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update entry_versions set revision = 5 where entry_version_id = ?::uuid").param(version(2))
                 .update()
 
@@ -320,7 +392,7 @@ class LibraryIntegrationSpec extends Specification {
         read.versions()[2].approval() == new Library.Approval.ByMigration()
     }
 
-    /** What is offered is what a change would admit: Ben wrote nothing of version 3, Ann started it. */
+
     def "each version offers the caller exactly what the caller may do to it now"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -342,7 +414,7 @@ class LibraryIntegrationSpec extends Specification {
         CAT_USER || [[WITHDRAW], [], []]
     }
 
-    /** A new draft is offered only where none is under way; a stop only where none stands. */
+
     def "an entry offers the caller what they may do to it as a whole, as it stands"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -367,7 +439,7 @@ class LibraryIntegrationSpec extends Specification {
         CAT_USER | false    | true    || [START_DRAFT, RENAME]
     }
 
-    /** A new draft of a kind not copied whole into one would lose some of what it started from, so none is offered. */
+
     def "a new draft is offered on an entry of every kind, whoever reads it"() {
         given:
         store.entry(TRIAGE, GROUP, kind, "Triage")
@@ -387,10 +459,7 @@ class LibraryIntegrationSpec extends Specification {
         "reference_list" || [START_DRAFT, RENAME, STOP]
     }
 
-    /**
-     * Handle's version in service pins Triage's 1 through two steps and counts once; the router's pins it
-     * through a route; a draft and a retired version pinning it are not counted, nor is anything elsewhere.
-     */
+
     def "each version names what in service in the group pins it, each once, and nothing else"() {
         given:
         store.entry(TRIAGE, GROUP, "workflow", "Triage")
@@ -458,7 +527,7 @@ class LibraryIntegrationSpec extends Specification {
         named << [TRIAGE, ELSEWHERE, "00000009-0000-4000-8000-000000000009"]
     }
 
-    /** Somebody in no role here cannot see into the group, and is answered as a group that is not is. */
+
     def "reading an entry by somebody holding nothing in the group is refused as no group, whatever it names"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -493,10 +562,7 @@ class LibraryIntegrationSpec extends Specification {
         versions << [1, 12]
     }
 
-    /**
-     * A writer is recorded and committed after the entry's own row was read and before who wrote each version
-     * is: one moment of the store is what is read, and it was not there at that moment.
-     */
+    /** A version must be read from one snapshot so a concurrent change cannot mix its parts. */
     def "an entry is read as one moment of the store, whatever lands while it is being read"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -553,7 +619,7 @@ class LibraryIntegrationSpec extends Specification {
         "Triage"   | null    | null     | " Handle" || "Entry ${HANDLE} holds a name this system will not show" as String
     }
 
-    /** Nobody but a person or a migration writes a version, so one written by neither is a store gone wrong. */
+
     def "a version that no person wrote and no migration started fails the read rather than being shown"() {
         given:
         store.entry(TRIAGE, GROUP, "question", "Triage")
@@ -599,7 +665,7 @@ class LibraryIntegrationSpec extends Specification {
         store.entry(ELSEWHERE, OTHER_GROUP, "question", "Elsewhere")
     }
 
-    /** An entry of this group's whose one version pins, in service or not, and retired or not. */
+
     private void holding(String entry, String name, String holder, boolean inService, boolean retired) {
         store.entry(entry, GROUP, "workflow", name)
         if (inService) {

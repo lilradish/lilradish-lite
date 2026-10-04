@@ -31,6 +31,15 @@ public sealed interface CodeOutcome permits CodeOutcome.Gave, CodeOutcome.Errore
      * where it can be.
      */
     static CodeOutcome returned(CodeCall call, JsonValue.@Nullable JsonObject returned) {
+        return returned(call, returned, false);
+    }
+
+    /** Read a return whose file positions were replaced by FileFillings in the ending transaction. */
+    static CodeOutcome returnedAfterFileFillings(CodeCall call, JsonValue.JsonObject returned) {
+        return returned(call, returned, true);
+    }
+
+    private static CodeOutcome returned(CodeCall call, JsonValue.@Nullable JsonObject returned, boolean verifiedFiles) {
         requireNonNull(call, "CodeOutcome call must not be null");
         if (returned == null) {
             return new Errored(new CodeError.Fault(CodeErrorReason.GAVE_NOTHING, List.of(), null, null), null);
@@ -44,13 +53,20 @@ public sealed interface CodeOutcome permits CodeOutcome.Gave, CodeOutcome.Errore
                             new CodeError.Fault(
                                     CodeErrorReason.NOT_DECLARED,
                                     List.of(),
-                                    returned.members().getFirst().name(),
+                                    new CodeError.UndeclaredMember(
+                                            returned.members().getFirst().name(), false),
                                     null),
                             returned);
         }
-        return switch (Unwrapping.given(Asking.told(gives, call.lists()), returned)) {
-            case GivenBack.Misfit wrong ->
-                misfit(new CodeError.Fault(reason(wrong.reason()), wrong.path(), wrong.undeclared(), null), returned);
+        return switch (verifiedFiles
+                ? Unwrapping.givenAfterFileFillings(Asking.told(gives, call.lists()), returned)
+                : Unwrapping.given(Asking.told(gives, call.lists()), returned)) {
+            case GivenBack.Misfit wrong -> {
+                String undeclared = wrong.undeclared();
+                CodeError.UndeclaredMember member =
+                        undeclared == null ? null : new CodeError.UndeclaredMember(undeclared, false);
+                yield misfit(new CodeError.Fault(reason(wrong.reason()), wrong.path(), member, null), returned);
+            }
             case GivenBack.Fits fits -> {
                 List<Given> values = new ArrayList<>(gives.fields().size());
                 for (Field field : gives.fields()) {
@@ -74,6 +90,10 @@ public sealed interface CodeOutcome permits CodeOutcome.Gave, CodeOutcome.Errore
                 null);
     }
 
+    static CodeOutcome refusedFile(CodeError.Fault fault, JsonValue.JsonObject returned) {
+        return misfit(fault, returned);
+    }
+
     private static CodeOutcome misfit(CodeError.Fault fault, JsonValue.JsonObject returned) {
         return new Errored(fault, kept(returned));
     }
@@ -93,12 +113,14 @@ public sealed interface CodeOutcome permits CodeOutcome.Gave, CodeOutcome.Errore
             case FIELD_UNKNOWN -> CodeErrorReason.NOT_DECLARED;
             case FIELD_MISSING, NOTHING_GIVEN -> CodeErrorReason.NOTHING_GIVEN;
             case NOT_ITS_KIND -> CodeErrorReason.NOT_ITS_KIND;
+            case LINE_BREAK -> CodeErrorReason.LINE_BREAK;
             case TOO_LONG -> CodeErrorReason.TOO_LONG;
             case TOO_MANY -> CodeErrorReason.TOO_MANY;
             case NOT_A_TERM -> CodeErrorReason.NOT_A_TERM;
             case UNKEEPABLE -> CodeErrorReason.UNKEEPABLE;
             case TOO_LONG_TO_KEEP -> CodeErrorReason.TOO_LONG_TO_KEEP;
             case NOT_THE_SHAPE,
+                    MODEL_DECLINED,
                     CONFIDENCE_MISSING,
                     CONFIDENCE_UNASKED,
                     CONFIDENCE_NOT_A_PERCENT,
@@ -132,6 +154,11 @@ public sealed interface CodeOutcome permits CodeOutcome.Gave, CodeOutcome.Errore
 
         public Errored {
             requireNonNull(wentWrong, "CodeOutcome.Errored wentWrong must not be null");
+            if (returned != null
+                    && !(wentWrong instanceof CodeError.Fault fault
+                            && fault.reason().aboutWhatCameBack())) {
+                throw new IllegalArgumentException("CodeOutcome.Errored keeps a return only for a reason found in it");
+            }
             String refused = returned == null ? null : unkeepable(returned);
             if (refused != null) {
                 throw new IllegalArgumentException(refused);

@@ -45,6 +45,69 @@ class SendMeasureSpec extends Specification {
         [asking, told] << [askings(), [true, false]].combinations()
     }
 
+    def "a file changes no measured send while nested non-file siblings and refusal words still count"() {
+        given:
+        def file = new AskedField(new FieldName("attachment"), FieldKind.FILE, null, null, null, [], false, false)
+        def ordinary = held("details", [text("note", 3)])
+        def withFile = held("details", [file, text("note", 3)])
+        def without = new Asking(INSTRUCTION, [ordinary], [ordinary])
+        def mixed = new Asking(INSTRUCTION, [file, withFile], [file, withFile])
+
+        expect:
+        SendMeasure.mostSent(mixed, true) == SendMeasure.mostSent(without, true)
+        SendMeasure.mostSent(mixed, false) == SendMeasure.mostSent(without, false)
+        SendMeasure.mostSentToReview(mixed) == SendMeasure.mostSentToReview(without)
+        SendMeasure.mostSentToReview(mixed.takes(), mixed.gives()) ==
+                SendMeasure.mostSentToReview(without.takes(), without.gives())
+        SendMeasure.mostSentToSearch([], mixed.gives(), true) ==
+                SendMeasure.mostSentToSearch([], without.gives(), true)
+        SendMeasure.mostSentToReviewSearch([], mixed.gives()) ==
+                SendMeasure.mostSentToReviewSearch([], without.gives())
+        SendMeasure.mostSentToReview(mixed) - codePoints(Envelope.toReview(mixed.gives())) >
+                SendMeasure.mostSent(mixed, false) - codePoints(Envelope.toProduce(mixed.gives()))
+        SendMeasure.mostSent(mixed, false) > SendMeasure.mostSent(new Asking(INSTRUCTION, [], []), false)
+    }
+
+    def "a search measure refuses a file source at any depth even with an absent or empty value"() {
+        given:
+        def file = new AskedField(new FieldName("document"), FieldKind.FILE, null, many, null, [], false, false)
+        def field = nested ? held("details", [file], outerMany) : file
+        def value = empty ? new JsonValue.JsonArray([]) : null
+        def part = new Payload.SearchPart.ValuePart(field, value)
+
+        when:
+        SendMeasure.mostSentToSearch([part], GIVES, false)
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == "A file is not sent to a model"
+
+        where:
+        nested | many | outerMany | empty
+        false  | null | null      | false
+        false  | 2    | null      | true
+        true   | null | null      | false
+        true   | null | 2         | true
+    }
+
+    def "longer escaped term meanings increase the measure by the exact schema text without changing the payload"() {
+        given:
+        def shortAsking = new Asking(INSTRUCTION, [], [term('choice', new OfferedTerms([offered('Choice', 'A meaning.')], null))])
+        def longAsking = new Asking(INSTRUCTION, [], [term('choice', new OfferedTerms([offered('Choice', 'Meaning "quoted" ' + GRINNING * 20)], null))])
+        def shortEnvelope = codePoints(Envelope.toProduce(shortAsking.gives()))
+        def longEnvelope = codePoints(Envelope.toProduce(longAsking.gives()))
+
+        when:
+        def shortMeasure = SendMeasure.mostSent(shortAsking, true)
+        def longMeasure = SendMeasure.mostSent(longAsking, true)
+
+        then:
+        longMeasure > shortMeasure
+        longMeasure - shortMeasure == longEnvelope - shortEnvelope
+        longMeasure == writtenAtMost(longAsking, true, false)
+        shortMeasure - shortEnvelope == longMeasure - longEnvelope
+    }
+
     /** A person answering in a model's place is shown what was refused, so a review is measured as though told. */
     def "the most a review could send is what its production was sent as though told, with every value to decide"() {
         expect:
@@ -86,12 +149,181 @@ class SendMeasureSpec extends Specification {
         askings()[0].takes() | null                 || "SendMeasure gives must not be null"
     }
 
-    def "a review could send more than its production could, told or not"() {
+    def "a review payload adds the answer even when the production schema is longer than its review instructions"() {
         expect:
-        SendMeasure.mostSentToReview(asking) > SendMeasure.mostSent(asking, told)
+        SendMeasure.mostSentToReview(asking) - codePoints(Envelope.toReview(asking.gives())) >
+                SendMeasure.mostSent(asking, told) - codePoints(Envelope.toProduce(asking.gives()))
 
         where:
         [asking, told] << [askings(), [true, false]].combinations()
+    }
+
+    def "the longest search message equals its actual fully escaped payload and envelope with every kind of value"() {
+        given:
+        def chosen = term("choice", new OfferedTerms([offered('"\\' * 3, 'Escaped.'), offered('plain', 'Plain.')], null))
+        def parts = [new Payload.SearchPart.LiteralPart('Before "\\\u0001' + GRINNING)] +
+                (GIVES + chosen).collect { new Payload.SearchPart.ValuePart(it, longest(it)) } +
+                [new Payload.SearchPart.LiteralPart('\nAfter')]
+        def refused = new Payload.Refused(GIVES.collectEntries { [(it.name()): longest(it)] },
+                GIVES.collectEntries { [(it.name()): '"' * 2048] })
+
+        when:
+        def actual = codePoints(CanonicalJson.write(Payload.toSearch(parts, GIVES, refused))) +
+                codePoints(Envelope.toSearch(GIVES))
+        def measured = SendMeasure.mostSentToSearch(parts, GIVES, true)
+
+        then:
+        measured == actual
+        measured > SendMeasure.mostSentToSearch(parts, GIVES, false)
+    }
+
+    def "a search counts the actual full message for a single or many number date and moment at their limits"() {
+        given:
+        def parts = [new Payload.SearchPart.LiteralPart('before '),
+                new Payload.SearchPart.ValuePart(field, longest(field)),
+                new Payload.SearchPart.LiteralPart(' after')]
+
+        when:
+        def actual = codePoints(CanonicalJson.write(Payload.toSearch(parts, GIVES, null))) +
+                codePoints(Envelope.toSearch(GIVES))
+
+        then:
+        SendMeasure.mostSentToSearch(parts, GIVES, false) == actual
+
+        where:
+        field << [plain('number', FieldKind.NUMBER), plain('date', FieldKind.DATE),
+                  plain('moment', FieldKind.MOMENT), plain('numbers', FieldKind.NUMBER, 2),
+                  plain('dates', FieldKind.DATE, 2), plain('moments', FieldKind.MOMENT, 2)]
+    }
+
+    def "the longest search review pairs with the written payload without a kept search record"() {
+        given:
+        def gives = GIVES.take(4)
+        def field = text('source', 3)
+        def parts = [new Payload.SearchPart.LiteralPart('Find "'),
+                new Payload.SearchPart.ValuePart(field, longest(field)),
+                new Payload.SearchPart.LiteralPart('"')]
+        def question = Payload.toSearch(parts, gives, null).members()[1].value().value()
+        def answer = gives.collectEntries { [(it.name()): longest(it)] }
+        def refused = new Payload.Refused(answer, gives.collectEntries { [(it.name()): '"' * 2048] })
+        def emptyRecord = new JsonValue.JsonObject([])
+
+        when:
+        def payload = Payload.toReviewSearch(question, gives, refused, answer, gives*.name(), emptyRecord)
+        def actual = codePoints(CanonicalJson.write(payload)) + codePoints(Envelope.toReviewSearch(gives))
+        def measured = SendMeasure.mostSentToReviewSearch(parts, gives)
+
+        then:
+        measured == actual
+        payload.members()*.name() == ['envelope_version', 'question', 'refused', 'answer', 'deciding']
+        measured > SendMeasure.mostSentToSearch(parts, gives, true)
+    }
+
+    def "the longest date or moment is counted as written inside the actual search question"() {
+        given:
+        def field = plain("source", kind)
+        def value = kind.longestWritten() as JsonValue.JsonString
+        def parts = [new Payload.SearchPart.LiteralPart("At "),
+                new Payload.SearchPart.ValuePart(field, value)]
+
+        when:
+        def payload = Payload.toSearch(parts, GIVES, null)
+        def question = payload.members()[1].value().value()
+        def actual = codePoints(CanonicalJson.write(payload)) + codePoints(Envelope.toSearch(GIVES))
+
+        then:
+        question == 'At "' + value.value() + '"'
+        question != "At " + value.value()
+        SendMeasure.mostSentToSearch(parts, GIVES, false) == actual
+
+        where:
+        kind << [FieldKind.DATE, FieldKind.MOMENT]
+    }
+
+    def "an empty top-level term list contributes no question text or array marks to the longest message"() {
+        given:
+        def field = term("unavailable", new OfferedTerms([], null), 3)
+        def parts = [new Payload.SearchPart.LiteralPart("Find "),
+                new Payload.SearchPart.ValuePart(field, Json.of([]))]
+
+        when:
+        def sent = Payload.toSearch(parts, GIVES, null)
+        def actual = codePoints(CanonicalJson.write(sent)) + codePoints(Envelope.toSearch(GIVES))
+        def measured = SendMeasure.mostSentToSearch(parts, GIVES, false)
+
+        then:
+        sent.members()[1].value() == Json.of("Find ")
+        measured == actual
+        measured == SendMeasure.mostSentToSearch([new Payload.SearchPart.LiteralPart("Find ")], GIVES, false)
+    }
+
+    def "a many-valued term uses its longest double-escaped form, even when another is longer once escaped"() {
+        given:
+        def field = term("choice", new OfferedTerms([offered('""', "Quoted."), offered("abcde", "Plain.")], null), 2)
+        def candidates = ['""', "abcde"].collect { chosen ->
+            def parts = [new Payload.SearchPart.ValuePart(field, Json.of([chosen, chosen]))]
+            codePoints(CanonicalJson.write(Payload.toSearch(parts, GIVES, null))) +
+                    codePoints(Envelope.toSearch(GIVES))
+        }
+        def most = SendMeasure.mostSentToSearch([new Payload.SearchPart.ValuePart(field, null)], GIVES, false)
+
+        expect:
+        writtenLength('""') < writtenLength("abcde")
+        candidates[0] > candidates[1]
+        most == candidates.max()
+    }
+
+    def "a repeated nested term list stays bounded when every search part reads it"() {
+        given:
+        def offeredTerms = new OfferedTerms((0..<256).collect { index ->
+            offered(String.format('%03d', index) + '"' * 125, "Choice ${index}.")
+        }, null)
+        def source = held('source', (0..<255).collect { index -> term("field_${index}", offeredTerms) })
+        def part = new Payload.SearchPart.ValuePart(source, null)
+        def empty = SendMeasure.mostSentToSearch([], GIVES, true)
+        def one = SendMeasure.mostSentToSearch([part], GIVES, true)
+
+        when:
+        long started = System.nanoTime()
+        def many = SendMeasure.mostSentToSearch(Collections.nCopies(256, part), GIVES, true)
+        long elapsed = System.nanoTime() - started
+        def asking = new Asking(INSTRUCTION, [source], [source])
+        def questionReview = SendMeasure.mostSentToReview(asking)
+        def codeReview = SendMeasure.mostSentToReview([source], [source])
+
+        then:
+        many == empty + 256 * (one - empty)
+        elapsed < 10_000_000_000L
+        questionReview > codeReview
+        codeReview > one
+    }
+
+    def "a search literal with an unpaired surrogate is refused while counting"() {
+        given:
+        def part = new Payload.SearchPart.LiteralPart(Character.toString(0xD800 as char))
+
+        when:
+        SendMeasure.mostSentToSearch([part], GIVES, false)
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == 'CanonicalJson refuses a text holding an unpaired surrogate'
+    }
+
+    def "a doubly escaped control with no short escape is the longest written character"() {
+        given:
+        def characters = (0..0xFFFF).findAll { !Character.isSurrogate(it as char) }.collect { Character.toString(it) } +
+                PAST_THE_FIRST_PLANE
+
+        expect:
+        characters.collect { twiceWrittenLength(it) }.max() == twiceWrittenLength(WORST_CHARACTER)
+        twiceWrittenLength(WORST_CHARACTER) == 7
+    }
+
+    def "a search measure remains at the most a long holds for nested values beyond it"() {
+        expect:
+        SendMeasure.mostSentToSearch([new Payload.SearchPart.ValuePart(pastALong(), null)], GIVES, false) ==
+                Long.MAX_VALUE
     }
 
     /** Why the measure may count free text at six characters to one: no character is written as more. */
@@ -154,12 +386,6 @@ class SendMeasureSpec extends Specification {
         reviewing << [false, true]
     }
 
-    /**
-     * One of every kind on both halves; a term whose terms are all shorter than none, one offering none, and one
-     * whose longest term written is not its longest term typed; no takes at all; fields held many times holding
-     * many; fields that must be given at each depth, which the envelope says of them; and text past the first
-     * plane, counted as characters rather than as what holds them.
-     */
     private static List<Asking> askings() {
         def escaping = new OfferedTerms([offered('""', "A pair of " + GRINNING), offered("abc", "Plain.")],
                 new ListNote("Choose " + GRINNING + "."))
@@ -193,8 +419,8 @@ class SendMeasureSpec extends Specification {
                 ? new Payload.Refused(given, asking.gives().collectEntries { [(it.name()): '"' * 2048] })
                 : null
         def payload = reviewing
-                ? Payload.toReview(asking, taken, refused, given, asking.gives()*.name())
-                : Payload.toProduce(asking, taken, refused)
+                ? Payload.toReview(asking, taken, refused, given, asking.gives()*.name(), asking.takes()*.name())
+                : Payload.toProduce(asking, taken, refused, asking.takes()*.name())
         def envelope = reviewing ? Envelope.toReview(asking.gives()) : Envelope.toProduce(asking.gives())
         codePoints(CanonicalJson.write(payload)) + codePoints(envelope)
     }
@@ -205,7 +431,7 @@ class SendMeasureSpec extends Specification {
         def given = asking.gives().collectEntries { [(it.name()): longest(it)] }
         def refused = new Payload.Refused(given, asking.gives().collectEntries { [(it.name()): '"' * 2048] })
         def payload = Payload.toReviewUninstructed(asking.takes(), asking.gives(), taken, refused, given,
-                asking.gives()*.name())
+                asking.gives()*.name(), asking.takes()*.name())
         codePoints(CanonicalJson.write(payload)) + codePoints(Envelope.toReviewUninstructed(asking.gives()))
     }
 
@@ -216,6 +442,12 @@ class SendMeasureSpec extends Specification {
             Unwrapping.review([new FieldName("summary")],
                     Json.of([decisions: [summary: [outcome: "refused", words: "a" + it]]])) instanceof ReviewAnswer.Reviewed
         }
+    }
+
+    private static long twiceWrittenLength(String said) {
+        codePoints(CanonicalJson.write(new JsonValue.JsonString(
+                CanonicalJson.write(new JsonValue.JsonString(said))))) -
+                codePoints(CanonicalJson.write(new JsonValue.JsonString(CanonicalJson.write(new JsonValue.JsonString("")))))
     }
 
     private static long writtenLength(String said) {

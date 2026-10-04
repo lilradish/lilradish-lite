@@ -40,19 +40,25 @@ final class FieldWriting {
     private static final String FIELDS = """
             insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, workflow_step_id,
                                             side, parent_field_id, position, name, label, help, kind, holds_many,
-                                            text_limit, many_limit, term_list_version_id, must_be_given, standing,
+                                            text_limit, text_lines, many_limit, term_list_version_id, file_types, file_maximum_bytes,
+                                            must_be_given, standing,
                                             standing_threshold, created_by)
             select field.id, cast(:version as uuid), cast(:entryKind as entry_kind), cast(:step as uuid),
                    cast(:side as declaration_side), field.parent, field.position, field.name, field.label, field.help,
-                   cast(field.kind as field_kind), field.holds_many, field.text_limit, field.many_limit, field.list,
-                   field.must_be_given, cast(field.standing as field_standing), field.floor, %s
+                   cast(field.kind as field_kind), field.holds_many, field.text_limit, field.text_lines, field.many_limit, field.list,
+                   case when field.file_types is null then null
+                        else array(select jsonb_array_elements_text(field.file_types::jsonb)) end,
+                   field.file_maximum_bytes, field.must_be_given, cast(field.standing as field_standing), field.floor, %s
               from unnest(cast(:ids as uuid[]), cast(:parents as uuid[]), cast(:positions as integer[]),
                           cast(:names as text[]), cast(:labels as text[]), cast(:helps as text[]),
                           cast(:kinds as text[]), cast(:holdsMany as boolean[]), cast(:textLimits as integer[]),
-                          cast(:manyLimits as integer[]), cast(:lists as uuid[]), cast(:mustBeGiven as boolean[]),
+                          cast(:textLines as text[]),
+                          cast(:manyLimits as integer[]), cast(:lists as uuid[]),
+                          cast(:fileTypes as text[]), cast(:fileMaximumBytes as bigint[]),
+                          cast(:mustBeGiven as boolean[]),
                           cast(:standings as text[]), cast(:floors as integer[]))
-                   as field(id, parent, position, name, label, help, kind, holds_many, text_limit, many_limit, list,
-                            must_be_given, standing, floor)
+                   as field(id, parent, position, name, label, help, kind, holds_many, text_limit, text_lines, many_limit, list,
+                            file_types, file_maximum_bytes, must_be_given, standing, floor)
             """.formatted(Author.OF_CALLER);
 
     private static final String HALF_CLEARED = """
@@ -187,7 +193,7 @@ final class FieldWriting {
         record RouteStep(UUID step) implements Owner {}
     }
 
-    /** Every field of a half as one column per stored column, bound as arrays to a single statement. */
+    /** Fields of a half, including the version pinned for each term field. */
     private static final class Rows {
 
         private final List<@Nullable Integer> parents = new ArrayList<>();
@@ -206,9 +212,15 @@ final class FieldWriting {
 
         private final List<@Nullable Integer> textLimits = new ArrayList<>();
 
+        private final List<@Nullable String> textLines = new ArrayList<>();
+
         private final List<@Nullable Integer> manyLimits = new ArrayList<>();
 
         private final List<@Nullable String> lists = new ArrayList<>();
+
+        private final List<@Nullable String> fileTypes = new ArrayList<>();
+
+        private final List<@Nullable Long> fileMaximumBytes = new ArrayList<>();
 
         private final List<Boolean> mustBeGiven = new ArrayList<>();
 
@@ -233,8 +245,20 @@ final class FieldWriting {
             kinds.add(StoreLabels.label(field.shape().kind()));
             holdsMany.add(field.howMany() instanceof HowMany.Many);
             textLimits.add(field.shape() instanceof FieldShape.Text text ? text.longest() : null);
+            textLines.add(field.shape() instanceof FieldShape.Text text ? StoreLabels.label(text.lines()) : null);
             manyLimits.add(field.howMany() instanceof HowMany.Many many ? many.most() : null);
             lists.add(list);
+            if (field.shape() instanceof FieldShape.File file) {
+                fileTypes.add("["
+                        + file.types().stream()
+                                .map(type -> "\"" + type.value() + "\"")
+                                .collect(java.util.stream.Collectors.joining(","))
+                        + "]");
+                fileMaximumBytes.add(file.maximumBytes());
+            } else {
+                fileTypes.add(null);
+                fileMaximumBytes.add(null);
+            }
             mustBeGiven.add(field.demand().mustBe());
             standings.add(
                     field.demand() instanceof Demand.Stands stands && stands.standing() != null
@@ -266,8 +290,11 @@ final class FieldWriting {
                     .param("kinds", kinds.toArray(String[]::new))
                     .param("holdsMany", holdsMany.toArray(Boolean[]::new))
                     .param("textLimits", textLimits.toArray(Integer[]::new))
+                    .param("textLines", textLines.toArray(String[]::new))
                     .param("manyLimits", manyLimits.toArray(Integer[]::new))
                     .param("lists", lists.toArray(String[]::new))
+                    .param("fileTypes", fileTypes.toArray(String[]::new))
+                    .param("fileMaximumBytes", fileMaximumBytes.toArray(Long[]::new))
                     .param("mustBeGiven", mustBeGiven.toArray(Boolean[]::new))
                     .param("standings", standings.toArray(String[]::new))
                     .param("floors", floors.toArray(Integer[]::new));

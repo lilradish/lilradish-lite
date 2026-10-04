@@ -40,7 +40,7 @@ export function StandingProvider({
 export function useStandingRead(): Resource<Standing> {
   const read = useContext(StandingContext);
   if (read === null) {
-    throw new Error("useStanding was called outside a StandingProvider");
+    throw new Error("useStandingRead was called outside a StandingProvider");
   }
   return read;
 }

@@ -55,13 +55,13 @@ class PersonRowsSpec extends Specification {
 
         where:
         held           || name
-        "Ada Lovelace" || new PersonName("Ada Lovelace")
+        "Ari Mockvale" || new PersonName("Ari Mockvale")
         null           || null
     }
 
     def "a name this system will not show fails the read, naming whose row it was"() {
         when:
-        PersonRows.nameOf(rowHolding(display_name: " Ada"), SUBJECT)
+        PersonRows.nameOf(rowHolding(display_name: " Ari"), SUBJECT)
 
         then:
         def failed = thrown(IllegalStateException)
@@ -75,7 +75,7 @@ class PersonRowsSpec extends Specification {
 
         where:
         held           || name
-        "Ada Lovelace" || new PersonName("Ada Lovelace")
+        "Ari Mockvale" || new PersonName("Ari Mockvale")
         null           || null
     }
 

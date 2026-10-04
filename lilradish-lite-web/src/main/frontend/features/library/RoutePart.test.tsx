@@ -8,6 +8,8 @@ import type { DeclaredField, PinnedList } from "../../api/declaration";
 import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { theme } from "../../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { noticesIn } from "../../testutil/notices";
 import { StepEditor } from "./StepEditor";
 import {
   flowOf,
@@ -113,6 +115,7 @@ function routing(
         { name: "Close", versionId: "w3", number: 1, takes: [], gives: [] },
       ],
       codeSteps: [],
+      searchWays: [],
       models: [],
     },
     terms: new Map([["l1", ["urgent", "later"]]]),
@@ -168,6 +171,24 @@ function addCase(): Promise<void> {
 const UNSET = "A case on no term yet";
 
 describe("RoutePart", () => {
+  it("warns for removing a case while adding and taking newer remain ordinary", async () => {
+    const { route } = editing(routing([URGENT]));
+    const remove = screen.getByRole("button", {
+      name: `Take out On ${isolatedInText("urgent")}`,
+    });
+    const add = screen.getByRole("button", { name: "Add a case" });
+    const newer = within(theCase(`On ${isolatedInText("urgent")}`)).getByRole(
+      "button",
+      { name: "Take version 2" },
+    );
+    expect(remove).toHaveClass("MuiButton-colorWarning");
+    expect(add).not.toHaveClass("MuiButton-colorWarning");
+    expect(newer).not.toHaveClass("MuiButton-colorWarning");
+    await userEvent.click(remove);
+    expect(route().cases).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("offers a case only the terms the list it chooses by offers that no other case is on", async () => {
     editing(routing([URGENT]));
     await addCase();
@@ -295,6 +316,22 @@ describe("RoutePart", () => {
     expect(adding).toHaveAccessibleDescription(
       "A route holds at most one case for each term the list it chooses by offers, and a fallback.",
     );
+    expect(noticesIn(adding.parentElement!)).toEqual([
+      {
+        severity: "warning",
+        words:
+          "A route holds at most one case for each term the list it chooses by offers, and a fallback.",
+      },
+    ]);
+  });
+
+  it("says nothing beside adding a case while there is room for one", () => {
+    editing(routing([URGENT]));
+    const adding = screen.getByRole("button", { name: "Add a case" });
+
+    expect(adding).not.toHaveAttribute("aria-disabled");
+    expect(adding).not.toHaveAttribute("aria-describedby");
+    expect(noticesIn(adding.parentElement!)).toEqual([]);
   });
 
   it("clears what fills a case once it leads elsewhere", async () => {
@@ -385,6 +422,31 @@ describe("RoutePart", () => {
         name: "What fills each input of what it leads to",
       }),
     ).toBeNull();
+  });
+
+  /** What fills a case's inputs sits in a case, a group already, so it is set in under a line instead. */
+  it("lays what it chooses by, what every case gives back and each case on a ground of its own, and what fills a case's inputs on none", () => {
+    editing(routing([URGENT]));
+
+    const inputs = within(theCase(`On ${isolatedInText("urgent")}`)).getByRole(
+      "heading",
+      { name: "What fills each input of what it leads to" },
+    ).parentElement!;
+
+    expect(
+      [
+        screen.getByRole("group", { name: "What it chooses by" })
+          .parentElement!,
+        screen.getByRole("region", { name: "What every case gives back" }),
+        theCase(`On ${isolatedInText("urgent")}`),
+        inputs,
+      ].map(drawnOf),
+    ).toEqual([
+      drawnAtDepth(3),
+      drawnAtDepth(3),
+      drawnAtDepth(3),
+      drawnAtDepth(4),
+    ]);
   });
 
   it("puts focus on the cases' heading once the last case is taken out, no case left", async () => {

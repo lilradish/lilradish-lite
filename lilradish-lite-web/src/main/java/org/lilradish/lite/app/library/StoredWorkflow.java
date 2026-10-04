@@ -15,13 +15,17 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.lilradish.lite.app.search.SearchWays;
 import org.lilradish.lite.domain.declaration.Asking;
+import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.model.ModelMode;
 import org.lilradish.lite.domain.model.ModelName;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 import org.lilradish.lite.domain.run.Ceiling;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.wire.StoreLabels;
 import org.lilradish.lite.domain.workflow.Binding;
 import org.lilradish.lite.domain.workflow.BindingSource;
@@ -29,6 +33,7 @@ import org.lilradish.lite.domain.workflow.ModelChoice;
 import org.lilradish.lite.domain.workflow.Pointer;
 import org.lilradish.lite.domain.workflow.Producer;
 import org.lilradish.lite.domain.workflow.RouteCase;
+import org.lilradish.lite.domain.workflow.SearchQuestionPart;
 import org.lilradish.lite.domain.workflow.StepId;
 import org.lilradish.lite.domain.workflow.StepKind;
 import org.lilradish.lite.domain.workflow.StepProducer;
@@ -85,7 +90,12 @@ record StoredWorkflow(
                    step.tries,
                    step.reviewer_model,
                    step.reviewer_mode,
-                   step.tells_what_happened
+                   step.tells_what_happened,
+                   step.search_way,
+                   cast(step.search_title_standing as text) as search_title_standing,
+                   cast(step.search_body_standing as text) as search_body_standing,
+                   cast(step.search_references_standing as text) as search_references_standing,
+                   cast(step.search_other_standing as text) as search_other_standing
               from workflow_steps step
              where step.entry_version_id = any(cast(:versions as uuid[]))
              order by step.position, step.workflow_step_id
@@ -111,6 +121,17 @@ record StoredWorkflow(
               from bindings binding
              where binding.entry_version_id = any(cast(:versions as uuid[]))
              order by binding.binding_id
+            """;
+
+    private static final String PARTS = """
+            select part.workflow_step_id,
+                   part.search_question_part_id,
+                   part.literal_text,
+                   part.source_step_id,
+                   part.source_path
+              from search_question_parts part
+             where part.entry_version_id = any(cast(:versions as uuid[]))
+             order by part.workflow_step_id, part.position
             """;
 
     StoredWorkflow {
@@ -166,6 +187,14 @@ record StoredWorkflow(
             EntryVersionId version = versionOf(result);
             consumers.computeIfAbsent(version, ignored -> new Consumers()).add(result, version);
         });
+        Map<UUID, List<SearchQuestionPart>> partsByStep = new HashMap<>();
+        if (stepRows.values().stream().flatMap(List::stream).anyMatch(row -> row.kind() == StepKind.SEARCH)) {
+            database.sql(PARTS).param("versions", spelled).query(result -> {
+                partsByStep
+                        .computeIfAbsent(result.getObject("workflow_step_id", UUID.class), ignored -> new ArrayList<>())
+                        .add(part(result));
+            });
+        }
         List<UUID> routes = stepRows.values().stream()
                 .flatMap(List::stream)
                 .filter(row -> row.kind() == StepKind.ROUTE)
@@ -178,7 +207,7 @@ record StoredWorkflow(
             Consumers bound = consumers.getOrDefault(version, new Consumers());
             List<Step> steps = new ArrayList<>();
             for (StepRow row : stepRows.getOrDefault(version, List.of())) {
-                steps.add(row.step(bound, casesByStep, routeGives));
+                steps.add(row.step(bound, casesByStep, routeGives, partsByStep));
             }
             StoredDeclarations.Halves declared = requireNonNull(halves.get(version));
             read.put(
@@ -215,6 +244,7 @@ record StoredWorkflow(
                             .forEach(pinned::add);
                 case Runs.Unchosen ignored -> {}
                 case Runs.Code ignored -> {}
+                case Runs.Search ignored -> {}
             }
         }
         return pinned;
@@ -247,19 +277,23 @@ record StoredWorkflow(
 
     /**
      * Inside the caller's transaction: what the version reaches beyond itself, judged against its group, against
-     * what {@code released} declares of the code steps it names, and against which of those {@code here} lets the
-     * group name.
+     * what {@code released} declares of the code steps it names, against which of those {@code here} lets the
+     * group name, and against the ways to search {@code ways} holds.
      */
     WorkflowProblems.Resolved resolvedIn(
-            JdbcClient database, GroupId group, ReleasedCodeSteps released, CodeStepsHere here) {
+            JdbcClient database, GroupId group, ReleasedCodeSteps released, CodeStepsHere here, SearchWays ways) {
         Map<EntryVersionId, StoredDeclarations.Halves> declared =
                 StoredDeclarations.ofGroupVersions(database, group, pinned());
         Map<String, StoredDeclarations.Halves> codeSteps = new HashMap<>();
+        Map<String, SearchWay> searchWays = new HashMap<>();
         for (Step step : steps) {
             if (step.runs() instanceof Runs.Code code
                     && code.codeStep() != null
                     && released.of(code.codeStep()) instanceof StoredDeclarations.Halves halves) {
                 codeSteps.put(code.codeStep(), halves);
+            }
+            if (step.runs() instanceof Runs.Search search && search.way() != null) {
+                ways.find(search.way()).ifPresent(way -> searchWays.put(way.name(), way));
             }
         }
         Set<EntryVersionId> lists = listsPinned();
@@ -275,7 +309,8 @@ record StoredWorkflow(
                 here.nameable(),
                 codeSteps,
                 here.listsUnserved(),
-                askedIn(database, group, declared));
+                askedIn(database, group, declared),
+                searchWays);
     }
 
     /**
@@ -335,11 +370,42 @@ record StoredWorkflow(
                                     choice(result.getString("producer_model"), result.getString("producer_mode")),
                                     result.getBoolean("tells_what_happened")),
                     result.getObject("tries", Integer.class),
-                    choice(result.getString("reviewer_model"), result.getString("reviewer_mode")));
+                    choice(result.getString("reviewer_model"), result.getString("reviewer_mode")),
+                    result.getString("search_way"),
+                    standings(result));
         } catch (IllegalArgumentException refused) {
             throw new IllegalStateException(
                     "Version " + version.value() + " holds a step " + id + " this system will not read", refused);
         }
+    }
+
+    private static Map<FieldName, FieldStanding> standings(ResultSet result) throws SQLException {
+        Map<FieldName, FieldStanding> standings = HashMap.newHashMap(SearchWay.FIELDS.size());
+        standing(standings, SearchWay.TITLE, result.getString("search_title_standing"));
+        standing(standings, SearchWay.BODY, result.getString("search_body_standing"));
+        standing(standings, SearchWay.REFERENCES, result.getString("search_references_standing"));
+        standing(standings, SearchWay.OTHER, result.getString("search_other_standing"));
+        return standings;
+    }
+
+    private static void standing(Map<FieldName, FieldStanding> standings, FieldName field, @Nullable String stored) {
+        if (stored != null) {
+            standings.put(field, StoreLabels.parse(FieldStanding.class, stored));
+        }
+    }
+
+    private static SearchQuestionPart part(ResultSet result) throws SQLException {
+        String literal = result.getString("literal_text");
+        return literal == null
+                ? new SearchQuestionPart.Read(result.getObject("search_question_part_id", UUID.class), readFrom(result))
+                : new SearchQuestionPart.LiteralPart(literal);
+    }
+
+    /** What a binding or a question part reads: this workflow's input where it names no step. */
+    private static BindingSource readFrom(ResultSet result) throws SQLException {
+        Pointer pointer = Pointer.parse(requireNonNull(result.getString("source_path")));
+        UUID step = result.getObject("source_step_id", UUID.class);
+        return step == null ? new BindingSource.WorkflowInput(pointer) : new BindingSource.StepOutput(step, pointer);
     }
 
     private static Producer producer(StepProducer stored, @Nullable ModelChoice model, boolean toldWhatHappened) {
@@ -366,7 +432,7 @@ record StoredWorkflow(
     }
 
     /** What a step runs, as far as the version says yet. */
-    sealed interface Runs permits Runs.Unchosen, Runs.Pinned, Runs.Code, Runs.Route {
+    sealed interface Runs permits Runs.Unchosen, Runs.Pinned, Runs.Code, Runs.Route, Runs.Search {
 
         record Unchosen() implements Runs {}
 
@@ -393,6 +459,26 @@ record StoredWorkflow(
             public Route {
                 requireNonNull(gives, "StoredWorkflow.Runs.Route gives must not be null");
                 cases = List.copyOf(requireNonNull(cases, "StoredWorkflow.Runs.Route cases must not be null"));
+            }
+        }
+
+        /**
+         * @param way the name of the way to search, which the release declares; none where none is chosen yet
+         * @param standings how each of the way's fields stands, by its name; one none is chosen for yet is left out
+         */
+        record Search(@Nullable String way, List<SearchQuestionPart> question, Map<FieldName, FieldStanding> standings)
+                implements Runs {
+
+            public Search {
+                question =
+                        List.copyOf(requireNonNull(question, "StoredWorkflow.Runs.Search question must not be null"));
+                standings =
+                        Map.copyOf(requireNonNull(standings, "StoredWorkflow.Runs.Search standings must not be null"));
+                if (standings.containsValue(FieldStanding.ABOVE_CONFIDENCE)) {
+                    throw new IllegalArgumentException(
+                            "StoredWorkflow.Runs.Search must not stand a field above a confidence, as a search gives"
+                                    + " none");
+                }
             }
         }
     }
@@ -441,14 +527,21 @@ record StoredWorkflow(
             @Nullable String codeStep,
             @Nullable Producer producer,
             @Nullable Integer tries,
-            @Nullable ModelChoice reviewer) {
+            @Nullable ModelChoice reviewer,
+            @Nullable String searchWay,
+            Map<FieldName, FieldStanding> standings) {
 
-        Step step(Consumers consumers, Map<UUID, List<CaseRow>> casesByStep, Map<UUID, StoredDeclarations.Half> gives) {
+        Step step(
+                Consumers consumers,
+                Map<UUID, List<CaseRow>> casesByStep,
+                Map<UUID, StoredDeclarations.Half> gives,
+                Map<UUID, List<SearchQuestionPart>> parts) {
             Runs runs =
                     switch (kind) {
                         case null -> new Runs.Unchosen();
                         case ENTRY -> pinned == null ? new Runs.Unchosen() : pinned;
                         case CODE_STEP -> new Runs.Code(codeStep);
+                        case SEARCH -> new Runs.Search(searchWay, parts.getOrDefault(id, List.of()), standings);
                         case ROUTE ->
                             new Runs.Route(
                                     consumers.discriminators.get(id),
@@ -505,11 +598,7 @@ record StoredWorkflow(
             if (constant != null) {
                 return new BindingSource.Written(ConstantJson.stored(constant));
             }
-            Pointer pointer = Pointer.parse(requireNonNull(result.getString("source_path")));
-            UUID step = result.getObject("source_step_id", UUID.class);
-            return step == null
-                    ? new BindingSource.WorkflowInput(pointer)
-                    : new BindingSource.StepOutput(step, pointer);
+            return readFrom(result);
         }
     }
 }

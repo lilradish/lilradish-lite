@@ -145,12 +145,7 @@ class StepActSpec extends Specification {
         "failed with its tries spent"             | false      | false        | CODE     | true  | true      || null
     }
 
-    /**
-     * Only a step held back or failed, or values waiting on the model to review them, has anything of this kind to
-     * do; of those, a model's try held back on length or a turnaway, failed on length, any try failed on its model
-     * not held, whatever was to be sent, and values the reviewer turned away are sent again, save of a code step the
-     * release does not hold, before any stop is judged. A stop on what the step runs holds no review.
-     */
+    /* A missing code step blocks production, but a failed review can pass its yielded values to a person. */
     def "sending again is refused where nothing went unsent to a model, where sending settles nothing, or while what it would send is stopped"() {
         expect:
         TRY_SENDING.refusal(new StepGround(named(at), runStopped, entryStopped, producer, false, false, null,
@@ -168,17 +163,19 @@ class StepActSpec extends Specification {
         "done"                                             | false      | false        | MODEL    | false      || STEP_MOVED_ON
         "held back on a stop"                              | false      | true         | MODEL    | false      || TRY_SENDING_NOT_OFFERED
         "held back on a stop before it was asked"          | true       | true         | MODEL    | false      || TRY_SENDING_NOT_OFFERED
-        "held back, code step not held"                    | false      | false        | CODE     | true       || TRY_SENDING_NOT_OFFERED
         "failed with its tries spent"                      | true       | false        | MODEL    | false      || TRY_SENDING_NOT_OFFERED
         "failed, no route case claiming it"                | false      | false        | null     | false      || TRY_SENDING_NOT_OFFERED
         "held back too long"                               | false      | false        | PERSON   | false      || TRY_SENDING_NOT_OFFERED
-        "failed as written down"                           | false      | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
         "awaiting a person's review in the model's place"  | true       | true         | MODEL    | false      || TRY_SENDING_NOT_OFFERED
         "awaiting a person's review, a list not here"      | false      | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
         "awaiting a person's review, takes no longer declared" | false  | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
         "awaiting a person's review, no longer declared"   | false      | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
+        "awaiting a person's review, holding a file"        | false      | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
         "awaiting the model's review, turned away"         | true       | false        | CODE     | true       || TRY_SENDING_NOT_OFFERED
-        "failed, its reviewer not held"                    | false      | true         | CODE     | true       || TRY_SENDING_NOT_OFFERED
+        "failed, its reviewer not held"                    | false      | true         | CODE     | true       || null
+        "failed as written down"                           | false      | false        | CODE     | false      || TRY_SENDING_NOT_OFFERED
+        "held back, code step not held"                    | false      | false        | CODE     | true       || TRY_SENDING_NOT_OFFERED
+        "failed, its reviewer not held"                    | true       | true         | CODE     | true       || RUN_STOPPED
         "held back, turned away"                           | true       | true         | MODEL    | false      || RUN_STOPPED
         "failed as written down"                           | true       | false        | MODEL    | false      || RUN_STOPPED
         "awaiting the model's review, turned away"         | true       | true         | PERSON   | false      || RUN_STOPPED
@@ -220,6 +217,7 @@ class StepActSpec extends Specification {
         EVERYTHING                    | "awaiting the model's review, turned away" | PERSON | false || [TRY_SENDING]
         EVERYTHING                    | "awaiting a person's review, takes no longer declared" | CODE | false || [REVIEW]
         EVERYTHING                    | "awaiting a person's review, no longer declared" | CODE | false || [REVIEW]
+        EVERYTHING                    | "awaiting a person's review, holding a file" | CODE | false || [REVIEW]
         EVERYTHING                    | "awaiting a person's review, a list not here" | CODE | false || [REVIEW]
         EVERYTHING                    | "held back too long"         | MODEL    | true       || []
         EVERYTHING                    | "failed with its tries spent" | MODEL   | false      || [ANSWER, ASK_AGAIN]
@@ -345,6 +343,7 @@ class StepActSpec extends Specification {
         EVERYTHING                    | "awaiting the model's review, turned away" | false | false || [(REVIEW): REVIEW_NOT_A_PERSONS]    | true
         [START_RUN]                   | "awaiting the model's review, out" | false | false        || [:]                                       | false
         [START_RUN]                   | "awaiting a person's review, no longer declared" | false | false || [(REVIEW): ACT_NOT_PERMITTED] | false
+        [START_RUN]                   | "awaiting a person's review, holding a file" | false | false || [(REVIEW): ACT_NOT_PERMITTED] | false
     }
 
     def "a code step withholds asking again where the release does not let it run again, and answering where it gives otherwise"() {
@@ -391,6 +390,40 @@ class StepActSpec extends Specification {
      * A position as the run fixture names it, beside three failures written down and three ways values are handed
      * to a person as what the model would be sent could not be built, that it names none of.
      */
+    def "a missing search tool offers sending again only to a model production that is not stopped"() {
+        given:
+        def failed = failedOn(RunStepFailureReason.TOOL_NOT_OFFERED, ModelCallPurpose.PRODUCE)
+
+        expect:
+        TRY_SENDING.refusal(new StepGround(failed, runStopped, false, producer, false, false, null, false)) == expected
+
+        where:
+        producer | runStopped || expected
+        MODEL    | false      || null
+        MODEL    | true       || RUN_STOPPED
+        PERSON   | false      || TRY_SENDING_NOT_OFFERED
+        CODE     | false      || TRY_SENDING_NOT_OFFERED
+    }
+
+    def "a changed code source offers only model sending again while the run and entry are not stopped"() {
+        given:
+        def failed = failedOn(reason, ModelCallPurpose.PRODUCE)
+        def ground = new StepGround(failed, runStopped, entryStopped, producer, false, false, null, false)
+
+        expect:
+        TRY_SENDING.refusal(ground) == expected
+        ANSWER.refusal(ground) == STEP_MOVED_ON
+        ASK_AGAIN.refusal(ground) == STEP_MOVED_ON
+
+        where:
+        [reason, producer, runStopped, entryStopped, expected] << [
+                [RunStepFailureReason.SOURCE_NO_LONGER_MATCHES, RunStepFailureReason.SOURCE_LIST_NOT_HERE],
+                [[MODEL, false, false, null], [MODEL, true, false, RUN_STOPPED],
+                 [MODEL, false, true, ENTRY_STOPPED], [PERSON, false, false, TRY_SENDING_NOT_OFFERED],
+                 [CODE, false, false, TRY_SENDING_NOT_OFFERED]],
+        ].combinations().collect { [it[0]] + it[1] }
+    }
+
     private static StepPosition named(String at) {
         switch (at) {
             case "failed, its model not held":
@@ -405,6 +438,8 @@ class StepActSpec extends Specification {
                 return handedToPerson(ReviewSending.TAKES_NO_LONGER_DECLARED)
             case "awaiting a person's review, no longer declared":
                 return handedToPerson(ReviewSending.NO_LONGER_DECLARED)
+            case "awaiting a person's review, holding a file":
+                return handedToPerson(ReviewSending.HOLDS_A_FILE)
             default:
                 return position(at)
         }

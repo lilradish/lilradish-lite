@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BROKEN_HERE, NOT_REACHED, RequestFailed } from "../../api/problem";
 import { serving } from "../../testutil/answering";
@@ -10,6 +10,10 @@ import { get } from "./http";
 import { useResource, type Resource } from "./useResource";
 
 vi.mock("../report/reportCaught", () => ({ reportCaught: vi.fn() }));
+
+beforeEach(() => {
+  vi.mocked(reportCaught).mockClear();
+});
 
 const NONE: readonly string[] = [];
 
@@ -260,6 +264,44 @@ describe("useResource", () => {
     expect(result.current.value).toEqual(["a row"]);
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
   });
+
+  it.each(["answer", "refusal"])(
+    "abandons an earlier %s as soon as a new read is asked for",
+    async (ending) => {
+      const earlier = deferred<readonly string[]>();
+      const current = deferred<readonly string[]>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn<Load>((signal) => {
+        signals.push(signal);
+        return signals.length === 1 ? earlier.promise : current.promise;
+      });
+      const { result } = readingWith(load);
+
+      act(() => {
+        result.current.reload();
+        expect(signals[0]?.aborted).toBe(true);
+        if (ending === "answer") {
+          earlier.settle(["earlier rows"]);
+        } else {
+          earlier.refuse(
+            new RequestFailed({ status: 403, code: "EARLIER_REFUSAL" }),
+          );
+        }
+      });
+      await act(async () => {});
+
+      expect(result.current.value).toBe(NONE);
+      expect(result.current.problem).toBeNull();
+      expect(result.current.loading).toBe(true);
+      expect(load).toHaveBeenCalledTimes(2);
+
+      await act(async () => current.settle(["current rows"]));
+
+      expect(result.current.value).toEqual(["current rows"]);
+      expect(result.current.problem).toBeNull();
+      expect(result.current.loading).toBe(false);
+    },
+  );
 
   /**
    * Not "replaced a frame later": a commit carrying the previous filter's rows

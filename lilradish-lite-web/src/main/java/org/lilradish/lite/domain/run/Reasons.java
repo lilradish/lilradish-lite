@@ -9,7 +9,7 @@ import org.lilradish.lite.domain.text.ProseRefusal;
 
 /**
  * What a person's reason for what they produced, and the words a value is refused with, are held to: prose a
- * model may be sent, over lines, at most 2048 characters. One holding nothing that shows is no reason at all.
+ * model may be sent, over lines, bounded by {@link #LONGEST}. One holding nothing that shows is no reason at all.
  */
 public final class Reasons {
 

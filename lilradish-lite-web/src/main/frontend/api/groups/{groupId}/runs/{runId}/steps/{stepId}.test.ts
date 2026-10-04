@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { answering, refusalOf } from "../../../../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT, NOT_AN_ADDRESS } from "../../../../../problem";
-import { readStep } from "./{stepId}";
+import { readStep, stepAnswerFrom } from "./{stepId}";
 
 const GROUP = "00000003-0000-4000-8000-000000000c81";
 
@@ -41,11 +41,10 @@ const ROW = {
   withheld: [],
 };
 
-/** Cat's answer, refused on review by somebody no name is held for. */
 const REFUSED_TRY = {
   number: 1,
   beyond: false,
-  askedBy: { userId: "000c81", displayName: "Ada" },
+  askedBy: { userId: "000c81", displayName: "Avo" },
   producedBy: { kind: "person", person: { userId: "000c82" } },
   why: "Read it twice.",
   values: [
@@ -137,7 +136,7 @@ const MISFIT_TRY = {
     cameBack: "4",
     spent: "16",
     cameBackUnknown: false,
-    measuredHere: true,
+    measuredHere: "partly",
   },
 };
 
@@ -152,6 +151,25 @@ const ERRORED_TRY = {
   wentWrong: { detail: "The reference it gave back is not text.", cut: false },
   returned: '{"reference": 7}',
   cost: { callsAModel: false },
+};
+
+const CHECKING_STEP = "0000000a-0000-4000-8000-000000000c81";
+
+/** A code step's try never run, as what its code gives back no longer matched what a later step reads from it. */
+const MISREAD_TRY = {
+  ...ERRORED_TRY,
+  wentWrong: undefined,
+  returned: undefined,
+  erroredFor: {
+    reason: "gives_otherwise",
+    field: "receipt.total",
+    readBy: { step: CHECKING_STEP },
+  },
+};
+
+const UNNAMED_TRY = {
+  ...MISREAD_TRY,
+  erroredFor: { reason: "not_declared", member: "", returnedNotKept: true },
 };
 
 const PAGE = {
@@ -309,6 +327,122 @@ function withTry(changed: object) {
   return { ...PAGE, triesMade: [{ ...REFUSED_TRY, ...changed }] };
 }
 
+const WORDS = { text: "I cannot answer.", altered: false, truncated: true };
+const CONTENT = { text: "Demo Sample", altered: true, truncated: false };
+
+describe("a model declining in production or review", () => {
+  const modelTry = {
+    ...SURE_TRY,
+    didNotFit: "model_declined",
+    review: {
+      asked: true,
+      by: { kind: "model", model: "judge" },
+      didNotFit: "model_declined",
+    },
+  };
+  const pageWith = (producer: unknown, reviewer: unknown) => ({
+    ...PAGE,
+    triesMade: [
+      {
+        ...modelTry,
+        declined: producer,
+        review: { ...modelTry.review, declined: reviewer },
+      },
+    ],
+  });
+
+  it("keeps the two sources and both exact text blocks independent", () => {
+    const answer = stepAnswerFrom(
+      pageWith({ words: WORDS, content: CONTENT }, { content: WORDS }),
+    );
+    expect(answer?.triesMade[0]?.declined).toEqual({
+      words: WORDS,
+      content: CONTENT,
+    });
+    expect(answer?.triesMade[0]?.review.declined).toEqual({ content: WORDS });
+  });
+
+  it("accepts a single block, withheld content, and an omitted record", () => {
+    expect(
+      stepAnswerFrom(pageWith({ words: WORDS }, { withheld: true }))
+        ?.triesMade[0],
+    ).toMatchObject({
+      declined: { words: WORDS },
+      review: { declined: { withheld: true } },
+    });
+    expect(
+      stepAnswerFrom(
+        pageWith({ words: { ...WORDS, text: " " } }, { withheld: true }),
+      )?.triesMade[0]?.declined,
+    ).toEqual({
+      words: { ...WORDS, text: " " },
+    });
+    const absent = stepAnswerFrom({ ...PAGE, triesMade: [modelTry] })
+      ?.triesMade[0];
+    expect(absent).not.toHaveProperty("declined");
+    expect(absent?.review).not.toHaveProperty("declined");
+  });
+
+  it.each([
+    {},
+    { withheld: false },
+    { withheld: true, words: WORDS },
+    { words: null },
+    { words: { ...WORDS, text: "" } },
+    { words: { ...WORDS, altered: undefined } },
+    { content: { ...CONTENT, truncated: "false" } },
+    { words: "raw" },
+  ])(
+    "refuses the whole answer when a declined record cannot be read: %j",
+    (bad) => {
+      expect(stepAnswerFrom(pageWith(bad, { content: CONTENT }))).toBeNull();
+      expect(stepAnswerFrom(pageWith({ words: WORDS }, bad))).toBeNull();
+    },
+  );
+});
+
+describe("an unreadable model response", () => {
+  const pageWith = (producer: unknown, reviewer: unknown) => ({
+    ...PAGE,
+    triesMade: [
+      {
+        ...SURE_TRY,
+        unreadableResponse: producer,
+        review: { ...SURE_TRY.review, unreadableResponse: reviewer },
+      },
+    ],
+  });
+
+  it("keeps production and review text and flags independently", () => {
+    const answer = stepAnswerFrom(pageWith(WORDS, CONTENT));
+    expect(answer?.triesMade[0]?.unreadableResponse).toEqual(WORDS);
+    expect(answer?.triesMade[0]?.review.unreadableResponse).toEqual(CONTENT);
+    const absent = stepAnswerFrom({ ...PAGE, triesMade: [SURE_TRY] })
+      ?.triesMade[0];
+    expect(absent).not.toHaveProperty("unreadableResponse");
+    expect(absent?.review).not.toHaveProperty("unreadableResponse");
+  });
+
+  it.each([
+    null,
+    {},
+    { ...WORDS, text: "" },
+    { ...WORDS, altered: undefined },
+    { ...WORDS, truncated: "false" },
+    { ...WORDS, extra: true },
+  ])(
+    "refuses an unreadable response of bad shape from either source: %j",
+    (bad) => {
+      expect(stepAnswerFrom(pageWith(bad, CONTENT))).toBeNull();
+      expect(stepAnswerFrom(pageWith(WORDS, bad))).toBeNull();
+    },
+  );
+});
+
+function withErroredFor(erroredFor: unknown) {
+  return { ...PAGE, triesMade: [{ ...MISREAD_TRY, erroredFor }] };
+}
+
 /** The page with one model's value, as sure as `confidence` says. */
 function sureAs(confidence: unknown) {
   return {
@@ -321,6 +455,159 @@ function sureAs(confidence: unknown) {
     ],
   };
 }
+
+describe("a held source on a step's page", () => {
+  const source = {
+    runId: "00000008-0000-4000-8000-000000000c82",
+    runNumber: 9,
+    stepId: "00000009-0000-4000-8000-000000000c82",
+    name: "tidy_it",
+    codeStep: "tidy",
+  };
+
+  it("reads the code source in another run", () => {
+    const where = { kind: "held_back", reason: "code_step_not_held", source };
+    expect(
+      stepAnswerFrom({ ...PAGE, step: { ...ROW, state: "held_back", where } })
+        ?.step.where,
+    ).toEqual(where);
+  });
+
+  it.each(Object.keys(source))(
+    "refuses a page whose source omits %s",
+    (member) => {
+      const incomplete = Object.fromEntries(
+        Object.entries(source).filter(([key]) => key !== member),
+      );
+      expect(
+        stepAnswerFrom({
+          ...PAGE,
+          step: {
+            ...ROW,
+            state: "held_back",
+            where: {
+              kind: "held_back",
+              reason: "code_step_not_held",
+              source: incomplete,
+            },
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("refuses a page that attributes a source hold to a review", () => {
+    expect(
+      stepAnswerFrom({
+        ...PAGE,
+        step: {
+          ...ROW,
+          where: {
+            kind: "waiting_on_review",
+            reason: "code_step_not_held",
+            source,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("reads a source mismatch as a failure with the kept source field", () => {
+    const where = {
+      kind: "failed",
+      reason: "source_no_longer_matches",
+      failedSourceNoLongerMatches: { source, field: "receipt.number" },
+    };
+    expect(
+      stepAnswerFrom({ ...PAGE, step: { ...ROW, state: "failed", where } })
+        ?.step.where,
+    ).toEqual(where);
+  });
+
+  it("refuses a failure page with a source record meant for a hold", () => {
+    expect(
+      stepAnswerFrom({
+        ...PAGE,
+        step: {
+          ...ROW,
+          state: "failed",
+          where: {
+            kind: "failed",
+            reason: "source_no_longer_matches",
+            source,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("a detail page with a source list failure", () => {
+  const failure = {
+    source: {
+      runId: "other-run",
+      runNumber: 8,
+      stepId: "source-step",
+      name: "source_step",
+      codeStep: "tidy",
+    },
+    field: "receipt.category",
+  };
+
+  it("reads the stored list failure without a shape-mismatch member", () => {
+    const where = {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+    };
+    expect(
+      stepAnswerFrom({ ...PAGE, step: { ...ROW, state: "failed", where } })
+        ?.step.where,
+    ).toEqual(where);
+  });
+
+  it.each([
+    { kind: "failed", reason: "source_list_not_here" },
+    {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: { source: failure.source },
+    },
+    {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: {
+        ...failure,
+        source: { ...failure.source, codeStep: null },
+      },
+    },
+    {
+      kind: "held_back",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+    },
+    {
+      kind: "failed",
+      reason: "source_no_longer_matches",
+      failedSourceListNotHere: failure,
+    },
+    {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceNoLongerMatches: failure,
+    },
+    {
+      kind: "failed",
+      reason: "source_list_not_here",
+      failedSourceListNotHere: failure,
+      failedSourceNoLongerMatches: failure,
+    },
+  ])("refuses an invalid list failure detail: %j", (where) => {
+    expect(
+      stepAnswerFrom({ ...PAGE, step: { ...ROW, state: "failed", where } }),
+    ).toBeNull();
+  });
+});
 
 describe("readStep", () => {
   it("reads one step's page at its address, the step escaped as one segment", async () => {
@@ -375,6 +662,25 @@ describe("readStep", () => {
     expect(page.triesMade).toEqual([]);
   });
 
+  it.each(["did_not_fit", "nothing_came_back", "errored", "later"])(
+    "reads a review lost as %s separately from how its production ended",
+    async (lost) => {
+      const review = {
+        asked: true,
+        by: { kind: "model", model: "small" },
+        wentWrong: true,
+        lost,
+        didNotFit: "words_missing",
+      };
+      const [tried] = (
+        await reading({ ...PAGE, triesMade: [{ ...SURE_TRY, review }] }).read
+      ).triesMade;
+      expect(tried!.review).toEqual(review);
+      expect(tried!.ended).toBe(SURE_TRY.ended);
+      expect(tried).not.toHaveProperty("didNotFit");
+    },
+  );
+
   it("reads what a model said, withheld from the reader, as withheld and never as none, its refusal's words and how sure it was withheld too", async () => {
     const [, withheld] = (await reading(PAGE).read).triesMade;
 
@@ -418,10 +724,149 @@ describe("readStep", () => {
     expect(errored!.returned).toBe('{"reference": 7}');
   });
 
+  it("reads line break outcomes beside the retained model and code evidence", async () => {
+    const model = { ...MISFIT_TRY, didNotFit: "line_break" };
+    const code = {
+      ...ERRORED_TRY,
+      erroredFor: { reason: "line_break", field: "receipt" },
+    };
+    const { triesMade } = await reading({ ...PAGE, triesMade: [model, code] })
+      .read;
+
+    expect(triesMade[0]?.didNotFit).toBe("line_break");
+    expect(triesMade[0]?.values).toEqual([]);
+    expect(triesMade[1]?.erroredFor).toEqual(code.erroredFor);
+    expect(triesMade[1]?.returned).toBe(code.returned);
+    expect(triesMade[1]).not.toHaveProperty("didNotFit");
+  });
+
+  it("reads trusted kept file metadata on an errored code try independently of raw returned JSON", async () => {
+    const keptFiles = [
+      {
+        path: "attachments[2]",
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "kept.txt",
+        type: "text/plain",
+        size: 7,
+      },
+    ];
+    const [errored] = (
+      await reading({ ...PAGE, triesMade: [{ ...ERRORED_TRY, keptFiles }] })
+        .read
+    ).triesMade;
+
+    expect(errored!.keptFiles).toEqual(keptFiles);
+    expect(errored!.returned).toBe('{"reference": 7}');
+  });
+
+  it.each([
+    ["identifier", { id: "not-a-uuid" }],
+    ["name", { name: "Demo\nSample.txt" }],
+    ["type", { type: "text//plain" }],
+  ])(
+    "refuses kept code file metadata with an unusable %s",
+    (_case, changed) => {
+      const file = {
+        path: "attachments[0]",
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Demo Sample.txt",
+        type: "text/plain",
+        size: 7,
+        ...changed,
+      };
+
+      expect(stepAnswerFrom(withTry({ keptFiles: [file] }))).toBeNull();
+    },
+  );
+
   it("leaves out what code gave back where a try carries none", async () => {
     const [refused] = (await reading(PAGE).read).triesMade;
 
     expect(refused).not.toHaveProperty("returned");
+  });
+
+  it("reads why this system found code went wrong, the field it is about and the later step reading it", async () => {
+    const [misread] = (
+      await reading({ ...PAGE, triesMade: [MISREAD_TRY] }).read
+    ).triesMade;
+
+    expect(misread).toEqual({
+      ...ERRORED_TRY,
+      wentWrong: undefined,
+      returned: undefined,
+      erroredFor: {
+        reason: "gives_otherwise",
+        field: "receipt.total",
+        readBy: { step: CHECKING_STEP },
+      },
+      cost: {},
+    });
+  });
+
+  it("reads what a workflow gives back as what reads the field, by its names joined by dots", async () => {
+    const [misread] = (
+      await reading(
+        withErroredFor({
+          ...MISREAD_TRY.erroredFor,
+          readBy: { output: "claim.total" },
+        }),
+      ).read
+    ).triesMade;
+
+    expect(misread!.erroredFor!.readBy).toEqual({ output: "claim.total" });
+  });
+
+  it("reads a member nothing declares with no name as the empty name it came as, and that what came back was not kept, naming no field", async () => {
+    const [unnamed] = (
+      await reading({ ...PAGE, triesMade: [UNNAMED_TRY] }).read
+    ).triesMade;
+
+    expect(unnamed!.erroredFor).toEqual({
+      reason: "not_declared",
+      member: "",
+      returnedNotKept: true,
+    });
+  });
+
+  it("reads a member's explicit cut flag without changing its name", async () => {
+    const member = "𝒜".repeat(64);
+    const [cut] = (
+      await reading(
+        withErroredFor({ reason: "not_declared", member, memberCut: true }),
+      ).read
+    ).triesMade;
+    expect(cut!.erroredFor).toEqual({
+      reason: "not_declared",
+      member,
+      memberCut: true,
+    });
+  });
+
+  it("does not infer a cut flag from a member name's ending", async () => {
+    const [uncut] = (
+      await reading(
+        withErroredFor({ reason: "not_declared", member: "items…" }),
+      ).read
+    ).triesMade;
+    expect(uncut!.erroredFor).toEqual({
+      reason: "not_declared",
+      member: "items…",
+    });
+  });
+
+  it("keeps a reason code went wrong for that this build does not know as it came", async () => {
+    const [later] = (
+      await reading(withErroredFor({ reason: "ran_too_hot" })).read
+    ).triesMade;
+
+    expect(later!.erroredFor).toEqual({ reason: "ran_too_hot" });
+  });
+
+  it("leaves out why code went wrong where a try carries none", async () => {
+    const tries = (await reading(PAGE).read).triesMade;
+
+    expect(tries.filter((each) => "erroredFor" in each)).toEqual([]);
+    expect(tries).toHaveLength(2);
   });
 
   it("reads which way a model's answer did not fit, each time its call was turned away before it was taken, and that this system measured what it spent", async () => {
@@ -436,10 +881,33 @@ describe("readStep", () => {
           cameBack: "4",
           spent: "16",
           cameBackUnknown: false,
-          measuredHere: true,
+          measuredHere: "partly",
         },
       },
     });
+  });
+
+  it("reads a model's declined answer as one spent try with its reason and cost", async () => {
+    const declined = { ...MISFIT_TRY, didNotFit: "model_declined" };
+    const { sent, read } = reading({ ...PAGE, triesMade: [declined] });
+
+    const answer = await read;
+
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(answer.triesMade).toEqual([
+      {
+        ...declined,
+        cost: {
+          spend: {
+            sent: "12",
+            cameBack: "4",
+            spent: "16",
+            cameBackUnknown: false,
+            measuredHere: "partly",
+          },
+        },
+      },
+    ]);
   });
 
   it("leaves out why a try did not fit, and when it was turned away, where it carries neither", async () => {
@@ -463,6 +931,23 @@ describe("readStep", () => {
     expect(withheld!.wentWrong).toEqual({ withheld: true });
     expect(withheld!.wentWrong).not.toHaveProperty("detail");
     expect(withheld!.wentWrong).not.toHaveProperty("cut");
+  });
+
+  it("reads how the question the step pins is drawn as it was written, leaving it out where the page says nothing of it", async () => {
+    const drawing =
+      "# {{title}}\n\n\\{{ <b>x</b> ![a](https://e.example/a.png)";
+
+    const page = await reading({ ...PAGE, drawing }).read;
+
+    expect(page.drawing).toBe(drawing);
+    expect(page).toEqual({ ...(await reading(PAGE).read), drawing });
+    expect(await reading(PAGE).read).not.toHaveProperty("drawing");
+  });
+
+  it("reads a drawing of one character as it came, the fewest a drawing is written in", async () => {
+    const page = await reading({ ...PAGE, drawing: " " }).read;
+
+    expect(page.drawing).toBe(" ");
   });
 
   it("reads how long after it to read the step again, which only a running run's page carries", async () => {
@@ -535,6 +1020,42 @@ describe("readStep", () => {
     expect(page.answering).not.toHaveProperty("instruction");
     expect(page.answering).not.toHaveProperty("lastRefused");
   });
+
+  it("reads a whole withheld input with its source but no value or earlier shape", async () => {
+    const input = {
+      input: "text",
+      from: { kind: "run_input", path: "ticket" },
+      withheld: true,
+    };
+    const page = await reading({ ...PAGE, wentIn: [input] }).read;
+
+    expect(page.wentIn).toEqual([input]);
+    expect(page.wentIn?.[0]).not.toHaveProperty("value");
+  });
+
+  it.each([
+    { value: "Fire." },
+    { earlierShape: true },
+    { withheldParts: ["/text"] },
+    { extra: "a private fact" },
+  ])(
+    "refuses a mixed whole withheld input instead of drawing part: %j",
+    async (mixed) => {
+      const input = {
+        input: "text",
+        from: { kind: "run_input", path: "ticket" },
+        withheld: true,
+        ...mixed,
+      };
+      const failure = await refusalOf(
+        reading({ ...PAGE, wentIn: [input] }).read,
+      );
+      expect(failure.problem).toEqual({
+        status: 200,
+        code: NOT_A_PROBLEM_DOCUMENT,
+      });
+    },
+  );
 
   it("reads each value of a code step kept in a shape the step had before as the text it was kept as, none as none, wherever the page gives one, and never as a value of any field", async () => {
     const page = await reading(KEPT_PAGE).read;
@@ -623,6 +1144,14 @@ describe("readStep", () => {
     ["a try saying nothing of its review", withTry({ review: undefined })],
     ["a review saying nothing of being asked", withTry({ review: {} })],
     [
+      "a review lost in no text",
+      withTry({ review: { asked: true, lost: true } }),
+    ],
+    [
+      "a review misfit in no text",
+      withTry({ review: { asked: true, didNotFit: 2 } }),
+    ],
+    [
       "a review gone wrong said in text",
       withTry({ review: { asked: true, wentWrong: "yes" } }),
     ],
@@ -631,7 +1160,7 @@ describe("readStep", () => {
     ["a try produced by nobody", withTry({ producedBy: undefined })],
     [
       "a try asked by nobody who can be shown",
-      withTry({ askedBy: { displayName: "Ada" } }),
+      withTry({ askedBy: { displayName: "Avo" } }),
     ],
     [
       "words of a refusal withheld as false",
@@ -705,6 +1234,12 @@ describe("readStep", () => {
         ],
       },
     ],
+    ["how it is drawn written as other than text", { ...PAGE, drawing: 7 }],
+    ["how it is drawn sent as null", { ...PAGE, drawing: null }],
+    [
+      "how it is drawn sent empty, which would draw nothing that went in",
+      { ...PAGE, drawing: "" },
+    ],
     [
       "a time to read again written in text",
       { ...PAGE, rereadAfterSeconds: "5" },
@@ -720,6 +1255,70 @@ describe("readStep", () => {
     [
       "what code gave back as other than text",
       { ...PAGE, triesMade: [{ ...ERRORED_TRY, returned: { reference: 7 } }] },
+    ],
+    [
+      "why code went wrong naming no reason",
+      withErroredFor({ field: "receipt" }),
+    ],
+    [
+      "why code went wrong for a reason in no word",
+      withErroredFor({ reason: 3 }),
+    ],
+    [
+      "the field code went wrong at named in no text",
+      withErroredFor({ reason: "too_long", field: ["receipt"] }),
+    ],
+    [
+      "a member nothing declares named in no text",
+      withErroredFor({ reason: "not_declared", member: null }),
+    ],
+    [
+      "what reads a field named as a step and as an output both",
+      withErroredFor({
+        reason: "gives_otherwise",
+        field: "receipt",
+        readBy: { step: CHECKING_STEP, output: "total" },
+      }),
+    ],
+    [
+      "what reads a field named as neither a step nor an output",
+      withErroredFor({
+        reason: "gives_otherwise",
+        field: "receipt",
+        readBy: {},
+      }),
+    ],
+    [
+      "what reads a field named as a step in no text",
+      withErroredFor({
+        reason: "gives_otherwise",
+        field: "receipt",
+        readBy: { step: 7 },
+      }),
+    ],
+    [
+      "a member cut flag sent as false",
+      withErroredFor({
+        reason: "not_declared",
+        member: "items",
+        memberCut: false,
+      }),
+    ],
+    [
+      "a member cut flag sent as text",
+      withErroredFor({
+        reason: "not_declared",
+        member: "items",
+        memberCut: "true",
+      }),
+    ],
+    [
+      "what came back said to be not kept as false",
+      withErroredFor({
+        reason: "too_long",
+        field: "receipt",
+        returnedNotKept: false,
+      }),
     ],
     ["a confidence below the scale", sureAs(-1)],
     ["a confidence above the scale", sureAs(101)],
@@ -792,4 +1391,314 @@ describe("readStep", () => {
       code: NOT_A_PROBLEM_DOCUMENT,
     });
   });
+});
+
+describe("originating run of a standing output", () => {
+  it("reads the actual maker separately from this step's run", () => {
+    const maker = { runId: "00000008-0000-4000-8000-000000000c82", number: 4 };
+    const page = stepAnswerFrom({
+      ...PAGE,
+      cameOut: [
+        {
+          field: "summary",
+          now: "stands",
+          value: "Demo Sample",
+          fromRun: maker,
+        },
+      ],
+    });
+    expect(page?.cameOut?.[0]?.fromRun).toEqual(maker);
+    expect(page?.run.runId).toBe(RUN);
+    expect(stepAnswerFrom(PAGE)?.cameOut?.[0]).not.toHaveProperty("fromRun");
+    expect(
+      stepAnswerFrom({
+        ...PAGE,
+        cameOut: [
+          {
+            field: "summary",
+            now: "stands",
+            value: "Demo Sample",
+            fromRun: { ...maker, number: "four" },
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("searching tries and answering", () => {
+  const SEARCH_STEP = {
+    ...ROW,
+    runs: {
+      kind: "search",
+      searchWay: "sample_web_search",
+      tool: "web_search",
+    },
+  };
+  const FEE = { currency: "USD", perUse: "0.0100", amount: "0.0200" };
+  const COUNTED = { uses: "2", usesCounted: "said", fee: FEE };
+  const SAID = {
+    question: "Find Demo Sample  ",
+    searches: [
+      { searchedFor: "Demo Sample", found: "Found.\n" },
+      { found: "Elsewhere" },
+    ],
+    searchesCut: true,
+    searchesNotAsItCame: true,
+    searchesLeftOut: "3",
+    ...COUNTED,
+  };
+  const pageWith = (
+    search: unknown,
+    producedBy: unknown = SURE_TRY.producedBy,
+  ) => ({
+    ...PAGE,
+    step: SEARCH_STEP,
+    triesMade: [{ ...SURE_TRY, producedBy, search }],
+  });
+
+  it("reads the question and record exactly as they came beside decimal count and fee", () => {
+    const page = stepAnswerFrom(pageWith(SAID));
+    expect(page?.triesMade[0]?.search).toEqual({
+      said: {
+        question: SAID.question,
+        searches: SAID.searches,
+        searchesCut: true,
+        searchesNotAsItCame: true,
+        searchesLeftOut: "3",
+      },
+      counted: COUNTED,
+    });
+    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("withheld");
+    expect(page?.triesMade[0]?.search?.counted).not.toHaveProperty("noFee");
+  });
+
+  it("keeps counts and money beside a withheld record and drops unknown members", () => {
+    const page = stepAnswerFrom(
+      pageWith({ withheld: true, ...COUNTED, later: "not read" }),
+    );
+    expect(page?.triesMade[0]?.search).toEqual({
+      said: { withheld: true },
+      counted: COUNTED,
+    });
+    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("question");
+    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("searches");
+  });
+
+  it.each([
+    [
+      {
+        question: "Find",
+        searchesUnsaid: true,
+        uses: "0",
+        usesCounted: "said",
+        noFee: { reason: "no_price" },
+      },
+      {
+        said: { question: "Find", searchesUnsaid: true },
+        counted: {
+          uses: "0",
+          usesCounted: "said",
+          noFee: { reason: "no_price" },
+        },
+      },
+    ],
+    [
+      {
+        question: "Find",
+        uses: "9007199254740993",
+        usesCounted: "at_most",
+        noFee: { reason: "many_currencies" },
+      },
+      {
+        said: { question: "Find" },
+        counted: {
+          uses: "9007199254740993",
+          usesCounted: "at_most",
+          noFee: { reason: "many_currencies" },
+        },
+      },
+    ],
+    [
+      {
+        withheld: true,
+        uses: "4",
+        usesCounted: "at_most",
+        noFee: { reason: "not_in_currency", currency: "EUR" },
+      },
+      {
+        said: { withheld: true },
+        counted: {
+          uses: "4",
+          usesCounted: "at_most",
+          noFee: { reason: "not_in_currency", currency: "EUR" },
+        },
+      },
+    ],
+    [{ question: "Find" }, { said: { question: "Find" } }],
+    [{ withheld: true }, { said: { withheld: true } }],
+  ])(
+    "reads accepted counts or an open uncounted call: %j",
+    (search, expected) => {
+      expect(stepAnswerFrom(pageWith(search))?.triesMade[0]?.search).toEqual(
+        expected,
+      );
+    },
+  );
+
+  it("keeps an explicitly empty half, but not an empty record", () => {
+    expect(
+      stepAnswerFrom(
+        pageWith({
+          question: "Find",
+          searches: [{ searchedFor: "", found: "" }],
+        }),
+      )?.triesMade[0]?.search,
+    ).toEqual({
+      said: { question: "Find", searches: [{ searchedFor: "", found: "" }] },
+    });
+    expect(stepAnswerFrom(pageWith({ searches: [{}] }))).toBeNull();
+  });
+
+  it.each([
+    { withheld: false },
+    ...[
+      "question",
+      "searches",
+      "searchesUnsaid",
+      "searchesCut",
+      "searchesNotAsItCame",
+      "searchesLeftOut",
+    ].map((name) => ({
+      withheld: true,
+      [name]: SAID[name as keyof typeof SAID] ?? true,
+    })),
+    { searches: [] },
+    { searches: [{ found: 3 }] },
+    { searches: [{ found: "Found" }], searchesUnsaid: true },
+    { searchesUnsaid: true, searchesCut: true },
+    { searchesUnsaid: true, searchesLeftOut: "1" },
+    { searchesCut: false },
+    { searchesNotAsItCame: false },
+    { searchesLeftOut: "0" },
+    { searchesLeftOut: "01" },
+    { searchesLeftOut: 1 },
+    { uses: "2" },
+    { usesCounted: "said" },
+    { fee: FEE },
+    { noFee: { reason: "no_price" } },
+    { ...COUNTED, noFee: { reason: "no_price" } },
+    { ...COUNTED, usesCounted: "estimated" },
+    ...[2, "-1", "01", "1.0", "1e3", ""].map((uses) => ({ ...COUNTED, uses })),
+    ...[0.01, "-1", "01.2", "1e-2", "1.", ".2", ""].map((perUse) => ({
+      ...COUNTED,
+      fee: { ...FEE, perUse },
+    })),
+    { ...COUNTED, fee: { ...FEE, amount: "1e2" } },
+    { ...COUNTED, fee: { ...FEE, currency: "usd" } },
+    { uses: "2", usesCounted: "said", noFee: { reason: "not_in_currency" } },
+    {
+      uses: "2",
+      usesCounted: "said",
+      noFee: { reason: "many_currencies", currency: "USD" },
+    },
+    {
+      uses: "2",
+      usesCounted: "said",
+      noFee: { reason: "no_price", currency: "USD" },
+    },
+    { uses: "2", usesCounted: "said", noFee: { reason: "unknown" } },
+  ])("refuses incomplete or contradictory search facts: %j", (search) => {
+    const given =
+      typeof search === "object" && search !== null && !("withheld" in search)
+        ? { question: "Find", ...search }
+        : search;
+    expect(stepAnswerFrom(pageWith(given))).toBeNull();
+  });
+
+  it.each([null, [], {}, { ...COUNTED }])(
+    "refuses a missing question or non-object search: %j",
+    (search) => {
+      expect(stepAnswerFrom(pageWith(search))).toBeNull();
+    },
+  );
+
+  it("refuses a record on a person-produced try or on a step that does not search", () => {
+    expect(stepAnswerFrom(pageWith(SAID, { kind: "person" }))).toBeNull();
+    expect(stepAnswerFrom({ ...pageWith(SAID), step: ROW })).toBeNull();
+    expect(
+      stepAnswerFrom({ ...PAGE, step: SEARCH_STEP })?.triesMade[0],
+    ).not.toHaveProperty("search");
+  });
+
+  it.each([true, false])(
+    "reads whether the answering question was sent: %s",
+    (searchQuestionSent) => {
+      const answering = {
+        number: 3,
+        beyond: false,
+        gives: [SUMMARY],
+        searchQuestion: "Find Demo Sample  ",
+        searchQuestionSent,
+      };
+      const page = stepAnswerFrom({ ...PAGE, step: SEARCH_STEP, answering });
+      expect(page?.answering).toEqual({
+        number: 3,
+        beyond: false,
+        gives: [SUMMARY],
+        searchQuestion: {
+          text: "Find Demo Sample  ",
+          sent: searchQuestionSent,
+        },
+      });
+      expect(page?.answering?.searchQuestion).not.toHaveProperty("withheld");
+    },
+  );
+
+  it("withholds the answering question without inventing whether it was sent", () => {
+    const answering = {
+      number: 3,
+      beyond: false,
+      gives: [SUMMARY],
+      searchQuestionWithheld: true,
+    };
+    const page = stepAnswerFrom({ ...PAGE, step: SEARCH_STEP, answering });
+    expect(page?.answering).toEqual({
+      number: 3,
+      beyond: false,
+      gives: [SUMMARY],
+      searchQuestion: { withheld: true },
+    });
+    expect(page?.answering?.searchQuestion).not.toHaveProperty("text");
+    expect(page?.answering?.searchQuestion).not.toHaveProperty("sent");
+  });
+
+  it.each([
+    { searchQuestion: "Find" },
+    { searchQuestionSent: false },
+    { searchQuestion: "Find", searchQuestionSent: "true" },
+    {
+      searchQuestion: "Find",
+      searchQuestionSent: true,
+      searchQuestionWithheld: true,
+    },
+    { searchQuestionWithheld: false },
+    { searchQuestion: null, searchQuestionSent: true },
+  ])(
+    "refuses an incomplete or contradictory answering question: %j",
+    (question) => {
+      expect(
+        stepAnswerFrom({
+          ...PAGE,
+          step: SEARCH_STEP,
+          answering: {
+            number: 3,
+            beyond: false,
+            gives: [SUMMARY],
+            ...question,
+          },
+        }),
+      ).toBeNull();
+    },
+  );
 });

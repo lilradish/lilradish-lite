@@ -5,6 +5,7 @@ import static java.util.Objects.requireNonNull;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import org.jspecify.annotations.Nullable;
+import org.lilradish.lite.domain.file.StoredFile;
 import org.lilradish.lite.domain.wire.JsonValue;
 import org.lilradish.lite.domain.wire.JsonValue.JsonBoolean;
 import org.lilradish.lite.domain.wire.JsonValue.JsonNumber;
@@ -26,7 +27,8 @@ public enum FieldKind {
     MOMENT("moment"),
     YES_NO("yes_no"),
     TERM("term"),
-    FIELDS("fields");
+    FIELDS("fields"),
+    FILE("file");
 
     public static final int MOST_DIGITS = 38;
 
@@ -116,22 +118,27 @@ public enum FieldKind {
             case MOMENT -> value instanceof JsonString moment && momentary(moment.value());
             case YES_NO -> value instanceof JsonBoolean;
             case FIELDS -> value instanceof JsonObject;
+            case FILE -> file(value);
         };
     }
 
-    /**
-     * The longest value {@link #writes} takes of a kind whose field declares no limit of it. Text is as long as
-     * its field says, a term as its list's terms are, and fields as what they hold, so of those it throws.
-     *
-     * @throws IllegalStateException of text, a term and fields
-     */
+    private static boolean file(JsonValue value) {
+        try {
+            StoredFile.fromKept(value);
+            return true;
+        } catch (IllegalArgumentException refused) {
+            return false;
+        }
+    }
+
+    /** The longest value {@link #writes} takes where its field does not determine the limit. */
     public JsonValue longestWritten() {
         return switch (this) {
             case NUMBER -> LONGEST_NUMBER;
             case DATE -> LONGEST_DATE;
             case MOMENT -> LONGEST_MOMENT;
             case YES_NO -> LONGEST_YES_NO;
-            case TEXT, TERM, FIELDS ->
+            case TEXT, TERM, FIELDS, FILE ->
                 throw new IllegalStateException("FieldKind " + published + " is as long as its field makes it");
         };
     }

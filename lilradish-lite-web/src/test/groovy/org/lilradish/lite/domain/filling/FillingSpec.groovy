@@ -3,6 +3,8 @@ package org.lilradish.lite.domain.filling
 import org.lilradish.lite.domain.declaration.FieldKind
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.declaration.TextLines
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
 import org.lilradish.lite.domain.wire.JsonValue
@@ -107,6 +109,36 @@ class FillingSpec extends Specification {
         new FillProblems([new FillProblem(path, reason)], 1)
     }
 
+    def "one line refuses every break before treating a value as missing, without rewriting it"() {
+        given:
+        def field = new FillField(new FieldName("title"), null, null, FieldKind.TEXT, 30, null, false,
+                null, [], null, null, TextLines.ONE)
+        def sent = Character.toString(codePoint)
+
+        expect:
+        Filling.of([field], Json.of([title: sent])) == new FillProblems(
+                [new FillProblem(path("title"), FillReason.LINE_BREAK)], 1)
+        Filling.of([field], Json.of([title: "Demo Sample" + sent])) == new FillProblems(
+                [new FillProblem(path("title"), FillReason.LINE_BREAK)], 1)
+        Filling.of([field], Json.of([title: "Demo Sample"])) instanceof FilledFields
+        Filling.of([field], Json.of([title: null])) instanceof FilledFields
+
+        where:
+        codePoint << [0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029]
+    }
+
+    def "a line break within nested many names its exact field and place"() {
+        given:
+        def text = new FillField(new FieldName("title"), null, null, FieldKind.TEXT, 30, 2, false,
+                null, [], null, null, TextLines.ONE)
+        def nested = new FillField(new FieldName("details"), null, null, FieldKind.FIELDS, null, null,
+                false, null, [text])
+
+        expect:
+        Filling.of([nested], Json.of([details: [title: ["Demo Sample", "\n"]]])) ==
+                new FillProblems([new FillProblem(path("details", "title", 1), FillReason.LINE_BREAK)], 1)
+    }
+
     def "values that all fit are kept as their kinds are, every field in declared order whatever order they came in"() {
         given:
         def sent = [note      : " Late\tno\n", items: [[count: "3", name: "Mug"], [name: "Lid", count: null]],
@@ -177,7 +209,7 @@ class FillingSpec extends Specification {
                   ZERO_WIDTH_JOINER + " "]
     }
 
-    def "text that must be given and shows nothing is missing, wherever it is held"() {
+    def "text that must be given, and every item among many texts, is missing when it shows nothing, wherever it is held"() {
         expect:
         filled(changed) == problem(missingAt, FillReason.MISSING)
 
@@ -186,6 +218,7 @@ class FillingSpec extends Specification {
         [complaint: " "]                         || path("complaint")
         [complaint: "\n\t" + NO_BREAK_SPACE]     || path("complaint")
         [tags: ["kettle", "  "]]                 || path("tags", 1)
+        [contact: [email: "a@b", phones: [" "]]] || path("contact", "phones", 0)
         [contact: [email: "\t", phones: ["1"]]]  || path("contact", "email")
         [items: [[name: " ", count: "3"]]]       || path("items", 0, "name")
     }
@@ -215,6 +248,9 @@ class FillingSpec extends Specification {
         [contact: [email: null, phones: []]]                              || [contact: null]
         [contact: [email: "", phones: []]]                                || [contact: null]
         [contact: [email: "\t", phones: []]]                              || [contact: null]
+        [contact: ""]                                                       || [contact: null]
+        [contact: " \t"]                                                    || [contact: null]
+        [items: " "]                                                        || [items: []]
         [contact: [email: "a@b.c", phones: []]]                           || [contact: [email: "a@b.c", phones: []]]
         [contact: [phones: ["1", "2"], email: "a@b"]]                     || [contact: [email: "a@b", phones: ["1", "2"]]]
         [address: [street: "1 Main", site: [floor: null, doors: []]]]     || [address: [street: "1 Main", site: null]]
@@ -237,6 +273,9 @@ class FillingSpec extends Specification {
         [contact: [email: "", phones: ["1"]]]                       || path("contact", "email")
         [contact: [email: "a@b", phones: [""]]]                     || path("contact", "phones", 0)
         [address: null]                                             || path("address")
+        [address: " \t"]                                            || path("address")
+        [tags: " "]                                                || path("tags")
+        [items: [" "]]                                            || path("items", 0)
         [address: [street: null, site: null]]                       || path("address")
         [address: [street: "", site: [floor: null, doors: []]]]     || path("address")
         [address: [street: " ", site: [floor: "", doors: []]]]      || path("address")
@@ -455,13 +494,12 @@ class FillingSpec extends Specification {
                 LEAST + [tags: "kettle"],
                 LEAST + [tags: ["kettle", null]],
                 LEAST + [tags: [["kettle"]]],
-                LEAST + [contact: ""],
                 LEAST + [contact: "a@b"],
                 LEAST + [contact: [[email: "a@b", phones: []]]],
                 LEAST + [contact: [email: "a@b"]],
                 LEAST + [contact: [email: "a@b", phones: [], fax: null]],
                 LEAST + [contact: [email: "a@b", phones: null]],
-                LEAST + [address: ""],
+                LEAST + [address: "visible"],
                 LEAST + [address: [street: "1 Main", site: [floor: null]]],
                 LEAST + [amounts: [1]],
                 LEAST + [flags: [true]],
@@ -689,5 +727,36 @@ class FillingSpec extends Specification {
         "amount"  | "12.5"
         "tags"    | "kettle"
         "address" | [street: "1 Main"]
+    }
+    def "stored file metadata is read with its numeric size while raw JSON cannot fill a file"() {
+        given:
+        def field = new FillField(new FieldName("documents"), null, null, FieldKind.FILE, null, null,
+                true, null, [], [new MediaTypeName("application/pdf")], 10L)
+        def kept = Json.of([id: "0199cdee-aeed-4ec9-a049-29c359a8bd71", name: "Demo Sample.pdf",
+                            type: "application/pdf", size: 3])
+
+        expect:
+        Filling.wire(field, kept) == kept
+        Filling.of([field], Json.of([documents: [id: "0199cdee-aeed-4ec9-a049-29c359a8bd71",
+                                                   name: "Demo Sample.pdf", type: "application/pdf", size: 3]]))
+                instanceof FillOutcome.Unshaped
+    }
+
+    def "stored file metadata without its id or within no declared type fails the read"() {
+        given:
+        def field = new FillField(new FieldName("documents"), null, null, FieldKind.FILE, null, null,
+                true, null, [], [new MediaTypeName("application/pdf")], 10L)
+
+        when:
+        Filling.wire(field, Json.of(kept))
+
+        then:
+        def refused = thrown(IllegalStateException)
+        refused.message == "Filling was handed values kept in no shape of the fields they fill"
+
+        where:
+        kept << [[name: "Demo Sample.pdf", type: "application/pdf", size: 3],
+                 [id: "0199cdee-aeed-4ec9-a049-29c359a8bd71", name: "Demo Sample.pdf", type: "image/png", size: 3],
+                 [id: "0199cdee-aeed-4ec9-a049-29c359a8bd71", name: "Demo Sample.pdf", type: "application/pdf", size: 11]]
     }
 }

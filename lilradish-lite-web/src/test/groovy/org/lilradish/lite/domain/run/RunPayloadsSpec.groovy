@@ -39,6 +39,8 @@ import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.file.MediaTypeName
+import org.lilradish.lite.domain.inference.Envelope
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
 import org.lilradish.lite.domain.registry.EntryVersionId
@@ -65,7 +67,7 @@ class RunPayloadsSpec extends Specification {
 
     static final List<BindingRecord> BOUND = [bind("complaint", "It broke.")]
 
-    static final String OPENING = '{"envelope_version":2,"instruction":"Answer what is asked.",' +
+    static final String OPENING = '{"envelope_version":' + Envelope.VERSION + ',"instruction":"Answer what is asked.",' +
             '"takes":{"complaint":"It broke.","order":null,"address":null,"contacts":null}'
 
     static final String TOLD = ',"refused":{"values":{"summary":"late","reason":null},' +
@@ -93,7 +95,7 @@ class RunPayloadsSpec extends Specification {
     static final Binding BINDING = new Binding(key(900), Pointer.parse("complaint"),
             new BindingSource.Written(json("It broke.")))
 
-    static final String CODE_OPENING = '{"envelope_version":2,"takes":{"complaint":"It broke."}'
+    static final String CODE_OPENING = '{"envelope_version":' + Envelope.VERSION + ',"takes":{"complaint":"It broke."}'
 
     static final ValueRecord EXTRA = value(3, "extra", false, "more")
 
@@ -132,7 +134,7 @@ class RunPayloadsSpec extends Specification {
         def sent = RunPayloads.toProduce(step(told()), bound.collect { target, held -> bind(target, held) }, null)
 
         then:
-        CanonicalJson.write(sent) == '{"envelope_version":2,"instruction":"Answer what is asked.","takes":' +
+        CanonicalJson.write(sent) == '{"envelope_version":' + Envelope.VERSION + ',"instruction":"Answer what is asked.","takes":' +
                 CanonicalJson.write(json([complaint: null, order: null, address: address, contacts: contacts])) + '}'
 
         where:
@@ -256,6 +258,8 @@ class RunPayloadsSpec extends Specification {
         code([text("complaint")], [standing("summary"), standing("cause")], [:])        | [byPerson(1)]                             || null                                  | ReviewUnbuiltReason.NO_LONGER_DECLARED
         code([text("complaint")], [standingFields("summary"), standing("reason")], [:]) | [byPerson(1)]                             || null                                  | ReviewUnbuiltReason.NO_LONGER_DECLARED
         code([text("complaint")], REVIEWED_THREE, [:])                                  | [codeInWords(1), byPerson(2, [EXTRA])]    || null                                  | ReviewUnbuiltReason.NO_LONGER_DECLARED
+        code([text("complaint"), nestedFile("attachment", true)], [standing("summary"), standing("reason")], [:]) | [byPerson(1)] || null | ReviewUnbuiltReason.HOLDS_A_FILE
+        code([text("complaint")], [standing("summary"), standing("reason"), nestedFile("attachment", false)], [:]) | [byPerson(1)] || null | ReviewUnbuiltReason.HOLDS_A_FILE
     }
 
     /** Who or what produced it is never sent, so the same production reads the same whoever made it. */
@@ -293,13 +297,14 @@ class RunPayloadsSpec extends Specification {
         step(told())    | yielded(1, StepProducer.MODEL, [STOOD, NO_REASON])     || "Payload decides values given back, each once, and one at least"
     }
 
-    def "a code step's production is reviewed only where the release holds that code step"() {
+    def "a code step gone from the release leaves its produced value for a person to review"() {
         when:
-        reviewing(codeStep(1, 3, null, Runs.code(), [BINDING]), [byPerson(1)])
+        def payload = reviewing(codeStep(1, 3, null, Runs.code(), [BINDING]), [byPerson(1)])
 
         then:
-        def refusal = thrown(NullPointerException)
-        refusal.message == "a code step reviewed is one the release holds"
+        payload instanceof ReviewPayload.Unbuilt
+        payload.reason() == ReviewUnbuiltReason.NO_LONGER_DECLARED
+        !(payload instanceof ReviewPayload.Built)
     }
 
     def "the values a review decides are those of the production waiting on one, in declared order"() {
@@ -358,7 +363,7 @@ class RunPayloadsSpec extends Specification {
 
     def "the production told is the newest before the asking refused in words, tries lost, open or refused in no words passed over"() {
         expect:
-        RunPayloads.refusedInWords(started(step(told()), tried(held)), asking).map { it.number() } ==
+        refusedForAsking(held, asking).map { it.number() } ==
                 Optional.ofNullable(newest)
 
         where:
@@ -380,7 +385,7 @@ class RunPayloadsSpec extends Specification {
 
     def "every production found refused in words is one the next asking is told, in those words"() {
         given:
-        def found = RunPayloads.refusedInWords(started(step(told()), tried(held)), asking).orElseThrow()
+        def found = refusedForAsking(held, asking).orElseThrow()
 
         when:
         def sent = CanonicalJson.write(RunPayloads.toProduce(step(told()), BOUND, found))
@@ -399,21 +404,41 @@ class RunPayloadsSpec extends Specification {
         "refused for length"                 | 2      || "reason"
     }
 
-    def "the production told is looked for only before a try numbered from one"() {
+    def "an existing model production finds the same refusal before its number is assigned or after it is cleared"() {
+        given:
+        def history = tried("refused in words twice")
+        def identity = new ProductionId(UUID.randomUUID())
+        def pending = new TryRecord(identity, number, StepProducer.MODEL, null, minutes(30), null, null, null, null,
+                null, null, false, null, [], [], [], [], [])
+        def snapshot = started(step(told()), history + [pending])
+
         when:
-        RunPayloads.refusedInWords(started(step(told()), tried("refused in words twice")), asking)
+        def found = RunPayloads.refusedInWords(snapshot, identity)
+
+        then:
+        found.orElseThrow().id() == history.last().id()
+        found.orElseThrow().number() == 2
+        RunPayloads.wentInto(snapshot, pending) == found
+        CanonicalJson.write(RunPayloads.toProduce(step(told()), BOUND, found.orElseThrow()))
+                .contains('"words":{"summary":"Not what was asked."}')
+
+        where:
+        number << [null, 3]
+    }
+
+    def "the production told is looked for only before a production the step holds"() {
+        when:
+        RunPayloads.refusedInWords(started(step(told()), tried("refused in words twice")),
+                new ProductionId(UUID.randomUUID()))
 
         then:
         def refusal = thrown(IllegalArgumentException)
-        refusal.message == "RunPayloads asking must be a try's number: " + asking
-
-        where:
-        asking << [0, -1]
+        refusal.message == "RunPayloads names a production its step does not hold"
     }
 
     def "the production told is looked for only in a step"() {
         when:
-        RunPayloads.refusedInWords(null, 2)
+        RunPayloads.refusedInWords(null, new ProductionId(UUID.randomUUID()))
 
         then:
         def refusal = thrown(NullPointerException)
@@ -428,6 +453,39 @@ class RunPayloadsSpec extends Specification {
     private static TryRecord reviewedAfter(String held, StepProducer producer) {
         int number = tried(held).size() + 1
         yielded(number, producer, [LATE, NO_REASON], [], producer == StepProducer.PERSON ? PERSON : null)
+    }
+
+    def "production and review mark a search source once at its top level for either producer"() {
+        given:
+        def sourceValue = value(910, 'body', false, 'Demo Sample web text')
+        def searched = started(Runs.searchStep(1), [yielded(1, sourceProducer, [sourceValue])])
+        def source = new BindingSource.StepOutput(stepId(1).value(), Pointer.parse('body'))
+        def bindings = [new Binding(key(911), Pointer.parse('address.geo.lat'), source),
+                        new Binding(key(912), Pointer.parse('address.street'), source),
+                        new Binding(key(913), Pointer.parse('complaint'), new BindingSource.Written(json('Demo Sample complaint')))]
+        def planned = new PlannedStep(stepId(2), 2, new StepId('step_2'), QUESTION, told(), 3, null, bindings)
+        def current = Runs.run([searched, Runs.unstarted(planned)])
+        def at = RunInTree.root(current)
+        def bound = StepInputs.bound(at, current.steps()[1]).orElseThrow()
+        def produced = RunPayloads.toProduce(at, planned, bound, null)
+        def original = byModel(1)
+        def reviewed = new TryRecord(new ProductionId(key(914)), original.number(), original.producer(), original.askedBy(),
+                original.askedAt(), original.endedAt(), original.endedBy(), original.explanation(), original.lost(),
+                original.fault(), original.lostDetail(), original.lostDetailCut(), original.returned(), original.values(),
+                original.reviews(), bound.collect { new InputRecord(it.binding().id(), it.source(), it.parts()) },
+                original.attempts(), original.calls())
+        def held = Runs.run([searched, started(planned, [reviewed])])
+
+        when:
+        def review = RunPayloads.toReview(RunInTree.root(held), held.steps()[1], reviewed)
+
+        then:
+        CanonicalJson.write(produced).contains('"found_on_the_web":["address"]')
+        review instanceof ReviewPayload.Built
+        CanonicalJson.write(review.payload()).contains('"found_on_the_web":["address"]')
+
+        where:
+        sourceProducer << [StepProducer.MODEL, StepProducer.PERSON]
     }
 
     private static PlannedStep step(Producer producer) {
@@ -446,7 +504,7 @@ class RunPayloadsSpec extends Specification {
     private static ReviewPayload reviewing(PlannedStep planned, List<TryRecord> tries) {
         def took = tries.collect { tookBound(it) }
         def run = Runs.run([started(planned, took)])
-        RunPayloads.toReview(run, run.steps()[0], took.last())
+        RunPayloads.toReview(RunInTree.root(run), run.steps()[0], took.last())
     }
 
     private static TryRecord tookBound(TryRecord aTry) {
@@ -501,10 +559,18 @@ class RunPayloadsSpec extends Specification {
         new Field(new FieldName(name), null, null, new FieldShape.Nested([text("why")]), new HowMany.One(), REVIEWED)
     }
 
+    private static Field nestedFile(String name, boolean taken) {
+        Demand demand = taken ? new Demand.Given(false) : REVIEWED
+        new Field(new FieldName(name), null, null,
+                new FieldShape.Nested([new Field(new FieldName("document"), null, null,
+                        new FieldShape.File([new MediaTypeName("application/pdf")], 1024L),
+                        new HowMany.One(), new Demand.Given(false))]), new HowMany.One(), demand)
+    }
+
     /** A constant, which is as good a source as any: what went in is the value, whatever it was read from. */
     private static BindingRecord bind(String target, Object held, int number = 900) {
         new BindingRecord(new Binding(key(number), Pointer.parse(target), new BindingSource.Written(json(held))),
-                json(held), null)
+                json(held), null, [])
     }
 
     /** A model's tries, oldest first, each giving back both fields and each refused in words having its summary refused. */
@@ -525,4 +591,12 @@ class RunPayloadsSpec extends Specification {
             default: throw new IllegalArgumentException(held)
         }
     }
+    private static Optional<TryRecord> refusedForAsking(String held, int asking) {
+        def tries = tried(held)
+        def askingTry = tries.find { it.number() == asking }
+        def snapshot = started(step(told()), tries)
+        askingTry == null ? RunPayloads.refusedBeforeAnswer(snapshot) : RunPayloads.refusedInWords(snapshot, askingTry.id())
+    }
+
+
 }

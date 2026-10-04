@@ -1,3 +1,4 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -27,19 +28,32 @@ function refusal(code: string, status: number): readonly [string, number] {
 }
 
 /** The picker as the page draws it, with only the server stood in for; what it tells the page is counted. */
-function opening(routes: Readonly<Record<string, readonly Reply[]>>) {
+function opening(
+  routes: Readonly<Record<string, readonly Reply[]>>,
+  mayChange = true,
+) {
   const sent = serving(routes);
   const onChosen = vi.fn();
   const onMoved = vi.fn();
   render(
     <ThemeProvider theme={theme}>
-      <CurrencyPicker groupId={GROUP} onChosen={onChosen} onMoved={onMoved} />
+      <CurrencyPicker
+        groupId={GROUP}
+        mayChange={mayChange}
+        onChosen={onChosen}
+        onMoved={onMoved}
+      />
     </ThemeProvider>,
   );
   return { sent, onChosen, onMoved };
 }
 
-function picker(): Promise<HTMLElement> {
+async function picker(): Promise<HTMLElement> {
+  const shown = screen.queryByRole("combobox", { name: "Currency" });
+  if (shown !== null) {
+    return shown;
+  }
+  await userEvent.click(await screen.findByRole("button", { name: "Change" }));
   return screen.findByRole("combobox", { name: "Currency" });
 }
 
@@ -58,8 +72,27 @@ async function picking(select: HTMLElement, words: string) {
 }
 
 describe("CurrencyPicker", () => {
+  it("starts with a quiet summary and opens the choice only for a reader who may change membership", async () => {
+    const routes = {
+      [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
+    };
+    const { sent } = opening(routes, false);
+
+    expect(await screen.findByText("Currency: EUR — Euro")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(requestsTo(sent)).toEqual([READ]);
+  });
+
   it("offers each currency priced, by its code and its name in the reader's language, with the one chosen shown and nothing to unchoose it", async () => {
     opening({ [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })] });
+
+    const change = await screen.findByRole("button", { name: "Change" });
+    expect(change).toHaveClass(
+      buttonClasses.outlined,
+      buttonClasses.colorPrimary,
+    );
+    expect(change).not.toHaveClass(buttonClasses.text);
 
     const select = await picker();
 

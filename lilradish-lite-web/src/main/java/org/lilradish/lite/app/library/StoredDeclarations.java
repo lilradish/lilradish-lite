@@ -27,9 +27,12 @@ import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.declaration.FieldShape;
 import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.declaration.HowMany;
+import org.lilradish.lite.domain.declaration.TextLines;
+import org.lilradish.lite.domain.file.MediaTypeName;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.wire.StoreLabels;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -37,7 +40,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * What versions and route steps declare, as the store holds it, each field beside its key: every owner asked is
  * read in one statement, and holds both halves, empty where it stores no field there. A stored value its type
  * refuses, or a field only a cycle leaves unreached, fails the read rather than being shown or left out. What a
- * code step declares is the release's, keyed here alike.
+ * code step declares and what a way to search gives back are the release's, keyed here alike.
  */
 final class StoredDeclarations {
 
@@ -52,8 +55,11 @@ final class StoredDeclarations {
                    cast(field.kind as text) as kind,
                    field.holds_many,
                    field.text_limit,
+                   field.text_lines,
                    field.many_limit,
                    field.term_list_version_id,
+                   field.file_types,
+                   field.file_maximum_bytes,
                    field.must_be_given,
                    cast(field.standing as text) as standing,
                    field.standing_threshold""";
@@ -152,14 +158,23 @@ final class StoredDeclarations {
         return new Halves(released(name, declared.takes()), released(name, declared.gives()));
     }
 
+    /** What a way to search this release holds gives back, each field keyed as {@link #ofCodeStep} keys one. */
+    static Half ofSearchWay(SearchWay way) {
+        Declaration gives =
+                new Declaration(DeclarationSide.GIVES, Demands.ofWorkflow(DeclarationSide.GIVES), way.outputs());
+        return new Half(
+                gives,
+                releasedKeys("search_way/" + way.name() + "/" + gives.side().published(), way.outputs()));
+    }
+
     private static Half released(String name, Declaration declaration) {
         return new Half(
                 declaration,
                 releasedKeys("code_step/" + name + "/" + declaration.side().published(), declaration.fields()));
     }
 
-    /* A name-based key never meets a drawn one: its version digit is its own. A name holds no '/', so no two paths
-    spell alike. */
+    /* A name-based key never meets a drawn one: its version digit is its own. A name holds no '/', and a way and a
+    code step stand under paths of their own, so no two paths spell alike. */
     private static List<Keyed> releasedKeys(String above, List<Field> level) {
         List<Keyed> keys = new ArrayList<>(level.size());
         for (Field field : level) {
@@ -247,8 +262,21 @@ final class StoredDeclarations {
         List<Keyed> held = new ArrayList<>();
         FieldShape shape =
                 switch (kind) {
-                    case TEXT -> new FieldShape.Text(row.textLimit());
+                    case TEXT ->
+                        new FieldShape.Text(
+                                row.textLimit(),
+                                row.textLines() == null
+                                        ? TextLines.SEVERAL
+                                        : StoreLabels.parse(TextLines.class, row.textLines()));
                     case TERM -> new FieldShape.Term(row.list() == null ? null : new EntryVersionId(row.list()));
+                    case FILE ->
+                        new FieldShape.File(
+                                row.fileTypes() == null
+                                        ? List.of()
+                                        : java.util.Arrays.stream(row.fileTypes())
+                                                .map(MediaTypeName::new)
+                                                .toList(),
+                                row.fileMaximumBytes());
                     case FIELDS -> {
                         List<Field> fields = new ArrayList<>();
                         for (Row child : byParent.getOrDefault(row.id(), List.of())) {
@@ -273,6 +301,7 @@ final class StoredDeclarations {
     }
 
     private static Row row(ResultSet result) throws SQLException {
+        java.sql.Array fileTypes = result.getArray("file_types");
         return new Row(
                 result.getObject("owner", UUID.class),
                 result.getObject("declaration_field_id", UUID.class),
@@ -284,8 +313,11 @@ final class StoredDeclarations {
                 result.getString("kind"),
                 result.getBoolean("holds_many"),
                 result.getObject("text_limit", Integer.class),
+                result.getString("text_lines"),
                 result.getObject("many_limit", Integer.class),
                 result.getObject("term_list_version_id", UUID.class),
+                fileTypes == null ? null : (String[]) fileTypes.getArray(),
+                result.getObject("file_maximum_bytes", Long.class),
                 result.getObject("must_be_given", Boolean.class),
                 result.getString("standing"),
                 result.getObject("standing_threshold", Integer.class));
@@ -354,8 +386,11 @@ final class StoredDeclarations {
             String kind,
             boolean holdsMany,
             @Nullable Integer textLimit,
+            @Nullable String textLines,
             @Nullable Integer manyLimit,
             @Nullable UUID list,
+            String @Nullable [] fileTypes,
+            @Nullable Long fileMaximumBytes,
             @Nullable Boolean mustBeGiven,
             @Nullable String standing,
             @Nullable Integer floor) {}

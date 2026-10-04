@@ -140,7 +140,7 @@ function Creating({
           fullWidth
         />
         <Box role="group" aria-labelledby={founderId}>
-          <Typography id={founderId} variant="subtitle2" component="p">
+          <Typography id={founderId} variant="subtitle2">
             {say("group.founder")}
           </Typography>
           <FindOne

@@ -21,6 +21,7 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.run.RunId
 import org.lilradish.lite.testutil.codestep.CodeStepsHeld
 import org.lilradish.lite.testutil.inference.ScriptedModelCalls
@@ -32,11 +33,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A run going on by itself, on a real server running the real baseline: its first step planned in the
- * transaction that started it, a stop holding the try a step would have made, a let-go releasing it, and a run
- * that wants nothing of itself left as it is.
- */
 class RunEngineIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -69,12 +65,13 @@ class RunEngineIntegrationSpec extends Specification {
         tree = new RunTree(session)
         executor = EngineExecutors.of(store.database)
         def writes = new EngineWrites(session)
-        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE)
+        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE, new SearchWays([]))
         def ceilings = new CeilingReach(session, DeployedModels.HELD, writes)
+        def heldFiles = EngineWiring.files(store)
         engine = new RunEngine(session, store.transactions(), tree, snapshots, writes, executor,
-                new EngineCalls(new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                DeployedModels.HELD, ceilings, new GroupRoles(session))
+                new EngineCalls(EngineWiring.withoutTools(), new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(session), Deployments.DEEP_ENOUGH, heldFiles)
         TicketWorkflow.seed(store)
     }
 
@@ -86,14 +83,13 @@ class RunEngineIntegrationSpec extends Specification {
         new RunId(UUID.fromString(spelled))
     }
 
-    /** Every row the engine writes about a run's steps, as one string per table. */
     private List<String> stepRows() {
         ["run_steps", "productions", "production_inputs", "production_values", "run_step_holds"]
                 .collect { store.digestOf(it) }
     }
 
-    /** Each try of a step, as its number, who produced it, who asked for it and whether it is open. */
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open' else 'ended' end
@@ -103,6 +99,7 @@ class RunEngineIntegrationSpec extends Specification {
     }
 
     private List<String> holdsOn(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select hold.reason || ' ' || hold.created_by || ' ' || coalesce(hold.released_by::text, '-')
                   from run_step_holds hold join run_steps step on step.run_step_id = hold.run_step_id
@@ -110,7 +107,7 @@ class RunEngineIntegrationSpec extends Specification {
                 """, step)
     }
 
-    /** As a start does: the run written, its tree locked, the first step planned, in one transaction. */
+    // Write the run, lock its tree, and plan the first step in one transaction.
     private void started() {
         store.transactions().executeWithoutResult {
             TicketWorkflow.run(store)
@@ -132,6 +129,7 @@ class RunEngineIntegrationSpec extends Specification {
 
         then:
         triesOf(SUMMARISE) == ["1 person ${SYSTEM} open" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select taken.binding_id || ' ' || coalesce(taken.source_production_value_id::text, '-')
                   from production_inputs taken
@@ -139,12 +137,13 @@ class RunEngineIntegrationSpec extends Specification {
 
         and: "and nothing past it, nothing held and nothing produced"
         triesOf(CONFIRM) == []
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from run_steps where workflow_step_id = ?::uuid", CONFIRM) == 0
         store.count("select count(*) from run_step_holds") == 0
         store.count("select count(*) from production_values") == 0
     }
 
-    /** Joined to the caller's transaction, a drive would hold the tree until whatever else the caller does ends. */
+    // Use a separate transaction so the caller's remaining work cannot prolong the tree lock.
     def "refuses to drive a run inside a transaction of the caller's, writing nothing"() {
         given:
         store.transactions().executeWithoutResult { TicketWorkflow.run(store) }
@@ -206,6 +205,7 @@ class RunEngineIntegrationSpec extends Specification {
         given:
         store.stopped(SUMMARISE_QUESTION, FIRST_STEWARD)
         started()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(FIRST_STEWARD, SUMMARISE_QUESTION).update()
 
@@ -223,6 +223,7 @@ class RunEngineIntegrationSpec extends Specification {
         store.stopped(WORKFLOW, FIRST_STEWARD)
         store.stopped(SUMMARISE_QUESTION, FIRST_STEWARD)
         started()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(FIRST_STEWARD, SUMMARISE_QUESTION).update()
         def before = stepRows()
@@ -266,6 +267,7 @@ class RunEngineIntegrationSpec extends Specification {
         given:
         store.stopped(SUMMARISE_QUESTION, FIRST_STEWARD)
         started()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(FIRST_STEWARD, SUMMARISE_QUESTION).update()
 
@@ -277,10 +279,10 @@ class RunEngineIntegrationSpec extends Specification {
         triesOf(SUMMARISE) == ["1 person ${SYSTEM} open" as String]
     }
 
-    /** Both wait on the tree's lock the spec holds; the one let through second finds the try the first made. */
     def "two drives of one run racing make one try, the second finding it made"() {
         given:
         TicketWorkflow.run(store)
+        // DB-SPECIFIC: PostgreSQL FOR NO KEY UPDATE.
         def holder = store.holding("select 1 from runs where run_id = '${RUN}' for no key update")
 
         when:

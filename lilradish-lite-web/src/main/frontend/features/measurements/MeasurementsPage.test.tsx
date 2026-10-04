@@ -7,6 +7,7 @@ import { MEASUREMENTS_DESTINATION } from "../../app/destinations";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { deferred } from "../../testutil/deferred";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
 import { MeasurementsPage } from "./MeasurementsPage";
 
 const READ = "GET /api/measurements";
@@ -125,6 +126,27 @@ describe("MeasurementsPage", () => {
     expect(
       screen.getAllByRole("heading").map((heading) => heading.textContent),
     ).toEqual(["Measurements", "The models", "This system"]);
+    expect(
+      screen
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["The models", "This system"]);
+  });
+
+  it("frames each table as a part of the page named by its heading, neither within the other", async () => {
+    opening();
+
+    const models = await screen.findByRole("region", { name: "The models" });
+    const system = screen.getByRole("region", { name: "This system" });
+
+    expect(models).toContainElement(tableNamed("The models"));
+    expect(system).toContainElement(tableNamed("This system"));
+    expect(models).not.toContainElement(system);
+    expect(system).not.toContainElement(models);
+    expect([models, system].map(drawnOf)).toEqual([
+      drawnAtDepth(1),
+      drawnAtDepth(1),
+    ]);
   });
 
   it("sorts one table by the heading pressed, by value and then the other way, leaving the other table as it was and reading nothing again", async () => {

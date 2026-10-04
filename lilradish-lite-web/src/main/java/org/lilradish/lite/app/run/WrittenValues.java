@@ -2,7 +2,9 @@ package org.lilradish.lite.app.run;
 
 import java.util.List;
 import org.jspecify.annotations.Nullable;
+import org.lilradish.lite.domain.declaration.FieldKind;
 import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.file.StoredFile;
 import org.lilradish.lite.domain.filling.FillField;
 import org.lilradish.lite.domain.filling.Filling;
 import org.lilradish.lite.domain.run.RunSnapshot;
@@ -25,12 +27,12 @@ final class WrittenValues {
 
     /** One value of {@code field}, none as null. */
     static JsonNode of(FillField field, JsonValue value) {
-        return node(Filling.wire(field, value));
+        return node(field, Filling.wire(field, value));
     }
 
     /** Every field in declared order, whatever order the store keeps them in. */
     static ObjectNode of(List<FillField> fields, JsonValue.JsonObject values) {
-        return object(Filling.wire(fields, values));
+        return object(fields, Filling.wire(fields, values));
     }
 
     // Labels and values must come from this one place.
@@ -56,7 +58,21 @@ final class WrittenValues {
         return found;
     }
 
-    private static JsonNode node(JsonValue value) {
+    private static JsonNode node(FillField field, JsonValue value) {
+        if (field.kind() == FieldKind.FILE) {
+            return file(value);
+        }
+        if (field.kind() == FieldKind.FIELDS) {
+            if (value instanceof JsonValue.JsonNull) {
+                return NODES.nullNode();
+            }
+            if (value instanceof JsonValue.JsonArray many) {
+                ArrayNode array = NODES.arrayNode();
+                many.items().forEach(item -> array.add(object(field.fields(), (JsonValue.JsonObject) item)));
+                return array;
+            }
+            return object(field.fields(), (JsonValue.JsonObject) value);
+        }
         return switch (value) {
             case JsonValue.JsonNull ignored -> NODES.nullNode();
             case JsonValue.JsonString text -> NODES.stringNode(text.value());
@@ -64,16 +80,38 @@ final class WrittenValues {
                 throw new IllegalStateException("Filling writes every value as text, never as a flag or a number");
             case JsonValue.JsonArray items -> {
                 ArrayNode array = NODES.arrayNode();
-                items.items().forEach(item -> array.add(node(item)));
+                items.items().forEach(item -> array.add(node(field, item)));
                 yield array;
             }
-            case JsonValue.JsonObject members -> object(members);
+            case JsonValue.JsonObject ignored -> throw new IllegalStateException("A scalar filling holds an object");
         };
     }
 
-    private static ObjectNode object(JsonValue.JsonObject members) {
+    private static JsonNode file(JsonValue value) {
+        if (value instanceof JsonValue.JsonNull) {
+            return NODES.nullNode();
+        }
+        if (value instanceof JsonValue.JsonArray many) {
+            ArrayNode array = NODES.arrayNode();
+            many.items().forEach(item -> array.add(file(item)));
+            return array;
+        }
+        StoredFile stored = StoredFile.fromKept(value);
+        ObjectNode file = NODES.objectNode();
+        file.put("id", stored.id().toString());
+        file.put("name", stored.name().value());
+        file.put("type", stored.type().value());
+        file.put("size", stored.size());
+        return file;
+    }
+
+    private static ObjectNode object(List<FillField> fields, JsonValue.JsonObject members) {
         ObjectNode object = NODES.objectNode();
-        members.members().forEach(member -> object.set(member.name(), node(member.value())));
+        for (int index = 0; index < fields.size(); index++) {
+            FillField field = fields.get(index);
+            JsonValue.JsonMember member = members.members().get(index);
+            object.set(member.name(), node(field, member.value()));
+        }
         return object;
     }
 }

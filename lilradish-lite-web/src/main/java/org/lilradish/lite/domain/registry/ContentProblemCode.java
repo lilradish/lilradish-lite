@@ -10,16 +10,26 @@ package org.lilradish.lite.domain.registry;
 public enum ContentProblemCode {
     /** A question tells whoever answers it nothing. */
     INSTRUCTION_MISSING("instruction_missing"),
+    DRAWING_NAMES_UNKNOWN("drawing_names_unknown"),
     /** A question gives nothing back, so nothing downstream could name anything it produced. */
     NOTHING_GIVEN_BACK("nothing_given_back"),
     /** A field holds the name an earlier field beside it holds. */
     NAME_REPEATED("name_repeated", true),
     /** A field of text says nothing of how long its value may be. */
     LONGEST_MISSING("longest_missing", true),
+    /** A field of files says nothing of how large one file may be. */
+    FILE_SIZE_MISSING("file_size_missing", true),
+    FILE_TYPES_TOO_MANY("file_types_too_many", true),
+    /** A question cannot take a file that no model could receive. */
+    QUESTION_TAKES_FILE("question_takes_file", true),
     /** A field of terms names no reference list. */
     LIST_MISSING("list_missing", true),
     /** A field holding many says nothing of how many. */
     MOST_MISSING("most_missing", true),
+    /** A field of files allows a size or count beyond this deployment's limits. */
+    FILE_LIMIT_PAST_DEPLOYMENT("file_limit_past_deployment", true),
+    /** The files across a declaration could exceed the deployment's one-handover bound. */
+    FILE_TOTAL_PAST_DEPLOYMENT("file_total_past_deployment"),
     /** One value of a field, at its limits, could be written out longer than one value may. */
     LIMIT_PAST_LARGEST("limit_past_largest", true),
     /** A field that holds fields holds none. */
@@ -65,6 +75,10 @@ public enum ContentProblemCode {
     REVIEWER_MODE_NOT_OFFERED("reviewer_mode_not_offered"),
     /** A model is asked by a step that gives nothing back. */
     MODEL_GIVES_NOTHING("model_gives_nothing"),
+    /** A model cannot make a step's file value. */
+    STEP_FILE_MADE_BY_MODEL("step_file_made_by_model"),
+    /** A model cannot review a step's file value. */
+    STEP_FILE_REVIEWED_BY_MODEL("step_file_reviewed_by_model"),
     /** A route is bound to nothing to choose its case by. */
     DISCRIMINATOR_MISSING("discriminator_missing"),
     /** What a route chooses its case by is not one term. */
@@ -77,8 +91,10 @@ public enum ContentProblemCode {
     CASE_NOT_OFFERED("case_not_offered"),
     /** A route's case is on the term an earlier case is on. */
     CASE_REPEATED("case_repeated"),
-    /** A route's case leads to a workflow giving back other than what the route declares. */
-    CASE_GIVES_OTHERWISE("case_gives_otherwise"),
+    CASE_GIVES_UNDECLARED("case_gives_undeclared"),
+    CASE_GIVES_OTHER_KIND("case_gives_other_kind"),
+    CASE_GIVES_PAST_LIMIT("case_gives_past_limit"),
+    CASE_MAY_GIVE_NOTHING("case_may_give_nothing"),
     /** An input is bound to nothing. */
     INPUT_UNBOUND("input_unbound"),
     /** A binding fills an input that what it binds into never declared. */
@@ -120,7 +136,16 @@ public enum ContentProblemCode {
     /** All a workflow takes, as the one value a run is started with, could be written out longer than one may. */
     TAKES_PAST_LARGEST("takes_past_largest"),
     /** A model reviewing what a code step gives back could be sent more than the most one may, and says by how much. */
-    CODE_STEP_REVIEW_PAST_LARGEST("code_step_review_past_largest");
+    CODE_STEP_REVIEW_PAST_LARGEST("code_step_review_past_largest"),
+    SEARCH_REVIEW_PAST_LARGEST("search_review_past_largest"),
+    /** A searching step's values are produced by a model that does not offer the tool its way to search needs. */
+    SEARCH_TOOL_NOT_OFFERED("search_tool_not_offered"),
+    /** A searching step runs a way to search this release does not hold. */
+    SEARCH_WAY_NOT_HELD("search_way_not_held"),
+    /** A searching step's question could be sent holding nothing. */
+    SEARCH_QUESTION_MAY_BE_EMPTY("search_question_may_be_empty"),
+    /** A searching step does not yet say how some field its way gives back stands, each named at the step. */
+    SEARCH_STANDING_MISSING("search_standing_missing");
 
     private final String published;
 

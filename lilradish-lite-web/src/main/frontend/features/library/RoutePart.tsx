@@ -12,6 +12,7 @@ import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId
 import { say, type MessageId } from "../../i18n/app";
 import { Press } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { GROUP_SX, HEADING_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { BindingControls, Inputs } from "./BindingControls";
 import { problemSaid } from "./ContentProblems";
@@ -34,22 +35,12 @@ import {
   type TargetRow,
 } from "./workflowDrafts";
 
-const PART_SX = { mb: 3 };
-
 const ROW_SX = {
   display: "flex",
   flexWrap: "wrap",
   gap: 2,
   alignItems: "center",
   mb: 2,
-};
-
-const CASE_SX = {
-  border: 1,
-  borderColor: "divider",
-  borderRadius: 1,
-  p: 2,
-  mb: 1,
 };
 
 const QUIET_SX = { color: "text.secondary" };
@@ -132,22 +123,25 @@ export function RoutePart({
   const most = mostCases(terms);
   const fallback = runs.cases.find((routeCase) => routeCase.fallback)?.key;
   return (
-    <Box sx={PART_SX}>
-      <BindingControls
-        label={say("workflow.chosenBy")}
-        target={CHOSEN_BY}
-        binding={{ target: "", source: runs.discriminator }}
-        sources={sources}
-        constant={false}
-        editable={editable}
-        flags={chosenBy}
-        onChange={(discriminator: SourceDraft) =>
-          change({ ...runs, discriminator, discriminatorId: undefined })
-        }
-      />
+    <>
+      <Box sx={GROUP_SX}>
+        <BindingControls
+          label={say("workflow.chosenBy")}
+          target={CHOSEN_BY}
+          binding={{ target: "", source: runs.discriminator }}
+          sources={sources}
+          constant={false}
+          editable={editable}
+          flags={chosenBy}
+          onChange={(discriminator: SourceDraft) =>
+            change({ ...runs, discriminator, discriminatorId: undefined })
+          }
+        />
+      </Box>
       <DeclarationBuilder
         title={say("workflow.routeGives")}
         heading="h5"
+        depth={3}
         demands={WORKFLOW_GIVES}
         fields={readGives}
         lists={workflow.offered.lists}
@@ -157,12 +151,7 @@ export function RoutePart({
           change: (gives) => change({ ...runs, gives }),
         }}
       />
-      <Typography
-        ref={heading}
-        tabIndex={-1}
-        variant="subtitle1"
-        component="h5"
-      >
+      <Typography ref={heading} tabIndex={-1} variant="h5" sx={HEADING_SX}>
         {say("workflow.cases")}
       </Typography>
       {runs.cases.length === 0 ? (
@@ -183,7 +172,7 @@ export function RoutePart({
           tabIndex={-1}
           role="group"
           aria-label={caseCalled(routeCase)}
-          sx={CASE_SX}
+          sx={GROUP_SX}
         >
           {workflow.problems
             .filter(
@@ -212,6 +201,7 @@ export function RoutePart({
           <Inputs
             heading="workflow.caseInputs"
             level="h6"
+            depth={4}
             rows={caseRows(routeCase)}
             sources={sources}
             editable={editable}
@@ -225,6 +215,7 @@ export function RoutePart({
           />
           {editable ? (
             <Press
+              warns
               label={say("workflow.removeCaseCalled", {
                 name: caseCalled(routeCase),
               })}
@@ -249,7 +240,7 @@ export function RoutePart({
         <Press
           reason={
             runs.cases.length >= most
-              ? { severity: "info", words: say("refusal.CASES_PAST_TERMS") }
+              ? { severity: "warning", words: say("refusal.CASES_PAST_TERMS") }
               : undefined
           }
           onPress={() => {
@@ -266,7 +257,7 @@ export function RoutePart({
           {say("workflow.addCase")}
         </Press>
       ) : null}
-    </Box>
+    </>
   );
 }
 

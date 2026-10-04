@@ -19,6 +19,7 @@ export function useActedOn<T>(
   } = {},
 ): {
   readonly shown: T;
+  readonly showingAnswerWhileReading: boolean;
   readonly changing: Action<T>;
   readonly refused: (problem: Problem) => void;
 } {
@@ -27,9 +28,15 @@ export function useActedOn<T>(
   // Boxed, so a value that is itself a function is held rather than called.
   const [shown, setShown] = useState({ value: read.value });
   const [readShown, setReadShown] = useState(read.value);
-  if (read.value !== readShown) {
+  const [guardingAnswer, setGuardingAnswer] = useState(false);
+  if (read.value !== readShown || (guardingAnswer && !read.loading)) {
     setReadShown(read.value);
-    setShown({ value: read.value });
+    if (!guardingAnswer || !read.loading) {
+      setShown({ value: read.value });
+      if (guardingAnswer) {
+        setGuardingAnswer(false);
+      }
+    }
   }
 
   useEffect(() => {
@@ -50,9 +57,18 @@ export function useActedOn<T>(
   };
 
   const changing = useAction<T>((answer) => {
+    if (read.loading) {
+      setGuardingAnswer(true);
+      reloadRead();
+    }
     setShown({ value: answer });
     after.answered?.(answer);
   }, refused);
 
-  return { shown: shown.value, changing, refused };
+  return {
+    shown: shown.value,
+    showingAnswerWhileReading: guardingAnswer && read.loading,
+    changing,
+    refused,
+  };
 }

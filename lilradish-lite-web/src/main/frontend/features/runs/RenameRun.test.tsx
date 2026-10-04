@@ -22,13 +22,15 @@ const LIMIT =
 const SENT = {
   runId: RUN_ID,
   number: 7,
-  name: "Claim from Ada",
+  name: "Claim from Avo",
   workflow: {
     entryId: "00000006-0000-4000-8000-000000000c71",
     name: "Handle a claim",
     version: 3,
   },
+  runsAbove: [],
   startedAt: "2026-09-24T08:00:00Z",
+  conversationEvents: [],
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
@@ -85,7 +87,7 @@ describe("RenameRun", () => {
   it("opens holding the name as it stands, and offers no rename until it is another", () => {
     renaming();
 
-    expect(nameBox()).toHaveValue("Claim from Ada");
+    expect(nameBox()).toHaveValue("Claim from Avo");
     expect(document.activeElement).toBe(nameBox());
     expect(rename()).toHaveAttribute("aria-disabled", "true");
     expect(rename()).toHaveAccessibleDescription("Change the name first.");

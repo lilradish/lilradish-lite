@@ -48,6 +48,8 @@ class ForeignProseSpec extends Specification {
     static final String EM_SPACE = Character.toString(0x2003)
     static final String IDEOGRAPHIC_SPACE = Character.toString(0x3000)
     static final String ACUTE = Character.toString(0x0301)
+    static final String HANGUL_FILLER = Character.toString(0x3164)
+    static final String HALFWIDTH_HANGUL_FILLER = Character.toString(0xFFA0)
     static final String GRINNING = Character.toString(0x1F600)
     static final String ALEF = Character.toString(0x05D0)
     static final String LAST_BEFORE_TAGS = Character.toString(0xDFFFF)
@@ -69,6 +71,7 @@ class ForeignProseSpec extends Specification {
                  "a" + LEFT_TO_RIGHT_MARK + "b" + ARABIC_LETTER_MARK + "c",
                  GRINNING + ZERO_WIDTH_JOINER + GRINNING + ZERO_WIDTH_NON_JOINER,
                  "limit" + NO_BREAK_SPACE + "reached",
+                 "a" + HANGUL_FILLER + "b" + HALFWIDTH_HANGUL_FILLER,
                  "x" + LAST_BEFORE_TAGS + FIRST_AFTER_TAGS]
     }
 
@@ -79,7 +82,8 @@ class ForeignProseSpec extends Specification {
         where:
         said << [null, "", " ", " \t\n ", "\r\n", NUL + LINE_SEPARATOR, ZERO_WIDTH_JOINER + LEFT_TO_RIGHT_MARK,
                  LANGUAGE_TAG + TAG_LATIN_SMALL_A + CANCEL_TAG, HIGH + " " + LOW, NO_BREAK_SPACE, EM_SPACE,
-                 IDEOGRAPHIC_SPACE, " " * MOST_KEPT + "hidden past the cut"]
+                 IDEOGRAPHIC_SPACE, HANGUL_FILLER, HALFWIDTH_HANGUL_FILLER,
+                 " " * MOST_KEPT + "hidden past the cut"]
     }
 
     def "an error with nothing readable left says so in a fixed sentence, which was not cut"() {
@@ -93,6 +97,7 @@ class ForeignProseSpec extends Specification {
         where:
         detail << ["", " \t\n ", "\r\n", NUL + LINE_SEPARATOR, ZERO_WIDTH_JOINER + RIGHT_TO_LEFT_OVERRIDE,
                    LANGUAGE_TAG + TAG_LATIN_SMALL_A, NO_BREAK_SPACE, EM_SPACE, IDEOGRAPHIC_SPACE,
+                   HANGUL_FILLER, HALFWIDTH_HANGUL_FILLER,
                    " " * MOST_KEPT + "hidden past the cut"]
     }
 

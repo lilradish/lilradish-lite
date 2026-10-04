@@ -2,6 +2,7 @@ package org.lilradish.lite.domain.declaration;
 
 import static java.util.Objects.requireNonNull;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -86,13 +87,28 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
     }
 
     /**
-     * Every field not holding as submitting requires, in the order the half reads, each field's problems in the order
-     * {@link ContentProblemCode} declares; each term counting as its list's longest, a missing list offering none.
+     * Every field's structural and pinned-list problems, without current deployment file limits, in reading and
+     * {@link ContentProblemCode} order; each term counts as its list's longest, a missing list offering none.
      */
     public List<FieldProblem> problems(Map<EntryVersionId, OfferedTerms> terms) {
+        return problems(terms, Long.MAX_VALUE, Integer.MAX_VALUE, false);
+    }
+
+    /** Every field problem, including file limits of the deployment judging this declaration. */
+    public List<FieldProblem> problems(
+            Map<EntryVersionId, OfferedTerms> terms, long maximumFileBytes, int maximumFilesPerField) {
+        return problems(terms, maximumFileBytes, maximumFilesPerField, false);
+    }
+
+    /** Every field problem, also refusing files taken by a question when that is the host. */
+    public List<FieldProblem> problems(
+            Map<EntryVersionId, OfferedTerms> terms,
+            long maximumFileBytes,
+            int maximumFilesPerField,
+            boolean questionTakes) {
         requireNonNull(terms, "Declaration terms must not be null");
         List<FieldProblem> found = new ArrayList<>();
-        walk(fields, new int[MOST_LEVELS], 0, terms, found);
+        walk(fields, new int[MOST_LEVELS], 0, terms, maximumFileBytes, maximumFilesPerField, questionTakes, found);
         return List.copyOf(found);
     }
 
@@ -103,6 +119,49 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
     public long longestWritten(Map<EntryVersionId, OfferedTerms> terms) {
         requireNonNull(terms, "Declaration terms must not be null");
         return object(fields, terms);
+    }
+
+    /** Whether any field at any depth holds a file. */
+    public boolean hasFile() {
+        return hasFile(fields);
+    }
+
+    private static boolean hasFile(List<Field> level) {
+        for (Field field : level) {
+            if (field.shape() instanceof FieldShape.File) {
+                return true;
+            }
+            if (field.shape() instanceof FieldShape.Nested nested && hasFile(nested.fields())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether every file at its bound, with every surrounding many multiplied through, exceeds one handover. */
+    public boolean filesPastTotal(long maximumTotalBytes) {
+        if (maximumTotalBytes < 1) {
+            throw new IllegalArgumentException("Declaration maximum total file size must be positive");
+        }
+        return fileBytes(fields).compareTo(BigInteger.valueOf(maximumTotalBytes)) > 0;
+    }
+
+    private static BigInteger fileBytes(List<Field> level) {
+        BigInteger total = BigInteger.ZERO;
+        for (Field field : level) {
+            BigInteger one =
+                    switch (field.shape()) {
+                        case FieldShape.File file ->
+                            file.maximumBytes() == null ? BigInteger.ZERO : BigInteger.valueOf(file.maximumBytes());
+                        case FieldShape.Nested nested -> fileBytes(nested.fields());
+                        default -> BigInteger.ZERO;
+                    };
+            if (field.howMany() instanceof HowMany.Many many) {
+                one = one.multiply(BigInteger.valueOf(many.most() == null ? 1 : many.most()));
+            }
+            total = total.add(one);
+        }
+        return total;
     }
 
     /** The fields it holds, at every depth together. */
@@ -125,7 +184,7 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
      * written out too long is found by, which is then left to what measures it.
      */
     public boolean holds() {
-        return !walk(fields, new int[MOST_LEVELS], 0, null, null);
+        return !walk(fields, new int[MOST_LEVELS], 0, null, Long.MAX_VALUE, Integer.MAX_VALUE, false, null);
     }
 
     /** The fields counted, this level's and every level's below. */
@@ -160,12 +219,15 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
             int[] at,
             int depth,
             @Nullable Map<EntryVersionId, OfferedTerms> terms,
+            long maximumFileBytes,
+            int maximumFilesPerField,
+            boolean questionTakes,
             @Nullable List<FieldProblem> found) {
         for (int index = 0; index < level.size(); index++) {
             Field field = level.get(index);
             at[depth] = index;
             for (ContentProblemCode code : CODES) {
-                if (has(code, field, level, index, terms)) {
+                if (has(code, field, level, index, terms, maximumFileBytes, maximumFilesPerField, questionTakes)) {
                     if (found == null) {
                         return true;
                     }
@@ -177,7 +239,15 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
                 }
             }
             if (field.shape() instanceof FieldShape.Nested nested
-                    && walk(nested.fields(), at, depth + 1, terms, found)) {
+                    && walk(
+                            nested.fields(),
+                            at,
+                            depth + 1,
+                            terms,
+                            maximumFileBytes,
+                            maximumFilesPerField,
+                            questionTakes,
+                            found)) {
                 return true;
             }
         }
@@ -189,12 +259,26 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
             Field field,
             List<Field> level,
             int index,
-            @Nullable Map<EntryVersionId, OfferedTerms> terms) {
+            @Nullable Map<EntryVersionId, OfferedTerms> terms,
+            long maximumFileBytes,
+            int maximumFilesPerField,
+            boolean questionTakes) {
         return switch (code) {
             case NAME_REPEATED -> named(level, index);
             case LONGEST_MISSING -> field.shape() instanceof FieldShape.Text text && text.longest() == null;
+            case FILE_SIZE_MISSING -> field.shape() instanceof FieldShape.File file && file.maximumBytes() == null;
+            case FILE_TYPES_TOO_MANY ->
+                field.shape() instanceof FieldShape.File file
+                        && !FieldShape.File.typesFit(file.types().size());
+            case QUESTION_TAKES_FILE -> questionTakes && field.shape() instanceof FieldShape.File;
             case LIST_MISSING -> field.shape() instanceof FieldShape.Term term && term.list() == null;
             case MOST_MISSING -> field.howMany() instanceof HowMany.Many many && many.most() == null;
+            case FILE_LIMIT_PAST_DEPLOYMENT ->
+                field.shape() instanceof FieldShape.File file
+                        && ((file.maximumBytes() != null && file.maximumBytes() > maximumFileBytes)
+                                || (field.howMany() instanceof HowMany.Many many
+                                        && many.most() != null
+                                        && many.most() > maximumFilesPerField));
             case LIMIT_PAST_LARGEST -> terms != null && value(field, terms) > MOST_SENT;
             case NO_FIELDS_HELD ->
                 field.shape() instanceof FieldShape.Nested nested
@@ -205,6 +289,8 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
                         && stands.standing() == FieldStanding.ABOVE_CONFIDENCE
                         && stands.floor() == null;
             case INSTRUCTION_MISSING,
+                    FILE_TOTAL_PAST_DEPLOYMENT,
+                    DRAWING_NAMES_UNKNOWN,
                     NOTHING_GIVEN_BACK,
                     NO_STEPS,
                     STEP_NAME_REPEATED,
@@ -223,13 +309,18 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
                     REVIEWER_NOT_HELD,
                     REVIEWER_MODE_NOT_OFFERED,
                     MODEL_GIVES_NOTHING,
+                    STEP_FILE_MADE_BY_MODEL,
+                    STEP_FILE_REVIEWED_BY_MODEL,
                     DISCRIMINATOR_MISSING,
                     DISCRIMINATOR_NOT_TERM,
                     NO_CASES,
                     CASE_TARGET_MISSING,
                     CASE_NOT_OFFERED,
                     CASE_REPEATED,
-                    CASE_GIVES_OTHERWISE,
+                    CASE_GIVES_UNDECLARED,
+                    CASE_GIVES_OTHER_KIND,
+                    CASE_GIVES_PAST_LIMIT,
+                    CASE_MAY_GIVE_NOTHING,
                     INPUT_UNBOUND,
                     TARGET_UNKNOWN,
                     TARGET_BOUND_TWICE,
@@ -250,8 +341,12 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
                     TERM_REPEATED,
                     ASKING_PAST_LARGEST,
                     TAKES_PAST_LARGEST,
-                    CODE_STEP_REVIEW_PAST_LARGEST ->
-                throw new IllegalStateException(code + " is not a field's own problem");
+                    CODE_STEP_REVIEW_PAST_LARGEST,
+                    SEARCH_REVIEW_PAST_LARGEST,
+                    SEARCH_TOOL_NOT_OFFERED,
+                    SEARCH_WAY_NOT_HELD,
+                    SEARCH_QUESTION_MAY_BE_EMPTY,
+                    SEARCH_STANDING_MISSING -> throw new IllegalStateException(code + " is not a field's own problem");
         };
     }
 
@@ -275,6 +370,7 @@ public record Declaration(DeclarationSide side, Demands demands, List<Field> fie
                     case FieldShape.Text text -> text.longest() == null ? 0 : QUOTES + text.longest();
                     case FieldShape.Term term -> term.list() == null ? 0 : longestTerm(terms.get(term.list()));
                     case FieldShape.Plain plain -> written(plain.kind().longestWritten());
+                    case FieldShape.File ignored -> 2048;
                     case FieldShape.Nested nested -> object(nested.fields(), terms);
                 };
         if (!(field.howMany() instanceof HowMany.Many many)) {

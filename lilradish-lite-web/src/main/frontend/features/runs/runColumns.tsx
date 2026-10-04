@@ -1,15 +1,13 @@
-import Box from "@mui/material/Box";
+import Typography from "@mui/material/Typography";
 
 import type { RunRow, RunSortColumn } from "../../api/groups/{groupId}/runs";
 import { say } from "../../i18n/app";
 import type { Ordering } from "../../lib/collection/ordering";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { Identifier } from "../../lib/text/Identifier";
 import { nameOrNumber } from "../../lib/text/names";
 import { When } from "../../lib/time/When";
-import { stateSaid } from "./runStates";
-
-/** What the table of runs sorts by: every order the server takes but what last happened, which heads no column. */
-type RunColumn = Exclude<RunSortColumn, "lastHappened">;
+import { RunStateBadge } from "./RunStateBadge";
 
 /** Every column the table of runs can be sorted by, closed over its columns in both directions. */
 export const RUNS_SORTABLE = {
@@ -18,31 +16,16 @@ export const RUNS_SORTABLE = {
   workflow: true,
   started: true,
   startedBy: true,
-} satisfies Record<RunColumn, true>;
+} satisfies Record<RunSortColumn, true>;
 
 /** On a column no row leaves empty, the newest first. */
-export const NEWEST_FIRST: Ordering<RunColumn> = {
+export const NEWEST_FIRST: Ordering<RunSortColumn> = {
   column: "started",
   descending: true,
 };
 
-/** The run something last happened in first, the order the runs are listed in as a conversation. */
-export const LAST_HAPPENED_FIRST: Ordering<RunSortColumn> = {
-  column: "lastHappened",
-  descending: true,
-};
-
-const KEY_SX = { typography: "identifier" };
-
-/** Where a run is, and the step a running one is on where the server named it. */
-export function listedWhereSaid(row: RunRow): string {
-  return row.state === "running" && row.at !== undefined
-    ? say("runState.runningAt", { step: isolatedInText(row.at) })
-    : stateSaid(row.state);
-}
-
 /** The workflow a run runs, and the version it ran. */
-export function workflowSaid(row: RunRow): string {
+function workflowSaid(row: RunRow): string {
   return say("run.workflowVersion", {
     name: isolatedInText(row.workflow.name),
     version: row.workflow.version,
@@ -55,15 +38,19 @@ export function runColumns(groupKey: string) {
     {
       label: say("work.run"),
       cell: (row: RunRow) => (
-        <Box component="span" sx={KEY_SX}>
-          {say("work.runKey", { key: groupKey, number: row.number })}
-        </Box>
+        <Identifier
+          value={say("work.runKey", { key: groupKey, number: row.number })}
+        />
       ),
       sortKey: "run",
     },
     {
       label: say("work.name"),
-      cell: (row: RunRow) => row.name,
+      cell: (row: RunRow) => (
+        <Typography component="strong" variant="subtitle1">
+          <bdi>{row.name}</bdi>
+        </Typography>
+      ),
       sortKey: "name",
     },
     {
@@ -83,7 +70,7 @@ export function runColumns(groupKey: string) {
     },
     {
       label: say("run.where"),
-      cell: listedWhereSaid,
+      cell: (row: RunRow) => <RunStateBadge state={row.state} at={row.at} />,
     },
   ] as const;
 }

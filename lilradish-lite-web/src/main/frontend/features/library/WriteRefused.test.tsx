@@ -73,7 +73,7 @@ describe("WriteRefused", () => {
     [
       "the act refused, as the rule writing asks",
       { status: 403, code: "ACT_NOT_PERMITTED" },
-      "A group's entries are started, written and submitted only by a role in it that may write one.",
+      "A group's entries are made, written and submitted only by a role in it that may write one.",
     ],
   ])("says %s and offers nothing to read afresh", (_case, problem, said) => {
     refusing(problem);

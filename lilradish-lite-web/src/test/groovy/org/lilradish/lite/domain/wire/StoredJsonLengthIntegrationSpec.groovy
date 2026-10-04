@@ -42,6 +42,7 @@ class StoredJsonLengthIntegrationSpec extends Specification {
 
     private int serverLength(String written) {
         server.postgresDatabase.connection.withCloseable { connection ->
+            // DB-SPECIFIC: PostgreSQL :: casts to text; jsonb type.
             connection.prepareStatement("select length(cast(? as jsonb)::text)").withCloseable { statement ->
                 statement.setString(1, written)
                 statement.executeQuery().withCloseable { result ->

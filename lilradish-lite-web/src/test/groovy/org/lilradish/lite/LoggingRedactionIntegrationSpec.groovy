@@ -6,9 +6,14 @@ import java.lang.constant.ClassDesc
 import java.nio.file.Path
 import java.time.Instant
 import org.libprunus.core.log.annotation.MaxMessageLength
+import org.libprunus.core.log.runtime.Loggable
+import org.lilradish.lite.app.inference.ConvertedCallAnswer
+import org.lilradish.lite.app.inference.SearchObservation
+import org.lilradish.lite.app.inference.ToolCallOutcome
 import org.lilradish.lite.app.run.EngineWrites
 import org.lilradish.lite.app.run.PendingCall
 import org.lilradish.lite.app.run.PendingSend
+import org.lilradish.lite.app.run.StepAnswers
 import org.lilradish.lite.app.run.StepReading
 import org.lilradish.lite.domain.codestep.CodeCall
 import org.lilradish.lite.domain.codestep.CodeError
@@ -43,9 +48,11 @@ import org.lilradish.lite.domain.inference.Payload
 import org.lilradish.lite.domain.inference.ProductionAnswer
 import org.lilradish.lite.domain.inference.ReviewAnswer
 import org.lilradish.lite.domain.inference.TurnAway
+import org.lilradish.lite.domain.listing.ListFilter
 import org.lilradish.lite.domain.model.DeployedModel
 import org.lilradish.lite.domain.model.ModelMode
 import org.lilradish.lite.domain.model.ModelName
+import org.lilradish.lite.domain.model.ModelToolName
 import org.lilradish.lite.domain.model.SentText
 import org.lilradish.lite.domain.registry.EntryVersionId
 import org.lilradish.lite.domain.run.DecisionRecord
@@ -54,17 +61,22 @@ import org.lilradish.lite.domain.run.ModelCallId
 import org.lilradish.lite.domain.run.ProductionId
 import org.lilradish.lite.domain.run.ProductionValueId
 import org.lilradish.lite.domain.run.ReviewOutcome
+import org.lilradish.lite.domain.run.ReviewPayload
 import org.lilradish.lite.domain.run.ReviewRecord
 import org.lilradish.lite.domain.run.RunId
+import org.lilradish.lite.domain.run.RunInTree
 import org.lilradish.lite.domain.run.RunSnapshot
 import org.lilradish.lite.domain.run.RunStepFailureId
 import org.lilradish.lite.domain.run.RunStepSendAttemptId
 import org.lilradish.lite.domain.run.RunnableWorkflow
 import org.lilradish.lite.domain.run.StepInputs
+import org.lilradish.lite.domain.run.StepPosition
+import org.lilradish.lite.domain.run.StepSnapshot
 import org.lilradish.lite.domain.run.TryLostReason
 import org.lilradish.lite.domain.run.TryRecord
 import org.lilradish.lite.domain.run.ValueRecord
 import org.lilradish.lite.domain.run.WorkflowStepId
+import org.lilradish.lite.domain.run.fixture.Runs
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.domain.workflow.Binding
 import org.lilradish.lite.domain.workflow.BindingSource
@@ -74,20 +86,7 @@ import org.lilradish.lite.domain.workflow.StepProducer
 import org.lilradish.lite.testutil.codestep.SpecCodeStep
 import spock.lang.Specification
 
-/**
- * What redacts these is a build-time rewrite driven by the suffix list in {@link
- * AppLoggingConvention}, so a carrier can stop being matched — by a rename, or by being introduced
- * outside the list — with nothing failing. Every carrier is asserted here, from one place, because
- * the failure mode is silence.
- *
- * <p>Both directions matter: a rewrite that emitted nothing at all would pass every "does not
- * contain" on its own.
- *
- * <p>What discriminates is the head, because the record these types would render without the
- * rewrite carries the same values under its simple name and a square bracket. Field order within a
- * layer is not contractual, so each surviving slot is searched for as a whole {@code name=value}
- * pair — pairing the name with the value is what a rendering that fell back to a hash cannot pass.
- */
+/** AppLoggingConvention suffixes drive rewriting; assert redaction and readable identifiers to catch silent misses or empty output. */
 class LoggingRedactionIntegrationSpec extends Specification {
 
     static final RunId RUN = new RunId(UUID.fromString("44440000-0000-4000-8000-000000000001"))
@@ -108,17 +107,103 @@ class LoggingRedactionIntegrationSpec extends Specification {
     static final ProductionValueId A_VALUE =
             new ProductionValueId(UUID.fromString("44440000-0000-4000-8000-000000000008"))
 
-    /** Every slot past the identifying head of a try: what it gave back, how it was reviewed, and what it took. */
+
     static final List<String> PROVENANCE = ["values=", "reviews=", "inputs="]
 
     /** Read off the declaration rather than restated, so the budget and the cut cannot drift apart. */
     static final int BUDGET = declaredBudget()
 
+    def "the pinned rewrite matches every newly named sensitive carrier, including the nested binary name"() {
+        expect:
+        Loggable.isAssignableFrom(carrier)
+
+        where:
+        carrier << [ConvertedCallAnswer, ToolCallOutcome, SearchObservation, ListFilter, ReviewPayload.Built]
+    }
+
+    def "a converted answer drops both the answer and observations while keeping model counts and tool reports"() {
+        given:
+        def tool = new ModelToolName("web_search")
+        def observation = new SearchObservation(tool, "weather in Rome", "Sunny.")
+
+        when:
+        def rendered = new ConvertedCallAnswer('{"summary":"private result"}', 120L, 8L, true,
+                [(tool): 2L], [observation], reason,
+                reason == DidNotFitReason.MODEL_DECLINED ? 'private refusal' : null, 3L).toString()
+
+        then:
+        rendered == "ConvertedCallAnswer(sentCount=120, cameBackCount=8, cutOff=true, " +
+                "reportedUses={ModelToolName(value=web_search)=2}, didNotFitReason=${reason}, " +
+                "generatedToolCallCharacters=3)" as String
+
+        where:
+        reason << [null, DidNotFitReason.MODEL_DECLINED]
+    }
+
+    def "a tool call outcome drops the model answer and observations and keeps its safe ending and usage"() {
+        given:
+        def tool = new ModelToolName("web_search")
+        def outcome = new CallOutcome.CameBack(answer, 120L, 8L, true, false, reason,
+                reason == DidNotFitReason.MODEL_DECLINED ? 'private refusal' : null)
+
+        when:
+        def rendered = new ToolCallOutcome(outcome, [(tool): 2L],
+                [new SearchObservation(tool, "weather in Rome", "Sunny.")]).toString()
+
+        then:
+        rendered == "ToolCallOutcome(outcome=CallOutcome\$CameBack(sentCount=120, cameBackCount=8, " +
+                "countedByModel=true, cutOff=false, didNotFitReason=${reason}), " +
+                "reportedUses={ModelToolName(value=web_search)=2})" as String
+
+        where:
+        answer                                     | reason
+        '{"summary":"private provider response"}' | null
+        '{"summary":"private second response"}'   | null
+        '{"summary":"private provider response"}' | DidNotFitReason.MODEL_DECLINED
+    }
+
+    def "a search observation drops absent and present text while retaining which tool observed it"() {
+        when:
+        def rendered = new SearchObservation(new ModelToolName("web_search"), searchedFor, found).toString()
+
+        then:
+        rendered == 'SearchObservation(tool=ModelToolName(value=web_search))'
+
+        where:
+        searchedFor       | found
+        "weather in Rome" | "Sunny."
+        null              | "Sunny."
+        "weather in Rome" | null
+        null              | null
+    }
+
+    def "typed filters and built review payloads have complete safe renderings"() {
+        expect:
+        new ListFilter("private search words").toString() == 'ListFilter()'
+        new ReviewPayload.Built(new JsonValue.JsonObject([
+                new JsonValue.JsonMember("summary", new JsonValue.JsonString("private result"))])).toString() == 'ReviewPayload$Built()'
+    }
+
+    def "explicitly unwoven tree wrappers expose only identifiers, never the nested run or position"() {
+        given:
+        def step = Runs.unstarted(Runs.question(1, Runs.person(), 1))
+        def run = Runs.run([step], false, null, [text: "private starting words"])
+        def from = new StepSnapshot(Runs.workflowStep(1), null, null, null, [], [],
+                new StepSnapshot.Beneath(run, null), [:])
+        def above = Runs.run([from], false, null, [text: "private parent words"])
+
+        expect:
+        new RunInTree(run, RunInTree.root(above), from).toString() ==
+                "RunInTree[run=${run.run().value()}]" as String
+        new StepPosition.Beneath(run, step, new StepPosition.NotStarted()).toString() ==
+                "Beneath[run=${run.run().value()}, at=${step.planned().id().value()}]" as String
+    }
+
     private static ValueRecord summary(ProductionValueId id, String said) {
         new ValueRecord(id, "summary", new JsonValue.JsonString(said), null, true)
     }
 
-    /** The value a step gave back is what every later step binds, and what a review decides on. */
+
     def "a value a try gave back renders which field it is of and whether it waits on a review, and drops what it holds"() {
         when:
         def rendered = summary(A_VALUE, "invoice 4471 was refused").toString()
@@ -134,6 +219,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains('id=ProductionValueId(value=44440000-0000-4000-8000-000000000008)')
         rendered.contains('field=summary')
         rendered.contains('needsReview=true')
+        rendered == 'ValueRecord(id=ProductionValueId(value=44440000-0000-4000-8000-000000000008), field=summary, confidence=null, needsReview=true)'
     }
 
     def "a decision drops the words a value was refused with and keeps what it decided of which value"() {
@@ -148,28 +234,38 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.startsWith('DecisionRecord(')
         rendered.contains('value=ProductionValueId(value=44440000-0000-4000-8000-000000000008)')
         rendered.contains('outcome=REFUSED')
+        rendered == 'DecisionRecord(value=ProductionValueId(value=44440000-0000-4000-8000-000000000008), outcome=REFUSED)'
     }
 
-    /** A person's reason for what they said, and what code said went wrong, are both somebody's words. */
+
     def "a try renders what it is and who made it, and drops why they said it and what code said or gave back"() {
         given:
         def answered = new TryRecord(A_TRY, 2, StepProducer.PERSON, null, DECIDED_AT, DECIDED_AT, OVERSEER,
                 "the buyer's address, not the shipper's", null, null, null, false, null, [], [], [], [], [])
-        def lost = new TryRecord(A_TRY, 1, StepProducer.CODE, null, DECIDED_AT, DECIDED_AT, null, null,
-                TryLostReason.DID_NOT_FIT, null, "invoice 4471 was refused upstream", true, '{"total":"1234.50"}', [],
-                [], [], [], [])
+        def lost = new TryRecord(A_TRY, 1, StepProducer.MODEL, null, DECIDED_AT, DECIDED_AT, null, null,
+                TryLostReason.DID_NOT_FIT, null, null, false, null, [], [], [], [], [])
+        def codeSaid = new TryRecord(A_TRY, 1, StepProducer.CODE, null, DECIDED_AT, DECIDED_AT, null, null,
+                TryLostReason.ERRORED, null, "invoice 4471 was refused upstream", true, null, [], [], [], [], [])
+        def codeReturned = new TryRecord(A_TRY, 1, StepProducer.CODE, null, DECIDED_AT, DECIDED_AT, null, null,
+                TryLostReason.ERRORED, new CodeError.Fault(CodeErrorReason.TOO_LONG, [new FieldName("total")], null, null),
+                null, false, '{"total":"1234.50"}', [], [], [], [], [])
 
         when:
         def renderedAnswered = answered.toString()
         def renderedLost = lost.toString()
+        def renderedSaid = codeSaid.toString()
+        def renderedReturned = codeReturned.toString()
 
         then:
         !renderedAnswered.contains("shipper's")
-        !renderedLost.contains("invoice 4471")
-        !renderedLost.contains("1234.50")
+        [renderedLost, renderedSaid, renderedReturned].every {
+            !it.contains("invoice 4471") && !it.contains("1234.50")
+        }
 
         and: "the slots they were in gone rather than emptied"
-        ["explanation=", "lostDetail=", "returned="].every { !renderedAnswered.contains(it) && !renderedLost.contains(it) }
+        ["explanation=", "lostDetail=", "returned="].every { slot ->
+            [renderedAnswered, renderedLost, renderedSaid, renderedReturned].every { !it.contains(slot) }
+        }
 
         and: "under a head a record cannot emit, naming the try and who made it"
         renderedAnswered.startsWith('TryRecord(')
@@ -180,15 +276,18 @@ class LoggingRedactionIntegrationSpec extends Specification {
 
         and: "and how the lost one ended, which is what a line about it is read for"
         renderedLost.contains('lost=DID_NOT_FIT')
-        renderedLost.contains('lostDetailCut=true')
+        renderedSaid.contains('lost=ERRORED')
+        renderedSaid.contains('lostDetailCut=true')
+        renderedReturned.contains('lost=ERRORED')
     }
 
-    /** The member's name is whatever the code wrote, which may repeat what it took; why and where are this system's. */
+
     def "a try of code gone wrong for this system's reason renders the reason and where, and drops the member it names"() {
         given:
         def aTry = new TryRecord(A_TRY, 1, StepProducer.CODE, null, DECIDED_AT, DECIDED_AT, null, null,
                 TryLostReason.ERRORED,
-                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [new FieldName("lines")], "invoice_4471", null), null,
+                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [new FieldName("lines")],
+                        new CodeError.UndeclaredMember("invoice_4471", false), null), null,
                 false, null, [], [], [], [], [])
 
         when:
@@ -206,7 +305,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         !rendered.contains("Fault@")
     }
 
-    /** Which step or output reads what no longer matches is this system's own, and is what a line about it is read for. */
+
     def "code gone wrong as giving otherwise renders what reads the field, a step by its key and an output by its field"() {
         when:
         def rendered = new CodeError.Fault(CodeErrorReason.GIVES_OTHERWISE, [new FieldName("receipt")], null, readBy)
@@ -224,7 +323,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         new CodeError.OutputReads([new FieldName("result")])                             || 'readBy=CodeError$OutputReads(' | 'FieldName(value=result)'
     }
 
-    /** What a run was started with is whatever somebody filled in; the version it runs is only a lookup away. */
+
     def "a run as the engine reads it renders which run it is and drops what it was started with"() {
         given:
         def nothing = { DeclarationSide side -> new Declaration(side, Demands.ofWorkflow(side), []) }
@@ -255,7 +354,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
                 UUID.fromString("44440000-0000-4000-8000-00000000000a"),
                 Pointer.parse("text"),
                 new BindingSource.Written(new JsonValue.JsonString("constant 9120")))
-        def bound = new StepInputs.BindingRecord(binding, new JsonValue.JsonString("invoice 4471"), A_VALUE)
+        def bound = new StepInputs.BindingRecord(binding, new JsonValue.JsonString("invoice 4471"), A_VALUE, [A_VALUE])
 
         when:
         def rendered = bound.toString()
@@ -264,11 +363,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered == 'StepInputs$BindingRecord(source=ProductionValueId(value=44440000-0000-4000-8000-000000000008))'
     }
 
-    /**
-     * One entry in the suffix list stands for every id, so a type named outside it is traced by
-     * nothing: the fallback is a class name and an identity hash, which names neither the run a
-     * line is about nor the person a decision is charged to.
-     */
+    /** Identifiers must remain readable so a logged act can be traced. */
     def "the identifiers a line has to be traced by are readable rather than identity hashes"() {
         expect:
         RUN.toString() == "RunId(value=44440000-0000-4000-8000-000000000001)"
@@ -279,7 +374,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         new UserId("overseer@example.com").toString() == "UserId(value=overseer@example.com)"
     }
 
-    /** The constants are fields of its own type: a rendering that took statics in would nest itself. */
+
     def "a system actor renders who it acts as"() {
         when:
         def rendered = SystemPrincipal.WORKFLOW_RUNNER.toString()
@@ -294,12 +389,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         !rendered.contains("WORKFLOW_RUNNER")
     }
 
-    /**
-     * A delegation is two subjects at once — the label that acted and the owner the call is charged
-     * to — and neither is a field of its own: both sit inside the registration, one level down. So
-     * does where it may be exercised, and a group is named by an identifier alone, so a line naming
-     * neither the identifier nor the kind of scope names no place at all.
-     */
+
     def "a delegation renders what acted, who it is charged to, where, and what it was bounded to"() {
         given:
         def owner = HumanPrincipal.of(OVERSEER, [] as Set, [(FINANCE): [GroupRole.OVERSEER] as Set])
@@ -346,17 +436,13 @@ class LoggingRedactionIntegrationSpec extends Specification {
         BUDGET - rendered.length() == 60
     }
 
-    /** How sure a model was is a type of its own, readable only if it was matched as well. */
+
     def "how sure a model was renders as the figure rather than an identity hash"() {
         expect:
         new Confidence(90).toString() == 'Confidence(percent=90)'
     }
 
-    /**
-     * A try carrying what it gave back, its review and what it took is a screen, not a log line:
-     * populated, it renders past the message budget and the runtime cuts the tail, which is where
-     * those are. What survives is the head — the identifiers the dropped slots can be looked up by.
-     */
+    /** Log only the identifying head: populated payloads exceed the message budget and cause tail truncation. */
     def "a fully reviewed try renders past the budget, keeping its identifiers and losing its tail"() {
         given: "every component one try can carry at once"
         def second = new ProductionValueId(UUID.fromString("44440000-0000-4000-8000-00000000000b"))
@@ -392,7 +478,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         !rendered.contains("buyer's address")
     }
 
-    /** Both texts carry what a run holds, or what a model is told to do with it. */
+
     def "what a call sends renders how long it is and neither of its texts"() {
         when:
         def rendered = SentText.measure("answer as the envelope says", '{"instruction":"total the invoice"}').toString()
@@ -408,10 +494,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         !rendered.contains('user=')
     }
 
-    /**
-     * Not matched itself, so it renders as a record does; what keeps the texts out is the value it
-     * holds, which renders their length alone.
-     */
+    /** The unmatched carrier stays safe because its nested value renders only the text length. */
     def "a request renders which model it asks and how much it sends, and never what"() {
         given:
         def model = new DeployedModel(new ModelName("sample_model"), [new ModelMode("research")], 200000,
@@ -432,10 +515,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains("sent=SentText(characters=23)")
     }
 
-    /**
-     * Not matched either, on purpose: what it would send is held only by the request inside it, and so renders as
-     * its length alone.
-     */
+    /** The unmatched request stays safe because its nested text renders only its length. */
     def "a call written down as sent renders which call it is and how much it sends, and never what"() {
         given:
         def model = new DeployedModel(new ModelName("sample_model"), [], 200000, new BigDecimal("4"), 8192, [])
@@ -459,7 +539,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains("call=ModelCallId(value=${call.call().value()})")
     }
 
-    /** What it reads an answer against names fields and the keys of the values decided, never what they hold. */
+
     def "a call to review renders which values it decides by field and key, and never what they hold"() {
         given:
         def model = new DeployedModel(new ModelName("sample_model"), [], 200000, new BigDecimal("4"), 8192, [])
@@ -483,11 +563,11 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains("ProductionValueId(value=${A_VALUE.value()})")
     }
 
-    /** Handed over before anything of it is written, so the keys it names are all there is to render. */
+
     def "a send handed over renders the keys it names, and nothing besides"() {
         given:
         def send = new PendingSend(new GroupId(UUID.randomUUID()), new RunId(UUID.randomUUID()),
-                new RunId(UUID.randomUUID()), new WorkflowStepId(UUID.randomUUID()), 2, purpose, presser, attemptOn,
+                new RunId(UUID.randomUUID()), new WorkflowStepId(UUID.randomUUID()), new ProductionId(UUID.randomUUID()), purpose, presser, attemptOn,
                 failedOn)
 
         when:
@@ -496,7 +576,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         then:
         rendered == ("PendingSend[group=GroupId(value=${send.group().value()}), " +
                 "root=RunId(value=${send.root().value()}), run=RunId(value=${send.run().value()}), " +
-                "step=WorkflowStepId(value=${send.step().value()}), number=2, purpose=${purpose}, ${said}]") as String
+                "step=WorkflowStepId(value=${send.step().value()}), aTry=ProductionId(value=${send.aTry().value()}), purpose=${purpose}, ${said}]") as String
 
         where:
         purpose                  | presser                            | attemptOn                                                                          | failedOn                                                                       || said
@@ -508,7 +588,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         ModelCallPurpose.REVIEW  | new UserId("overseer@example.com") | null                                                                               | new RunStepFailureId(UUID.fromString("00000012-0000-4000-8000-000000000002")) || "presser=UserId(value=overseer@example.com), attemptOn=null, failedOn=RunStepFailureId(value=00000012-0000-4000-8000-000000000002)"
     }
 
-    /** What a try sent, read back to be sent again word for word, holds whatever the run was started with. */
+
     def "what was sent, read back to be sent again, renders the attempt holding it and its envelope, and drops what it holds"() {
         given:
         def attempt = new RunStepSendAttemptId(UUID.fromString("44440000-0000-4000-8000-000000000010"))
@@ -525,14 +605,17 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.startsWith('EngineWrites$SentRecord(')
         rendered.contains("attempt=RunStepSendAttemptId(value=${attempt.value()})")
         rendered.contains("envelopeVersion=2")
+        rendered == "EngineWrites\$SentRecord(attempt=RunStepSendAttemptId(value=${attempt.value()}), envelopeVersion=2)" as String
     }
 
     def "an answer that came back renders what was counted and drops the answer"() {
         when:
-        def rendered = new CallOutcome.CameBack('{"total":"1234.50"}', 120, 8, true, false).toString()
+        def rendered = new CallOutcome.CameBack('{"total":"1234.50"}', 120, 8, true, false, reason,
+                reason == DidNotFitReason.MODEL_DECLINED ? 'private refusal' : null).toString()
 
         then:
         !rendered.contains("1234.50")
+        !rendered.contains("private refusal")
         !rendered.contains("answer=")
 
         and: "under a head only the rewrite emits"
@@ -541,12 +624,18 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains("cameBackCount=8")
         rendered.contains("countedByModel=true")
         rendered.contains("cutOff=false")
+        rendered == "CallOutcome\$CameBack(sentCount=120, cameBackCount=8, countedByModel=true, " +
+                "cutOff=false, didNotFitReason=${reason})" as String
+
+        where:
+        reason << [null, DidNotFitReason.MODEL_DECLINED, DidNotFitReason.NOT_THE_SHAPE]
     }
 
-    /** Foreign text, not yet made safe to show, and free to repeat whatever was sent. */
+
     def "an error renders that it went wrong and drops what the other side said"() {
         expect:
-        new CallOutcome.Errored("invoice 4471 was refused upstream").toString() == 'CallOutcome$Errored()'
+        new CallOutcome.Errored("invoice 4471 was refused upstream",
+                KeptAnswer.of("private service response")).toString() == 'CallOutcome$Errored()'
     }
 
     def "a turnaway renders whether it was used up and drops what the model said"() {
@@ -560,12 +649,9 @@ class LoggingRedactionIntegrationSpec extends Specification {
         and: "under a head only the rewrite emits"
         rendered.startsWith("TurnAway(")
         rendered.contains("spentUp=true")
+        rendered == 'TurnAway(spentUp=true)'
     }
 
-    /**
-     * Not matched itself, so it renders as a record does; what keeps the words out is the turnaway it
-     * holds, which renders without them.
-     */
     def "a call turned away renders the turnaway that ended it without what the model said"() {
         when:
         def rendered = new CallOutcome.TurnedAway(new TurnAway("quota spent for account 88", true)).toString()
@@ -577,12 +663,25 @@ class LoggingRedactionIntegrationSpec extends Specification {
         and:
         rendered.contains("last=TurnAway(")
         rendered.contains("spentUp=true")
+        rendered == 'CallOutcome$TurnedAway(last=TurnAway(spentUp=true))'
     }
 
-    /** What a step's page reads of a model's lost try: the words its call went wrong in are the model side's. */
+    def "tool call endings without answers keep each complete safe ending and no response or observations"() {
+        expect:
+        new ToolCallOutcome(outcome, [:], []).toString() ==
+                "ToolCallOutcome(outcome=${ending}, reportedUses={})" as String
+
+        where:
+        outcome                                                      || ending
+        new CallOutcome.TurnedAway(new TurnAway("private quota", true)) || 'CallOutcome$TurnedAway(last=TurnAway(spentUp=true))'
+        new CallOutcome.NotResent()                                   || 'CallOutcome$NotResent()'
+        new CallOutcome.Errored("private provider error", null)         || 'CallOutcome$Errored()'
+    }
+
+
     def "why a model lost a try renders which way it did not fit and whether the words were cut, and drops the words"() {
         when:
-        def rendered = new StepReading.LostRecord(DidNotFitReason.CUT_OFF, "invoice 4471 was refused upstream", true)
+        def rendered = new StepReading.LostRecord(DidNotFitReason.CUT_OFF, "invoice 4471 was refused upstream", true, false)
                 .toString()
 
         then:
@@ -593,6 +692,22 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.startsWith('StepReading$LostRecord(')
         rendered.contains("didNotFit=CUT_OFF")
         rendered.contains("wentWrongCut=true")
+        rendered == 'StepReading$LostRecord(didNotFit=CUT_OFF, wentWrongCut=true, unreadableResponsePresent=false)'
+    }
+
+    def "unreadable response records render flags but never their kept service text"() {
+        when:
+        def rendered = carrier.toString()
+
+        then:
+        !rendered.contains('Demo Sample private envelope')
+        !rendered.contains('text=')
+        !rendered.contains('altered=')
+        !rendered.contains('truncated=')
+
+        where:
+        carrier << [new StepReading.UnreadableRecord('Demo Sample private envelope', true, false),
+                    new StepAnswers.UnreadableResponseRecord('Demo Sample private envelope', true, false)]
     }
 
     def "a turnaway a step's page reads renders which attempt it was of and what became of it, and drops what was said"() {
@@ -612,6 +727,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains("attempt=RunStepSendAttemptId(value=${attempt.value()})")
         rendered.contains("saidCut=true")
         rendered.contains("sentAgain=false")
+        rendered == "StepReading\$TurnawayRecord(attempt=RunStepSendAttemptId(value=${attempt.value()}), at=${DECIDED_AT}, saidCut=true, sentAgain=false)" as String
     }
 
     /** Cleaned to be shown, not to be logged: it can still repeat whatever was sent. */
@@ -626,6 +742,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         and: "under a head only the rewrite emits"
         rendered.startsWith("ForeignProse(")
         rendered.contains("truncated=true")
+        rendered == 'ForeignProse(truncated=true)'
     }
 
     def "what is kept of an answer renders whether it was altered and drops the answer"() {
@@ -639,9 +756,10 @@ class LoggingRedactionIntegrationSpec extends Specification {
         and: "under a head only the rewrite emits"
         rendered.startsWith("KeptAnswer(")
         rendered.contains("altered=true")
+        rendered == 'KeptAnswer(altered=true, truncated=false)'
     }
 
-    /** Both maps are the model's: its values, and how sure it said it was, keyed by what was declared. */
+
     def "values a model produced render as produced and drop both the values and how sure it was"() {
         when:
         def rendered = new ProductionAnswer.Produced(
@@ -725,13 +843,14 @@ class LoggingRedactionIntegrationSpec extends Specification {
 
         and: "under a head only the rewrite emits"
         rendered.startsWith('FilledFields(')
+        rendered == 'FilledFields()'
     }
 
-    /** What code takes is whatever the run was filled in with; what it declares and the terms offered are a lookup away. */
+
     def "a call to a code step renders which code step it runs and drops what it takes, declares and is offered"() {
         when:
         def rendered = new CodeCall(new CodeStepName("send_reply"), SpecCodeStep.SEND_REPLY.declaration(), [:],
-                new JsonValue.JsonObject([new JsonValue.JsonMember("reply", new JsonValue.JsonString("invoice 4471 was refused"))]))
+                new JsonValue.JsonObject([new JsonValue.JsonMember("reply", new JsonValue.JsonString("invoice 4471 was refused"))]), [:])
                 .toString()
 
         then:
@@ -741,6 +860,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         and: "under a head only the rewrite emits, naming the code step"
         rendered.startsWith('CodeCall(')
         rendered.contains('name=CodeStepName(value=send_reply)')
+        rendered == 'CodeCall(name=CodeStepName(value=send_reply))'
     }
 
     def "values code gave back render as given and drop them"() {
@@ -772,9 +892,10 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains('name=FieldName(value=tier)')
         rendered.contains('standing=ABOVE_CONFIDENCE')
         rendered.contains('floor=80')
+        rendered == 'CodeOutcome$Given(name=FieldName(value=tier), standing=ABOVE_CONFIDENCE, floor=80)'
     }
 
-    /** Matched by the same suffix as a value code gave back: it holds nothing to hide, and renders what it holds. */
+
     def "whether a declared field must be given renders as it is, under a head only the rewrite emits"() {
         when:
         def rendered = new Demand.Given(true).toString()
@@ -783,27 +904,34 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered == 'Demand$Given(mustBe=true)'
     }
 
-    /** What went wrong is the code's own words, and what it gave back is its own; both may repeat what it took. */
+
     def "code gone wrong renders whether what it said was cut and drops what it said and what it gave back"() {
         when:
         def rendered = new CodeOutcome.Errored(
                 new CodeError.Said(ForeignProse.errorDetail("invoice 4471 was refused upstream " + "a" * 2048)),
+                null).toString()
+        def returned = new CodeOutcome.Errored(
+                new CodeError.Fault(CodeErrorReason.TOO_LONG, [new FieldName("total")], null, null),
                 '{"total":"1234.50"}').toString()
 
         then:
         !rendered.contains("invoice 4471")
         !rendered.contains("1234.50")
-        ["text=", "returned="].every { !rendered.contains(it) }
+        !returned.contains("1234.50")
+        ["text=", "returned="].every { !rendered.contains(it) && !returned.contains(it) }
 
         and: "under a head only the rewrite emits, what it said rendered a level down as prose renders"
         rendered.startsWith('CodeOutcome$Errored(')
         rendered.contains('wentWrong=CodeError$Said(detail=ForeignProse(truncated=true))')
+        rendered == 'CodeOutcome$Errored(wentWrong=CodeError$Said(detail=ForeignProse(truncated=true)))'
+        returned == 'CodeOutcome$Errored(wentWrong=CodeError$Fault(reason=TOO_LONG, path=[FieldName(value=total)], readBy=null))'
     }
 
     def "code gone wrong for this system's reason renders the reason and where, and drops the member and what it gave back"() {
         when:
         def rendered = new CodeOutcome.Errored(
-                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [new FieldName("lines")], "invoice_4471", null),
+                new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [new FieldName("lines")],
+                        new CodeError.UndeclaredMember("invoice_4471", false), null),
                 '{"lines":[{"invoice_4471":"1234.50"}]}').toString()
 
         then:
@@ -818,10 +946,7 @@ class LoggingRedactionIntegrationSpec extends Specification {
         rendered.contains('FieldName(value=lines)')
     }
 
-    /*
-     * @MaxMessageLength is CLASS-retained, so reflection cannot see it: the class file is the only
-     * place the declared budget can be read back from.
-     */
+    /** CLASS-retained annotations require reading class files rather than runtime metadata. */
     private static int declaredBudget() {
         def classes = Path.of(AppLoggingConvention.protectionDomain.codeSource.location.toURI())
         def declaring = classes.resolve(AppLoggingConvention.name.replace(".", File.separator) + ".class")

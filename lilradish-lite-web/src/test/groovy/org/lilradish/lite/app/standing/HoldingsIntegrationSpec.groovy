@@ -18,10 +18,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What somebody holds, asked of the real baseline on a server whose database defaults to the C locale,
- * so an order only the named ICU collation gives proves it was named.
- */
+/** Ordering must be independent of the database default collation. */
 class HoldingsIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -30,15 +27,15 @@ class HoldingsIntegrationSpec extends Specification {
 
     static final String CAPITAL_E_ACUTE = Character.toString(0xC9)
 
-    /** In three groups, and once in one they no longer hold anything in; a watcher, and a steward no longer. */
+
     static final UserId READER = new UserId("000801")
 
-    /** A steward in no group. */
+
     static final UserId ESTATE_ONLY = new UserId("000802")
 
     static final UserId HOLDS_NOTHING = new UserId("000803")
 
-    /** The owner of payroll, beside the reader there, and nothing across the estate. */
+
     static final UserId OWNER_ELSEWHERE = new UserId("000804")
 
     static final UserId NOBODY = new UserId("there-is-no-such-user")
@@ -49,7 +46,7 @@ class HoldingsIntegrationSpec extends Specification {
                                                     GroupPermission.AUTHOR_ENTRY,
                                                     GroupPermission.READ_INFERENCE_CONTENT]
 
-    /** And an overseer's, which is also what an operator and an overseer hold between them. */
+
     static final List<GroupPermission> OVERSEEING = OPERATING + [GroupPermission.READ_ALL_RUNS,
                                                                  GroupPermission.REVIEW_AT_GATE,
                                                                  GroupPermission.APPROVE_ENTRY,
@@ -96,7 +93,7 @@ class HoldingsIntegrationSpec extends Specification {
         grants = new EstateRoleGrants(session)
     }
 
-    /** Two roles in one group are their union, a role taken is not held, and an owner beside the reader lends nothing. */
+
     def "a reader is read in every group they are in, holding there what their open roles bundle"() {
         when:
         def principal = holdings.heldBy(READER).orElseThrow().principal()
@@ -136,7 +133,7 @@ class HoldingsIntegrationSpec extends Specification {
         principal.estateReach() == [EstateAct.CHECK_SOUNDNESS, EstateAct.READ_MEASUREMENTS] as Set
     }
 
-    /** The reader's roles in payroll are theirs alone: whoever else is there holds only what their own rows say. */
+
     def "somebody in one group with the reader holds only their own role there, and nothing elsewhere"() {
         when:
         def held = holdings.heldBy(OWNER_ELSEWHERE).orElseThrow()
@@ -172,7 +169,7 @@ class HoldingsIntegrationSpec extends Specification {
         user << [NOBODY, HOLDS_NOTHING]
     }
 
-    /** Two readers of held estate roles, the gate's and the standing's, that must never disagree. */
+
     def "what the standing reads across the estate is what the gate reads, for anybody at all"() {
         when:
         def standing = holdings.heldBy(user).map { it.principal().estateReach() }.orElse([] as Set)
@@ -206,12 +203,13 @@ class HoldingsIntegrationSpec extends Specification {
         NOBODY      || 0
     }
 
-    /** Shown, a name the type refuses is a twin; left out, the reader is in fewer groups than they are. */
+    /** Every stored group name must be readable; an invalid name fails the whole read. */
     def "a stored name this system will not show fails the whole read loudly, naming whose group it was"() {
         given:
         def connection = database.connection
         connection.autoCommit = false
         def session = JdbcClient.create(new SingleConnectionDataSource(connection, true))
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, 'LEADING', ' Leading', ?::uuid)")
                 .params(group("9"), FIRST_STEWARD).update()
         member(session, group("9"), person("1"), "operator")
@@ -231,13 +229,15 @@ class HoldingsIntegrationSpec extends Specification {
 
     private static void populate(JdbcClient session) {
         (1..4).each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("""
                     insert into subjects (subject_id, kind, user_id, display_name, created_by)
                     values (?::uuid, 'person', ?, ?, ?::uuid)
                     """).params(person("$it"), "00080$it", "Person $it", SEEDER).update()
         }
-        // Nobody outside the pool is in any group.
+
         [person("1"), person("4")].each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                     .params(it, FIRST_STEWARD).update()
         }
@@ -245,6 +245,7 @@ class HoldingsIntegrationSpec extends Specification {
          [group("2"), "FINANCE", "finance"],
          [group("3"), "ELAN", CAPITAL_E_ACUTE + "lan"],
          [group("4"), "VOID", "Empty room"]].each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, ?, ?, ?::uuid)")
                     .params(it[0], it[1], it[2], FIRST_STEWARD).update()
         }
@@ -256,6 +257,7 @@ class HoldingsIntegrationSpec extends Specification {
         ended(session, group("4"), person("1"), "operator", "removed_from_group")
         member(session, group("1"), person("4"), "owner")
         granted(session, person("1"), "watcher")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("""
                 insert into estate_role_grants (subject_id, role, created_by, removed_at, removed_by)
                 values (?::uuid, 'steward', ?::uuid, now(), ?::uuid)
@@ -264,11 +266,13 @@ class HoldingsIntegrationSpec extends Specification {
     }
 
     private static void granted(JdbcClient session, String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, estate_role.
         session.sql("insert into estate_role_grants (subject_id, role, created_by) values (?::uuid, ?::estate_role, ?::uuid)")
                 .params(subject, role, SEEDER).update()
     }
 
     private static void member(JdbcClient session, String group, String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role.
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid)
@@ -276,6 +280,7 @@ class HoldingsIntegrationSpec extends Specification {
     }
 
     private static void ended(JdbcClient session, String group, String subject, String role, String removal) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role, group_member_removal; now().
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by, removed_at, removed_by, removal)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid, now(), ?::uuid, ?::group_member_removal)

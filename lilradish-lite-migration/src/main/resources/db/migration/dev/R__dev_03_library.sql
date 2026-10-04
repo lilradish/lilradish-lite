@@ -1,14 +1,12 @@
--- Development only, and repeatable for the reasons the pool seed gives. One group and its library, with a
--- version at every standing. Every act here is the seeder's; what a person does is done in the app.
 
--- Keys by their first eight digits: 2 group, 4 membership, 6 entry, 7 version, 8 submission, 9 code step
--- publication, a term, b field, c step, d case, e binding.
 
--- Targeted, so a row made in the app holding this key or name is refused under its own rule, not skipped.
+-- Targeted ON CONFLICT does not skip collisions with other unique constraints.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into groups (group_id, key, name, created_by) values
     ('00000002-0000-4000-8000-000000000101', 'SUPPORT', 'Customer support', '00000000-0000-4000-8000-000000000000')
 on conflict (group_id) do nothing;
 
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into group_members (group_member_id, group_id, subject_id, role, created_by) values
     ('00000004-0000-4000-8000-000000000101', '00000002-0000-4000-8000-000000000101',
      '00000001-0000-4000-8000-000000000102', 'owner', '00000000-0000-4000-8000-000000000000'),
@@ -17,7 +15,7 @@ insert into group_members (group_member_id, group_id, subject_id, role, created_
 on conflict do nothing;
 
 -- Targeted for the reason groups is.
--- One entry says nothing of what it is for, which a card has to be read without too.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into entries (entry_id, group_id, kind, name, purpose, created_by) values
     ('00000006-0000-4000-8000-000000000101', '00000002-0000-4000-8000-000000000101',
      'question', 'Summarise a complaint', 'Says what a complaint is about, and which product and order it names.',
@@ -35,14 +33,15 @@ insert into entries (entry_id, group_id, kind, name, purpose, created_by) values
      '00000000-0000-4000-8000-000000000000')
 on conflict (entry_id) do nothing;
 
--- The code step the development source set holds, published to the group by its key as a migration publishes one.
 -- Targeted for the reason groups is.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into code_step_publications (code_step_publication_id, code_step, group_key, every_group, created_by) values
     ('00000009-0000-4000-8000-000000000101', 'stamp_reference', 'SUPPORT', false,
      '00000000-0000-4000-8000-000000000000')
 on conflict (code_step_publication_id) do nothing;
 
 -- Summarise a complaint: 1 retired, 2 in service, 3 submitted.
+-- DB-SPECIFIC: on conflict and now() use PostgreSQL's syntax and semantics.
 insert into entry_versions (entry_version_id, entry_id, entry_kind, number, created_by,
                             approved_at, approved_by, approved_by_kind,
                             retired_at, retired_by, retired_by_kind) values
@@ -61,6 +60,7 @@ insert into entry_versions (entry_version_id, entry_id, entry_kind, number, crea
 on conflict do nothing;
 
 -- Handle a complaint: 1 in service, 2 a draft.
+-- DB-SPECIFIC: on conflict and now() use PostgreSQL's syntax and semantics.
 insert into entry_versions (entry_version_id, entry_id, entry_kind, number, created_by,
                             approved_at, approved_by, approved_by_kind) values
     ('00000007-0000-4000-8000-000000000104', '00000006-0000-4000-8000-000000000102', 'workflow', 1,
@@ -72,6 +72,7 @@ insert into entry_versions (entry_version_id, entry_id, entry_kind, number, crea
 on conflict do nothing;
 
 -- Complaint categories: 1 in service.
+-- DB-SPECIFIC: on conflict and now() use PostgreSQL's syntax and semantics.
 insert into entry_versions (entry_version_id, entry_id, entry_kind, number, created_by,
                             approved_at, approved_by, approved_by_kind) values
     ('00000007-0000-4000-8000-000000000106', '00000006-0000-4000-8000-000000000103', 'reference_list', 1,
@@ -80,6 +81,7 @@ insert into entry_versions (entry_version_id, entry_id, entry_kind, number, crea
 on conflict do nothing;
 
 -- Escalate a complaint and Stamp a complaint: 1 in service each.
+-- DB-SPECIFIC: on conflict and now() use PostgreSQL's syntax and semantics.
 insert into entry_versions (entry_version_id, entry_id, entry_kind, number, created_by,
                             approved_at, approved_by, approved_by_kind) values
     ('00000007-0000-4000-8000-000000000107', '00000006-0000-4000-8000-000000000104', 'workflow', 1,
@@ -90,21 +92,23 @@ insert into entry_versions (entry_version_id, entry_id, entry_kind, number, crea
      now(), '00000000-0000-4000-8000-000000000000', 'seeder')
 on conflict do nothing;
 
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into entry_version_submissions (entry_version_submission_id, entry_version_id, created_by, created_by_kind) values
     ('00000008-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000103',
      '00000000-0000-4000-8000-000000000000', 'seeder')
 on conflict do nothing;
 
--- Every version past a draft is whole, as submitting it demanded; the one draft is left as it was opened.
 
 -- reference_list_terms, workflow_steps and declaration_fields carry deferrable uniques, which an untargeted
 -- on conflict fails on; the rest follow them.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into reference_list_versions (entry_version_id, note, created_by) values
     ('00000007-0000-4000-8000-000000000106',
      'Choose the term for what the customer asks to have put right, not for what they mention on the way.',
      '00000000-0000-4000-8000-000000000000')
 on conflict (entry_version_id) do nothing;
 
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into reference_list_terms (reference_list_term_id, entry_version_id, position, term, meaning, created_by) values
     ('0000000a-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000106', 1, 'Billing',
      'A charge, a refund or an invoice is what is disputed.', '00000000-0000-4000-8000-000000000000'),
@@ -114,6 +118,7 @@ insert into reference_list_terms (reference_list_term_id, entry_version_id, posi
      'What came works wrongly, and how it came is not the complaint.', '00000000-0000-4000-8000-000000000000')
 on conflict (reference_list_term_id) do nothing;
 
+-- DB-SPECIFIC: on conflict and chr() use PostgreSQL's syntax and semantics.
 insert into question_versions (entry_version_id, instruction, created_by) values
     ('00000007-0000-4000-8000-000000000101',
      'Summarise the complaint in one paragraph.',
@@ -127,8 +132,9 @@ insert into question_versions (entry_version_id, instruction, created_by) values
      '00000000-0000-4000-8000-000000000000')
 on conflict (entry_version_id) do nothing;
 
--- Raising a ceiling on handling waits on approval. A database seeded before this flag takes it on a second
--- run, which only ever sets it, and never on a row somebody has since edited.
+-- ON CONFLICT sets raise_needs_approval only when the incoming flag is true,
+-- the stored flag is false and updated_by is null.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into workflow_versions (entry_version_id, ceiling, raise_needs_approval, may_be_helped, helper_model,
                                helper_mode, created_by) values
     ('00000007-0000-4000-8000-000000000104', 200000, true, true, 'sample_model', 'ordinary',
@@ -143,8 +149,7 @@ on conflict (entry_version_id) do update set raise_needs_approval = true
     where excluded.raise_needs_approval and not workflow_versions.raise_needs_approval
       and workflow_versions.updated_by is null;
 
--- Handling runs the question, then routes on its category; every case escalates. No reviewer model is
--- named, so a person reviews.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind, pinned_version_id, pinned_kind,
                             producer, producer_model, producer_mode, tries, tells_what_happened, created_by) values
     ('0000000c-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000104', 1, 'summarise',
@@ -161,13 +166,14 @@ insert into workflow_steps (workflow_step_id, entry_version_id, position, name, 
      '00000000-0000-4000-8000-000000000000')
 on conflict (workflow_step_id) do nothing;
 
--- Stamping runs the code step, whose values stand as it declares them, so nobody is asked.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind, code_step, producer, tries,
                             created_by) values
     ('0000000c-0000-4000-8000-000000000104', '00000007-0000-4000-8000-000000000108', 1, 'stamp',
      'code_step', 'stamp_reference', 'code', 2, '00000000-0000-4000-8000-000000000000')
 on conflict (workflow_step_id) do nothing;
 
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into route_cases (route_case_id, entry_version_id, workflow_step_id, term, target_version_id, created_by) values
     ('0000000d-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000104',
      '0000000c-0000-4000-8000-000000000102', 'Billing',
@@ -180,62 +186,72 @@ insert into route_cases (route_case_id, entry_version_id, workflow_step_id, term
      '00000007-0000-4000-8000-000000000107', '00000000-0000-4000-8000-000000000000')
 on conflict (route_case_id) do nothing;
 
--- Some fields of versions in service carry a label, help or both; every other field is read by its name.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side, parent_field_id, position,
-                                name, label, help, kind, text_limit, term_list_version_id, must_be_given, standing,
+                                name, label, help, kind, text_limit, text_lines, term_list_version_id, must_be_given, standing,
                                 standing_threshold, created_by) values
     ('0000000b-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000101', 'question', 'takes', null, 1,
-     'complaint', default, default, 'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'complaint', default, default, 'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000102', '00000007-0000-4000-8000-000000000101', 'question', 'gives', null, 1,
-     'summary', default, default, 'text', 1000, null, true, 'never', null, '00000000-0000-4000-8000-000000000000'),
+     'summary', default, default, 'text', 1000, 'several', null, true, 'never', null, '00000000-0000-4000-8000-000000000000'),
 
     ('0000000b-0000-4000-8000-000000000103', '00000007-0000-4000-8000-000000000102', 'question', 'takes', null, 1,
      'complaint', 'The complaint', 'As the customer wrote it, greeting and signature included.',
-     'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000104', '00000007-0000-4000-8000-000000000102', 'question', 'takes', null, 2,
-     'channel', 'Came in by', default, 'text', 32, null, false, null, null, '00000000-0000-4000-8000-000000000000'),
+     'channel', 'Came in by', default, 'text', 32, 'one', null, false, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000105', '00000007-0000-4000-8000-000000000102', 'question', 'gives', null, 1,
      'category', default, 'What the customer asks to have put right.',
-     'term', null, '00000007-0000-4000-8000-000000000106', true, 'above_confidence', 80,
+     'term', null, null, '00000007-0000-4000-8000-000000000106', true, 'above_confidence', 80,
      '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000106', '00000007-0000-4000-8000-000000000102', 'question', 'gives', null, 2,
-     'details', default, default, 'fields', null, null, false, 'never', null, '00000000-0000-4000-8000-000000000000'),
+     'details', default, default, 'fields', null, null, null, false, 'never', null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000107', '00000007-0000-4000-8000-000000000102', 'question', 'gives',
      '0000000b-0000-4000-8000-000000000106', 1,
-     'product', default, default, 'text', 128, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'product', default, default, 'text', 128, 'one', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000108', '00000007-0000-4000-8000-000000000102', 'question', 'gives',
      '0000000b-0000-4000-8000-000000000106', 2,
-     'order_reference', default, default, 'text', 64, null, false, null, null, '00000000-0000-4000-8000-000000000000'),
+     'order_reference', default, default, 'text', 64, 'one', null, false, null, null, '00000000-0000-4000-8000-000000000000'),
 
     ('0000000b-0000-4000-8000-000000000109', '00000007-0000-4000-8000-000000000103', 'question', 'takes', null, 1,
-     'complaint', default, default, 'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'complaint', default, default, 'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000110', '00000007-0000-4000-8000-000000000103', 'question', 'takes', null, 2,
-     'channel', default, default, 'text', 32, null, false, null, null, '00000000-0000-4000-8000-000000000000'),
+     'channel', default, default, 'text', 32, 'one', null, false, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000111', '00000007-0000-4000-8000-000000000103', 'question', 'gives', null, 1,
-     'category', default, default, 'term', null, '00000007-0000-4000-8000-000000000106', true, 'above_confidence', 90,
+     'category', default, default, 'term', null, null, '00000007-0000-4000-8000-000000000106', true, 'above_confidence', 90,
      '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000112', '00000007-0000-4000-8000-000000000103', 'question', 'gives', null, 2,
-     'details', default, default, 'fields', null, null, false, 'never', null, '00000000-0000-4000-8000-000000000000'),
+     'details', default, default, 'fields', null, null, null, false, 'never', null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000113', '00000007-0000-4000-8000-000000000103', 'question', 'gives',
      '0000000b-0000-4000-8000-000000000112', 1,
-     'product', default, default, 'text', 128, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'product', default, default, 'text', 128, 'one', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000114', '00000007-0000-4000-8000-000000000103', 'question', 'gives',
      '0000000b-0000-4000-8000-000000000112', 2,
-     'order_reference', default, default, 'text', 64, null, false, null, null, '00000000-0000-4000-8000-000000000000'),
+     'order_reference', default, default, 'text', 64, 'one', null, false, null, null, '00000000-0000-4000-8000-000000000000'),
 
     ('0000000b-0000-4000-8000-000000000115', '00000007-0000-4000-8000-000000000104', 'workflow', 'takes', null, 1,
      'complaint', 'The complaint', 'As the customer wrote it, greeting and signature included.',
-     'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000116', '00000007-0000-4000-8000-000000000107', 'workflow', 'takes', null, 1,
-     'complaint', default, default, 'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'complaint', default, default, 'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
 
     ('0000000b-0000-4000-8000-000000000117', '00000007-0000-4000-8000-000000000108', 'workflow', 'takes', null, 1,
-     'complaint', default, default, 'text', 4000, null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+     'complaint', default, default, 'text', 4000, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
     ('0000000b-0000-4000-8000-000000000118', '00000007-0000-4000-8000-000000000108', 'workflow', 'gives', null, 1,
-     'reference', default, default, 'text', 12, null, true, null, null, '00000000-0000-4000-8000-000000000000')
+     'reference', default, default, 'text', 12, 'several', null, true, null, null, '00000000-0000-4000-8000-000000000000'),
+
+    ('0000000b-0000-4000-8000-000000000119', '00000007-0000-4000-8000-000000000104', 'workflow', 'takes', null, 2,
+     'title', 'Title', default, 'text', 128, 'one', null, false, null, null, '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000120', '00000007-0000-4000-8000-000000000104', 'workflow', 'takes', null, 3,
+     'amount', 'Amount in dispute', default, 'number', null, null, null, false, null, null,
+     '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000121', '00000007-0000-4000-8000-000000000104', 'workflow', 'takes', null, 4,
+     'category', 'Complaint category', default, 'term', null, null, '00000007-0000-4000-8000-000000000106', false,
+     null, null, '00000000-0000-4000-8000-000000000000')
 on conflict (declaration_field_id) do nothing;
 
 -- A null target path is the route's discriminator.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
 insert into bindings (binding_id, entry_version_id, workflow_step_id, step_kind, route_case_id, target_path,
                       source_step_id, source_path, constant, created_by) values
     ('0000000e-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000104',
@@ -268,4 +284,59 @@ insert into bindings (binding_id, entry_version_id, workflow_step_id, step_kind,
     ('0000000e-0000-4000-8000-000000000110', '00000007-0000-4000-8000-000000000108',
      null, null, null, 'reference',
      '0000000c-0000-4000-8000-000000000104', 'reference', null, '00000000-0000-4000-8000-000000000000')
+on conflict (binding_id) do nothing;
+
+-- The attachment stays with the run; only the separately entered topic is searched.
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
+insert into entries (entry_id, group_id, kind, name, purpose, created_by) values
+    ('00000006-0000-4000-8000-000000000106', '00000002-0000-4000-8000-000000000101',
+     'workflow', 'Demo Sample attachment research', 'Searches a topic while keeping an attachment available to the people reading the run.',
+     '00000000-0000-4000-8000-000000000000')
+on conflict (entry_id) do nothing;
+
+-- DB-SPECIFIC: on conflict and now() use PostgreSQL's syntax and semantics.
+insert into entry_versions (entry_version_id, entry_id, entry_kind, number, approved_at,
+                            approved_by, approved_by_kind, created_by) values
+    ('00000007-0000-4000-8000-000000000109', '00000006-0000-4000-8000-000000000106', 'workflow', 1, now(),
+     '00000000-0000-4000-8000-000000000000', 'seeder', '00000000-0000-4000-8000-000000000000')
+on conflict (entry_version_id) do nothing;
+
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
+insert into workflow_versions (entry_version_id, created_by) values ('00000007-0000-4000-8000-000000000109', '00000000-0000-4000-8000-000000000000')
+on conflict (entry_version_id) do nothing;
+
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
+insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind, search_way,
+                            producer, producer_model, producer_mode, tries, tells_what_happened,
+                            search_title_standing, search_body_standing, search_references_standing,
+                            search_other_standing, created_by) values
+    ('0000000c-0000-4000-8000-000000000105', '00000007-0000-4000-8000-000000000109', 1, 'research', 'search', 'sample_web_search',
+     'model', 'sample_model', 'ordinary', 2, true, 'always', 'never', 'always', 'always', '00000000-0000-4000-8000-000000000000')
+on conflict (workflow_step_id) do nothing;
+
+-- DB-SPECIFIC: on conflict and text[] use PostgreSQL's syntax and semantics.
+insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side, position,
+                                name, label, help, kind, text_limit, text_lines, must_be_given, standing,
+                                file_types, file_maximum_bytes, created_by) values
+    ('0000000b-0000-4000-8000-000000000122', '00000007-0000-4000-8000-000000000109', 'workflow', 'takes', 0, 'topic', 'Search topic', 'The topic used for the search.', 'text', 512, 'one', true, null, null, null, '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000123', '00000007-0000-4000-8000-000000000109', 'workflow', 'takes', 1, 'attachment', 'Attachment', 'Download the attachment to inspect it alongside the search.', 'file', null, null, true, null, cast(array['application/pdf', 'image/png'] as text[]), 2097152, '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000124', '00000007-0000-4000-8000-000000000109', 'workflow', 'gives', 0, 'title', 'Title', null, 'text', 200, 'several', true, null, null, null, '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000125', '00000007-0000-4000-8000-000000000109', 'workflow', 'gives', 1, 'body', 'Body', null, 'text', 16000, 'several', true, null, null, null, '00000000-0000-4000-8000-000000000000'),
+    ('0000000b-0000-4000-8000-000000000126', '00000007-0000-4000-8000-000000000109', 'workflow', 'gives', 2, 'references', 'References', null, 'text', 8000, 'several', false, null, null, null, '00000000-0000-4000-8000-000000000000')
+on conflict (declaration_field_id) do nothing;
+
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
+insert into search_question_parts (search_question_part_id, entry_version_id, workflow_step_id,
+                                   position, literal_text, source_path, created_by) values
+    ('00000019-0000-4000-8000-000000000101', '00000007-0000-4000-8000-000000000109', '0000000c-0000-4000-8000-000000000105', 0,
+     'Find information about ', null, '00000000-0000-4000-8000-000000000000'),
+    ('00000019-0000-4000-8000-000000000102', '00000007-0000-4000-8000-000000000109', '0000000c-0000-4000-8000-000000000105', 1,
+     null, 'topic', '00000000-0000-4000-8000-000000000000')
+on conflict (search_question_part_id) do nothing;
+
+-- DB-SPECIFIC: on conflict uses PostgreSQL's syntax and semantics.
+insert into bindings (binding_id, entry_version_id, target_path, source_step_id, source_path, created_by) values
+    ('0000000e-0000-4000-8000-000000000111', '00000007-0000-4000-8000-000000000109', 'title', '0000000c-0000-4000-8000-000000000105', 'title', '00000000-0000-4000-8000-000000000000'),
+    ('0000000e-0000-4000-8000-000000000112', '00000007-0000-4000-8000-000000000109', 'body', '0000000c-0000-4000-8000-000000000105', 'body', '00000000-0000-4000-8000-000000000000'),
+    ('0000000e-0000-4000-8000-000000000113', '00000007-0000-4000-8000-000000000109', 'references', '0000000c-0000-4000-8000-000000000105', 'references', '00000000-0000-4000-8000-000000000000')
 on conflict (binding_id) do nothing;

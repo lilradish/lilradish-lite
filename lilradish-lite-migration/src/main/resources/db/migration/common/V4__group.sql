@@ -1,9 +1,9 @@
--- What each role bundles is held in the application; this type names only which of them somebody
--- holds, so a change to a bundle is not a change to this schema.
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type group_role as enum ('operator', 'overseer', 'owner');
 
 -- ---------------------------------------------------------------- groups
 
+-- DB-SPECIFIC: length(), text, ~, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table groups (
     -- No default, as on subjects: this key is minted before there is a row for it to name.
     group_id        uuid         not null,
@@ -38,11 +38,12 @@ create table groups (
 
 -- ---------------------------------------------------------------- membership
 
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type group_member_removal as enum ('role_taken', 'removed_from_group');
 
--- That whoever is here is in the pool cannot be a key: the target would be pool_members' current
--- stays, and PostgreSQL does not accept a partial index as a foreign key target. So the key reaches
--- subjects, and the rest is the application's.
+-- A foreign key cannot target pool_members' partial index of current stays.
+-- This foreign key targets subjects instead.
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table group_members (
     group_member_id uuid         not null default uuidv7(),
     group_id        uuid         not null,
@@ -72,9 +73,11 @@ create table group_members (
         check (removed_at is null or removed_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index group_members_one_current_holding
     on group_members (group_id, subject_id, role) where removed_at is null;
 
 -- A member holds a row per role, so how many groups they are in is count(distinct group_id) over
 -- this index and never count(*).
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index group_members_by_subject on group_members (subject_id) where removed_at is null;

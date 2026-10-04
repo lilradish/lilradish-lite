@@ -16,9 +16,7 @@ public enum RunSortColumn implements ListColumn {
 
     STARTED("started", ListValueKind.LONG),
 
-    STARTED_BY("startedBy", ListValueKind.NULLABLE_TEXT),
-
-    LAST_HAPPENED("lastHappened", ListValueKind.LONG);
+    STARTED_BY("startedBy", ListValueKind.NULLABLE_TEXT);
 
     private final String published;
 

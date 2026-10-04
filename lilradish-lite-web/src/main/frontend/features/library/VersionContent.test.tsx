@@ -21,11 +21,17 @@ const VERSION: Version = {
   pinnedBy: [],
 };
 
-function drawn(kind: EntryKind) {
+function drawn(
+  kind: EntryKind,
+  wrapDocument?: (
+    content: import("react").ReactNode,
+  ) => import("react").ReactNode,
+) {
   return render(
     <MemoryRouter>
       <VersionContent
         kind={kind}
+        wrapDocument={wrapDocument}
         groupId={GROUP}
         entryId={ENTRY}
         version={VERSION}
@@ -66,9 +72,15 @@ describe("VersionContent", () => {
         [`GET ${address}`]: [[JSON.stringify(held), 200]],
       });
 
-      drawn(kind);
+      drawn(kind, (content) => (
+        <section aria-label="Document">{content}</section>
+      ));
 
-      expect(await screen.findByText(said)).toBeInTheDocument();
+      const shown = await screen.findByText(said);
+      expect(shown).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Document" })).toContainElement(
+        shown,
+      );
       expect(requestsTo(sent)).toEqual([`GET ${address}`]);
     },
   );
@@ -94,6 +106,7 @@ describe("VersionContent", () => {
                 questions: [],
                 workflows: [],
                 codeSteps: [],
+                searchWays: [],
                 models: [],
               },
               terms: {},

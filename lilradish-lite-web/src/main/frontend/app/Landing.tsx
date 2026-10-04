@@ -1,6 +1,7 @@
 import Typography from "@mui/material/Typography";
 
 import { say } from "../i18n/app";
+import { Part } from "../lib/layout/Part";
 import { PRODUCT_NAME } from "./product";
 
 /**
@@ -13,13 +14,10 @@ import { PRODUCT_NAME } from "./product";
  */
 export function Landing() {
   return (
-    <section>
-      <Typography variant="h5" component="h1" gutterBottom>
-        {PRODUCT_NAME}
-      </Typography>
+    <Part title={PRODUCT_NAME} level="h1" depth={1}>
       <Typography variant="body2" sx={{ color: "text.secondary" }}>
         {say("landing.detail")}
       </Typography>
-    </section>
+    </Part>
   );
 }

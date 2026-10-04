@@ -1,20 +1,26 @@
 package org.lilradish.lite.app.library;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.jspecify.annotations.Nullable;
 import org.libprunus.core.error.ApiErrorException;
 import org.lilradish.lite.domain.declaration.DeclarationSide;
 import org.lilradish.lite.domain.declaration.Demands;
+import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.failure.RefusalCode;
 import org.lilradish.lite.domain.model.ModelMode;
 import org.lilradish.lite.domain.model.ModelName;
 import org.lilradish.lite.domain.referencelist.Term;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.text.ConcealingCharacter;
 import org.lilradish.lite.domain.text.Identifiers;
 import org.lilradish.lite.domain.text.Legibility;
@@ -41,6 +47,8 @@ final class FlowBody {
 
     /** The most steps a workflow version holds. */
     static final int MOST_STEPS = 256;
+
+    static final int MOST_QUESTION_PARTS = 256;
 
     private static final String REVISION = "revision";
 
@@ -98,6 +106,19 @@ final class FlowBody {
 
     private static final String CONSTANT = "constant";
 
+    private static final String SEARCH_WAY = "searchWay";
+
+    private static final String QUESTION = "question";
+
+    private static final String STANDINGS = "standings";
+
+    private static final String TEXT = "text";
+
+    private static final String FROM = "from";
+
+    private static final Set<String> STANDING_MEMBERS =
+            SearchWay.FIELDS.stream().map(FieldName::value).collect(Collectors.toUnmodifiableSet());
+
     private FlowBody() {}
 
     /**
@@ -109,10 +130,10 @@ final class FlowBody {
 
     /**
      * @param readAs the key it was read under, which keeps what it pins; none for a step added
-     * @param producer only where it runs a question or a code step, and none there until chosen
-     * @param tries only where it runs a question or a code step, and none there until chosen
-     * @param reviewer the model reviewing its productions, only where it runs a question or a code step; none
-     *     where a person does
+     * @param producer only where it runs a question, a code step or a search, and none there until chosen
+     * @param tries only where it runs a question, a code step or a search, and none there until chosen
+     * @param reviewer the model reviewing its productions, only where it runs a question, a code step or a search;
+     *     none where a person does
      */
     record SentStep(
             @Nullable UUID readAs,
@@ -123,7 +144,8 @@ final class FlowBody {
             @Nullable ModelChoice reviewer,
             List<SentBinding> bindings) {}
 
-    sealed interface SentRuns permits SentRuns.Unchosen, SentRuns.Pinned, SentRuns.Code, SentRuns.Route {
+    sealed interface SentRuns
+            permits SentRuns.Unchosen, SentRuns.Pinned, SentRuns.Code, SentRuns.Route, SentRuns.Search {
 
         record Unchosen() implements SentRuns {}
 
@@ -133,6 +155,21 @@ final class FlowBody {
 
         record Route(@Nullable SentSource discriminator, DeclarationBody.Sent gives, List<SentCase> cases)
                 implements SentRuns {}
+
+        /**
+         * @param way none until chosen
+         * @param standings how each of the way's fields stands, by its name; one none is chosen for yet is left out
+         */
+        record Search(@Nullable String way, List<SentPart> question, Map<FieldName, FieldStanding> standings)
+                implements SentRuns {}
+    }
+
+    /** One part of a search's question: text written into it, or a value read from what a binding may read. */
+    sealed interface SentPart permits SentPart.Text, SentPart.Read {
+
+        record Text(String text) implements SentPart {}
+
+        record Read(SentRead source) implements SentPart {}
     }
 
     /**
@@ -147,15 +184,20 @@ final class FlowBody {
 
     record SentBinding(Pointer target, SentSource source) {}
 
-    sealed interface SentSource permits SentSource.Input, SentSource.Step, SentSource.Written {
+    sealed interface SentSource permits SentRead, SentSource.Written {
 
-        record Input(Pointer pointer) implements SentSource {}
+        record Input(Pointer pointer) implements SentRead {}
 
         /** @param index the step's place among those sent, counted from zero */
-        record Step(int index, Pointer pointer) implements SentSource {}
+        record Step(int index, Pointer pointer) implements SentRead {}
 
         /** @param stored the constant as the store writes it */
         record Written(String stored) implements SentSource {}
+    }
+
+    sealed interface SentRead extends SentSource permits SentSource.Input, SentSource.Step {
+
+        Pointer pointer();
     }
 
     static Sent read(JsonNode body) {
@@ -184,7 +226,8 @@ final class FlowBody {
         if (!runsSent.isNull() && kind == null) {
             throw unusable();
         }
-        boolean produces = kind == RunsKind.QUESTION || kind == RunsKind.CODE_STEP;
+        boolean asks = kind == RunsKind.QUESTION || kind == RunsKind.SEARCH;
+        boolean produces = asks || kind == RunsKind.CODE_STEP;
         Set<String> taken = new HashSet<>(Set.of(NAME, RUNS, BINDINGS));
         if (produces) {
             taken.addAll(Set.of(PRODUCER, TRIES, REVIEWER));
@@ -194,7 +237,7 @@ final class FlowBody {
                 keyIn(sent.path(STEP_ID)),
                 nameIn(sent.get(NAME)),
                 runsIn(runsSent, kind, count, index),
-                produces ? producerIn(sent.get(PRODUCER), kind == RunsKind.QUESTION) : null,
+                produces ? producerIn(sent.get(PRODUCER), asks) : null,
                 produces ? triesIn(sent.get(TRIES)) : null,
                 produces ? choiceIn(sent.get(REVIEWER)) : null,
                 bindings(sent.get(BINDINGS), count, index));
@@ -229,7 +272,75 @@ final class FlowBody {
                                 sent.get(GIVES), DeclarationSide.GIVES, Demands.ofWorkflow(DeclarationSide.GIVES)),
                         cases(sent.get(CASES), count));
             }
+            case SEARCH -> {
+                requireMembers(sent, Set.of(KIND, SEARCH_WAY, QUESTION, STANDINGS), Set.of());
+                JsonNode named = sent.get(SEARCH_WAY);
+                yield new SentRuns.Search(
+                        named.isNull() ? null : identifierIn(named),
+                        question(sent.get(QUESTION), count, own),
+                        standingsIn(sent.get(STANDINGS)));
+            }
         };
+    }
+
+    private static List<SentPart> question(JsonNode sent, int count, int own) {
+        if (!sent.isArray()) {
+            throw unusable();
+        }
+        if (sent.size() > MOST_QUESTION_PARTS) {
+            throw LibraryRefusal.SEARCH_QUESTION_PARTS_TOO_MANY.raised();
+        }
+        List<SentPart> parts = new ArrayList<>(sent.size());
+        for (JsonNode part : sent) {
+            if (part.has(TEXT)) {
+                requireMembers(part, Set.of(TEXT), Set.of());
+                parts.add(new SentPart.Text(writtenIn(part.get(TEXT))));
+            } else {
+                requireMembers(part, Set.of(FROM), Set.of());
+                parts.add(new SentPart.Read(readIn(part.get(FROM), count, own)));
+            }
+        }
+        return parts;
+    }
+
+    /* Refused as an instruction is where it arrives, save that text showing nothing is kept. */
+    private static String writtenIn(JsonNode sent) {
+        String text = textIn(sent);
+        ProseRefusal refusal = ProseRefusal.of(text, true, FlowBody::requireWrittenWell);
+        if (refusal == null) {
+            return text;
+        }
+        RefusalCode code = refusal.code(RefusalCode.SEARCH_TEXT_UNUSABLE);
+        throw code == RefusalCode.SEARCH_TEXT_UNUSABLE
+                ? LibraryRefusal.SEARCH_TEXT_UNUSABLE.raised()
+                : LibraryRefusal.answering(code).raised();
+    }
+
+    private static void requireWrittenWell(String text) {
+        Legibility.requireNotEmpty(text, "Question text");
+        Legibility.requireWellFormedProse(text, "Question text");
+        Legibility.requireWithinMaximumLength(text, 8192, "Question text");
+    }
+
+    /** Each of the way's fields always or never, or none until chosen: a search gives no confidence to stand above. */
+    private static Map<FieldName, FieldStanding> standingsIn(JsonNode sent) {
+        requireMembers(sent, STANDING_MEMBERS, Set.of());
+        Map<FieldName, FieldStanding> standings = HashMap.newHashMap(SearchWay.FIELDS.size());
+        for (FieldName field : SearchWay.FIELDS) {
+            JsonNode standing = sent.get(field.value());
+            if (standing.isNull()) {
+                continue;
+            }
+            String spelled = textIn(standing);
+            if (FieldStanding.ALWAYS.published().equals(spelled)) {
+                standings.put(field, FieldStanding.ALWAYS);
+            } else if (FieldStanding.NEVER.published().equals(spelled)) {
+                standings.put(field, FieldStanding.NEVER);
+            } else {
+                throw unusable();
+            }
+        }
+        return standings;
     }
 
     private static List<SentCase> cases(JsonNode sent, int count) {
@@ -274,17 +385,8 @@ final class FlowBody {
     }
 
     private static SentSource sourceIn(JsonNode sent, int count, int own) {
-        if (sent.has(INPUT)) {
-            requireMembers(sent, Set.of(INPUT), Set.of());
-            return new SentSource.Input(pointerIn(sent.get(INPUT)));
-        }
-        if (sent.has(STEP)) {
-            requireMembers(sent, Set.of(STEP, PATH), Set.of());
-            JsonNode index = sent.get(STEP);
-            if (!index.isInt() || index.intValue() < 0 || index.intValue() >= count || index.intValue() == own) {
-                throw unusable();
-            }
-            return new SentSource.Step(index.intValue(), pointerIn(sent.get(PATH)));
+        if (sent.has(INPUT) || sent.has(STEP)) {
+            return readIn(sent, count, own);
         }
         requireMembers(sent, Set.of(CONSTANT), Set.of());
         JsonValue constant;
@@ -309,8 +411,24 @@ final class FlowBody {
         }
     }
 
-    /** A question is produced by a model or a person, a code step by code or a person saying it was done. */
-    private static @Nullable Producer producerIn(JsonNode sent, boolean question) {
+    private static SentRead readIn(JsonNode sent, int count, int own) {
+        if (sent.has(INPUT)) {
+            requireMembers(sent, Set.of(INPUT), Set.of());
+            return new SentSource.Input(pointerIn(sent.get(INPUT)));
+        }
+        requireMembers(sent, Set.of(STEP, PATH), Set.of());
+        JsonNode index = sent.get(STEP);
+        if (!index.isInt() || index.intValue() < 0 || index.intValue() >= count || index.intValue() == own) {
+            throw unusable();
+        }
+        return new SentSource.Step(index.intValue(), pointerIn(sent.get(PATH)));
+    }
+
+    /**
+     * A question or a search is produced by a model or a person, a code step by code or a person saying it was
+     * done.
+     */
+    private static @Nullable Producer producerIn(JsonNode sent, boolean asks) {
         if (sent.isNull()) {
             return null;
         }
@@ -319,11 +437,11 @@ final class FlowBody {
             requireMembers(sent, Set.of(KIND), Set.of());
             return new Producer.Person();
         }
-        if (!question && StepProducer.CODE.published().equals(kind)) {
+        if (!asks && StepProducer.CODE.published().equals(kind)) {
             requireMembers(sent, Set.of(KIND), Set.of());
             return new Producer.Code();
         }
-        if (!question || !StepProducer.MODEL.published().equals(kind)) {
+        if (!asks || !StepProducer.MODEL.published().equals(kind)) {
             throw unusable();
         }
         requireMembers(sent, Set.of(KIND, MODEL, MODE, TOLD), Set.of());
@@ -374,7 +492,7 @@ final class FlowBody {
 
     private static String identifierIn(JsonNode sent) {
         try {
-            return Identifiers.requireText(textIn(sent), "Code step");
+            return Identifiers.requireText(textIn(sent), "A name a release gives");
         } catch (IllegalArgumentException refused) {
             throw unusable();
         }

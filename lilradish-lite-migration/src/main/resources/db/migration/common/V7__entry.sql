@@ -1,7 +1,9 @@
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type entry_kind as enum ('workflow', 'question', 'reference_list');
 
 -- ---------------------------------------------------------------- entries
 
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table entries (
     -- No default, as on subjects: this key is minted before there is a row for it to name.
     entry_id        uuid         not null,
@@ -42,13 +44,13 @@ create table entries (
 
 -- ---------------------------------------------------------------- versions
 
+-- DB-SPECIFIC: generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table entry_versions (
     entry_version_id uuid         not null default uuidv7(),
     entry_id         uuid         not null,
     -- Carried only to reach entries_kind_unique, and to be reached by every key naming a version of one kind.
     entry_kind       entry_kind   not null,
     number           integer      not null,
-    -- Counts the writes to a draft's content, so a save naming another revision than this is refused.
     revision         integer      not null default 1,
     created_at       timestamptz  not null default now(),
     created_by       uuid         not null,
@@ -101,9 +103,11 @@ create table entry_versions (
 );
 
 -- Draft or submitted only while entry_versions_retired_once_approved holds.
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index entry_versions_one_unapproved
     on entry_versions (entry_id) where approved_at is null;
 
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table entry_version_submissions (
     entry_version_submission_id uuid         not null default uuidv7(),
     entry_version_id            uuid         not null,
@@ -131,9 +135,11 @@ create table entry_version_submissions (
         check (withdrawn_at is null or withdrawn_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index entry_version_submissions_one_open
     on entry_version_submissions (entry_version_id) where withdrawn_at is null;
 
+-- DB-SPECIFIC: timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table entry_version_writers (
     entry_version_id uuid         not null,
     created_by       uuid         not null,
@@ -150,6 +156,7 @@ create table entry_version_writers (
 
 -- ---------------------------------------------------------------- stops
 
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table entry_stops (
     entry_stop_id   uuid         not null default uuidv7(),
     entry_id        uuid         not null,
@@ -173,4 +180,5 @@ create table entry_stops (
     constraint entry_stops_let_go_after_created check (let_go_at is null or let_go_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index entry_stops_one_in_force on entry_stops (entry_id) where let_go_at is null;

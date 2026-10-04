@@ -58,7 +58,11 @@ export function refusalSentence(problem: Problem, rule?: Rule): string {
   // The one code of this side's read where a server's would be: it is minted
   // with the status of the response whose body could not be read as a document.
   if (problem.code === NOT_A_PROBLEM_DOCUMENT) {
-    return say("failure.unreadable");
+    return say(
+      problem.status >= 200 && problem.status < 300
+        ? "failure.unreadableAnswer"
+        : "failure.unreadable",
+    );
   }
   const id = `refusal.${problem.code}`;
   return Object.hasOwn(APP_EN, id)

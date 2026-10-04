@@ -16,10 +16,7 @@ const MOVED_ON: ReadonlySet<string> = new Set([
   "STEP_MOVED_ON",
 ] satisfies readonly WordedRefusal[]);
 
-/**
- * The try the step is held back or failed on, handed over to be sent to its model. Nothing is sent with it. The
- * step it is answered with is almost always as it stood before, since sending comes after the answer.
- */
+/** Sending follows the answer, so the step returned may still stand as it did before the press. */
 export function trySending(
   groupId: string,
   runId: string,
@@ -41,7 +38,6 @@ export function refusedAsChanged(problem: Problem): boolean {
   return servedAmong(problem, CHANGED);
 }
 
-/** Whether the step had moved on from where it was held or failed since it was read. */
 export function refusedAsMovedOn(problem: Problem): boolean {
   return servedAmong(problem, MOVED_ON);
 }

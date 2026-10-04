@@ -5,13 +5,19 @@ import {
   readQuestion,
   type QuestionVersion,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
+import { draw } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/drawing";
 import { instruct } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/instruction";
 import { declare } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/{side}";
 import type { Problem } from "../../api/problem";
 import { Async } from "../../app/Async";
 import { say, type MessageId } from "../../i18n/app";
 import { useAction } from "../../lib/request/useAction";
-import { proseRefused, type ProseRefusal } from "../../lib/text/legibility";
+import { drawingTooDeep } from "../../lib/text/drawingDepth";
+import {
+  proseRefused,
+  showsInProse,
+  type ProseRefusal,
+} from "../../lib/text/legibility";
 import { VERSION_ACT_RULES } from "./actRules";
 import { contentOf, type ReadContent } from "./ContentProblems";
 import { DeclarationBuilder } from "./DeclarationBuilder";
@@ -19,6 +25,7 @@ import type { Demands } from "./declarationDrafts";
 import { ProsePart, type ProseWords } from "./ProsePart";
 import QUESTION_DEMANDS from "./questionDemands.json";
 import { useVersionContent } from "./useVersionContent";
+import { useDraftPartStatus } from "./useDraftStatus";
 import { WhatIsAdded } from "./WhatIsAdded";
 
 const TAKES = QUESTION_DEMANDS.takes as Demands;
@@ -33,6 +40,40 @@ const PROSE_REFUSALS = {
   unusable: "refusal.INSTRUCTION_UNUSABLE",
 } as const satisfies Record<ProseRefusal, MessageId>;
 
+const DRAWING_REFUSALS = {
+  crlf: "refusal.PROSE_LINE_BREAK_CRLF",
+  unusable: "refusal.DRAWING_UNUSABLE",
+  too_deep: "refusal.DRAWING_TOO_DEEP",
+} as const;
+
+const NOT_DRAWING = /[^\t\n\P{Cc}]|[\p{Zl}\p{Zp}\p{Cs}]/u;
+
+function drawingRefused(typed: string): MessageId | null {
+  if (typed.includes("\r\n")) {
+    return DRAWING_REFUSALS.crlf;
+  }
+  let length = 0;
+  for (const _character of typed) {
+    length += 1;
+    if (length > 8192) {
+      return DRAWING_REFUSALS.unusable;
+    }
+  }
+  if (NOT_DRAWING.test(typed) || !showsInProse(typed)) {
+    return DRAWING_REFUSALS.unusable;
+  }
+  return drawingTooDeep(typed) ? DRAWING_REFUSALS.too_deep : null;
+}
+
+const DRAWING_WORDS: ProseWords = {
+  title: "question.drawing",
+  hint: "question.drawingHint",
+  saysNothing: "question.drawingMissing",
+  save: "question.saveDrawing",
+  unchanged: "question.drawingUnchanged",
+  underway: "question.underway",
+};
+
 const INSTRUCTION_WORDS: ProseWords = {
   title: "question.instruction",
   hint: "question.instructionHint",
@@ -43,7 +84,7 @@ const INSTRUCTION_WORDS: ProseWords = {
 };
 
 /** Which part a press to read the version afresh came from, which is where the keyboard goes back to. */
-type Part = "instruction" | "takes" | "gives";
+type Part = "instruction" | "drawing" | "takes" | "gives";
 
 /** Each part is written on its own over the revision last shown; while one is out, or a read, nothing else is sent. */
 export function QuestionContent({
@@ -80,8 +121,18 @@ export function QuestionContent({
     Part
   >(load, readCount, onWritten, shownAs);
   const instructing = useAction<QuestionVersion>(written, onRefused);
+  const drawing = useAction<QuestionVersion>(written, onRefused);
   const taking = useAction<QuestionVersion>(written, onRefused);
   const giving = useAction<QuestionVersion>(written, onRefused);
+  useDraftPartStatus(
+    "read",
+    false,
+    read.loading ||
+      instructing.running ||
+      drawing.running ||
+      taking.running ||
+      giving.running,
+  );
   const editable = version.acts.has("write");
   const question = shown;
 
@@ -95,7 +146,12 @@ export function QuestionContent({
               words={INSTRUCTION_WORDS}
               said={question.instruction}
               editable={editable}
-              waiting={taking.running || giving.running || read.loading}
+              waiting={
+                drawing.running ||
+                taking.running ||
+                giving.running ||
+                read.loading
+              }
               refusalOf={(typed) => {
                 const refused = proseRefused(typed);
                 return refused === null ? null : PROSE_REFUSALS[refused];
@@ -115,14 +171,46 @@ export function QuestionContent({
               focusOnArrival={afresh.from === "instruction"}
               onReadAfresh={readAfresh("instruction")}
             />
+            <ProsePart
+              words={DRAWING_WORDS}
+              said={question.drawing}
+              editable={editable}
+              waiting={
+                instructing.running ||
+                taking.running ||
+                giving.running ||
+                read.loading
+              }
+              refusalOf={drawingRefused}
+              rule={VERSION_ACT_RULES.write}
+              action={drawing}
+              save={(drawingText, signal) =>
+                draw(
+                  groupId,
+                  entryId,
+                  version.versionId,
+                  question.revision,
+                  drawingText,
+                  signal,
+                )
+              }
+              focusOnArrival={afresh.from === "drawing"}
+              onReadAfresh={readAfresh("drawing")}
+            />
             <DeclarationBuilder
               title={say("question.takes")}
               heading="h3"
+              depth={2}
               demands={TAKES}
               fields={question.takes}
               lists={question.lists}
               editable={editable}
-              waiting={instructing.running || giving.running || read.loading}
+              waiting={
+                instructing.running ||
+                drawing.running ||
+                giving.running ||
+                read.loading
+              }
               saveLabel={say("question.saveTakes")}
               underway={say("question.underway")}
               rule={VERSION_ACT_RULES.write}
@@ -144,11 +232,17 @@ export function QuestionContent({
             <DeclarationBuilder
               title={say("question.gives")}
               heading="h3"
+              depth={2}
               demands={GIVES}
               fields={question.gives}
               lists={question.lists}
               editable={editable}
-              waiting={instructing.running || taking.running || read.loading}
+              waiting={
+                instructing.running ||
+                drawing.running ||
+                taking.running ||
+                read.loading
+              }
               saveLabel={say("question.saveGives")}
               underway={say("question.underway")}
               rule={VERSION_ACT_RULES.write}

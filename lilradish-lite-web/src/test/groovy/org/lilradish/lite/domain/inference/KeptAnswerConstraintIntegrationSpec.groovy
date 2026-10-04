@@ -8,10 +8,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What is kept of an answer, sent to a real server and read back, and judged by the schema's own check on the
- * column it is kept in, read off that server rather than copied here.
- */
+/** Read the live schema check so changes are tested against the stored rule. */
 class KeptAnswerConstraintIntegrationSpec extends Specification {
 
     static final int MOST = KeptAnswer.MOST_KEPT
@@ -28,6 +25,7 @@ class KeptAnswerConstraintIntegrationSpec extends Specification {
 
     def setupSpec() {
         session = JdbcClient.create(Baseline.appliedTo(server, "postgres"))
+        // DB-SPECIFIC: PostgreSQL :: casts to regnamespace; pg_constraint; pg_get_constraintdef().
         bounded = session.sql("""
                 select pg_get_constraintdef(oid) from pg_constraint
                 where conname = 'model_calls_answer_bounded' and connamespace = 'app'::regnamespace and contype = 'c'
@@ -60,7 +58,7 @@ class KeptAnswerConstraintIntegrationSpec extends Specification {
         piece << ["a", Character.toString(0x1F600)]
     }
 
-    /** Refused on the way in, or rewritten without a word: either way, not what came back. */
+
     def "what came back unkept is not held by the store as it came"() {
         expect:
         readBack(cameBack) != cameBack
@@ -84,7 +82,7 @@ class KeptAnswerConstraintIntegrationSpec extends Specification {
                 .param(answer).query(Boolean).single()
     }
 
-    /** Every code point, in pieces short enough to be kept whole, NUL included, lone surrogates among them. */
+
     private static List<String> everyCodePointInChunks() {
         (0..Character.MAX_CODE_POINT).collate(1000).collect { chunk ->
             def builder = new StringBuilder()

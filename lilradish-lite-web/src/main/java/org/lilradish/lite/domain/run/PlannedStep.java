@@ -16,7 +16,7 @@ import org.lilradish.lite.domain.workflow.StepId;
  * @param producer none exactly where what it runs produces nothing of its own: a workflow or a route
  * @param tries none exactly where it has no producer
  * @param reviewer the model reviewing its productions; none where a person does, or where nobody does
- * @param bindings what fills each input it takes, in the order written
+ * @param bindings what fills each input it takes, in the order written; none for a search, whose question is its input
  */
 public record PlannedStep(
         WorkflowStepId id,
@@ -36,10 +36,18 @@ public record PlannedStep(
         if (order < 1) {
             throw new IllegalArgumentException("PlannedStep order must be positive: " + order);
         }
-        boolean produces = runs instanceof StepRuns.Question || runs instanceof StepRuns.Code;
+        boolean produces =
+                switch (runs) {
+                    case StepRuns.Question _, StepRuns.Code _, StepRuns.Search _ -> true;
+                    case StepRuns.Workflow _, StepRuns.Route _ -> false;
+                };
         if (produces != (producer != null) || produces != (tries != null) || (!produces && reviewer != null)) {
             throw new IllegalArgumentException("PlannedStep " + name.value()
                     + " names a producer, tries and a reviewer exactly where what it runs produces");
+        }
+        if (runs instanceof StepRuns.Search && (producer instanceof Producer.Code || !bindings.isEmpty())) {
+            throw new IllegalArgumentException(
+                    "PlannedStep " + name.value() + " searches with its question alone, asked of a model or a person");
         }
         if (tries != null && tries < 1) {
             throw new IllegalArgumentException("PlannedStep tries must be positive: " + tries);

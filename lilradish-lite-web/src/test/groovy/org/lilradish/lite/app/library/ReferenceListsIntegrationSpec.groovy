@@ -86,6 +86,7 @@ class ReferenceListsIntegrationSpec extends Specification {
         def delivery = termed(VERSION, 2, "Delivery", "It came late or not at all.")
         def billing = termed(VERSION, 1, "Billing", "A charge is what is disputed.")
         def returns = termed(VERSION, 3, "Returns", "It was sent back.")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update entry_versions set revision = 6 where entry_version_id = ?::uuid").param(VERSION)
                 .update()
 
@@ -197,6 +198,7 @@ class ReferenceListsIntegrationSpec extends Specification {
     }
 
     private UUID termed(String version, int position, String term, String meaning) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, ?, ?, ?, ?::uuid)

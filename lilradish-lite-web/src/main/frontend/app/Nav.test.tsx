@@ -233,8 +233,7 @@ describe("Nav", () => {
   /**
    * The router decides which entry is current, and every address under it
    * begins with the same prefix — which is what makes a comparison written by
-   * hand here mark two entries at once. The lenses are separate paths for the
-   * same reason: a search string is not part of that decision.
+   * hand here mark two entries at once.
    */
   it.each([
     ["a screen of its own", "/system/groups", "Groups"],

@@ -14,11 +14,10 @@ const GROUP = "00000003-0000-4000-8000-000000000c21";
 const STOPPED = {
   runId: "00000008-0000-4000-8000-000000000c21",
   number: 2,
-  name: "Refund for Grace",
+  name: "Refund for Glinn",
   workflow: { name: "Pay a refund", version: 3 },
   startedBy: { userId: "000c21", displayName: "Ann Example" },
   startedAt: "2026-09-25T09:00:00Z",
-  lastHappenedAt: "2026-09-25T09:30:00Z",
   state: "stopped",
 };
 
@@ -26,11 +25,10 @@ const STOPPED = {
 const NAMELESS_STARTER = {
   runId: "00000008-0000-4000-8000-000000000c22",
   number: 1,
-  name: "Claim from Ada",
+  name: "Claim from Avo",
   workflow: { name: "Handle a claim", version: 1 },
   startedBy: { userId: "000c22" },
   startedAt: "2026-09-25T08:00:00Z",
-  lastHappenedAt: "2026-09-25T08:00:00Z",
   state: "running",
   at: "summarise",
 };
@@ -39,13 +37,15 @@ describe("startRun", () => {
   const START = {
     name: "Kettle arrived broken",
     versionId: "00000007-0000-4000-8000-000000000c21",
+    uploads: [],
+    hasFilePositions: false,
     values: {
       complaint: "It leaks.",
       amount: "12.50",
       urgent: "true",
       due: null,
       tags: [],
-      contact: { email: "ada@example.org", phones: ["0123"] },
+      contact: { email: "avo@example.org", phones: ["0123"] },
     },
   };
 
@@ -54,18 +54,63 @@ describe("startRun", () => {
       JSON.stringify({ runId: STOPPED.runId, number: 7, readable: true }),
       201,
     ]);
+    const controller = new AbortController();
 
-    const started = await startRun(GROUP, START, new AbortController().signal);
+    const started = await startRun(GROUP, START, controller.signal);
 
+    expect(sent).toHaveBeenCalledTimes(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(`/api/groups/${GROUP}/runs`);
     expect(init?.method).toBe("POST");
-    expect(JSON.parse(String(init?.body))).toEqual(START);
+    expect(init?.signal).toBe(controller.signal);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: START.name,
+      versionId: START.versionId,
+      values: START.values,
+    });
     expect(started).toEqual({
       runId: STOPPED.runId,
       number: 7,
       readable: true,
     });
+  });
+
+  it("sends a file run as a first JSON document and one fixed-name part without a client file id", async () => {
+    const sent = answering([
+      JSON.stringify({ runId: STOPPED.runId, number: 7, readable: true }),
+      201,
+    ]);
+    const file = new File(["data"], 'Demo Sample %"/文.pdf', {
+      type: "application/pdf",
+    });
+    const start = {
+      name: "Demo Sample",
+      versionId: START.versionId,
+      values: {
+        attachment: { upload: 0, name: file.name },
+      },
+      uploads: [file],
+      hasFilePositions: true,
+    };
+
+    await startRun(GROUP, start, new AbortController().signal);
+
+    const [address, init] = sent.mock.calls[0]!;
+    expect(address).toBe(`/api/groups/${GROUP}/runs`);
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual({ Accept: "application/json" });
+    expect(init?.body).toBeInstanceOf(FormData);
+    const parts = [...(init!.body as FormData).entries()];
+    expect(parts.map(([name]) => name)).toEqual(["document", "upload0"]);
+    expect(JSON.parse(String(parts[0]![1]))).toEqual({
+      name: start.name,
+      versionId: start.versionId,
+      values: { attachment: { upload: 0, name: file.name } },
+    });
+    expect(JSON.stringify(parts[0]![1])).not.toContain("id");
+    expect(parts[1]![1]).toBeInstanceOf(File);
+    expect((parts[1]![1] as File).name).toBe("file");
+    expect((parts[1]![1] as File).type).toBe("application/pdf");
   });
 
   it("reads a run begun that the reader may not read as one they may not", async () => {
@@ -143,18 +188,18 @@ describe("runsLoader", () => {
   it("asks for the group's runs in the order and with the filter asked, from where the page left off", async () => {
     const sent = answering(['{"items":[],"reading":"all"}', 200]);
 
-    await runsLoader(GROUP, { filter: "", order: "-lastHappened" })(
+    await runsLoader(GROUP, { filter: "", order: "-started" })(
       null,
       new AbortController().signal,
     );
-    await runsLoader("a/b", { filter: "Ada", order: "startedBy" })(
+    await runsLoader("a/b", { filter: "Avo", order: "startedBy" })(
       "c1",
       new AbortController().signal,
     );
 
     expect(sent.mock.calls.map(([address]) => address)).toEqual([
-      `/api/groups/${GROUP}/runs?sort=-lastHappened`,
-      "/api/groups/a%2Fb/runs?sort=startedBy&filter=Ada&cursor=c1",
+      `/api/groups/${GROUP}/runs?sort=-started`,
+      "/api/groups/a%2Fb/runs?sort=startedBy&filter=Avo&cursor=c1",
     ]);
   });
 
@@ -223,7 +268,6 @@ describe("runsLoader", () => {
     ["a step written as null", { ...STOPPED, at: null }],
     ["a step that is no word", { ...STOPPED, at: 1 }],
     ["no time it started", { ...STOPPED, startedAt: 9 }],
-    ["no time it was last acted on", { ...STOPPED, lastHappenedAt: undefined }],
   ])(
     "refuses a page holding a run with %s, as a document this side cannot read",
     async (_case, row) => {

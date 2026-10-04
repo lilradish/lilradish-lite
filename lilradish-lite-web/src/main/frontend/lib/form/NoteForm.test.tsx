@@ -179,6 +179,39 @@ describe("NoteForm", () => {
     expect(act).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the first two thousand characters of a pasted note and sends only those", async () => {
+    const act = vi.fn();
+    form({ acts: [{ label: "Reject", act }] });
+    const written = "a".repeat(2000);
+
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.paste(`${written}b`);
+    expect(screen.getByRole("textbox")).toHaveValue(written);
+
+    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(act).toHaveBeenCalledExactlyOnceWith(written);
+  });
+
+  it("keeps Enter in the note from acting until a button is pressed", async () => {
+    const approve = vi.fn();
+    const reject = vi.fn();
+    form({
+      acts: [
+        { label: "Approve", act: approve },
+        { label: "Reject", act: reject },
+      ],
+    });
+
+    await userEvent.type(screen.getByRole("textbox"), "Demo Sample{Enter}");
+    expect(approve).not.toHaveBeenCalled();
+    expect(reject).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("Demo Sample");
+
+    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(reject).toHaveBeenCalledExactlyOnceWith("Demo Sample");
+    expect(approve).not.toHaveBeenCalled();
+  });
+
   /**
    * The note is the reviewer's reasoning and an act may be refused, so losing
    * it on click means writing it twice. Clearing here reads like the obvious

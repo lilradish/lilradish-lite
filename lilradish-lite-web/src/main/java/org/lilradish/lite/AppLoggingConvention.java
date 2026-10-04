@@ -11,10 +11,6 @@ import org.libprunus.core.log.runtime.LogLevel;
  * and exit logging woven in, which have their {@code toString()} replaced by a structural rendering,
  * and how long one rendered line may run before it is cut.
  *
- * <p>A profile matches by package and class suffix, and both lists below are maintained by hand: a
- * type no suffix names is rewritten by nothing, and renders as a class name and an identity hash
- * that traces nobody.
- *
  * <p>The two method-logging profiles are the wiring a service or a controller added to that package
  * would be woven by, stated once rather than remembered at the time.
  */
@@ -63,7 +59,16 @@ import org.libprunus.core.log.runtime.LogLevel;
             "FieldName",
             "Fault",
             "Said",
-            "Reads"
+            "Reads",
+            "Part",
+            "ConvertedCallAnswer",
+            "ToolCallOutcome",
+            "SearchObservation",
+            "ListFilter",
+            "ReviewPayload$Built",
+            "ModelToolName",
+            "CallOutcome$TurnedAway",
+            "CallOutcome$NotResent"
         })
 @MaxMessageLength(512)
 public final class AppLoggingConvention {

@@ -124,8 +124,14 @@ final class LibraryController {
     }
 
     private static EntryRowAnswer rowAnswer(Library.LibraryRow row) {
+        EntryPurpose purpose = row.purpose();
         return new EntryRowAnswer(
-                row.entryId().value(), row.name().value(), row.inService(), row.submitted(), row.stopped());
+                row.entryId().value(),
+                row.name().value(),
+                purpose == null ? null : purpose.value(),
+                row.inService(),
+                row.submitted(),
+                row.stopped());
     }
 
     private static VersionAnswer versionAnswer(Library.VersionView version) {
@@ -160,10 +166,15 @@ final class LibraryController {
                 .toList();
     }
 
-    /** @param inService the number of the newest version in service, absent where none is */
+    /** Absent purpose and in-service version are left off the wire. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record EntryRowAnswer(
-            UUID entryId, String name, @Nullable Integer inService, boolean submitted, boolean stopped) {}
+            UUID entryId,
+            String name,
+            @Nullable String purpose,
+            @Nullable Integer inService,
+            boolean submitted,
+            boolean stopped) {}
 
     /**
      * @param purpose absent where the entry says nothing of what it is for

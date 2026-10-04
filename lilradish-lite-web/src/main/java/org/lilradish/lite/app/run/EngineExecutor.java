@@ -3,6 +3,7 @@ package org.lilradish.lite.app.run;
 import static java.util.Objects.requireNonNull;
 
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -10,6 +11,14 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.app.codestep.CodeStepDeployment;
 import org.lilradish.lite.app.inference.LongestSend;
+import org.lilradish.lite.domain.identity.GroupId;
+import org.lilradish.lite.domain.inference.ModelCallPurpose;
+import org.lilradish.lite.domain.registry.EntryId;
+import org.lilradish.lite.domain.run.ProductionId;
+import org.lilradish.lite.domain.run.RunId;
+import org.lilradish.lite.domain.run.RunStepFailureId;
+import org.lilradish.lite.domain.run.RunStepSendAttemptId;
+import org.lilradish.lite.domain.run.WorkflowStepId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -49,6 +58,8 @@ final class EngineExecutor implements DisposableBean, ApplicationListener<Contex
     private final AtomicInteger threadsMade = new AtomicInteger();
 
     private final AtomicInteger codeThreadsMade = new AtomicInteger();
+
+    private final ConcurrentHashMap<Object, Object> queued = new ConcurrentHashMap<>();
 
     private final Duration drain;
 
@@ -110,18 +121,43 @@ final class EngineExecutor implements DisposableBean, ApplicationListener<Contex
     }
 
     void execute(Runnable task) {
-        handOver(pool, task);
+        handOver(pool, task, null);
+    }
+
+    void execute(EntryId entry, Runnable task) {
+        requireNonNull(entry, "EngineExecutor entry must not be null");
+        handOver(pool, task, new EntryIntent(entry));
+    }
+
+    void execute(PendingSend pending, Runnable task) {
+        requireNonNull(pending, "EngineExecutor pending send must not be null");
+        Object intent = pending.presser() == null
+                ? new RunIntent(pending.group(), pending.root())
+                : new PressedSendIntent(pending.purpose(), pending.aTry(), pending.attemptOn(), pending.failedOn());
+        handOver(pool, task, intent);
     }
 
     /** As {@link #execute} does, on the threads code is run on and nothing else is. */
     void executeCode(Runnable task) {
-        handOver(codePool, task);
+        handOver(codePool, task, null);
     }
 
-    private static void handOver(ThreadPoolTaskExecutor to, Runnable task) {
+    void executeCode(PendingCode pending, Runnable task) {
+        requireNonNull(pending, "EngineExecutor pending code must not be null");
+        handOver(codePool, task, new CodeIntent(pending.group(), pending.root(), pending.step()));
+    }
+
+    private void handOver(ThreadPoolTaskExecutor to, Runnable task, @Nullable Object intent) {
         requireNonNull(task, "EngineExecutor task must not be null");
+        Object ticket = intent == null ? task : new Object();
+        if (intent != null && queued.putIfAbsent(intent, ticket) != null) {
+            return;
+        }
         try {
             to.execute(() -> {
+                if (intent != null) {
+                    queued.remove(intent, ticket);
+                }
                 try {
                     task.run();
                 } catch (Exception failed) {
@@ -132,12 +168,31 @@ final class EngineExecutor implements DisposableBean, ApplicationListener<Contex
                             "A run handed over stopped its thread with {}",
                             fatal.getClass().getName());
                     throw fatal;
+                } finally {
+                    if (intent != null) {
+                        queued.remove(intent, ticket);
+                    }
                 }
             });
         } catch (TaskRejectedException refused) {
+            if (intent != null) {
+                queued.remove(intent, ticket);
+            }
             logger.warn("A run was handed over once runs had stopped going on by themselves", refused);
         }
     }
+
+    private record EntryIntent(EntryId entry) {}
+
+    private record RunIntent(GroupId group, RunId root) {}
+
+    private record PressedSendIntent(
+            ModelCallPurpose purpose,
+            ProductionId production,
+            @Nullable RunStepSendAttemptId attempt,
+            @Nullable RunStepFailureId failure) {}
+
+    private record CodeIntent(GroupId group, RunId root, WorkflowStepId step) {}
 
     @Override
     public void destroy() {

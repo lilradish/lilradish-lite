@@ -8,10 +8,10 @@ const GROUP = "00000003-0000-4000-8000-000000000991";
 
 const SUBJECT = "00000002-0000-4000-8000-000000000991";
 
-const GRACE = {
+const GLINN = {
   subjectId: SUBJECT,
   userId: "000991",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   roles: ["operator"],
   lastChangingRoles: [],
   removable: true,
@@ -25,7 +25,7 @@ const CHANGES = [
 
 describe.each(CHANGES)("%s", (_name, change, method) => {
   it("asks for the role at the member's own address inside the group, carrying nothing", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     await change(GROUP, SUBJECT, "overseer", new AbortController().signal);
 
@@ -38,7 +38,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
   });
 
   it("reads the member as the group now holds them", async () => {
-    answering([JSON.stringify(GRACE), 200]);
+    answering([JSON.stringify(GLINN), 200]);
 
     const member = await change(
       GROUP,
@@ -48,7 +48,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
     );
 
     expect(member).toEqual({
-      ...GRACE,
+      ...GLINN,
       roles: new Set(["operator"]),
       lastChangingRoles: new Set(),
       removable: true,
@@ -69,7 +69,7 @@ describe.each(CHANGES)("%s", (_name, change, method) => {
   });
 
   it("goes through the member's address as atMember makes it, refusing what it refuses", async () => {
-    const sent = answering([JSON.stringify(GRACE), 200]);
+    const sent = answering([JSON.stringify(GLINN), 200]);
 
     const failure = await refusalOf(
       change(GROUP, "..", "operator", new AbortController().signal),

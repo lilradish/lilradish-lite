@@ -117,10 +117,45 @@ public final class ConstantFit {
         };
     }
 
+    /** Other mismatches may remain in a draft; a line break at a known one-line field may not. */
+    public static boolean breaksTextLines(JsonValue constant, Field field) {
+        requireNonNull(constant, "ConstantFit constant must not be null");
+        requireNonNull(field, "ConstantFit field must not be null");
+        return switch (field.howMany()) {
+            case HowMany.One ignored -> breaksTextLinesOne(constant, field.shape());
+            case HowMany.Many ignored ->
+                constant instanceof JsonValue.JsonArray items
+                        && items.items().stream().anyMatch(item -> breaksTextLinesOne(item, field.shape()));
+        };
+    }
+
+    private static boolean breaksTextLinesOne(JsonValue value, FieldShape shape) {
+        return switch (shape) {
+            case FieldShape.Text text ->
+                value instanceof JsonValue.JsonString written && !text.lines().accepts(written.value());
+            case FieldShape.Nested nested -> {
+                if (!(value instanceof JsonValue.JsonObject written)) {
+                    yield false;
+                }
+                Map<String, JsonValue> byName =
+                        HashMap.newHashMap(written.members().size());
+                written.members().forEach(member -> byName.put(member.name(), member.value()));
+                yield nested.fields().stream().anyMatch(held -> {
+                    JsonValue member = byName.get(held.name().value());
+                    return member != null && breaksTextLines(member, held);
+                });
+            }
+            case FieldShape.Term ignored -> false;
+            case FieldShape.Plain ignored -> false;
+            case FieldShape.File ignored -> false;
+        };
+    }
+
     private static boolean fitsOne(JsonValue value, FieldShape shape, Map<EntryVersionId, OfferedTerms> terms) {
         return switch (shape) {
             case FieldShape.Text text ->
                 value instanceof JsonValue.JsonString written
+                        && text.lines().accepts(written.value())
                         && (text.longest() == null || Legibility.withinMaximumLength(written.value(), text.longest()));
             case FieldShape.Term term ->
                 value instanceof JsonValue.JsonString written
@@ -130,6 +165,7 @@ public final class ConstantFit {
             case FieldShape.Nested nested ->
                 value instanceof JsonValue.JsonObject written && members(written, nested, terms);
             case FieldShape.Plain plain -> plain.kind().writes(value);
+            case FieldShape.File ignored -> false;
         };
     }
 

@@ -33,11 +33,7 @@ export function Frame() {
   return (
     <StandingProvider read={standing}>
       <AppShell
-        brand={
-          <Typography variant="h6" component="p">
-            {PRODUCT_NAME}
-          </Typography>
-        }
+        brand={<Typography variant="brand">{PRODUCT_NAME}</Typography>}
         navigation={<Nav inForce={inForce} />}
         utility={null}
         at={at}

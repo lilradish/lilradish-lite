@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { asProblem, RequestFailed, type Problem } from "../../api/problem";
 import { reportCaught } from "../report/reportCaught";
@@ -48,6 +48,7 @@ export function useResource<T>(
   // Boxed because React calls a bare function handed to `useState` or to a
   // setter: unwrapped, `load` would run during render, without a signal.
   const [source, setSource] = useState({ load });
+  const abandonRead = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -55,6 +56,11 @@ export function useResource<T>(
     // both: a caller may chain work onto the read, and that chain runs whether
     // or not the request it was chained to was cut off.
     let abandoned = false;
+    const abandon = () => {
+      abandoned = true;
+      controller.abort();
+    };
+    abandonRead.current = abandon;
     const refuse = (failure: unknown) => {
       if (!(controller.signal.aborted || failure instanceof RequestFailed)) {
         reportCaught(failure);
@@ -80,12 +86,15 @@ export function useResource<T>(
       refuse(failure);
     }
     return () => {
-      abandoned = true;
-      controller.abort();
+      if (abandonRead.current === abandon) {
+        abandonRead.current = null;
+      }
+      abandon();
     };
   }, [load, blank, attempt]);
 
   const reload = useCallback(() => {
+    abandonRead.current?.();
     setSettled((prior) => ({ ...prior, problem: null, loading: true }));
     setAttempt((count) => count + 1);
   }, []);

@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,8 @@ import type {
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { theme } from "../../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { NO_GROUND } from "../../testutil/grounds";
 import { StepEditor } from "./StepEditor";
 import { flowOf, namedVersions, type FlowDraft } from "./workflowDrafts";
 
@@ -163,10 +165,49 @@ const WORKFLOW: WorkflowVersion = {
     ],
     workflows: [],
     codeSteps: [TIDYING],
-    models: [{ name: "general", modes: ["research"] }],
+    searchWays: [],
+    models: [{ name: "general", modes: ["research"], tools: [] }],
   },
   terms: new Map(),
 };
+
+function searchingWorkflow(): WorkflowVersion {
+  const search: Step = {
+    stepId: "s4",
+    name: "find",
+    bindings: [],
+    runs: {
+      kind: "search",
+      searchWay: "web",
+      question: [
+        { text: "Find " },
+        { partId: "p1", from: { input: "complaint" } },
+        { partId: "p2", from: { step: 0, path: "summary" } },
+      ],
+      standings: { title: "always", body: "never" },
+    },
+    producer: { kind: "model", model: "general", toldWhatHappened: true },
+    tries: 2,
+  };
+  return {
+    ...WORKFLOW,
+    steps: [...WORKFLOW.steps, search],
+    offered: {
+      ...WORKFLOW.offered,
+      searchWays: [
+        {
+          name: "web",
+          tool: "web_search",
+          gives: [{ ...SUMMARY, name: "title" }],
+        },
+      ],
+      models: [
+        { name: "general", modes: ["research"], tools: ["web_search"] },
+        { name: "small", modes: [], tools: [] },
+      ],
+    },
+  };
+}
 
 function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
@@ -236,6 +277,351 @@ function groupNames(): string[] {
 }
 
 describe("StepEditor", () => {
+  it("refreshes memoized search choices when an unnamed source becomes a real name with identical words", async () => {
+    const workflow = searchingWorkflow();
+    const original = flowOf(workflow);
+    function Host() {
+      const [flow, setFlow] = useState({
+        ...original,
+        steps: original.steps.map((step, index) =>
+          index === 0 ? { ...step, name: "" } : step,
+        ),
+      });
+      return (
+        <>
+          <button
+            onClick={() =>
+              setFlow((now) => ({
+                ...now,
+                steps: now.steps.map((step, index) =>
+                  index === 0
+                    ? { ...step, name: "Step 1, not named yet" }
+                    : step,
+                ),
+              }))
+            }
+          >
+            Name the source
+          </button>
+          <StepEditor
+            step={flow.steps[3]!}
+            position={3}
+            flow={flow}
+            workflow={workflow}
+            named={namedVersions(workflow)}
+            editable
+            change={(changed) =>
+              setFlow((now) => ({
+                ...now,
+                steps: now.steps.map((step, index) =>
+                  index === 3 ? changed(step) : step,
+                ),
+              }))
+            }
+          />
+        </>
+      );
+    }
+    render(<Host />, { wrapper: themed });
+    const control = screen.getAllByRole("combobox", { name: "From" })[1]!;
+    expect(control.textContent).toBe("Step 1: Step 1, not named yet");
+    expect(
+      getComputedStyle(within(control).getByText("not named yet")).fontStyle,
+    ).toBe("italic");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Name the source" }),
+    );
+    expect(control.textContent).toBe("Step 1: Step 1, not named yet");
+    expect(within(control).queryByText("not named yet")).toBeNull();
+    const name = within(control).getByText("Step 1, not named yet");
+    expect(name.tagName).toBe("BDI");
+    expect(getComputedStyle(name).fontStyle).not.toBe("italic");
+    await userEvent.click(control);
+    const option = screen.getByRole("option", {
+      name: "Step 1: Step 1, not named yet",
+    });
+    expect(within(option).queryByText("not named yet")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(control).toHaveFocus();
+  });
+  it("gives the name and runs their own full-width vertical places", () => {
+    editing(0, true);
+    const name = screen
+      .getByRole("textbox", { name: "Name" })
+      .closest(".MuiFormControl-root")!;
+    const runs = screen
+      .getByRole("combobox", { name: "Runs" })
+      .closest(".MuiFormControl-root")!;
+    const group = name.parentElement!;
+    expect(runs.parentElement).toBe(group);
+    expect(getComputedStyle(group).flexDirection).toBe("column");
+    expect(getComputedStyle(group).alignItems).toBe("stretch");
+    expect(name).toHaveClass("MuiFormControl-fullWidth");
+    expect(runs).toHaveClass("MuiFormControl-fullWidth");
+    expect(getComputedStyle(group).gap).toBe("20px");
+  });
+  it("spaces search headings from outlined labels and keeps complete labels across the column", () => {
+    editing(3, true, searchingWorkflow());
+    const heading = screen.getByRole("heading", { name: "Gives back stands" });
+    expect(getComputedStyle(heading).marginBottom).toBe("20px");
+    const field = screen
+      .getByRole("combobox", { name: "references stands" })
+      .closest(".MuiFormControl-root")!;
+    expect(field).toHaveClass("MuiFormControl-fullWidth");
+    expect(getComputedStyle(field.parentElement!).flexDirection).toBe("column");
+    const control = screen.getByRole("combobox", { name: "references stands" });
+    const label = document.getElementById(
+      control.getAttribute("aria-labelledby")!,
+    )!;
+    expect(label.textContent).toBe("references stands");
+    expect(getComputedStyle(label).maxWidth).toBe("calc(100% - 24px)");
+  });
+  it("draws search part moves as navigation and removal as a warning", () => {
+    editing(3, true, searchingWorkflow());
+    const up = screen.getByRole("button", { name: /Move up: Find/ });
+    const down = screen.getByRole("button", { name: /Move down: Find/ });
+    const remove = screen.getByRole("button", { name: /Take out: Find/ });
+    expect(up).toHaveClass("MuiIconButton-colorInherit");
+    expect(down).toHaveClass("MuiIconButton-colorInherit");
+    expect(remove).toHaveClass("MuiIconButton-colorWarning");
+    expect(remove).not.toHaveClass("MuiIconButton-colorInherit");
+  });
+  it("starts producer and tries at the same edge, with model controls stretched", () => {
+    editing(3, true, searchingWorkflow());
+    const producer = screen
+      .getByRole("combobox", { name: "Who produces its values" })
+      .closest(".MuiFormControl-root")!;
+    const tries = screen
+      .getByRole("textbox", { name: "How many tries" })
+      .closest(".MuiFormControl-root")!;
+    const group = producer.parentElement!;
+    expect(tries.parentElement).toBe(group);
+    expect(getComputedStyle(group).flexDirection).toBe("column");
+    expect(getComputedStyle(group).alignItems).toBe("stretch");
+    expect(getComputedStyle(producer).width).toBe("100%");
+    expect(getComputedStyle(tries).width).toBe("100%");
+    const model = within(group)
+      .getByRole("combobox", { name: "Model" })
+      .closest(".MuiFormControl-root")!;
+    expect(getComputedStyle(model).width).toBe("100%");
+  });
+
+  it("shows a search way's tool and offers only models that provide it", async () => {
+    editing(3, true, searchingWorkflow());
+
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Way to search" }),
+    );
+    expect(
+      screen.getAllByText("Needs a model offering web_search").length,
+    ).toBeGreaterThan(0);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    expect(screen.getByRole("option", { name: "general" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "small" })).toBeNull();
+  });
+
+  it("keeps a newly typed search part and the renamed step together", () => {
+    const held = editing(3, true, searchingWorkflow());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "find_more" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Written text" }), {
+      target: { value: "Find now " },
+    });
+
+    const step = held.flow.steps[3]!;
+    expect(step.name).toBe("find_more");
+    expect(step.runs.kind).toBe("search");
+    if (step.runs.kind !== "search") throw new Error("search missing");
+    expect(step.runs.question).toEqual([
+      { key: "text-0", text: "Find now " },
+      { key: "p1", partId: "p1", source: { from: "input", path: "complaint" } },
+      {
+        key: "p2",
+        partId: "p2",
+        source: { from: "step", stepKey: "s1", path: "summary" },
+      },
+    ]);
+  });
+
+  it("updates search source choices and forward warnings when their inputs change", async () => {
+    const original = searchingWorkflow();
+    const later: DeclaredField = {
+      ...COMPLAINT,
+      fieldId: "later",
+      name: "later",
+    };
+    function Host() {
+      const [workflow, setWorkflow] = useState(original);
+      const [flow, setFlow] = useState(flowOf(original));
+      const position = flow.steps.findIndex((step) => step.key === "s4");
+      return (
+        <>
+          <button
+            onClick={() =>
+              setWorkflow((now) => ({
+                ...now,
+                takes: [...now.takes, later],
+              }))
+            }
+          >
+            Offer another input
+          </button>
+          <button
+            onClick={() =>
+              setFlow((now) => ({
+                ...now,
+                steps: [now.steps[3]!, ...now.steps.slice(0, 3)],
+              }))
+            }
+          >
+            Move search first
+          </button>
+          <StepEditor
+            step={flow.steps[position]!}
+            position={position}
+            flow={flow}
+            workflow={workflow}
+            named={namedVersions(workflow)}
+            editable
+            change={(changed) =>
+              setFlow((now) => ({
+                ...now,
+                steps: now.steps.map((step, index) =>
+                  index === position ? changed(step) : step,
+                ),
+              }))
+            }
+          />
+        </>
+      );
+    }
+    render(<Host />, { wrapper: themed });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Offer another input" }),
+    );
+    await userEvent.click(
+      screen.getAllByRole("combobox", { name: "Which" })[0]!,
+    );
+    expect(screen.getByRole("option", { name: "later" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(
+      screen.queryByText(
+        "It reads a step that does not come before this one, which submitting refuses.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move search first" }));
+
+    expect(
+      screen.getByText(
+        "It reads a step that does not come before this one, which submitting refuses.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("holds both add controls at 256 question parts and explains the limit", () => {
+    const workflow = searchingWorkflow();
+    const step = workflow.steps[3]!;
+    const full: Step = {
+      ...step,
+      runs: {
+        ...step.runs,
+        kind: "search",
+        question: Array.from({ length: 256 }, () => ({ text: "x" })),
+        standings: {},
+      },
+    };
+    editing(3, true, {
+      ...workflow,
+      steps: [...workflow.steps.slice(0, 3), full],
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Add written text" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Add a value" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.getAllByText(
+        "A question holds at most 256 parts. Remove one to add another.",
+      ),
+    ).toHaveLength(2);
+  }, 15000);
+
+  it("moves search parts by named keyboard controls and keeps their source identities", async () => {
+    const held = editing(3, true, searchingWorkflow());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Move down: Find/ }),
+    );
+    const search = held.flow.steps[3]!.runs;
+    expect(search.kind).toBe("search");
+    if (search.kind !== "search") throw new Error("search missing");
+    expect(search.question[0]).toEqual({
+      key: "p1",
+      partId: "p1",
+      source: { from: "input", path: "complaint" },
+    });
+    expect(search.question[1]).toEqual({ key: "text-0", text: "Find " });
+    expect(
+      screen.getByRole("button", { name: /Move up: complaint of/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("adds a value only from workflow inputs or earlier steps and excludes files", async () => {
+    const file: DeclaredField = {
+      fieldId: "f10",
+      name: "attachment",
+      kind: "file",
+      many: false,
+      mustBeGiven: true,
+      maximumBytes: 100,
+      types: ["text/plain"],
+    };
+    const workflow = {
+      ...searchingWorkflow(),
+      takes: [...WORKFLOW.takes, file],
+    };
+    const held = editing(3, true, workflow);
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a value" }));
+    const from = screen.getAllByRole("combobox", { name: "From" }).at(-1)!;
+    await userEvent.click(from);
+    expect(
+      screen.getByRole("option", { name: "What the workflow takes" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /Step 1: triage/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Step 4/ })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("option", { name: "What the workflow takes" }),
+    );
+    await userEvent.click(
+      screen.getAllByRole("combobox", { name: "Which" }).at(-1)!,
+    );
+    expect(
+      screen.getByRole("option", { name: "complaint" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "attachment" })).toBeNull();
+    await userEvent.click(screen.getByRole("option", { name: "complaint" }));
+
+    const search = held.flow.steps[3]!.runs;
+    expect(search.kind).toBe("search");
+    if (search.kind !== "search") throw new Error("search missing");
+    expect(search.question.at(-1)).toEqual({
+      key: "search-4",
+      source: { from: "input", path: "complaint" },
+    });
+    expect(search.question.at(-1)).not.toHaveProperty("partId");
+  });
+
   it("reads what a step runs, who produces it, its tries and who reviews it where the draft may not be written", () => {
     editing(0, false);
 
@@ -254,6 +640,90 @@ describe("StepEditor", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["the code step it names", "tidy_up", "tidy_up"],
+    ["that it names no code step yet", "", "Nothing chosen yet"],
+  ])(
+    "reads a code step by %s alone where the draft may not be written, leaving its kind to the panel's head",
+    (_case, codeStep, words) => {
+      editing(2, false, {
+        ...WORKFLOW,
+        steps: WORKFLOW.steps.map((step) =>
+          step.stepId === "s3"
+            ? { ...step, runs: { kind: "code_step", codeStep } }
+            : step,
+        ),
+      });
+
+      expect(screen.getByText(words)).toBeInTheDocument();
+      expect(screen.queryByText(/code step/i)).toBeNull();
+      expect(screen.queryByText("None chosen yet")).toBeNull();
+    },
+  );
+
+  it.each(["question", "workflow"] as const)(
+    "says a step running a %s that pins no version yet runs nothing chosen where the draft may not be written, as its row in the steps does",
+    (kind) => {
+      editing(0, false, {
+        ...WORKFLOW,
+        steps: WORKFLOW.steps.map((step) =>
+          step.stepId === "s1" ? { ...step, runs: { kind } } : step,
+        ),
+      });
+
+      expect(screen.getByText("Nothing chosen yet")).toBeInTheDocument();
+      expect(screen.queryByText("None chosen yet")).toBeNull();
+    },
+  );
+
+  it("reads a route by its parts alone where the draft may not be written, leaving its kind to the panel's head", () => {
+    editing(1, false);
+
+    expect(
+      screen.getByRole("heading", { name: "What every case gives back" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^(a )?route$/i)).toBeNull();
+    expect(screen.queryByText("Nothing chosen yet")).toBeNull();
+  });
+
+  it("says a step that runs nothing yet runs nothing chosen where the draft may not be written, as its row in the steps does", () => {
+    editing(1, false, {
+      ...WORKFLOW,
+      steps: WORKFLOW.steps.map((step) =>
+        step.stepId === "s2" ? { ...step, runs: undefined } : step,
+      ),
+    });
+
+    expect(screen.getByText("Nothing chosen yet")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Runs" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "What every case gives back" }),
+    ).toBeNull();
+  });
+
+  it("lays who produces and how often it is tried on one ground, who reviews and what fills each input each on one of its own, and what it runs on none", () => {
+    editing(0, false);
+
+    const around = (words: string) => screen.getByText(words).parentElement!;
+    const drawnAround = (words: string) => drawnOf(around(words));
+    const group = drawnAtDepth(3);
+    const grounds = [
+      "Who produces its values: A person",
+      "Who may review: general in research",
+      "What fills each input",
+    ].map(around);
+
+    expect(around("How many tries: 2")).toBe(grounds[0]);
+    expect(new Set(grounds).size).toBe(grounds.length);
+    expect(grounds.map(drawnOf)).toEqual([group, group, group]);
+    expect(drawnAround(`${isolatedInText("Triage")}, version 4`).ground).toBe(
+      NO_GROUND,
+    );
+    expect(
+      screen.getAllByRole("heading").map((heading) => heading.textContent),
+    ).toEqual(["What fills each input"]);
+  });
+
   it("reads what fills each input, and only those, under a heading of its own where the draft may not be written", () => {
     editing(0, false);
 
@@ -262,8 +732,8 @@ describe("StepEditor", () => {
     ).toBeInTheDocument();
     expect(
       screen
-        .getAllByText(/: What the workflow takes, /)
-        .map((each) => each.textContent),
+        .getAllByLabelText(/^What the workflow takes, /)
+        .map((each) => each.parentElement!.textContent),
     ).toEqual([
       "complaint: What the workflow takes, complaint",
       "urgency: What the workflow takes, complaint",
@@ -483,13 +953,15 @@ describe("StepEditor", () => {
   it("says against an input that must be given one filled from what need not be, which may be empty", async () => {
     editing(0, true);
     const input = screen.getByRole("group", { name: "complaint" });
+    const which = () => within(input).getByRole("combobox", { name: "Which" });
 
-    expect(input).not.toHaveAccessibleDescription(/may be empty/);
+    expect(which()).not.toHaveAccessibleDescription(/may be empty/);
     await chooseIn(input, "Which", "note");
 
-    expect(input).toHaveAccessibleDescription(
+    expect(which()).toHaveAccessibleDescription(
       "What it fills must be given, and what it reads need not be, so that may be empty.",
     );
+    expect(input).not.toHaveAttribute("aria-describedby");
   });
 
   it("offers a step only what the workflow takes and the steps before it to read from", async () => {
@@ -512,6 +984,15 @@ describe("StepEditor", () => {
     await choose("Version", `${isolatedInText("Addressing")}, version 1`);
 
     expect(groupNames()).toEqual(["address", "address.street", "address.city"]);
+    expect(
+      ["address", "address.street", "address.city"].map((name) =>
+        drawnOf(screen.getByRole("group", { name }).parentElement!),
+      ),
+    ).toEqual([
+      expect.not.objectContaining(drawnAtDepth(4)),
+      drawnAtDepth(4),
+      drawnAtDepth(4),
+    ]);
   });
 
   it("fills a field within one holding fields on its own, filling nothing else", async () => {
@@ -567,6 +1048,24 @@ describe("StepEditor", () => {
     ).toBeNull();
   });
 
+  it("asks how many tries on the ground of who produces where the draft may be written, apart from who reviews", () => {
+    editing(0, true);
+
+    const groundOf = (control: HTMLElement) =>
+      control.closest(".MuiFormControl-root")!.parentElement!;
+    const producing = groundOf(
+      screen.getByRole("combobox", { name: "Who produces its values" }),
+    );
+
+    expect(
+      within(producing).getByRole("textbox", { name: "How many tries" }),
+    ).toHaveValue("2");
+    expect(
+      groundOf(screen.getByRole("combobox", { name: "Who may review" })),
+    ).not.toBe(producing);
+    expect(drawnOf(producing)).toEqual(drawnAtDepth(3));
+  });
+
   it("says a model reviewing is the one that produces where a model produces and the deployment holds one", async () => {
     editing(0, true);
 
@@ -584,9 +1083,10 @@ describe("StepEditor", () => {
       ...WORKFLOW,
       offered: {
         ...WORKFLOW.offered,
+        searchWays: [],
         models: [
-          { name: "general", modes: ["research"] },
-          { name: "small", modes: [] },
+          { name: "general", modes: ["research"], tools: [] },
+          { name: "small", modes: [], tools: [] },
         ],
       },
     });

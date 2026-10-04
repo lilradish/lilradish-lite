@@ -11,10 +11,13 @@ class CodeErrorSpec extends Specification {
             new CodeError.StepReads(UUID.fromString("00000009-0000-4000-8000-000000000c02"))
 
     static final List<CodeErrorReason> ABOUT_NO_FIELD =
-            [CodeErrorReason.GAVE_NOTHING, CodeErrorReason.FAILED_ON_THIS_SIDE, CodeErrorReason.SAID_NOTHING]
+            [CodeErrorReason.GAVE_NOTHING, CodeErrorReason.FAILED_ON_THIS_SIDE,
+             CodeErrorReason.SAID_NOTHING, CodeErrorReason.FILE_TOTAL_TOO_LARGE]
 
     static final List<CodeErrorReason> ABOUT_A_FIELD =
             CodeErrorReason.values().toList() - ABOUT_NO_FIELD - [CodeErrorReason.NOT_DECLARED]
+
+    static final CodeError.UndeclaredMember EXTRA = new CodeError.UndeclaredMember("extra", false)
 
     /** One character the store counts as one, and Java as two. */
     static final String PAIR = Character.toString(0x1F600)
@@ -32,7 +35,7 @@ class CodeErrorSpec extends Specification {
 
     def "a member nothing declares is named, at the first level or within the field holding it"() {
         when:
-        new CodeError.Fault(CodeErrorReason.NOT_DECLARED, path, "extra", null)
+        new CodeError.Fault(CodeErrorReason.NOT_DECLARED, path, EXTRA, null)
 
         then:
         noExceptionThrown()
@@ -69,6 +72,7 @@ class CodeErrorSpec extends Specification {
         CodeErrorReason.GAVE_NOTHING          | LINES_SKU || "CodeError.Fault gave_nothing is about no field, and names none"
         CodeErrorReason.FAILED_ON_THIS_SIDE   | LINES_SKU || "CodeError.Fault failed_on_this_side is about no field, and names none"
         CodeErrorReason.SAID_NOTHING          | LINES_SKU || "CodeError.Fault said_nothing is about no field, and names none"
+        CodeErrorReason.FILE_TOTAL_TOO_LARGE  | LINES_SKU || "CodeError.Fault file_total_too_large is about no field, and names none"
     }
 
     def "refuses a member named for any reason but that it is not declared, and none named where that is the reason"() {
@@ -82,8 +86,8 @@ class CodeErrorSpec extends Specification {
         where:
         reason                       | member
         CodeErrorReason.NOT_DECLARED | null
-        CodeErrorReason.TOO_LONG     | "extra"
-        CodeErrorReason.NOT_A_TERM   | ""
+        CodeErrorReason.TOO_LONG     | EXTRA
+        CodeErrorReason.NOT_A_TERM   | new CodeError.UndeclaredMember("", false)
     }
 
     def "refuses what reads the field named for any reason but that it no longer matches, and none named where it is"() {
@@ -117,41 +121,68 @@ class CodeErrorSpec extends Specification {
     }
 
     /** Whatever the code wrote as a member's name is shown in one line, so what breaks or hides in one is taken out. */
-    def "names a member cleaned for one line, and cut alone past 64 characters, saying so"() {
-        expect:
-        new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [], written, null).member() == kept
+    def "names a member cleaned for one line, and past 64 characters cut to its first 64, saying so apart from the name"() {
+        when:
+        def member = new CodeError.UndeclaredMember(written, false)
+
+        then:
+        member.name() == kept
+        member.cut() == cut
 
         where:
-        written                                              || kept
-        "extra"                                              || "extra"
-        ""                                                   || ""
-        "bad" + Character.toString(7) + "bin"                || "badbin"
-        "two" + Character.toString(10) + "lines"             || "twolines"
-        "tab" + Character.toString(9) + "bed"                || "tabbed"
-        "zero" + Character.toString(0x200B) + "width"        || "zerowidth"
-        "turned" + Character.toString(0x202E) + "round"      || "turnedround"
-        "half" + Character.toString(0xD800) + "pair"         || "halfpair"
-        "n" * 64                                             || "n" * 64
-        "n" * 65                                             || "n" * 64 + "…"
-        "b" * 3000                                           || "b" * 64 + "…"
-        PAIR * 65                                            || PAIR * 64 + "…"
-        "n" * 64 + Character.toString(7)                     || "n" * 64
-        Character.toString(7) * 3                            || ""
+        written                                              || kept                | cut
+        "extra"                                              || "extra"             | false
+        ""                                                   || ""                  | false
+        "bad" + Character.toString(7) + "bin"                || "badbin"            | false
+        "two" + Character.toString(10) + "lines"             || "twolines"          | false
+        "tab" + Character.toString(9) + "bed"                || "tabbed"            | false
+        "zero" + Character.toString(0x200B) + "width"        || "zerowidth"         | false
+        "turned" + Character.toString(0x202E) + "round"      || "turnedround"       | false
+        "half" + Character.toString(0xD800) + "pair"         || "halfpair"          | false
+        "n" * 64                                             || "n" * 64            | false
+        "n" * 63 + "…"                                       || "n" * 63 + "…"      | false
+        "n" * 65                                             || "n" * 64            | true
+        "b" * 3000                                           || "b" * 64            | true
+        PAIR * 65                                            || PAIR * 64           | true
+        "n" * 64 + Character.toString(7)                     || "n" * 64            | false
+        "n" * 64 + Character.toString(7) + "n"               || "n" * 64            | true
+        Character.toString(7) * 3                            || ""                  | false
     }
 
     /** Read back from the store it is made again from what was kept, which must come out as it went in. */
-    def "names a member already cleaned and cut exactly as it was kept"() {
+    def "names a member already cleaned and cut exactly as it was kept, still cut where it was"() {
         given:
-        def kept = new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [], written, null).member()
+        def kept = new CodeError.UndeclaredMember(written, false)
 
         when:
-        def again = new CodeError.Fault(CodeErrorReason.NOT_DECLARED, [], kept, null)
+        def again = new CodeError.UndeclaredMember(kept.name(), kept.cut())
 
         then:
-        again.member() == kept
+        again == kept
 
         where:
-        written << ["n" * 65, "n" * 64, "n" * 63 + "…", PAIR * 70, "a" + Character.toString(7)]
+        written << ["n" * 65, "n" * 64, "n" * 63 + "…", PAIR * 70, PAIR * 64, "a" + Character.toString(7)]
+    }
+
+    def "refuses a name said to be cut short of 64 characters"() {
+        when:
+        new CodeError.UndeclaredMember(name, true)
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == "CodeError.UndeclaredMember is cut only at 64 characters"
+
+        where:
+        name << ["", "n" * 63, PAIR * 63, "n" * 63 + Character.toString(7)]
+    }
+
+    def "a member is refused where it names nothing"() {
+        when:
+        new CodeError.UndeclaredMember(null, false)
+
+        then:
+        def refused = thrown(NullPointerException)
+        refused.message == "CodeError.UndeclaredMember name must not be null"
     }
 
     def "what code said is refused where it is not given"() {

@@ -6,7 +6,7 @@ import type { FillField, FillReason } from "../../api/filling";
 import { proseCharactersRefused, showsInProse } from "../text/legibility";
 
 /** The kinds one value is written as; fields hold values rather than being written as one. */
-type WrittenKind = Exclude<FieldKind, "fields">;
+type WrittenKind = Exclude<FieldKind, "fields" | "file">;
 
 export type WrittenField = FillField & { readonly kind: WrittenKind };
 
@@ -40,6 +40,19 @@ export function holdsNothing(typed: string): boolean {
   );
 }
 
+/** A line break refused by a field taking one line. */
+export function hasLineBreak(typed: string): boolean {
+  return /[\n\v\f\r\u0085\u2028\u2029]/u.test(typed);
+}
+
+/** A text field taking one line never treats a line break as an empty value. */
+export function holdsNothingFor(field: WrittenField, typed: string): boolean {
+  return (
+    !(field.kind === "text" && field.lines === "one" && hasLineBreak(typed)) &&
+    holdsNothing(typed)
+  );
+}
+
 /**
  * Why the server would refuse what is typed as the value of one field, or null where it takes it. Nothing typed
  * is refused only where the field must be given.
@@ -48,7 +61,10 @@ export function valueRefused(
   field: WrittenField,
   typed: string,
 ): FillReason | null {
-  if (holdsNothing(typed)) {
+  if (field.kind === "text" && field.lines === "one" && hasLineBreak(typed)) {
+    return "line_break";
+  }
+  if (holdsNothingFor(field, typed)) {
     return field.mustBeGiven ? "missing" : null;
   }
   switch (field.kind) {

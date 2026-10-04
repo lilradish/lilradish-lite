@@ -62,7 +62,7 @@ class MembersControllerIntegrationSpec extends Specification {
     static final ListOrder<MemberSortColumn> BY_USER = new ListOrder<>(MemberSortColumn.USER_ID, false)
 
     static final Members.MemberRow ADA_ROW = new Members.MemberRow(new SubjectId(ADA), new UserId("000e01"),
-            new PersonName("Ada Lovelace"), EnumSet.of(GroupRole.OPERATOR, GroupRole.OWNER))
+            new PersonName("Ari Mockvale"), EnumSet.of(GroupRole.OPERATOR, GroupRole.OWNER))
 
     static final Members.MemberRow NAMELESS_ROW =
             new Members.MemberRow(new SubjectId(NAMELESS), new UserId("000e02"), null, EnumSet.of(GroupRole.OVERSEER))
@@ -125,7 +125,7 @@ class MembersControllerIntegrationSpec extends Specification {
         document.get("items").collect { membersOf(it) } ==
                 [["subjectId", "userId", "displayName", "roles"], ["subjectId", "userId", "roles"]]
         document.get("items").collect { it.get("subjectId").asString() } == [ADA.toString(), NAMELESS.toString()]
-        document.get("items").get(0).get("displayName").asString() == "Ada Lovelace"
+        document.get("items").get(0).get("displayName").asString() == "Ari Mockvale"
 
         and: "each role under the spelling it is published by, every one of them and nothing standing in"
         document.get("items").collect { item -> item.get("roles").collect { it.asString() } as Set } ==
@@ -157,7 +157,7 @@ class MembersControllerIntegrationSpec extends Specification {
         sent                                                           || order                                                | typed
         []                                                             || BY_USER                                              | null
         [["sort", "-displayName"]]                                     || new ListOrder<>(MemberSortColumn.DISPLAY_NAME, true) | null
-        [["filter", "Ada" + Character.toString(0x3000) + "Lovelace"]]  || BY_USER                                              | "Ada Lovelace"
+        [["filter", "Ari" + Character.toString(0x3000) + "Mockvale"]]  || BY_USER                                              | "Ari Mockvale"
     }
 
     /** A cursor names the group it was minted in, so it pages through that group or through none. */
@@ -201,7 +201,7 @@ class MembersControllerIntegrationSpec extends Specification {
         sent                  || code
         [["sort", "roles"]]   || "LIST_SORT_UNUSABLE"
         [["sort", "groups"]]  || "LIST_SORT_UNUSABLE"
-        [["search", "ada"]]   || "PARAMETER_UNKNOWN"
+        [["search", "ari"]]   || "PARAMETER_UNKNOWN"
         [["cursor", "nope"]]  || "LIST_CURSOR_UNUSABLE"
     }
 
@@ -225,7 +225,7 @@ class MembersControllerIntegrationSpec extends Specification {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
         given(members.member(new GroupId(GROUP), new SubjectId(ADA))).willReturn(Optional.of(new Members.Member(
-                new SubjectId(ADA), new UserId("000e01"), new PersonName("Ada Lovelace"),
+                new SubjectId(ADA), new UserId("000e01"), new PersonName("Ari Mockvale"),
                 EnumSet.of(GroupRole.OPERATOR, GroupRole.OWNER), EnumSet.of(GroupRole.OWNER), false)))
 
         when:

@@ -82,8 +82,21 @@ final class SchemaKeys {
     static final String ROUTE_RUN_STEP = "00000012-0000-4000-8000-000000000002"
     /** ESCALATE reached in RUN. */
     static final String ESCALATE_RUN_STEP = "00000012-0000-4000-8000-000000000003"
+    /** SEARCH_STEP reached in RUN. */
+    static final String SEARCH_RUN_STEP = "00000012-0000-4000-8000-000000000007"
+    static final String SEARCH_HOLD = "00000015-0000-4000-8000-000000000007"
+    static final String SEARCH_FAILURE = "00000017-0000-4000-8000-000000000007"
+    static final String SEARCH_ATTEMPT = "00000016-0000-4000-8000-000000000007"
+    static final String SEARCH_CALL = "00000018-0000-4000-8000-000000000007"
+    static final String SEARCH_PRODUCTION = "0000001b-0000-4000-8000-00000000000a"
+    static final String SEARCH_VALUE = "0000001c-0000-4000-8000-000000000007"
+    static final String SEARCH_INPUT = "0000001f-0000-4000-8000-000000000007"
     /** RUN's stop, in force. */
     static final String RUN_STOP = "00000013-0000-4000-8000-000000000001"
+    /** RUN's stop by its own ceiling and SUB_RUN's, opened again. */
+    static final String CEILING_STOP = "00000013-0000-4000-8000-000000000002"
+    /** RUN's stop by SUB_RUN's ceiling, which no fixture writes. */
+    static final String SUB_CEILING_STOP = "00000013-0000-4000-8000-000000000003"
     /** RUN's change of ceiling, awaiting approval. */
     static final String CHANGE = "00000014-0000-4000-8000-000000000001"
     /** RUN_STEP held back on length, for LONG_ATTEMPT. */
@@ -205,6 +218,7 @@ final class SchemaKeys {
     static final String SPARE_REVIEW = "0000001d-0000-4000-8000-00000000000f"
     static final String SPARE_CHECK = "0000001e-0000-4000-8000-00000000000f"
 
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final String APPROVE_THE_DRAFT = "update app.entry_versions set approved_at = now()," +
             " approved_by = '${MEMBER}' where entry_version_id = '${DRAFT}'; "
     /** The list's next draft, naming no revision. */
@@ -213,10 +227,13 @@ final class SchemaKeys {
     static final String OPEN_A_LIST_VERSION_AT_REVISION_ONE = "insert into app.entry_versions (entry_id, entry_kind," +
             " number, created_by, revision) values ('${LIST_ENTRY}', 'reference_list', 3, '${STEWARD}', 1)"
     /** OTHER_GROUP renamed to a name spelt with a sharp s. */
+    // DB-SPECIFIC: chr() and now() use PostgreSQL's syntax and semantics.
     static final String NAME_THE_OTHER_GROUP_STRASSE = "update app.groups set name = 'Stra' || chr(223) || 'e'," +
             " updated_at = now(), updated_by = '${STEWARD}' where group_id = '${OTHER_GROUP}'; "
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final String APPROVE_THE_OTHER_DRAFT = "update app.entry_versions set approved_at = now()," +
             " approved_by = '${STEWARD}' where entry_version_id = '${OTHER_WORKFLOW_DRAFT}'; "
+    // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
     static final String WITHDRAW_THE_SUBMISSION = "update app.entry_version_submissions set withdrawn_at = now()," +
             " withdrawn_by = '${STEWARD}' where entry_version_submission_id = '${SUBMISSION}'; "
 
@@ -238,6 +255,9 @@ final class SchemaKeys {
         "run_step_failures"      : "run_step_failure_id = '${FAILURE}'",
         "model_calls"            : "model_call_id = '${CALL}'",
         "model_call_turnaways"   : "model_call_turnaway_id = '${TURNAWAY}'",
+        "model_call_tool_uses"   : "model_call_id = '${SEARCH_CALL}'",
+        "model_call_tool_prices" : "model_call_id = '${SEARCH_CALL}' and currency = 'USD'",
+        "model_call_searches"    : "model_call_id = '${SEARCH_CALL}' and position = 1",
         "run_help_exchanges"     : "run_help_exchange_id = '${HELP}'",
         "productions"            : "production_id = '${ANSWERED}'",
         "review_decisions"       : "review_id = '${REVIEW}'",

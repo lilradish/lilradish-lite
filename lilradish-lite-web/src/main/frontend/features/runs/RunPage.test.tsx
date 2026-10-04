@@ -1,314 +1,70 @@
-import { ThemeProvider } from "@mui/material/styles";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { buttonClasses } from "@mui/material/Button";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { RouterProvider, createMemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { StandingProvider } from "../../app/standing/StandingContext";
+import { LEAST_TABLE_WIDTH } from "../../lib/collection/RowPanel";
 import { theme } from "../../lib/theme/theme";
-import { whenText } from "../../lib/time/When";
-import { requestsTo, serving, type Reply } from "../../testutil/answering";
-import { answered, inGroup } from "../../testutil/standingRead";
-import { WITHIN_THE_RUN } from "./runAddress";
-import { RunPage } from "./RunPage";
+import { requestsTo } from "../../testutil/answering";
+import { deferred } from "../../testutil/deferred";
+import { resolved } from "../../testutil/grounds";
+import {
+  laysPairsBeside,
+  wideKeptBesideNarrow,
+} from "../../testutil/writtenRules";
 
-const GROUP = "00000003-0000-4000-8000-000000000c51";
+import {
+  GROUP,
+  RUN_ID,
+  ABOVE,
+  WORKFLOW,
+  RAISE,
+  PAGE,
+  KEPT_DRAWING_AS,
+  RUN,
+  AVO,
+  GLINN,
+  START_RUN_RULE,
+  APPROVE_ENTRY_RULE,
+  SUMMARISE,
+  FILE_IT,
+  CLAIM,
+  STOPPED,
+  RAISED,
+  ASKED,
+  reply,
+  refusal,
+  UNANSWERED,
+  STEPS,
+  VERSION,
+  FROM_ABOVE,
+  SUMMARY,
+  RUN_HEADER,
+  DECLARATIONS,
+  SUMMARISE_ROW,
+  FILE_IT_ROW,
+  stepsRead,
+  opening,
+  opened,
+  setApart,
+  ceiling,
+  said,
+  about,
+  drawn,
+  runReads,
+} from "../../testutil/runPage";
 
-const RUN_ID = "00000008-0000-4000-8000-000000000c51";
-
-const ABOVE = "00000008-0000-4000-8000-000000000c52";
-
-const WORKFLOW = "00000006-0000-4000-8000-000000000c51";
-
-const RAISE = "0000000b-0000-4000-8000-000000000c51";
-
-const PAGE = `/groups/${GROUP}/work/${RUN_ID}`;
-
-const RUN = `/api/groups/${GROUP}/runs/${RUN_ID}`;
-
-const ADA = { userId: "000c51", displayName: "Ada Lovelace" };
-
-const GRACE = { userId: "000c52", displayName: "Grace Hopper" };
-
-const START_RUN_RULE =
-  "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, only by a role in it that may start one.";
-
-const APPROVE_ENTRY_RULE =
-  "A group's entries are put into service, and a run's raised ceiling approved or refused, only by a role in it that may approve an entry.";
-
-/** Running, started by Ada, spent past what a number holds exactly, a raise of its ceiling needing approval. */
-const CLAIM = {
-  runId: RUN_ID,
-  number: 7,
-  name: "Claim from Ada",
-  workflow: { entryId: WORKFLOW, name: "Handle a claim", version: 3 },
-  startedBy: ADA,
-  startedAt: "2026-09-24T08:00:00Z",
-  state: "running",
-  spend: {
-    sent: "9007199254740993",
-    cameBack: "20",
-    spent: "9007199254741013",
-    cameBackUnknown: false,
-  },
-  ceiling: { inForce: "9007199254740990", raiseNeedsApproval: true },
-  acts: ["stop", "rename", "change_ceiling"],
-};
-
-const STOPPED = {
-  ...CLAIM,
-  state: "stopped",
-  stopped: { at: "2026-09-24T08:15:00Z", by: GRACE },
-  acts: ["open_again", "rename", "change_ceiling"],
-};
-
-/** A raise Grace asked for, which Ada, reading, may decide. */
-const RAISED = {
-  ...CLAIM,
-  ceiling: {
-    ...CLAIM.ceiling,
-    waiting: {
-      changeId: RAISE,
-      to: "20000",
-      askedBy: GRACE,
-      askedAt: "2026-09-24T08:30:00Z",
-    },
-  },
-  acts: ["stop", "change_ceiling", "approve_raise", "refuse_raise"],
-};
-
-/** The same raise, asked by the one reading. */
-const ASKED = { ...RAISED, acts: ["stop", "change_ceiling", "withdraw_raise"] };
-
-function reply(run: object, status = 200): Reply {
-  return [JSON.stringify(run), status];
-}
-
-function refusal(code: string, status: number): Reply {
-  return [JSON.stringify({ code }), status];
-}
-
-/** A reply the server never sends. */
-const UNANSWERED: Reply = new Promise(() => {});
-
-const STEPS = `${RUN}/steps`;
-
-const VERSION = "00000007-0000-4000-8000-000000000c51";
-
-const QUESTION_VERSION = "00000007-0000-4000-8000-000000000c52";
-
-const SUMMARISE = "00000009-0000-4000-8000-000000000c51";
-
-const FILE_IT = "00000009-0000-4000-8000-000000000c52";
-
-const TICKET = {
-  name: "ticket",
-  label: "Ticket",
-  kind: "text",
-  longest: 4000,
-  mustBeGiven: true,
-};
-
-const DUE = { name: "due", label: "Due", kind: "date", mustBeGiven: false };
-
-const SUMMARY = {
-  name: "summary",
-  label: "Summary",
-  kind: "text",
-  longest: 100,
-  mustBeGiven: true,
-};
-
-/** Ada's claim, as it was started. */
-const STARTED = {
-  ...CLAIM,
-  startedWith: { ticket: "Kettle leaks", due: "2026-09-30" },
-};
-
-const RUN_HEADER = {
-  runId: RUN_ID,
-  number: 7,
-  versionId: VERSION,
-  state: "running",
-  at: { stepId: FILE_IT, name: "file_it" },
-  acts: ["stop"],
-  progress: { done: 1, of: 2 },
-};
-
-const DECLARATIONS = {
-  [VERSION]: { takes: [TICKET, DUE], gives: [SUMMARY] },
-  [QUESTION_VERSION]: {
-    takes: [{ ...TICKET, name: "text", label: "Text" }],
-    gives: [SUMMARY],
-  },
-};
-
-/** A question a person answered on its first try, its summary standing. */
-const SUMMARISE_ROW = {
-  stepId: SUMMARISE,
-  order: 1,
-  name: "summarise",
-  runs: {
-    kind: "question",
-    entryId: "00000006-0000-4000-8000-000000000c52",
-    name: "Summarise",
-    version: 2,
-    versionId: QUESTION_VERSION,
-  },
-  producer: { kind: "person" },
-  reviewer: { kind: "person" },
-  state: "done",
-  takesFrom: [{ input: "text", from: { kind: "run_input", path: "ticket" } }],
-  tries: { current: 1, declared: 2, beyond: false },
-  cost: { callsAModel: false },
-  gaveBack: [{ field: "summary", value: "A kettle leaks.", now: "stands" }],
-  acts: [],
-  withheld: [],
-};
-
-/** A code step, its code running its first try. */
-const FILE_IT_ROW = {
-  stepId: FILE_IT,
-  order: 2,
-  name: "file_it",
-  runs: { kind: "code_step", codeStep: "file_claim" },
-  producer: { kind: "code" },
-  reviewer: { kind: "person" },
-  state: "running",
-  where: { kind: "running", on: "code" },
-  tries: { current: 1, declared: 1, beyond: false },
-  takesFrom: [
-    {
-      input: "summary",
-      from: {
-        kind: "step",
-        path: "summary",
-        stepId: SUMMARISE,
-        name: "summarise",
-        versionId: QUESTION_VERSION,
-      },
-    },
-  ],
-  cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
-};
-
-/** Its first step done and its summary standing; the code step after it running. */
-function stepsRead(changed: object = {}, route: object = {}): Reply {
-  return reply({
-    run: RUN_HEADER,
-    declarations: DECLARATIONS,
-    gaveBack: {
-      declares: "values",
-      standing: [{ field: "summary", value: "A kettle leaks." }],
-    },
-    steps: [SUMMARISE_ROW, { ...FILE_IT_ROW, ...route }],
-    ...changed,
-  });
-}
-
-function reads(sent: ReturnType<typeof serving>): string[] {
-  return requestsTo(sent).filter((each) => each.startsWith("GET"));
-}
-
-/** What is in flight let land a turn at a time, until `landed` holds; failing where it never does. */
-async function landing(landed: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 100 && !landed(); turn += 1) {
-    await act(() => vi.advanceTimersByTimeAsync(0));
-  }
-  expect(landed()).toBe(true);
-}
-
-/**
- * The page at its address under a real router, drawn in detail unless asked otherwise, with the standing it would
- * be handed and only the server stood in for.
- */
-function opening(
-  routes: Readonly<Record<string, readonly Reply[]>> = {},
-  address: string | { pathname: string; state?: unknown } = PAGE,
-  drawing: "detail" | "conversation" = "detail",
-) {
-  const sent = serving({
-    [`GET ${RUN}`]: [reply(CLAIM)],
-    [`GET ${STEPS}`]: [stepsRead()],
-    ...routes,
-  });
-  const onDetail = vi.fn();
-  const router = createMemoryRouter(
-    [
-      {
-        path: "/groups/:groupId/work/:runId",
-        element:
-          drawing === "detail" ? (
-            <RunPage drawing="detail" onActed={() => {}} />
-          ) : (
-            <RunPage
-              drawing="conversation"
-              onDetail={onDetail}
-              onActed={() => {}}
-            />
-          ),
-      },
-    ],
-    { initialEntries: [address] },
-  );
-  const readAgain = vi.fn();
-  const standing = answered(
-    [],
-    [inGroup(GROUP, "CLAIMS", "Claims", ["start_run", "read_own_runs"])],
-  );
-  render(
-    <ThemeProvider theme={theme}>
-      <StandingProvider read={{ ...standing, reload: readAgain }}>
-        <RouterProvider router={router} />
-      </StandingProvider>
-    </ThemeProvider>,
-  );
-  return { sent, readAgain, onDetail, router };
-}
-
-async function opened(): Promise<HTMLElement> {
-  return screen.findByRole("heading", { level: 2 });
-}
-
-function setApart(words: string): string {
-  return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
-}
-
-function ceiling(): HTMLElement {
-  return screen.getByRole("group", { name: "Ceiling" });
-}
-
-/** Each label of the header beside what it says, in the order drawn; the header's are the page's first. */
-function said(): Record<string, string> {
-  const header = within(document.querySelector("dl")!);
-  const terms = header.getAllByRole("term");
-  const definitions = header.getAllByRole("definition");
-  return Object.fromEntries(
-    terms.map((term, at) => [
-      term.textContent ?? "",
-      definitions[at]!.textContent ?? "",
-    ]),
-  );
-}
-
-function drawn(): string[] {
-  return screen.queryAllByRole("button").map((each) => each.textContent ?? "");
-}
-
-function runReads(sent: ReturnType<typeof serving>): number {
-  return requestsTo(sent).filter((each) => each === `GET ${RUN}`).length;
-}
-
+afterEach(() => {
+  localStorage.clear();
+});
 describe("RunPage", () => {
   /** Every count grouped as the reader groups one, and none of its digits lost on the way. */
-  it("heads the page with the run's name, and says what ran, who started it, where it is, what it has cost and its ceiling", async () => {
+  it("heads the page with the run's name, and says About it what ran, who started it, where it is and how far it has got, what it has cost and its ceiling", async () => {
     opening();
 
-    expect(await opened()).toHaveTextContent(setApart("Claim from Ada"));
-    const header = said();
-    expect(Object.keys(header)).toEqual([
+    expect(await opened()).toHaveTextContent(setApart("Claim from Avo"));
+    const facts = said();
+    expect(Object.keys(facts)).toEqual([
       "Number",
       "Workflow",
       "Started",
@@ -316,29 +72,154 @@ describe("RunPage", () => {
       "What it has cost",
       "Ceiling",
     ]);
-    expect(header).toMatchObject({
+    expect(facts).toMatchObject({
       Number: "7",
       Workflow: `${setApart("Handle a claim")}, version 3`,
-      "Where it is": "Running",
+      "Where it is": "Running1 of 2 steps done",
       "What it has cost":
         "9,007,199,254,741,013 in all: 9,007,199,254,740,993 sent, 20 came back",
       Ceiling: "9,007,199,254,740,990Change the ceiling",
     });
-    expect(header.Started).toMatch(
-      new RegExp(`^By ${setApart("Ada Lovelace")}, .+$`),
+    expect(facts.Started).toMatch(
+      new RegExp(`^By ${setApart("Avo Lumerace")}, .+$`),
     );
+    const where = within(about()).getByText("Where it is").nextElementSibling!;
+    expect(where.querySelector("bdi")).toBeNull();
+    expect(within(where as HTMLElement).queryByText("Running, on")).toBeNull();
     expect(
       screen.getByRole("link", { name: /Handle a claim/ }),
     ).toHaveAttribute("href", `/groups/${GROUP}/workflows/${WORKFLOW}`);
   });
 
+  it("names the run as the page's one first-level heading, the parts of its work and About it each under it at the second", async () => {
+    opening();
+    const title = await opened();
+    await screen.findByRole("table", { name: "The steps" });
+
+    expect(
+      screen
+        .getAllByRole("heading")
+        .map((heading) => [heading.tagName, heading.textContent]),
+    ).toEqual([
+      ["H1", setApart("Claim from Avo")],
+      ["H2", "What it was started with"],
+      ["H2", "What it gave back"],
+      ["H2", "The steps"],
+      ["H2", "About it"],
+    ]);
+    expect(screen.getAllByRole("heading", { level: 1 })).toEqual([title]);
+  });
+
+  it.each([
+    ["fullDetail", () => screen.getByRole("table", { name: "The steps" })],
+    [
+      "conversation",
+      () => screen.getByRole("list", { name: "The conversation" }),
+    ],
+  ] as const)(
+    "draws in %s the work first and About it after it, in a column of its own beside it",
+    async (drawing, work) => {
+      opening({}, PAGE, drawing);
+      await opened();
+      await waitFor(() => expect(work()).toBeInTheDocument());
+
+      const aboutIt = about();
+      expect(
+        work().compareDocumentPosition(aboutIt) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(aboutIt).not.toContainElement(work());
+      const aboutColumn = aboutIt.parentElement!.parentElement!;
+      expect(aboutColumn.previousElementSibling).toContainElement(work());
+      expect(aboutColumn.nextElementSibling).toBeNull();
+      expect(getComputedStyle(aboutIt).backgroundColor).toBe(
+        resolved(theme.palette.background.paper),
+      );
+      expect(getComputedStyle(aboutIt).boxShadow).not.toBe("none");
+      if (drawing === "conversation") {
+        expect(getComputedStyle(aboutIt.parentElement!).height).toBe("100%");
+        expect(getComputedStyle(aboutIt).minHeight).toBe("100%");
+      }
+    },
+  );
+
+  it("draws Stop under The facts, Rename beside it, and the way to the other drawing at the foot of About it", async () => {
+    opening();
+    await opened();
+
+    const facts = about().querySelector("dl")!;
+    const stop = within(about()).getByRole("button", { name: "Stop" });
+    const rename = within(about()).getByRole("button", { name: "Rename" });
+    const controls = within(about()).getAllByRole("button");
+    expect(
+      facts.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(facts).not.toContainElement(stop);
+    // Each control is wrapped by the one drawing it; the row holding the wrappers is the one asked of.
+    const row = stop.parentElement!.parentElement!;
+    expect(row).toContainElement(rename);
+    expect(row).not.toContainElement(controls.at(-1)!);
+    expect(controls.indexOf(stop) + 1).toBe(controls.indexOf(rename));
+    expect(controls.at(-1)).toHaveTextContent("Show as a conversation");
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+    expect(laysPairsBeside(facts)).toBe(false);
+  });
+
+  it.each([
+    ["conversation", "Summarise", "summarise"],
+    ["fullDetail", "summarise", "Summarise"],
+  ] as const)(
+    "names in About it, drawn in %s, the step the run is on as the rest of that drawing names it: %s, not %s",
+    async (drawing, named, notNamed) => {
+      opening(
+        {
+          [`GET ${RUN}`]: [
+            reply({ ...CLAIM, at: { stepId: SUMMARISE, name: "summarise" } }),
+          ],
+        },
+        PAGE,
+        drawing,
+      );
+      await opened();
+
+      await waitFor(() =>
+        expect(said()["Where it is"]).toBe(
+          `Running, on ${setApart(named)}1 of 2 steps done`,
+        ),
+      );
+      expect(said()["Where it is"]).not.toContain(setApart(notNamed));
+      const where = within(about()).getByText("Where it is")
+        .nextElementSibling as HTMLElement;
+      const hint = within(where).getByText("Running, on");
+      const step = where.querySelector("bdi");
+      expect(getComputedStyle(hint).fontStyle).toBe("italic");
+      expect(step).toHaveTextContent(setApart(named));
+      expect(hint).not.toContainElement(step);
+      expect(where).toHaveTextContent(
+        `Running, on ${setApart(named)}1 of 2 steps done`,
+      );
+    },
+  );
+
+  it("keeps the work wide enough for a table where About it stands beside it", async () => {
+    opening();
+    await opened();
+
+    expect(wideKeptBesideNarrow()).toBeGreaterThanOrEqual(LEAST_TABLE_WIDTH);
+  });
+
   it("heads a run beneath another with its number, links the run above, and says it is held to that one's ceiling", async () => {
     const { name: _unnamed, startedBy: _nobody, ...beneath } = CLAIM;
     opening({
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "stopped" } }),
+      ],
       [`GET ${RUN}`]: [
         reply({
           ...beneath,
           above: ABOVE,
+          runsAbove: [{ runId: ABOVE, number: 6 }],
+          from: FROM_ABOVE,
           state: "stopped",
           stopped: {
             at: "2026-09-24T08:15:00Z",
@@ -351,23 +232,520 @@ describe("RunPage", () => {
     });
 
     expect(await opened()).toHaveTextContent("Run 7");
-    const header = said();
-    expect(header.Started).toMatch(/^By the run above it, .+$/);
-    expect(header["Where it is"]).toMatch(
+    const facts = said();
+    expect(facts.Started).toMatch(
+      new RegExp(`^By ${setApart("route")} in run 6, .+$`),
+    );
+    expect(facts["Where it is"]).toMatch(
       /^Stopped by the ceiling of run 6, .+$/,
     );
-    expect(header.Ceiling).toBe("Held to the ceiling of run 6, at the top");
+    expect(facts.Ceiling).toBe("Held to the ceiling of run 6, at the top");
     expect(
       [
-        screen.getByRole("link", { name: "The run above it" }),
+        screen.getByRole("link", { name: "Open run 6" }),
+        screen.getByRole("link", { name: "Open the step that started it" }),
         screen.getByRole("link", { name: /Held to the ceiling of run 6/ }),
       ].map((link) => link.getAttribute("href")),
     ).toEqual([
       `/groups/${GROUP}/work/${ABOVE}`,
+      `/groups/${GROUP}/work/${ABOVE}/steps/${FILE_IT}`,
       `/groups/${GROUP}/work/${ABOVE}`,
     ]);
-    expect(drawn()).toEqual([]);
+    expect(drawn()).toEqual(["Show as a conversation"]);
   });
+
+  /** Kept apart from the tab Work was left on, which says nothing of how a run is drawn. */
+  it.each([
+    ["nothing kept", null, "conversation"],
+    ["Conversation kept", "conversation", "conversation"],
+    ["Full detail kept", "fullDetail", "fullDetail"],
+    ["a word this build does not know", "sideways", "conversation"],
+    ["the name of a Work tab", "history", "conversation"],
+  ])(
+    "draws the run as this device last left a run: %s",
+    async (_case, kept, drawn) => {
+      localStorage.setItem("lilradish.work.tab", "history");
+      if (kept !== null) {
+        localStorage.setItem(KEPT_DRAWING_AS, kept);
+      }
+      opening({}, PAGE, null);
+      await opened();
+
+      expect(
+        screen.queryByRole("list", { name: "The conversation" }) !== null,
+      ).toBe(drawn === "conversation");
+      expect(screen.queryByRole("table", { name: "The steps" }) !== null).toBe(
+        drawn === "fullDetail",
+      );
+      expect(localStorage.getItem(KEPT_DRAWING_AS)).toBe(kept);
+    },
+  );
+
+  it.each(
+    (["fullDetail", "conversation"] as const).flatMap((drawing) => [
+      [
+        drawing,
+        "the list's filter and order, and none of what a step's page picked",
+        `${PAGE}?filter=claim&sort=startedBy&value=summary&try=1`,
+        `/groups/${GROUP}/work?filter=claim&sort=startedBy&tab=history`,
+      ],
+      [
+        drawing,
+        "its filter, and History named in place of the tab the address named",
+        `${PAGE}?tab=newRun&filter=claim`,
+        `/groups/${GROUP}/work?filter=claim&tab=history`,
+      ],
+      [drawing, "History alone", PAGE, `/groups/${GROUP}/work?tab=history`],
+    ]),
+  )(
+    "draws in %s, above the run's name, the path through Work and History to it, History carrying %s",
+    async (drawing, _case, address, history) => {
+      opening({}, address, drawing);
+      const heading = await opened();
+
+      const path = screen.getByRole("navigation", { name: "Breadcrumb" });
+      expect(
+        within(path)
+          .getAllByRole("link")
+          .map((link) => [link.textContent, link.getAttribute("href")]),
+      ).toEqual([
+        ["Work", `/groups/${GROUP}/work`],
+        ["History", history],
+      ]);
+      expect(within(path).getAllByRole("listitem").at(-1)).toHaveTextContent(
+        setApart("Claim from Avo"),
+      );
+      expect(
+        within(path).queryByRole("link", { name: /Claim from Avo/ }),
+      ).toBeNull();
+      expect(
+        path.compareDocumentPosition(heading) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    },
+  );
+
+  it("draws a run beneath others with every run above it in the path, from the top down, each opening its own page", async () => {
+    const top = "00000008-0000-4000-8000-000000000c59";
+    const { name: _unnamed, startedBy: _nobody, ...beneath } = CLAIM;
+    opening(
+      {
+        [`GET ${RUN}`]: [
+          reply({
+            ...beneath,
+            above: ABOVE,
+            from: FROM_ABOVE,
+            runsAbove: [
+              { runId: top, number: 5, name: "Claim from Glinn" },
+              { runId: ABOVE, number: 6 },
+            ],
+            ceiling: { heldBy: { runId: top, number: 5 } },
+            acts: [],
+          }),
+        ],
+      },
+      `${PAGE}?filter=claim`,
+    );
+    await opened();
+
+    const path = screen.getByRole("navigation", { name: "Breadcrumb" });
+
+    expect(
+      within(path)
+        .getAllByRole("link")
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      ["Work", `/groups/${GROUP}/work`],
+      ["History", `/groups/${GROUP}/work?filter=claim&tab=history`],
+      [
+        setApart("Claim from Glinn"),
+        `/groups/${GROUP}/work/${top}?filter=claim`,
+      ],
+      ["Run 6", `/groups/${GROUP}/work/${ABOVE}?filter=claim`],
+    ]);
+    expect(within(path).getAllByRole("listitem").at(-1)).toHaveTextContent(
+      "Run 7",
+    );
+    expect(within(path).queryByRole("link", { name: "Run 7" })).toBeNull();
+  });
+
+  it.each([
+    ["while the run is still read", UNANSWERED],
+    ["where the run is refused", refusal("RUN_NOT_IN_VIEW", 404)],
+  ])(
+    "draws the path through Work and History alone %s, saying nothing of the run",
+    async (_case, answer) => {
+      opening({ [`GET ${RUN}`]: [answer] });
+
+      const path = await screen.findByRole("navigation", {
+        name: "Breadcrumb",
+      });
+
+      expect(
+        within(path)
+          .getAllByRole("link")
+          .map((link) => link.textContent),
+      ).toEqual(["Work", "History"]);
+      expect(within(path).getAllByRole("listitem")).toHaveLength(2);
+      expect(document.body).not.toHaveTextContent("Claim from Avo");
+      expect(document.body).not.toHaveTextContent("Run 7");
+    },
+  );
+
+  it.each(["run", "steps"] as const)(
+    "closes the run when %s first fails ordinarily and the other read later refuses run access",
+    async (first) => {
+      const held = deferred<readonly [string, number]>();
+      const ordinary = refusal("READ_FAILED", 503);
+      const { sent } = opening({
+        [`GET ${RUN}`]: [first === "run" ? ordinary : held.promise],
+        [`GET ${STEPS}`]: [first === "steps" ? ordinary : held.promise],
+      });
+      await screen.findByRole("alert");
+      expect(screen.queryByText("That run is not in view.")).toBeNull();
+
+      await act(async () =>
+        held.settle([JSON.stringify({ code: "RUN_NOT_IN_VIEW" }), 404]),
+      );
+
+      expect(screen.getByText("That run is not in view.")).toBeVisible();
+      expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+      expect(screen.queryByRole("table", { name: "The steps" })).toBeNull();
+      expect(
+        requestsTo(sent).filter((each) => each === `GET ${RUN}`),
+      ).toHaveLength(1);
+      expect(
+        requestsTo(sent).filter((each) => each === `GET ${STEPS}`),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["fullDetail", "conversation"] as const)(
+    "shows one route's actual child workflow and deepest step in %s and its own step page",
+    async (drawing) => {
+      const direction = String.fromCodePoint(0x05d0);
+      const workflowName = `Demo Sample ${direction}`;
+      const deepestName = `make_${direction}`;
+      const deepestStep = "00000009-0000-4000-8000-000000000c55";
+      const beneath = {
+        runId: ABOVE,
+        number: 8,
+        runs: {
+          kind: "workflow",
+          entryId: WORKFLOW,
+          name: workflowName,
+          version: 2,
+          versionId: VERSION,
+        },
+        at: {
+          runId: ABOVE,
+          number: 8,
+          stepId: deepestStep,
+          name: deepestName,
+        },
+      };
+      const route = {
+        ...FILE_IT_ROW,
+        name: "choose",
+        runs: { kind: "route" },
+        producer: undefined,
+        reviewer: undefined,
+        tries: undefined,
+        state: "waiting",
+        acts: [],
+        beneath,
+      };
+      const { router } = opening(
+        {
+          [`GET ${STEPS}`]: [stepsRead({}, route), stepsRead({}, route)],
+          [`GET ${RUN}/steps/${FILE_IT}`]: [
+            reply({
+              run: RUN_HEADER,
+              declarations: DECLARATIONS,
+              step: route,
+              triesMade: [],
+            }),
+          ],
+        },
+        PAGE,
+        drawing,
+      );
+      await opened();
+      const versionWords = `${setApart(workflowName)}, version 2`;
+      const childWords = `It started run 8 beneath this one. Open run 8 ${versionWords} ${setApart(deepestName)}`;
+      expect(document.body.textContent).toContain(childWords);
+      expect(document.body.textContent).not.toContain(
+        `Open run 8${versionWords}`,
+      );
+      expect(document.body.textContent).not.toContain(
+        `${versionWords}${setApart(deepestName)}`,
+      );
+      expect(
+        screen
+          .getByRole("link", { name: setApart(deepestName) })
+          .getAttribute("href"),
+      ).toBe(`/groups/${GROUP}/work/${ABOVE}/steps/${deepestStep}`);
+      expect(
+        screen.getByRole("link", { name: "Open run 8" }).getAttribute("href"),
+      ).toBe(`/groups/${GROUP}/work/${ABOVE}`);
+      expect(document.body.textContent).not.toContain(
+        `${workflowName}, version 2`,
+      );
+
+      await act(() =>
+        router.navigate(`/groups/${GROUP}/work/${RUN_ID}/steps/${FILE_IT}`),
+      );
+      await screen.findByRole("heading", { level: 1 });
+      expect(document.body.textContent).toContain(childWords);
+      expect(document.body.textContent).not.toContain(
+        `Open run 8${versionWords}`,
+      );
+      expect(document.body.textContent).not.toContain(
+        `${versionWords}${setApart(deepestName)}`,
+      );
+      expect(
+        screen
+          .getByRole("link", { name: setApart(deepestName) })
+          .getAttribute("href"),
+      ).toBe(`/groups/${GROUP}/work/${ABOVE}/steps/${deepestStep}`);
+      expect(document.body.textContent).not.toContain(
+        `${workflowName}, version 2`,
+      );
+    },
+  );
+
+  it("links a child run's launch and actual source step but offers no ceiling change there", async () => {
+    const sourceStep = "00000009-0000-4000-8000-000000000c53";
+    const launchStep = "00000009-0000-4000-8000-000000000c54";
+    const { name: _name, startedBy: _startedBy, ...child } = CLAIM;
+    opening({
+      [`GET ${RUN}`]: [
+        reply({
+          ...child,
+          above: ABOVE,
+          runsAbove: [{ runId: ABOVE, number: 6 }],
+          from: {
+            runId: ABOVE,
+            number: 6,
+            stepId: launchStep,
+            stepName: "route",
+          },
+          startedWith: { ticket: "Demo Sample" },
+          startedWithFrom: [
+            {
+              input: "ticket",
+              from: {
+                kind: "step",
+                runId: ABOVE,
+                runNumber: 6,
+                stepId: sourceStep,
+                name: "made",
+                path: "summary",
+              },
+            },
+          ],
+          acts: ["change_ceiling"],
+        }),
+      ],
+    });
+    await opened();
+
+    expect(
+      screen
+        .getByRole("link", { name: "Open the step that started it" })
+        .getAttribute("href"),
+    ).toBe(`/groups/${GROUP}/work/${ABOVE}/steps/${launchStep}`);
+    expect(said().Started).toMatch(
+      new RegExp(`^By ${setApart("route")} in run 6, .+$`),
+    );
+    expect(screen.getByRole("link", { name: "Open run 6" })).toHaveAttribute(
+      "href",
+      `/groups/${GROUP}/work/${ABOVE}`,
+    );
+    expect(
+      screen
+        .getAllByRole("link")
+        .find(
+          (link) =>
+            link.getAttribute("href") ===
+            `/groups/${GROUP}/work/${ABOVE}/steps/${sourceStep}`,
+        ),
+    ).toHaveTextContent(/which.*in run 6 gave back/);
+    expect(
+      within(ceiling()).queryByRole("button", { name: "Change the ceiling" }),
+    ).toBeNull();
+  });
+
+  it("shows a child run's whole composed input and links each part to its actual maker", async () => {
+    const sourceStep = "00000009-0000-4000-8000-000000000c53";
+    const maker = "00000008-0000-4000-8000-000000000c57";
+    const { name: _name, startedBy: _startedBy, ...child } = CLAIM;
+    const ticket = {
+      name: "ticket",
+      label: "Ticket",
+      kind: "fields",
+      mustBeGiven: true,
+      fields: [
+        {
+          name: "name",
+          label: "Name",
+          kind: "text",
+          longest: 4000,
+          mustBeGiven: true,
+        },
+        {
+          name: "id",
+          label: "Identifier",
+          kind: "text",
+          longest: 100,
+          mustBeGiven: true,
+        },
+        {
+          name: "note",
+          label: "Note",
+          kind: "text",
+          longest: 4000,
+          mustBeGiven: true,
+        },
+      ],
+    };
+    opening(
+      {
+        [`GET ${RUN}`]: [
+          reply({
+            ...child,
+            above: ABOVE,
+            runsAbove: [{ runId: ABOVE, number: 6 }],
+            from: FROM_ABOVE,
+            startedWith: {
+              ticket: { name: "Demo Sample", id: "7", note: "Ready" },
+            },
+            startedWithFrom: [
+              {
+                input: "ticket",
+                sources: [
+                  { targetPath: "name", from: { kind: "constant" } },
+                  {
+                    targetPath: "id",
+                    from: {
+                      kind: "run_input",
+                      runId: ABOVE,
+                      runNumber: 6,
+                      path: "ticket",
+                    },
+                  },
+                  {
+                    targetPath: "note",
+                    from: {
+                      kind: "step",
+                      runId: maker,
+                      runNumber: 4,
+                      stepId: sourceStep,
+                      name: "made",
+                      path: "summary",
+                    },
+                  },
+                ],
+              },
+            ],
+            acts: [],
+          }),
+        ],
+        [`GET ${STEPS}`]: [
+          stepsRead({
+            declarations: {
+              ...DECLARATIONS,
+              [VERSION]: { takes: [ticket], gives: [SUMMARY] },
+            },
+            steps: [
+              {
+                ...SUMMARISE_ROW,
+                takesFrom: [
+                  {
+                    input: "text",
+                    from: { kind: "run_input", path: "ticket.name" },
+                  },
+                ],
+              },
+              FILE_IT_ROW,
+            ],
+          }),
+        ],
+      },
+      `${PAGE}?filter=claim`,
+    );
+    await opened();
+
+    const region = screen.getByRole("region", {
+      name: "What it was started with",
+    });
+    expect(region).toHaveTextContent("Demo Sample");
+    expect(region).toHaveTextContent("It was put together from these:");
+    const parts = within(region).getAllByRole("listitem");
+    expect(parts.at(-3)).toHaveTextContent("Name");
+    expect(parts.at(-2)).toHaveTextContent("Identifier");
+    expect(parts.at(-1)).toHaveTextContent("Note");
+    expect(within(parts.at(-3)!).queryByRole("link")).toBeNull();
+    expect(within(parts.at(-2)!).getByRole("link")).toHaveAttribute(
+      "href",
+      `/groups/${GROUP}/work/${ABOVE}?filter=claim`,
+    );
+    expect(within(parts.at(-1)!).getByRole("link")).toHaveAttribute(
+      "href",
+      `/groups/${GROUP}/work/${maker}/steps/${sourceStep}?filter=claim`,
+    );
+    expect(region).not.toHaveTextContent("undefined");
+  });
+
+  it.each([
+    ["a named ancestor", ABOVE],
+    ["an unidentifiable source", undefined],
+  ])(
+    "keeps %s run-input path apart from the child's same-path label",
+    async (_case, sourceRunId) => {
+      const { name: _name, startedBy: _startedBy, ...child } = CLAIM;
+      opening({
+        [`GET ${RUN}`]: [
+          reply({
+            ...child,
+            above: ABOVE,
+            runsAbove: [{ runId: ABOVE, number: 6 }],
+            from: FROM_ABOVE,
+            startedWith: { ticket: "Demo Sample" },
+            startedWithFrom: [
+              {
+                input: "ticket",
+                from: {
+                  kind: "run_input",
+                  path: "ticket",
+                  ...(sourceRunId === undefined
+                    ? {}
+                    : { runId: sourceRunId, runNumber: 6 }),
+                },
+              },
+            ],
+            acts: [],
+          }),
+        ],
+      });
+      await opened();
+
+      const region = screen.getByRole("region", {
+        name: "What it was started with",
+      });
+      const sourceWords = `${setApart("Ticket")}: ${setApart("ticket")}, which ${sourceRunId === undefined ? "the run" : "run 6"} was started with`;
+      expect(region).toHaveTextContent(sourceWords);
+      expect(region).not.toHaveTextContent(
+        `${setApart("Ticket")}: ${setApart("Ticket")}, which ${sourceRunId === undefined ? "the run" : "run 6"} was started with`,
+      );
+      const sourceLink = within(region).queryByRole("link", {
+        name: sourceWords,
+      });
+      expect(sourceLink?.getAttribute("href") ?? null).toBe(
+        sourceRunId === undefined ? null : `/groups/${GROUP}/work/${ABOVE}`,
+      );
+    },
+  );
 
   /** Opened beside a list, a run's links keep the list's filter and order, as the list's own links do. */
   it("keeps the address's query on each link to another run", async () => {
@@ -378,6 +756,8 @@ describe("RunPage", () => {
           reply({
             ...beneath,
             above: ABOVE,
+            runsAbove: [{ runId: ABOVE, number: 6 }],
+            from: FROM_ABOVE,
             ceiling: { heldBy: { runId: ABOVE, number: 6 } },
             acts: [],
           }),
@@ -390,17 +770,191 @@ describe("RunPage", () => {
 
     expect(
       [
-        screen.getByRole("link", { name: "The run above it" }),
+        screen.getByRole("link", { name: "Open run 6" }),
+        screen.getByRole("link", { name: "Open the step that started it" }),
         screen.getByRole("link", { name: /Held to the ceiling of run 6/ }),
       ].map((link) => link.getAttribute("href")),
     ).toEqual([
       `/groups/${GROUP}/work/${ABOVE}?filter=claim&sort=run`,
+      `/groups/${GROUP}/work/${ABOVE}/steps/${FILE_IT}?filter=claim&sort=run`,
       `/groups/${GROUP}/work/${ABOVE}?filter=claim&sort=run`,
     ]);
   });
 
+  it("names every reached child ceiling, and keeps a human stop separate", async () => {
+    const children = [
+      { runId: ABOVE, number: 8 },
+      { runId: "00000008-0000-4000-8000-000000000c53", number: 9 },
+    ];
+    opening({
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "stopped" } }),
+      ],
+      [`GET ${RUN}`]: [
+        reply({
+          ...STOPPED,
+          stopped: {
+            at: "2026-09-24T08:15:00Z",
+            ceilingOf: children[0],
+            ceilings: children,
+          },
+        }),
+      ],
+    });
+    await opened();
+    expect(said()["Where it is"]).toMatch(
+      /^Stopped by the ceilings of runs 8 and 9, /,
+    );
+    expect(said()["Where it is"]).not.toContain("Glinn");
+  });
+
+  it("names its own ceiling with each lower ceiling when both are reached", async () => {
+    const ceilings = [
+      { runId: RUN_ID, number: 7 },
+      { runId: ABOVE, number: 8 },
+    ];
+    opening({
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "stopped" } }),
+      ],
+      [`GET ${RUN}`]: [
+        reply({
+          ...STOPPED,
+          stopped: {
+            at: "2026-09-24T08:15:00Z",
+            ceilingOf: ceilings[0],
+            ceilings,
+          },
+        }),
+      ],
+    });
+    await opened();
+    expect(said()["Where it is"]).toMatch(
+      /^Stopped by its ceiling and the ceiling of run 8, /,
+    );
+  });
+
+  it("lists child-owned ceilings at the root and targets only the selected child", async () => {
+    const child = {
+      run: { runId: ABOVE, number: 8 },
+      ceiling: { inForce: "50", raiseNeedsApproval: false },
+      acts: ["change_ceiling"],
+    };
+    const { sent } = opening({
+      [`GET ${RUN}`]: [
+        reply({ ...CLAIM, ceilingsBeneath: [child] }),
+        UNANSWERED,
+      ],
+      [`PATCH ${RUN}/ceiling`]: [reply({ ...CLAIM, ceilingsBeneath: [child] })],
+    });
+    await opened();
+    const childGroup = screen.getByRole("group", { name: "Ceiling of run 8" });
+    expect(within(childGroup).getByText("50")).toBeVisible();
+    expect(
+      within(childGroup).getByRole("button", {
+        name: "Change the ceiling of run 8",
+      }),
+    ).toBeVisible();
+    await userEvent.click(
+      within(childGroup).getByRole("button", {
+        name: "Change the ceiling of run 8",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Change the ceiling of run 8",
+    });
+    await userEvent.clear(
+      within(dialog).getByRole("textbox", { name: "Ceiling" }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Change" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const changed = sent.mock.calls.find(
+      ([, init]) => init?.method === "PATCH",
+    );
+    expect(changed?.[0]).toBe(`${RUN}/ceiling`);
+    expect(JSON.parse(String(changed?.[1]?.body))).toEqual({
+      ceiling: null,
+      runId: ABOVE,
+    });
+  });
+
   it.each([
-    ["somebody", { by: GRACE }, `^Stopped by ${setApart("Grace Hopper")}, .+$`],
+    ["Approve the raise", "approval", "approve_raise", GLINN],
+    ["Refuse the raise", "refusal", "refuse_raise", GLINN],
+    ["Withdraw the raise", "withdrawal", "withdraw_raise", AVO],
+  ] as const)(
+    "decides only the selected child raise by the root %s endpoint",
+    async (control, decision, act, askedBy) => {
+      const siblingId = "00000008-0000-4000-8000-000000000c53";
+      const child = {
+        run: { runId: ABOVE, number: 8 },
+        ceiling: {
+          inForce: "50",
+          raiseNeedsApproval: true,
+          waiting: {
+            changeId: RAISE,
+            to: "100",
+            askedBy,
+            askedAt: "2026-09-24T08:30:00Z",
+          },
+        },
+        acts: [act],
+      };
+      const sibling = {
+        ...child,
+        run: { runId: siblingId, number: 9 },
+        ceiling: {
+          ...child.ceiling,
+          waiting: { ...child.ceiling.waiting, changeId: `${RAISE}-other` },
+        },
+        acts: [],
+      };
+      const before = { ...CLAIM, ceilingsBeneath: [child, sibling] };
+      const after = {
+        ...CLAIM,
+        ceilingsBeneath: [
+          {
+            ...child,
+            ceiling: { ...child.ceiling, waiting: undefined },
+            acts: [],
+          },
+          sibling,
+        ],
+      };
+      const address = `PUT ${RUN}/ceiling-changes/${RAISE}/${decision}`;
+      const { sent } = opening({
+        [`GET ${RUN}`]: [reply(before), UNANSWERED],
+        [address]: [reply(after)],
+      });
+      await opened();
+      const selected = screen.getByRole("group", { name: "Ceiling of run 8" });
+      const other = screen.getByRole("group", { name: "Ceiling of run 9" });
+      expect(within(other).getByText(/asked/)).toBeVisible();
+
+      await userEvent.click(
+        within(selected).getByRole("button", { name: control }),
+      );
+
+      await waitFor(() =>
+        expect(within(selected).queryByText(/asked/)).toBeNull(),
+      );
+      expect(within(other).getByText(/asked/)).toBeVisible();
+      expect(
+        within(ceiling()).getByText("9,007,199,254,740,990"),
+      ).toBeVisible();
+      expect(requestsTo(sent).filter((each) => each.startsWith("PUT"))).toEqual(
+        [address],
+      );
+      expect(requestsTo(sent)).not.toContain(
+        `PUT /api/groups/${GROUP}/runs/${ABOVE}/ceiling-changes/${RAISE}/${decision}`,
+      );
+    },
+  );
+
+  it.each([
+    ["somebody", { by: GLINN }, `^Stopped by ${setApart("Glinn Havven")}, .+$`],
     [
       "its own ceiling, naming nobody",
       { ceilingOf: { runId: RUN_ID, number: 7 } },
@@ -411,18 +965,45 @@ describe("RunPage", () => {
       [`GET ${RUN}`]: [
         reply({ ...STOPPED, stopped: { at: "2026-09-24T08:15:00Z", ...by } }),
       ],
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "stopped" } }),
+      ],
     });
     await opened();
 
     expect(said()["Where it is"]).toMatch(new RegExp(where));
   });
 
+  it.each([
+    ["done", "Done", { ...RUN_HEADER, state: "done", at: undefined }],
+    ["running", `Running, on ${setApart("file it")}`, RUN_HEADER],
+  ])(
+    "says where a %s run is now despite its earlier stop",
+    async (state, words, header) => {
+      opening({
+        [`GET ${RUN}`]: [reply({ ...STOPPED, state, at: RUN_HEADER.at })],
+        [`GET ${STEPS}`]: [stepsRead({ run: header })],
+      });
+      await opened();
+
+      expect(said()["Where it is"]).toContain(words);
+      expect(said()["Where it is"]).not.toContain("Stopped by");
+    },
+  );
+
   /** A state named after this build is said plainly as one it cannot say, never in the server's spelling. */
   it("says where a run is in words only, even where the server works out a state this build has none for", async () => {
-    opening({ [`GET ${RUN}`]: [reply({ ...CLAIM, state: "resting" })] });
+    opening({
+      [`GET ${RUN}`]: [reply({ ...CLAIM, state: "resting" })],
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "resting" } }),
+      ],
+    });
     await opened();
 
-    expect(said()["Where it is"]).toBe("Not something this page can say yet.");
+    expect(said()["Where it is"]).toBe(
+      "Not something this page can say yet.1 of 2 steps done",
+    );
     expect(screen.queryByText(/resting/)).toBeNull();
   });
 
@@ -433,14 +1014,19 @@ describe("RunPage", () => {
       "What came back is not known for every call yet, and is counted here as nothing.",
     ],
     [
-      "with any of it as this system measured it, says some or all of it is, never as one try's",
-      { measuredHere: true },
-      "Some or all of it is as this system measured it, where a model did not say what it counted.",
+      "with some calls counted here, says part of it is measured here",
+      { measuredHere: "partly" },
+      "Part of it is as this system measured it, where a model did not say what it counted.",
+    ],
+    [
+      "with every call counted here, says all of it is measured here",
+      { measuredHere: "wholly" },
+      "All of it is as this system measured it, as no model said what it counted.",
     ],
     [
       "with both, says who counted it before what is not known",
-      { cameBackUnknown: true, measuredHere: true },
-      "Some or all of it is as this system measured it, where a model did not say what it counted.What came back is not known for every call yet, and is counted here as nothing.",
+      { cameBackUnknown: true, measuredHere: "partly" },
+      "Part of it is as this system measured it, where a model did not say what it counted.What came back is not known for every call yet, and is counted here as nothing.",
     ],
     ["with all of it known as the model counted it, says nothing more", {}, ""],
   ])("says what a run has cost, and %s", async (_case, marked, more) => {
@@ -472,18 +1058,24 @@ describe("RunPage", () => {
         "withdraw_raise",
       ],
       [
-        "Stop",
-        "Rename",
         "Change the ceiling",
         "Approve the raise",
         "Refuse the raise",
         "Withdraw the raise",
+        "Stop",
+        "Rename",
+        "Show as a conversation",
       ],
     ],
-    ["opening again alone", ["open_again"], ["Open again"]],
-    ["none of them", [], []],
+    [
+      "opening again alone",
+      ["open_again"],
+      ["Open again", "Show as a conversation"],
+    ],
+    ["none of them", [], ["Show as a conversation"]],
   ])(
-    "draws only the controls the server says the reader may use: %s",
+    "draws only the controls the server says the reader may use, the way to Conversation last: %s",
+
     async (_case, acts, controls) => {
       opening({ [`GET ${RUN}`]: [reply({ ...RAISED, acts })] });
       await opened();
@@ -522,6 +1114,10 @@ describe("RunPage", () => {
   it("opens a stopped run again", async () => {
     const { sent } = opening({
       [`GET ${RUN}`]: [reply(STOPPED), reply(CLAIM)],
+      [`GET ${STEPS}`]: [
+        stepsRead({ run: { ...RUN_HEADER, state: "stopped" } }),
+        stepsRead(),
+      ],
       [`DELETE ${RUN}/stop`]: [reply(CLAIM)],
     });
     await opened();
@@ -534,6 +1130,29 @@ describe("RunPage", () => {
     expect(requestsTo(sent).filter((each) => !each.startsWith("GET"))).toEqual([
       `DELETE ${RUN}/stop`,
     ]);
+  });
+
+  it("draws Stop outlined in the warning colour, and the same control once it reads Open again in none, Rename in none either way", async () => {
+    opening({
+      [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
+      [`PUT ${RUN}/stop`]: [reply(STOPPED)],
+    });
+    await opened();
+    const control = screen.getByRole("button", { name: "Stop" });
+    const rename = screen.getByRole("button", { name: "Rename" });
+
+    expect(control).toHaveClass(buttonClasses.colorWarning);
+    expect(control).toHaveClass(buttonClasses.outlined);
+    expect(rename).not.toHaveClass(buttonClasses.colorWarning);
+
+    await userEvent.click(control);
+
+    expect(await screen.findByRole("button", { name: "Open again" })).toBe(
+      control,
+    );
+    expect(control).not.toHaveClass(buttonClasses.colorWarning);
+    expect(control).toHaveClass(buttonClasses.outlined);
+    expect(rename).not.toHaveClass(buttonClasses.colorWarning);
   });
 
   /** A refusal of the act says the reader's standing moved, which is read again with the run. */
@@ -553,7 +1172,7 @@ describe("RunPage", () => {
   it("renames the run through its dialog, heading the page with the name it answers with", async () => {
     const { sent } = opening({
       [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
-      [`PATCH ${RUN}`]: [reply({ ...CLAIM, name: "Claim from Ada, again" })],
+      [`PATCH ${RUN}`]: [reply({ ...CLAIM, name: "Claim from Avo, again" })],
     });
     await opened();
 
@@ -568,7 +1187,7 @@ describe("RunPage", () => {
     );
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(await opened()).toHaveTextContent(setApart("Claim from Ada, again"));
+    expect(await opened()).toHaveTextContent(setApart("Claim from Avo, again"));
     expect(requestsTo(sent).filter((each) => !each.startsWith("GET"))).toEqual([
       `PATCH ${RUN}`,
     ]);
@@ -582,7 +1201,7 @@ describe("RunPage", () => {
     ],
     [
       "taken away, says so",
-      { changeId: RAISE, askedBy: GRACE, askedAt: "2026-09-24T08:30:00Z" },
+      { changeId: RAISE, askedBy: GLINN, askedAt: "2026-09-24T08:30:00Z" },
       "for it to be taken away\\. That waits on approval\\.$",
     ],
   ])(
@@ -596,7 +1215,7 @@ describe("RunPage", () => {
       await opened();
 
       expect(within(ceiling()).getByText(/asked/)).toHaveTextContent(
-        new RegExp(`^${setApart("Grace Hopper")} asked, .+, ${words}`),
+        new RegExp(`^${setApart("Glinn Havven")} asked, .+, ${words}`),
       );
       expect(
         within(ceiling()).getByText("9,007,199,254,740,990"),
@@ -749,1698 +1368,10 @@ describe("RunPage", () => {
       const { readAgain } = opening({ [`GET ${RUN}`]: [refusal(code, 404)] });
 
       expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
-      expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
-      expect(readAgain).toHaveBeenCalledTimes(standingReads);
+      expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+      await waitFor(() =>
+        expect(readAgain).toHaveBeenCalledTimes(standingReads),
+      );
     },
   );
-
-  describe("in detail", () => {
-    function part(name: string): HTMLElement {
-      return screen.getByRole("region", { name });
-    }
-
-    function stepRows(): string[][] {
-      const [, ...rows] = within(
-        screen.getByRole("table", { name: "The steps" }),
-      ).getAllByRole<HTMLTableRowElement>("row");
-      return rows.map((row) =>
-        [...row.cells].map((cell) => cell.textContent ?? ""),
-      );
-    }
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("draws under the header what it was started with, what it gave back that stands, and every step in order with where each input comes from", async () => {
-      const { sent } = opening(
-        { [`GET ${RUN}`]: [reply(STARTED)], [`GET ${STEPS}`]: [stepsRead()] },
-        PAGE,
-        "detail",
-      );
-
-      await screen.findByRole("table", { name: "The steps" });
-
-      expect(
-        within(part("What it was started with"))
-          .getAllByRole("definition")
-          .map((each) => each.textContent),
-      ).toEqual(["Kettle leaks", "Sep 30, 2026"]);
-      expect(
-        within(part("What it gave back")).getByRole("term"),
-      ).toHaveTextContent("Summary");
-      expect(
-        within(part("What it gave back")).getByRole("definition"),
-      ).toHaveTextContent("A kettle leaks.");
-      expect(stepRows()).toEqual([
-        [
-          "1",
-          "summarise",
-          `${setApart("Text")}: ${setApart("Ticket")}, which the run was started with`,
-          "Done",
-          "Nothing: it calls no model.",
-        ],
-        [
-          "2",
-          "file it",
-          `${setApart("summary")}: ${setApart("Summary")}, which ${setApart("summarise")} gave back`,
-          "RunningIts code is running.",
-          "Nothing: it calls no model.",
-        ],
-      ]);
-      expect(
-        screen.queryByText("Nothing it gives back stands yet."),
-      ).toBeNull();
-      expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
-    });
-
-    it("says in the steps a step's cost is some or all of it as this system measured it, never as one try's", async () => {
-      const measured = {
-        ...SUMMARISE_ROW,
-        cost: {
-          callsAModel: true,
-          sent: "1200",
-          cameBack: "300",
-          spent: "1500",
-          cameBackUnknown: false,
-          measuredHere: true,
-        },
-      };
-      opening(
-        { [`GET ${STEPS}`]: [stepsRead({ steps: [measured, FILE_IT_ROW] })] },
-        PAGE,
-        "detail",
-      );
-
-      await screen.findByRole("table", { name: "The steps" });
-
-      const [cost, uncalled] = stepRows().map((cells) => cells.at(-1));
-      expect(cost).toBe(
-        "1,500 in all: 1,200 sent, 300 came backSome or all of it is as this system measured it, where a model did not say what it counted.",
-      );
-      expect(cost).not.toContain("Both as");
-      expect(uncalled).toBe("Nothing: it calls no model.");
-    });
-
-    it("opens each step's own page from its row, keeping the list's address", async () => {
-      opening(
-        { [`GET ${STEPS}`]: [stepsRead()] },
-        `${PAGE}?sort=run`,
-        "detail",
-      );
-
-      const table = await screen.findByRole("table", { name: "The steps" });
-
-      expect(
-        within(table)
-          .getAllByRole("link")
-          .map((link) => link.getAttribute("href")),
-      ).toEqual([
-        `${PAGE}/steps/${SUMMARISE}?sort=run`,
-        `${PAGE}/steps/${FILE_IT}?sort=run`,
-      ]);
-    });
-
-    it.each([
-      [
-        "nothing standing yet",
-        { declares: "values", standing: [] },
-        "Nothing it gives back stands yet.",
-      ],
-      [
-        "a workflow that acts rather than answers",
-        { declares: "nothing" },
-        "Its workflow gives nothing back: it acts rather than answers.",
-      ],
-      [
-        "what it declares in a word this build does not know",
-        { declares: "later" },
-        "Not something this page can say yet.",
-      ],
-    ])(
-      "says so of what it gave back where it has %s, and lists nothing",
-      async (_case, gaveBack, sentence) => {
-        opening(
-          { [`GET ${STEPS}`]: [stepsRead({ gaveBack })] },
-          PAGE,
-          "detail",
-        );
-
-        await screen.findByRole("table", { name: "The steps" });
-
-        expect(part("What it gave back")).toHaveTextContent(sentence);
-        expect(
-          within(part("What it gave back")).queryByRole("term"),
-        ).toBeNull();
-      },
-    );
-
-    it.each([
-      [
-        "the run above started it",
-        { ...CLAIM, name: undefined, startedBy: undefined, above: ABOVE },
-        `The run above it started it, with ${setApart("Handle a claim")}.`,
-      ],
-      [
-        "it takes nothing",
-        { ...CLAIM, startedWith: {} },
-        "Its workflow takes nothing, so it was started with nothing.",
-      ],
-    ])(
-      "says what it was started with in words where %s and no value is there to list",
-      async (_case, run, sentence) => {
-        opening(
-          {
-            [`GET ${RUN}`]: [reply(run)],
-            [`GET ${STEPS}`]: [
-              stepsRead({
-                declarations: { [VERSION]: { takes: [], gives: [SUMMARY] } },
-              }),
-            ],
-          },
-          PAGE,
-          "detail",
-        );
-
-        await screen.findByRole("table", { name: "The steps" });
-
-        expect(part("What it was started with")).toHaveTextContent(sentence);
-        expect(
-          within(part("What it was started with")).queryByRole("term"),
-        ).toBeNull();
-      },
-    );
-
-    /** Timeouts are faked, so what is in flight is let land a turn at a time rather than waited on. */
-    it("keeps where each step is up for as long as the steps say to, never saying it is reading, and stops once they no longer say it", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({ rereadAfterSeconds: 2 }),
-            stepsRead({}, { state: "done", where: undefined }),
-          ],
-        },
-        PAGE,
-        "detail",
-      );
-      await landing(() => screen.queryByRole("table") !== null);
-
-      await act(() => vi.advanceTimersByTimeAsync(1999));
-      expect(reads(sent)).toHaveLength(2);
-      await act(() => vi.advanceTimersByTimeAsync(1));
-      await landing(() => stepRows()[1]![3] === "Done");
-      await act(() => vi.advanceTimersByTimeAsync(60_000));
-
-      expect(reads(sent)).toEqual([
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-      ]);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(screen.queryByText("Still reading…")).toBeNull();
-      expect(screen.queryByRole("alert")).toBeNull();
-    });
-
-    it("reads the steps again once an act on the run answers, as well as showing the run it answered with", async () => {
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead(),
-            stepsRead({}, { state: "failed", where: undefined }),
-          ],
-          [`PUT ${RUN}/stop`]: [reply(STOPPED)],
-        },
-        PAGE,
-        "detail",
-      );
-      await screen.findByRole("table", { name: "The steps" });
-
-      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-      await waitFor(() => expect(stepRows()[1]![3]).toBe("Failed"));
-      const asked = requestsTo(sent);
-      expect(asked.slice(asked.indexOf(`PUT ${RUN}/stop`))).toEqual([
-        `PUT ${RUN}/stop`,
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-      ]);
-    });
-
-    it("starts the keyboard at the ceiling once an act's answer is drawn, and leaves it where the reader put it when the run is read again after", async () => {
-      let settle!: (answer: readonly [string, number]) => void;
-      const readAgain = new Promise<readonly [string, number]>((done) => {
-        settle = done;
-      });
-      opening(
-        {
-          [`GET ${RUN}`]: [reply(RAISED), readAgain],
-          [`GET ${STEPS}`]: [stepsRead()],
-          [`PUT ${RUN}/ceiling-changes/${RAISE}/approval`]: [reply(CLAIM)],
-        },
-        PAGE,
-        "detail",
-      );
-      await screen.findByRole("table", { name: "The steps" });
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Approve the raise" }),
-      );
-      await waitFor(() => expect(document.activeElement).toBe(ceiling()));
-      ceiling().blur();
-      settle([JSON.stringify({ ...CLAIM, name: "Claim, read again" }), 200]);
-
-      await waitFor(() =>
-        expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
-          setApart("Claim, read again"),
-        ),
-      );
-      expect(document.activeElement).toBe(document.body);
-    });
-
-    /** Timeouts are faked, as where each step is kept up is. */
-    it("says once, in a region of its own, where a read again finds a step in another state, and nothing where none is", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const done = { state: "done", where: undefined };
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({ rereadAfterSeconds: 1 }),
-            stepsRead({ rereadAfterSeconds: 1 }, done),
-            stepsRead({ rereadAfterSeconds: 1 }, done),
-          ],
-        },
-        PAGE,
-        "detail",
-      );
-      await landing(() => screen.queryByRole("table") !== null);
-      // The page's own region comes first; the read's own follows it.
-      const news = screen.getAllByRole("status")[0]!;
-      expect(news).toHaveTextContent(/^$/);
-
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() => stepRows()[1]![3] === "Done");
-
-      expect(news).toHaveTextContent(`${setApart("file it")}: now Done.`);
-      expect(news).not.toHaveTextContent("summarise");
-      expect(news).not.toHaveTextContent("Claim from Ada");
-
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() => news.textContent === "");
-      expect(stepRows()[1]![3]).toBe("Done");
-    });
-
-    it("starts the keyboard at the run's heading where the reader came back to it from one of its steps", async () => {
-      opening(
-        { [`GET ${STEPS}`]: [stepsRead()] },
-        { pathname: PAGE, state: WITHIN_THE_RUN },
-        "detail",
-      );
-
-      const heading = await opened();
-
-      await waitFor(() => expect(document.activeElement).toBe(heading));
-    });
-
-    it("leaves the keyboard where it was where the run was opened by its address", async () => {
-      opening({ [`GET ${STEPS}`]: [stepsRead()] }, PAGE, "detail");
-
-      const heading = await opened();
-
-      expect(document.activeElement).not.toBe(heading);
-      expect(document.activeElement).toBe(document.body);
-    });
-
-    it("says the run refused in place where its steps are refused, drawing nothing of it", async () => {
-      opening(
-        { [`GET ${STEPS}`]: [refusal("RUN_NOT_IN_VIEW", 404)] },
-        PAGE,
-        "detail",
-      );
-
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "That run is not in view.",
-      );
-      expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
-      expect(screen.queryByRole("table")).toBeNull();
-    });
-
-    it("draws no conversation, and names no step's message", async () => {
-      opening();
-
-      await screen.findByRole("table", { name: "The steps" });
-
-      expect(
-        screen.queryByRole("list", { name: "The conversation" }),
-      ).toBeNull();
-      expect(document.getElementById(`step-${SUMMARISE}`)).toBeNull();
-      expect(screen.queryByRole("button", { name: "More" })).toBeNull();
-    });
-  });
-
-  describe("as a conversation", () => {
-    const NOTIFY = "00000009-0000-4000-8000-000000000c53";
-
-    const CLOSE_IT = "00000009-0000-4000-8000-000000000c54";
-
-    /** A step not reached yet. */
-    function notReached(stepId: string, order: number, name: string) {
-      return {
-        stepId,
-        order,
-        name,
-        runs: { kind: "route" },
-        state: "not_started",
-        takesFrom: [],
-        cost: { callsAModel: false },
-        acts: [],
-        withheld: [],
-      };
-    }
-
-    /** Ada's answer to the summary, which Grace assured. */
-    const ANSWERED_TRY = {
-      number: 1,
-      beyond: false,
-      producedBy: { kind: "person", person: ADA },
-      values: [
-        {
-          field: "summary",
-          value: "A kettle leaks.",
-          now: "stands",
-          decision: { outcome: "assured" },
-        },
-      ],
-      review: { asked: true, by: { kind: "person", person: GRACE } },
-      ended: "stands",
-      cost: { callsAModel: false },
-    };
-
-    /** Ada's first answer, which Grace refused. */
-    const REFUSED_TRY = {
-      ...ANSWERED_TRY,
-      values: [
-        {
-          field: "summary",
-          value: "Kettle.",
-          now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
-        },
-      ],
-      ended: "refused_on_review",
-    };
-
-    /** The summary asked twice: refused, then answered again and assured. */
-    const ASKED_TWICE = {
-      ...SUMMARISE_ROW,
-      tries: { current: 2, declared: 2, beyond: false },
-    };
-
-    /** The summary answered by the reader, waiting on a review the reader may not give for `refusal`. */
-    function waitingOnReview(refusal: string) {
-      return {
-        ...SUMMARISE_ROW,
-        state: "waiting",
-        where: {
-          kind: "waiting_on_review",
-          number: 1,
-          values: [{ field: "summary", on: "review_at_gate" }],
-          since: "2026-09-24T08:05:00Z",
-          waitsOn: "review_at_gate",
-        },
-        gaveBack: [
-          {
-            field: "summary",
-            value: "A kettle leaks.",
-            now: "waiting_on_review",
-          },
-        ],
-        withheld: [{ act: "review", refusal }],
-      };
-    }
-
-    function stepPage(step: object, triesMade: readonly object[]): Reply {
-      return reply({
-        run: RUN_HEADER,
-        declarations: DECLARATIONS,
-        step,
-        triesMade,
-      });
-    }
-
-    function conversation(): HTMLElement {
-      return screen.getByRole("list", { name: "The conversation" });
-    }
-
-    async function conversing(): Promise<HTMLElement> {
-      return screen.findByRole("list", { name: "The conversation" });
-    }
-
-    function message(name: string): HTMLElement {
-      return within(conversation()).getByRole("listitem", { name });
-    }
-
-    /** Each message by its title, in the order drawn. */
-    function messages(): string[] {
-      return [...conversation().children].map(
-        (each) =>
-          within(each as HTMLElement).getAllByRole("heading", {
-            level: 3,
-          })[0]!.textContent ?? "",
-      );
-    }
-
-    /** What a disclosure opens and shuts. */
-    function controlled(control: HTMLElement): HTMLElement {
-      return document.getElementById(control.getAttribute("aria-controls")!)!;
-    }
-
-    function labelled(part: HTMLElement): Record<string, string> {
-      const terms = within(part).getAllByRole("term");
-      const definitions = within(part).getAllByRole("definition");
-      return Object.fromEntries(
-        terms.map((term, at) => [
-          term.textContent ?? "",
-          definitions[at]!.textContent ?? "",
-        ]),
-      );
-    }
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("heads it with its name, where it is by the title of the step it is on, and how far it has got, keeping its cost and ceiling out of sight", async () => {
-      opening(
-        { [`GET ${RUN}`]: [reply({ ...CLAIM, at: RUN_HEADER.at })] },
-        PAGE,
-        "conversation",
-      );
-
-      expect(await opened()).toHaveTextContent(setApart("Claim from Ada"));
-      await conversing();
-
-      expect(
-        screen.getByText(`Running, on ${setApart("file it")}`),
-      ).toBeInTheDocument();
-      expect(screen.getByText("1 of 2 steps done")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "More" })).toHaveAttribute(
-        "aria-expanded",
-        "false",
-      );
-      expect(screen.queryByRole("group", { name: "Ceiling" })).toBeNull();
-      expect(screen.queryByText(/in all:/)).toBeNull();
-      expect(screen.queryByText("Number")).toBeNull();
-    });
-
-    it("opens behind More what it has cost, its ceiling, a way to rename it and the way to the detail, and shuts them again", async () => {
-      opening({}, PAGE, "conversation");
-      await conversing();
-      const more = screen.getByRole("button", { name: "More" });
-
-      await userEvent.click(more);
-
-      expect(more).toHaveAttribute("aria-expanded", "true");
-      expect(labelled(controlled(more))).toEqual({
-        "What it has cost":
-          "9,007,199,254,741,013 in all: 9,007,199,254,740,993 sent, 20 came back",
-        Ceiling: "9,007,199,254,740,990Change the ceiling",
-      });
-      expect(
-        within(controlled(more))
-          .getAllByRole("button")
-          .map((each) => each.textContent),
-      ).toEqual(["Change the ceiling", "Rename", "Show in detail"]);
-
-      await userEvent.click(more);
-
-      expect(more).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByRole("group", { name: "Ceiling" })).toBeNull();
-    });
-
-    it("says behind More that some or all of what it has cost is as this system measured it, never as one try's", async () => {
-      opening(
-        {
-          [`GET ${RUN}`]: [
-            reply({ ...CLAIM, spend: { ...CLAIM.spend, measuredHere: true } }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const more = screen.getByRole("button", { name: "More" });
-
-      await userEvent.click(more);
-
-      const cost = labelled(controlled(more))["What it has cost"];
-      expect(cost).toBe(
-        "9,007,199,254,741,013 in all: 9,007,199,254,740,993 sent, 20 came backSome or all of it is as this system measured it, where a model did not say what it counted.",
-      );
-      expect(cost).not.toContain("Both as");
-    });
-
-    it("asks for the detail from More, reading nothing more of the run", async () => {
-      const { sent, onDetail } = opening({}, PAGE, "conversation");
-      await conversing();
-      await userEvent.click(screen.getByRole("button", { name: "More" }));
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Show in detail" }),
-      );
-
-      expect(onDetail).toHaveBeenCalledOnce();
-      expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
-    });
-
-    it("reads the steps again once an act on the run answers, heading it with the run the act answered with", async () => {
-      const { sent } = opening(
-        {
-          [`GET ${RUN}`]: [reply(CLAIM), reply(STOPPED)],
-          [`PUT ${RUN}/stop`]: [reply(STOPPED)],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-
-      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-      expect(
-        await screen.findByRole("button", { name: "Open again" }),
-      ).toBeInTheDocument();
-      await waitFor(() => expect(messages().at(-1)).toMatch(/^Stopped by /));
-      const asked = requestsTo(sent);
-      expect(asked.slice(asked.indexOf(`PUT ${RUN}/stop`))).toEqual([
-        `PUT ${RUN}/stop`,
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-      ]);
-    });
-
-    /** The run read again after the act is held unanswered, so all that is drawn is what the act answered. */
-    it("starts the keyboard at More once a stop takes its control away from one who may not open the run again, More still shut", async () => {
-      opening(
-        {
-          [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
-          [`PUT ${RUN}/stop`]: [
-            reply({ ...STOPPED, acts: ["rename", "change_ceiling"] }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const more = screen.getByRole("button", { name: "More" });
-
-      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-      await waitFor(() => expect(document.activeElement).toBe(more));
-      expect(more).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Open again" })).toBeNull();
-      expect(screen.queryByRole("group", { name: "Ceiling" })).toBeNull();
-    });
-
-    it("draws what it was started with first, then one message per step reached in the order they run, each named by its title, and names the steps not reached on one line after them", async () => {
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              steps: [
-                SUMMARISE_ROW,
-                FILE_IT_ROW,
-                notReached(NOTIFY, 3, "notify_them"),
-                notReached(CLOSE_IT, 4, "close_it"),
-              ],
-            }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-
-      expect(messages()).toEqual([
-        "What it was started with",
-        setApart("Summarise"),
-        setApart("file it"),
-      ]);
-      expect(
-        screen.getByText(
-          `Not reached yet: ${setApart("notify them")} and ${setApart("close it")}`,
-        ),
-      ).toBeInTheDocument();
-      expect(document.getElementById(`step-${NOTIFY}`)).toBeNull();
-      expect(screen.queryByRole("table")).toBeNull();
-      expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
-    });
-
-    it("says in its first message who started it, with which workflow, and each value it was started with under its label", async () => {
-      opening({ [`GET ${RUN}`]: [reply(STARTED)] }, PAGE, "conversation");
-      await conversing();
-
-      const first = message("What it was started with");
-
-      expect(first).toHaveTextContent(
-        new RegExp(
-          `${setApart("Ada Lovelace")} started it, .+, with ${setApart("Handle a claim")}, version 3\\.`,
-        ),
-      );
-      expect(labelled(first)).toEqual({
-        Ticket: "Kettle leaks",
-        Due: "Sep 30, 2026",
-      });
-      expect(within(first).queryByRole("button")).toBeNull();
-    });
-
-    it("shuts a long text it was started with until it is opened, saying whether it is open", async () => {
-      opening(
-        {
-          [`GET ${RUN}`]: [
-            reply({
-              ...STARTED,
-              startedWith: {
-                ticket: "Kettle leaks.\nIt leaked again.",
-                due: null,
-              },
-            }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const first = message("What it was started with");
-      const control = within(first).getByRole("button", {
-        name: `${setApart("Ticket")}, in full`,
-      });
-      expect(control).toHaveAttribute("aria-expanded", "false");
-      expect(within(first).queryByText(/It leaked again/)).toBeNull();
-      expect(labelled(first).Due).toBe("None");
-
-      await userEvent.click(control);
-
-      expect(control).toHaveAttribute("aria-expanded", "true");
-      expect(controlled(control)).toHaveTextContent(
-        "Kettle leaks. It leaked again.",
-      );
-      expect(within(first).getAllByRole("button")).toHaveLength(1);
-    });
-
-    it("says in its first message that the run above started it, opening that run, and lists nothing it was started with", async () => {
-      const { name: _unnamed, startedBy: _nobody, ...beneath } = CLAIM;
-      opening(
-        {
-          [`GET ${RUN}`]: [reply({ ...beneath, above: ABOVE, acts: [] })],
-        },
-        `${PAGE}?sort=run`,
-        "conversation",
-      );
-      await conversing();
-
-      const first = message("What it was started with");
-
-      expect(first).toHaveTextContent(
-        new RegExp(
-          `The run above it started it, .+, with ${setApart("Handle a claim")}, version 3\\.`,
-        ),
-      );
-      expect(
-        within(first).getByRole("link", { name: "The run above it" }),
-      ).toHaveAttribute("href", `/groups/${GROUP}/work/${ABOVE}?sort=run`);
-      expect(within(first).queryByRole("term")).toBeNull();
-    });
-
-    it("says in each step's message where it is, which try, and what that try gave back under its label with where each value stands, and nothing more until Details is opened", async () => {
-      const { sent } = opening({}, PAGE, "conversation");
-      await conversing();
-
-      const summarise = message(setApart("Summarise"));
-      const fileIt = message(setApart("file it"));
-
-      expect(summarise).toHaveTextContent("Done");
-      expect(summarise).toHaveTextContent("Try 1 of the 2 it allows");
-      expect(labelled(summarise)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.It stands.",
-      });
-      expect(
-        within(summarise).getByRole("button", { name: "Details" }),
-      ).toHaveAttribute("aria-expanded", "false");
-      expect(within(summarise).queryByText("Produced by")).toBeNull();
-      expect(within(summarise).queryByRole("link")).toBeNull();
-      expect(
-        within(summarise).queryByRole("button", { name: "Earlier try" }),
-      ).toBeNull();
-      expect(fileIt).toHaveTextContent("RunningIts code is running.");
-      expect(fileIt).toHaveTextContent("Try 1 of the 1 it allows");
-      expect(within(fileIt).queryByRole("term")).toBeNull();
-      expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
-    });
-
-    it("describes each message's controls by that message's title, so one message's Details is told from another's", async () => {
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [ASKED_TWICE, FILE_IT_ROW] })],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-      const fileIt = message(setApart("file it"));
-
-      expect(
-        within(summarise).getByRole("button", { name: "Details" }),
-      ).toHaveAccessibleDescription(setApart("Summarise"));
-      expect(
-        within(fileIt).getByRole("button", { name: "Details" }),
-      ).toHaveAccessibleDescription(setApart("file it"));
-      expect(
-        within(summarise)
-          .getAllByRole("button")
-          .map((each) => each.getAttribute("aria-describedby")),
-      ).toEqual(Array(3).fill(within(summarise).getByRole("heading").id));
-    });
-
-    it("reads the step's own page as Details opens, drawing who produced its newest try, who reviewed it, where each input comes from, and the way to its page", async () => {
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(SUMMARISE_ROW, [ANSWERED_TRY]),
-          ],
-        },
-        `${PAGE}?sort=run`,
-        "conversation",
-      );
-      await conversing();
-      const details = within(message(setApart("Summarise"))).getByRole(
-        "button",
-        { name: "Details" },
-      );
-
-      await userEvent.click(details);
-
-      expect(details).toHaveAttribute("aria-expanded", "true");
-      const opened = controlled(details);
-      await within(opened).findByText("Produced by");
-      expect(labelled(opened)).toEqual({
-        "Asked for by": "The run itself",
-        "Produced by": setApart("Ada Lovelace"),
-        "Reviewed by": setApart("Grace Hopper"),
-        "How it ended": "It stands.",
-        Cost: "Nothing: it calls no model.",
-        "Takes from": `${setApart("Text")}: ${setApart("Ticket")}, which the run was started with`,
-      });
-      expect(
-        within(opened).getByRole("link", { name: "Open this step's page" }),
-      ).toHaveAttribute("href", `${PAGE}/steps/${SUMMARISE}?sort=run`);
-      expect(reads(sent)).toEqual([
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-        `GET ${STEPS}/${SUMMARISE}`,
-      ]);
-
-      await userEvent.click(details);
-
-      expect(details).toHaveAttribute("aria-expanded", "false");
-      expect(within(opened).queryByText("Produced by")).toBeNull();
-    });
-
-    it("says in Details how sure a model was of each value it said so of, after who produced it, and nothing of a value it did not", async () => {
-      const model = { kind: "model", model: "small", mode: "careful" };
-      const spend = {
-        callsAModel: true,
-        sent: "12",
-        cameBack: "4",
-        spent: "16",
-        cameBackUnknown: false,
-      };
-      const sorry = { field: "reply", value: "Sorry.", now: "stands" };
-      const modelled = {
-        ...SUMMARISE_ROW,
-        producer: model,
-        cost: spend,
-        gaveBack: [...SUMMARISE_ROW.gaveBack, sorry],
-      };
-      const declarations = {
-        ...DECLARATIONS,
-        [QUESTION_VERSION]: {
-          ...DECLARATIONS[QUESTION_VERSION],
-          gives: [
-            SUMMARY,
-            { ...SUMMARY, name: "reply", label: "Reply" },
-            { ...SUMMARY, name: "tone", label: "Tone" },
-          ],
-        },
-      };
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({ declarations, steps: [modelled, FILE_IT_ROW] }),
-          ],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            reply({
-              run: RUN_HEADER,
-              declarations,
-              step: modelled,
-              triesMade: [
-                {
-                  ...ANSWERED_TRY,
-                  producedBy: model,
-                  values: [
-                    {
-                      field: "summary",
-                      value: "A kettle leaks.",
-                      now: "stands",
-                      confidence: 87,
-                      decision: { outcome: "assured" },
-                    },
-                    { ...sorry, decision: { outcome: "assured" } },
-                    {
-                      field: "tone",
-                      value: "Calm.",
-                      now: "stands",
-                      confidence: 40,
-                      decision: { outcome: "assured" },
-                    },
-                  ],
-                  cost: spend,
-                },
-              ],
-            }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const details = within(message(setApart("Summarise"))).getByRole(
-        "button",
-        { name: "Details" },
-      );
-
-      await userEvent.click(details);
-
-      const opened = controlled(details);
-      await within(opened).findByText("How sure");
-      const fields = labelled(opened);
-      expect(fields["How sure"]).toBe(
-        `${setApart("Summary")}: 87%${setApart("Tone")}: 40%`,
-      );
-      expect(Object.keys(fields).slice(0, 3)).toEqual([
-        "Asked for by",
-        "Produced by",
-        "How sure",
-      ]);
-    });
-
-    it("says nothing in Details of how sure where no value carries it, as none of a person's try does", async () => {
-      opening(
-        {
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(SUMMARISE_ROW, [ANSWERED_TRY]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const details = within(message(setApart("Summarise"))).getByRole(
-        "button",
-        { name: "Details" },
-      );
-
-      await userEvent.click(details);
-
-      const opened = controlled(details);
-      await within(opened).findByText("Produced by");
-      expect(within(opened).queryByText("How sure")).toBeNull();
-      expect(opened).not.toHaveTextContent(/\d+%/);
-    });
-
-    it("turns to an earlier try in the same message, saying which of how many it is and what it gave back and was told, and back to the newest, the keyboard kept on the control left to press", async () => {
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [ASKED_TWICE, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(ASKED_TWICE, [
-              REFUSED_TRY,
-              { ...ANSWERED_TRY, number: 2 },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-      const earlier = within(summarise).getByRole("button", {
-        name: "Earlier try",
-      });
-      const later = within(summarise).getByRole("button", {
-        name: "Later try",
-      });
-      expect(summarise).toHaveTextContent("Try 2 of the 2 it allows");
-      expect(later).toBeDisabled();
-
-      await userEvent.click(earlier);
-
-      await waitFor(() =>
-        expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]:
-            `Kettle.Refused on review.Refused: ${setApart("Too short.")}`,
-        }),
-      );
-      expect(summarise).toHaveTextContent("Try 1 of the 2 it allows");
-      expect(earlier).toBeDisabled();
-      expect(later).toBeEnabled();
-      expect(document.activeElement).toBe(later);
-
-      await userEvent.click(later);
-
-      expect(labelled(summarise)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.It stands.",
-      });
-      expect(summarise).toHaveTextContent("Try 2 of the 2 it allows");
-      expect(later).toBeDisabled();
-      expect(document.activeElement).toBe(earlier);
-      expect(reads(sent)).toEqual([
-        `GET ${RUN}`,
-        `GET ${STEPS}`,
-        `GET ${STEPS}/${SUMMARISE}`,
-      ]);
-    });
-
-    it("says a value of an earlier try turned to that was refused for its length is refused for its length, and not what its review said of it", async () => {
-      const refusedForLength = {
-        ...REFUSED_TRY,
-        values: [
-          {
-            field: "summary",
-            value: "Kettle.",
-            now: "refused_for_length",
-            decision: { outcome: "assured" },
-          },
-        ],
-        ended: "refused_for_length",
-      };
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [ASKED_TWICE, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(ASKED_TWICE, [
-              refusedForLength,
-              { ...ANSWERED_TRY, number: 2 },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
-      );
-
-      await waitFor(() =>
-        expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]: "Kettle.Refused for its length.",
-        }),
-      );
-      expect(summarise).not.toHaveTextContent("Assured.");
-    });
-
-    /** A model's try: a person's is never lost, and one of theirs giving nothing back is never followed by another. */
-    it("says how a try turned to ended where it gave nothing back", async () => {
-      const model = { kind: "model", model: "small", mode: "careful" };
-      const spent = (sent: number, cameBack: number) => ({
-        callsAModel: true,
-        sent: String(sent),
-        cameBack: String(cameBack),
-        spent: String(sent + cameBack),
-        cameBackUnknown: false,
-      });
-      const asked = { ...ASKED_TWICE, producer: model, cost: spent(20, 5) };
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [asked, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(asked, [
-              {
-                ...ANSWERED_TRY,
-                producedBy: model,
-                values: [],
-                review: { asked: false },
-                ended: "nothing_came_back",
-                cost: spent(10, 0),
-              },
-              {
-                ...ANSWERED_TRY,
-                number: 2,
-                producedBy: model,
-                cost: spent(10, 5),
-              },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
-      );
-
-      expect(
-        await within(summarise).findByText("Nothing came back."),
-      ).toBeInTheDocument();
-      expect(summarise).toHaveTextContent("Try 1 of the 2 it allows");
-      expect(within(summarise).queryByRole("term")).toBeNull();
-      expect(summarise).not.toHaveTextContent("A kettle leaks.");
-    });
-
-    it("says which way a try turned to did not fit, beneath how it ended", async () => {
-      const model = { kind: "model", model: "small", mode: "careful" };
-      const asked = { ...ASKED_TWICE, producer: model };
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [asked, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(asked, [
-              {
-                ...ANSWERED_TRY,
-                producedBy: model,
-                values: [],
-                review: { asked: false },
-                ended: "did_not_fit",
-                didNotFit: "field_missing",
-              },
-              { ...ANSWERED_TRY, number: 2, producedBy: model },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
-      );
-
-      const ended = await within(summarise).findByText(
-        "What came back did not fit what was declared.",
-      );
-      expect(ended.nextElementSibling).toHaveTextContent(
-        "The answer left out a value it was asked for.",
-      );
-      expect(summarise).not.toHaveTextContent("field_missing");
-    });
-
-    it("says each time a step held back was turned away beneath what holds it, and never again in the try its Details open", async () => {
-      const model = { kind: "model", model: "small" };
-      const turnedAway = [
-        {
-          at: "2026-09-24T08:04:00Z",
-          said: "Too many asks.",
-          cut: true,
-          sentAgain: false,
-        },
-      ];
-      const held = {
-        ...SUMMARISE_ROW,
-        producer: model,
-        state: "held_back",
-        where: {
-          kind: "held_back",
-          reason: "turned_away",
-          since: "2026-09-24T08:04:00Z",
-          turnedAway,
-          waitsOn: "starter",
-        },
-        tries: { current: 1, declared: 2, beyond: false },
-        gaveBack: undefined,
-      };
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [held, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(held, [
-              {
-                ...ANSWERED_TRY,
-                producedBy: model,
-                values: [],
-                review: { asked: false },
-                ended: "open",
-                turnedAway,
-              },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-      const holding = within(summarise).getByText(
-        "The model it names would not take it.",
-      );
-      const turned = within(summarise).getByText(
-        `Turned away ${whenText("2026-09-24T08:04:00Z")}.`,
-      );
-      expect(
-        holding.compareDocumentPosition(turned) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-      expect(summarise).toHaveTextContent(
-        `The model said: ${setApart("Too many asks.")} (cut short here)`,
-      );
-
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Details" }),
-      );
-
-      await within(summarise).findByText("Produced by");
-      expect(within(summarise).getAllByText(/^Turned away/)).toEqual([turned]);
-      expect(
-        within(summarise).queryByText("Times the model would not take it"),
-      ).toBeNull();
-    });
-
-    it("lets the step's own page go once Details is shut in the middle of reading it, drawing nothing it answers", async () => {
-      let settle!: (answer: readonly [string, number]) => void;
-      const held = new Promise<readonly [string, number]>((done) => {
-        settle = done;
-      });
-      const { sent } = opening(
-        { [`GET ${STEPS}/${SUMMARISE}`]: [held] },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-      const details = within(summarise).getByRole("button", {
-        name: "Details",
-      });
-      await userEvent.click(details);
-      await waitFor(() =>
-        expect(reads(sent)).toContain(`GET ${STEPS}/${SUMMARISE}`),
-      );
-
-      await userEvent.click(details);
-      await act(async () => {
-        settle([
-          JSON.stringify({
-            run: RUN_HEADER,
-            declarations: DECLARATIONS,
-            step: SUMMARISE_ROW,
-            triesMade: [ANSWERED_TRY],
-          }),
-          200,
-        ]);
-        await held;
-      });
-
-      const [, asked] = sent.mock.calls.find(([address]) =>
-        String(address).endsWith(`/steps/${SUMMARISE}`),
-      )!;
-      expect(asked?.signal?.aborted).toBe(true);
-      expect(details).toHaveAttribute("aria-expanded", "false");
-      expect(within(summarise).queryByText("Produced by")).toBeNull();
-      expect(screen.queryByRole("alert")).toBeNull();
-    });
-
-    it("says once that the step's own page is being read, and once that it was refused, where a try turned to and Details both wait on it", async () => {
-      let settle!: (answer: readonly [string, number]) => void;
-      const held = new Promise<readonly [string, number]>((done) => {
-        settle = done;
-      });
-      opening(
-        {
-          [`GET ${STEPS}`]: [stepsRead({ steps: [ASKED_TWICE, FILE_IT_ROW] })],
-          [`GET ${STEPS}/${SUMMARISE}`]: [held],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-      const summarise = message(setApart("Summarise"));
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
-      );
-      await userEvent.click(
-        within(summarise).getByRole("button", { name: "Details" }),
-      );
-
-      expect(within(summarise).getAllByText("Still reading…")).toHaveLength(1);
-
-      await act(async () => {
-        settle([JSON.stringify({ code: "STEP_NOT_IN_VIEW" }), 404]);
-        await held;
-      });
-
-      const refused = within(summarise).getAllByRole("alert");
-      expect(refused).toHaveLength(1);
-      expect(refused[0]).toHaveTextContent("That step is not in view.");
-      expect(within(summarise).queryByText("Still reading…")).toBeNull();
-      expect(within(summarise).queryByText("Produced by")).toBeNull();
-    });
-
-    /** Timeouts are faked, as where each step is kept up is; a click is dispatched, as nothing here may wait. */
-    it("reads a try turned to once, and keeps the step's own page up only while Details is open", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { sent } = opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              rereadAfterSeconds: 1,
-              steps: [ASKED_TWICE, FILE_IT_ROW],
-            }),
-          ],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(ASKED_TWICE, [
-              REFUSED_TRY,
-              { ...ANSWERED_TRY, number: 2 },
-            ]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      const stepReads = () =>
-        reads(sent).filter((each) => each === `GET ${STEPS}/${SUMMARISE}`)
-          .length;
-      await landing(
-        () => screen.queryByRole("list", { name: "The conversation" }) !== null,
-      );
-      const summarise = message(setApart("Summarise"));
-      act(() =>
-        within(summarise).getByRole("button", { name: "Earlier try" }).click(),
-      );
-      await landing(() => (summarise.textContent ?? "").includes("Kettle."));
-
-      await act(() => vi.advanceTimersByTimeAsync(5000));
-      expect(stepReads()).toBe(1);
-
-      const details = within(summarise).getByRole("button", {
-        name: "Details",
-      });
-      act(() => details.click());
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() => stepReads() === 2);
-
-      act(() => details.click());
-      await act(() => vi.advanceTimersByTimeAsync(5000));
-      expect(stepReads()).toBe(2);
-      expect(vi.getTimerCount()).toBe(1);
-    });
-
-    /** Timeouts are faked, as where each step is kept up is; a click is dispatched, as nothing here may wait. */
-    it("keeps the step's own page up while Details is open and the run runs, and stops once the run no longer does", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const done = { ...CLAIM, state: "done", acts: [] };
-      const { sent } = opening(
-        {
-          [`GET ${RUN}`]: [reply(CLAIM), reply(CLAIM), reply(done)],
-          [`GET ${STEPS}`]: [
-            stepsRead({ rereadAfterSeconds: 2 }),
-            stepsRead({ rereadAfterSeconds: 2 }),
-            stepsRead(
-              { run: { ...RUN_HEADER, state: "done", acts: [] } },
-              { state: "done", where: undefined },
-            ),
-          ],
-          [`GET ${STEPS}/${SUMMARISE}`]: [
-            stepPage(SUMMARISE_ROW, [ANSWERED_TRY]),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      const stepReads = () =>
-        reads(sent).filter((each) => each === `GET ${STEPS}/${SUMMARISE}`)
-          .length;
-      await landing(
-        () => screen.queryByRole("list", { name: "The conversation" }) !== null,
-      );
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      const details = within(message(setApart("Summarise"))).getByRole(
-        "button",
-        { name: "Details" },
-      );
-      act(() => details.click());
-      await landing(() => screen.queryByText("Produced by") !== null);
-
-      await act(() => vi.advanceTimersByTimeAsync(2000));
-      await landing(() => stepReads() === 2);
-      await act(() => vi.advanceTimersByTimeAsync(2000));
-      await landing(() =>
-        (message(setApart("file it")).textContent ?? "").includes("Done"),
-      );
-      const whileItRan = stepReads();
-      await act(() => vi.advanceTimersByTimeAsync(60_000));
-
-      expect(stepReads()).toBe(whileItRan);
-      expect(
-        reads(sent).filter((each) => each === `GET ${STEPS}`),
-      ).toHaveLength(3);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(details).toHaveAttribute("aria-expanded", "true");
-    });
-
-    it.each([
-      [
-        "the reader gave it",
-        "REVIEW_OWN_PRODUCTION",
-        "You gave this, so somebody else reviews it.",
-      ],
-      [
-        "the reader's roles reach no review",
-        "ACT_NOT_PERMITTED",
-        "You may not review it.",
-      ],
-    ])(
-      "says a value waiting on review is not the reader's to review where %s, whom it waits on and since when, and offers nothing to review it with",
-      async (_case, refusal, sentence) => {
-        opening(
-          {
-            [`GET ${STEPS}`]: [
-              stepsRead({ steps: [waitingOnReview(refusal), FILE_IT_ROW] }),
-            ],
-          },
-          PAGE,
-          "conversation",
-        );
-        await conversing();
-
-        const summarise = message(setApart("Summarise"));
-
-        expect(summarise).toHaveTextContent(
-          `Waiting${setApart("Summary")} is not reviewed yet.It waits on somebody who may review it.`,
-        );
-        expect(summarise).toHaveTextContent(/Since .+Try 1/);
-        expect(summarise).toHaveTextContent(sentence);
-        expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]: "A kettle leaks.It waits on review.",
-        });
-        expect(
-          within(summarise)
-            .getAllByRole("button")
-            .map((each) => each.textContent),
-        ).toEqual(["Details"]);
-        expect(summarise).not.toHaveTextContent(refusal);
-      },
-    );
-
-    it("says who stopped what holds a step back and when, and says that moment no second time as since when it is held", async () => {
-      const stoppedAt = "2026-09-24T08:05:00Z";
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              steps: [
-                {
-                  ...SUMMARISE_ROW,
-                  state: "held_back",
-                  where: {
-                    kind: "held_back",
-                    reason: "entry_stopped",
-                    since: stoppedAt,
-                    stopped: { what: "entry", by: GRACE, at: stoppedAt },
-                    waitsOn: "starter",
-                  },
-                  gaveBack: [
-                    { field: "summary", value: "Kettle.", now: "refused" },
-                  ],
-                  withheld: [{ act: "answer", refusal: "ENTRY_STOPPED" }],
-                },
-                notReached(FILE_IT, 2, "file_it"),
-              ],
-            }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-
-      const summarise = message(setApart("Summarise"));
-
-      expect(summarise).toHaveTextContent(
-        `Stopped by ${setApart("Grace Hopper")}, `,
-      );
-      expect(summarise).not.toHaveTextContent(/Since /);
-    });
-
-    it("says since when a step failed that sending may mend, beside who stopped what it runs and when, each its own moment", async () => {
-      const failedAt = "2026-09-24T08:02:00Z";
-      const stoppedAt = "2026-09-24T08:05:00Z";
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              steps: [
-                {
-                  ...SUMMARISE_ROW,
-                  state: "failed",
-                  where: {
-                    kind: "failed",
-                    reason: "uncuttable_length",
-                    since: failedAt,
-                    stopped: { what: "entry", by: GRACE, at: stoppedAt },
-                    waitsOn: "starter",
-                  },
-                  withheld: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
-                },
-                notReached(FILE_IT, 2, "file_it"),
-              ],
-            }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-
-      const summarise = message(setApart("Summarise"));
-
-      expect(summarise).toHaveTextContent(
-        `Stopped by ${setApart("Grace Hopper")}, ${whenText(stoppedAt)}.`,
-      );
-      expect(summarise).toHaveTextContent(`Since ${whenText(failedAt)}`);
-      expect(summarise).not.toHaveTextContent(`Since ${whenText(stoppedAt)}`);
-      expect(summarise).not.toHaveTextContent("It waits on");
-    });
-
-    it.each([
-      ["done, with what it gave back", CLAIM, {}, "Done", /^What it gave back/],
-      [
-        "done, as one that acts rather than answers",
-        CLAIM,
-        { gaveBack: { declares: "nothing" } },
-        "Done",
-        /^Its workflow gives nothing back: it acts rather than answers\.$/,
-      ],
-      [
-        "stopped, by whom, with what stood by then",
-        STOPPED,
-        {},
-        new RegExp(`^Stopped by ${setApart("Grace Hopper")}, `),
-        /^What stood by then/,
-      ],
-    ])(
-      "ends with its last message where it is %s",
-      async (_case, run, changed, title, body) => {
-        const state = run === STOPPED ? "stopped" : "done";
-        opening(
-          {
-            [`GET ${RUN}`]: [reply({ ...run, state, acts: [] })],
-            [`GET ${STEPS}`]: [
-              stepsRead(
-                { run: { ...RUN_HEADER, state, acts: [] }, ...changed },
-                // A run whose every step is done is done, stopped or not: a stopped one is left a step short.
-                state === "stopped" ? {} : { state: "done", where: undefined },
-              ),
-            ],
-          },
-          PAGE,
-          "conversation",
-        );
-        await conversing();
-
-        const last = conversation().lastElementChild as HTMLElement;
-        const heading = within(last).getAllByRole("heading", { level: 3 })[0]!;
-
-        expect(heading.textContent).toMatch(title);
-        expect(last.textContent!.slice(heading.textContent!.length)).toMatch(
-          body,
-        );
-        expect(
-          within(last)
-            .queryAllByRole("term")
-            .map((term) => term.textContent),
-        ).toEqual("gaveBack" in changed ? [] : [setApart("Summary")]);
-      },
-    );
-
-    it("ends with its last message saying at which step it failed and why, with what stood by then", async () => {
-      opening(
-        {
-          [`GET ${RUN}`]: [reply({ ...CLAIM, state: "failed" })],
-          [`GET ${STEPS}`]: [
-            stepsRead(
-              { run: { ...RUN_HEADER, state: "failed" } },
-              {
-                state: "failed",
-                where: {
-                  kind: "failed",
-                  reason: "tries_spent",
-                  waitsOn: "starter",
-                },
-              },
-            ),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await conversing();
-
-      const last = message("Failed");
-
-      expect(last).toHaveTextContent(
-        `It failed at ${setApart("file it")}.Every try it allows has been made, and none of them stands.`,
-      );
-      expect(last).toHaveTextContent("What stood by then");
-      expect(labelled(last)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.",
-      });
-      expect(messages().at(-1)).toBe("Failed");
-    });
-
-    /** Timeouts are faked, so what is in flight is let land a turn at a time rather than waited on. */
-    it("keeps each message up for as long as the steps say to, saying what changed, and leaves the keyboard where the reader put it", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({ rereadAfterSeconds: 1 }),
-            stepsRead({}, { state: "done", where: undefined }),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await landing(
-        () => screen.queryByRole("list", { name: "The conversation" }) !== null,
-      );
-      const details = within(message(setApart("Summarise"))).getByRole(
-        "button",
-        { name: "Details" },
-      );
-      details.focus();
-
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() =>
-        (message(setApart("file it")).textContent ?? "").includes("Done"),
-      );
-
-      expect(document.activeElement).toBe(details);
-      expect(screen.getAllByRole("status")[0]).toHaveTextContent(
-        `${setApart("file it")}: now Done.`,
-      );
-      expect(message(setApart("file it"))).not.toHaveTextContent("Running");
-    });
-
-    /** Timeouts are faked, so what is in flight is let land a turn at a time rather than waited on. */
-    it("says what changed of a step by its message's title, where what it runs is named otherwise than the step", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              rereadAfterSeconds: 1,
-              steps: [waitingOnReview("ACT_NOT_PERMITTED"), FILE_IT_ROW],
-            }),
-            stepsRead(),
-          ],
-        },
-        PAGE,
-        "conversation",
-      );
-      await landing(
-        () => screen.queryByRole("list", { name: "The conversation" }) !== null,
-      );
-
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() =>
-        (message(setApart("Summarise")).textContent ?? "").includes("Done"),
-      );
-
-      expect(screen.getAllByRole("status")[0]!.textContent).toBe(
-        `${setApart("Summarise")}: now Done.`,
-      );
-    });
-
-    /** Timeouts are faked, as where each step is kept up is. */
-    it("starts the keyboard at the message the address names as the page arrives, and never again as it is read again", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { sent, router } = opening(
-        { [`GET ${STEPS}`]: [stepsRead({ rereadAfterSeconds: 1 })] },
-        `${PAGE}?filter=claim#step-${FILE_IT}`,
-        "conversation",
-      );
-      await landing(
-        () => screen.queryByRole("list", { name: "The conversation" }) !== null,
-      );
-      const aimed = message(setApart("file it"));
-      await landing(() => document.activeElement === aimed);
-      expect(aimed.id).toBe(`step-${FILE_IT}`);
-      const { pathname, search, hash } = router.state.location;
-      expect(`${pathname}${search}${hash}`).toBe(`${PAGE}?filter=claim`);
-      expect(router.state.historyAction).toBe("REPLACE");
-
-      await act(() => router.navigate(-1));
-      const before = router.state.location;
-      expect(`${before.pathname}${before.search}${before.hash}`).toBe(
-        `${PAGE}?filter=claim`,
-      );
-
-      aimed.blur();
-      await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() => reads(sent).length === 4);
-
-      expect(document.activeElement).toBe(document.body);
-    });
-
-    it("forgets an address naming a step not reached yet, starting the keyboard nowhere", async () => {
-      const { router } = opening(
-        {
-          [`GET ${STEPS}`]: [
-            stepsRead({
-              steps: [
-                SUMMARISE_ROW,
-                FILE_IT_ROW,
-                notReached(NOTIFY, 3, "notify_them"),
-              ],
-            }),
-          ],
-        },
-        `${PAGE}?filter=claim#step-${NOTIFY}`,
-        "conversation",
-      );
-      await conversing();
-
-      await waitFor(() => expect(router.state.location.hash).toBe(""));
-      expect(router.state.location.search).toBe("?filter=claim");
-      expect(document.activeElement).toBe(document.body);
-    });
-  });
 });

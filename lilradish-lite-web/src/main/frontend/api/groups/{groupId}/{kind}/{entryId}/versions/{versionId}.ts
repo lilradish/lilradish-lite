@@ -1,5 +1,6 @@
 import { get } from "../../../../../../lib/request/http";
 import {
+  allMembersRead,
   countFrom,
   isUnchecked,
   listOf,
@@ -8,11 +9,9 @@ import {
   textFrom,
 } from "../../../../../../lib/request/document";
 import {
-  addedFrom,
   declaredFrom,
   listVersionFrom,
   pinnedFrom,
-  type AddedField,
   type DeclaredField,
   type ListVersion,
   type PinnedList,
@@ -34,10 +33,12 @@ export interface QuestionVersion {
   readonly revision: number;
   /** Absent where it tells nobody anything yet. */
   readonly instruction?: string;
+  /** Markdown laid out for a person, absent where the version has none. */
+  readonly drawing?: string;
   readonly takes: readonly DeclaredField[];
   readonly gives: readonly DeclaredField[];
   /** What a model is told of what it gives back; absent where that half is not whole yet. */
-  readonly added?: readonly AddedField[];
+  readonly added?: string;
   /** Every list of the group's in service, which is all a field of terms may pin. */
   readonly lists: readonly ListVersion[];
 }
@@ -101,13 +102,17 @@ export function questionFrom(body: unknown): QuestionVersion | null {
   const instruction = optional(body, "instruction", (said) =>
     typeof said === "string" ? said : null,
   );
+  const drawing = optional(body, "drawing", (said) =>
+    typeof said === "string" ? said : null,
+  );
   const takes = listOf(body.takes, declaredFrom);
   const gives = listOf(body.gives, declaredFrom);
-  const added = optional(body, "added", (told) => listOf(told, addedFrom));
+  const added = optional(body, "added", textFrom);
   const lists = listOf(body.lists, listVersionFrom);
   if (
     revision === null ||
     instruction === null ||
+    drawing === null ||
     takes === null ||
     gives === null ||
     added === null ||
@@ -121,12 +126,14 @@ export function questionFrom(body: unknown): QuestionVersion | null {
     gives,
     lists,
     ...(instruction === undefined ? {} : { instruction }),
+    ...(drawing === undefined ? {} : { drawing }),
     ...(added === undefined ? {} : { added }),
   };
 }
 
 /** What a step may run, spelt the way the server spells it and held level with its list for the reason `SurfaceAct` gives. */
-export type RunsKind = "question" | "workflow" | "code_step" | "route";
+export type RunsKind =
+  "question" | "workflow" | "code_step" | "route" | "search";
 
 /** Who produces a step's values, spelt and held level as `RunsKind` is. */
 export type ProducerKind = "model" | "person" | "code";
@@ -151,6 +158,20 @@ export type BindingSource =
   | { readonly input: string }
   | { readonly step: number; readonly path: string }
   | { readonly constant: string };
+
+export type SearchSource = Exclude<
+  BindingSource,
+  { readonly constant: string }
+>;
+
+export type SearchPart =
+  | { readonly text: string }
+  | { readonly partId: string; readonly from: SearchSource };
+
+const SEARCH_FIELDS = ["title", "body", "references", "other"] as const;
+
+export type SearchField = (typeof SEARCH_FIELDS)[number];
+export type SearchStanding = "always" | "never";
 
 /** One input filled, or what a route chooses by, which alone names no target. */
 export interface Binding {
@@ -191,6 +212,9 @@ interface Runs {
   readonly codeStep?: string;
   readonly discriminator?: Binding;
   readonly cases?: readonly RouteCase[];
+  readonly searchWay?: string;
+  readonly question?: readonly SearchPart[];
+  readonly standings?: Partial<Record<SearchField, SearchStanding>>;
 }
 
 /** One step, in the order it runs; what nothing has chosen yet is absent. */
@@ -213,6 +237,7 @@ interface DeclaredVersion extends ListVersion {
 export interface HeldModel {
   readonly name: string;
   readonly modes: readonly string[];
+  readonly tools: readonly string[];
 }
 
 /**
@@ -225,11 +250,18 @@ export interface OfferedCodeStep {
   readonly gives: readonly DeclaredField[];
 }
 
+export interface OfferedSearchWay {
+  readonly name: string;
+  readonly tool: string;
+  readonly gives: readonly DeclaredField[];
+}
+
 interface WorkflowOffers {
   readonly lists: readonly ListVersion[];
   readonly questions: readonly DeclaredVersion[];
   readonly workflows: readonly DeclaredVersion[];
   readonly codeSteps: readonly OfferedCodeStep[];
+  readonly searchWays: readonly OfferedSearchWay[];
   readonly models: readonly HeldModel[];
 }
 
@@ -249,6 +281,7 @@ export interface WorkflowVersion {
   readonly helper?: ModelChoice;
   /** What submitting would refuse of it now, each placed as a refusal places it. */
   readonly problems: readonly ContentProblem[];
+  readonly problemTotal?: number;
   /** In the order its steps run, producing before reviewing. */
   readonly sendsPast: readonly SendPast[];
   readonly offered: WorkflowOffers;
@@ -261,6 +294,7 @@ const RUNS_KINDS = {
   workflow: true,
   code_step: true,
   route: true,
+  search: true,
 } satisfies Record<RunsKind, true>;
 
 const PRODUCER_KINDS = {
@@ -299,6 +333,7 @@ export function workflowFrom(body: unknown): WorkflowVersion | null {
   const ceiling = optional(body, "ceiling", textFrom);
   const helper = optional(body, "helper", choiceFrom);
   const problems = listOf(body.problems, contentProblemFrom);
+  const problemTotal = optional(body, "problemTotal", countFrom);
   const sendsPast = listOf(body.sendsPast, sendPastFrom);
   const offered = offersFrom(body.offered);
   const terms = termsFrom(body.terms);
@@ -314,6 +349,8 @@ export function workflowFrom(body: unknown): WorkflowVersion | null {
     ceiling === null ||
     helper === null ||
     problems === null ||
+    problemTotal === null ||
+    (problemTotal !== undefined && problemTotal < problems.length) ||
     sendsPast === null ||
     offered === null ||
     terms === null
@@ -330,6 +367,7 @@ export function workflowFrom(body: unknown): WorkflowVersion | null {
     raiseNeedsApproval,
     mayBeHelped,
     problems,
+    ...(problemTotal === undefined ? {} : { problemTotal }),
     sendsPast,
     offered,
     terms,
@@ -411,6 +449,35 @@ function runsFrom(body: unknown): Runs | null {
   ) {
     return null;
   }
+  if (body.kind === "search") {
+    if (
+      Object.keys(body).some(
+        (key) =>
+          !["kind", "searchWay", "gives", "question", "standings"].includes(
+            key,
+          ),
+      )
+    ) {
+      return null;
+    }
+    const searchWay = optional(body, "searchWay", textFrom);
+    const gives = optional(body, "gives", (held) => listOf(held, declaredFrom));
+    const question = listOf(body.question, searchPartFrom);
+    const standings = standingsFrom(body.standings);
+    return searchWay === null ||
+      gives === null ||
+      question === null ||
+      question.length > 256 ||
+      standings === null
+      ? null
+      : {
+          kind: "search",
+          question,
+          standings,
+          ...(searchWay === undefined ? {} : { searchWay }),
+          ...(gives === undefined ? {} : { gives }),
+        };
+  }
   const members = {
     version: optional(body, "version", pinnedFrom),
     takes: optional(body, "takes", (held) => listOf(held, declaredFrom)),
@@ -419,10 +486,48 @@ function runsFrom(body: unknown): Runs | null {
     discriminator: optional(body, "discriminator", bindingFrom),
     cases: optional(body, "cases", (held) => listOf(held, caseFrom)),
   };
-  if (Object.values(members).includes(null)) {
+  if (!allMembersRead(members)) {
     return null;
   }
   return { kind: body.kind as RunsKind, ...present(members) };
+}
+
+function searchPartFrom(body: unknown): SearchPart | null {
+  if (!isUnchecked(body)) {
+    return null;
+  }
+  const keys = Object.keys(body);
+  if (keys.length === 1 && typeof body.text === "string") {
+    return { text: body.text };
+  }
+  if (keys.length === 2 && typeof body.partId === "string") {
+    const from = sourceFrom(body.from);
+    return from === null ||
+      "constant" in from ||
+      ("step" in from && from.step < 0)
+      ? null
+      : { partId: body.partId, from };
+  }
+  return null;
+}
+
+function standingsFrom(
+  body: unknown,
+): Partial<Record<SearchField, SearchStanding>> | null {
+  if (!isUnchecked(body)) {
+    return null;
+  }
+  const standings: Partial<Record<SearchField, SearchStanding>> = {};
+  for (const [name, standing] of Object.entries(body)) {
+    if (
+      !SEARCH_FIELDS.includes(name as SearchField) ||
+      (standing !== "always" && standing !== "never")
+    ) {
+      return null;
+    }
+    standings[name as SearchField] = standing;
+  }
+  return standings;
 }
 
 function caseFrom(body: unknown): RouteCase | null {
@@ -436,7 +541,7 @@ function caseFrom(body: unknown): RouteCase | null {
     gives: optional(body, "gives", (held) => listOf(held, declaredFrom)),
   };
   const bindings = listOf(body.bindings, bindingFrom);
-  if (Object.values(members).includes(null) || bindings === null) {
+  if (!allMembersRead(members) || bindings === null) {
     return null;
   }
   return { caseId: body.caseId, bindings, ...present(members) };
@@ -468,6 +573,7 @@ function sourceFrom(body: unknown): BindingSource | null {
   if (
     members.length === 2 &&
     Number.isSafeInteger(body.step) &&
+    (body.step as number) >= 0 &&
     typeof body.path === "string"
   ) {
     return { step: body.step as number, path: body.path };
@@ -506,7 +612,7 @@ function producerFrom(body: unknown): Producer | null {
       typeof said === "boolean" ? said : null,
     ),
   };
-  if (Object.values(members).includes(null)) {
+  if (!allMembersRead(members)) {
     return null;
   }
   return { kind: body.kind as ProducerKind, ...present(members) };
@@ -533,17 +639,19 @@ function offersFrom(body: unknown): WorkflowOffers | null {
   const questions = listOf(body.questions, declaredVersionFrom);
   const workflows = listOf(body.workflows, declaredVersionFrom);
   const codeSteps = listOf(body.codeSteps, codeStepFrom);
+  const searchWays = listOf(body.searchWays, searchWayFrom);
   const models = listOf(body.models, modelFrom);
   if (
     lists === null ||
     questions === null ||
     workflows === null ||
     codeSteps === null ||
+    searchWays === null ||
     models === null
   ) {
     return null;
   }
-  return { lists, questions, workflows, codeSteps, models };
+  return { lists, questions, workflows, codeSteps, searchWays, models };
 }
 
 function declaredVersionFrom(body: unknown): DeclaredVersion | null {
@@ -568,12 +676,32 @@ function codeStepFrom(body: unknown): OfferedCodeStep | null {
     : { name: body.name, takes, gives };
 }
 
+function searchWayFrom(body: unknown): OfferedSearchWay | null {
+  if (
+    !isUnchecked(body) ||
+    typeof body.name !== "string" ||
+    typeof body.tool !== "string" ||
+    Object.keys(body).some((key) => !["name", "tool", "gives"].includes(key))
+  ) {
+    return null;
+  }
+  const gives = listOf(body.gives, declaredFrom);
+  return gives === null ||
+    gives.length !== SEARCH_FIELDS.length ||
+    gives.some((field, index) => field.name !== SEARCH_FIELDS[index])
+    ? null
+    : { name: body.name, tool: body.tool, gives };
+}
+
 function modelFrom(body: unknown): HeldModel | null {
   if (!isUnchecked(body) || typeof body.name !== "string") {
     return null;
   }
   const modes = listOf(body.modes, textFrom);
-  return modes === null ? null : { name: body.name, modes };
+  const tools = listOf(body.tools, textFrom);
+  return modes === null || tools === null
+    ? null
+    : { name: body.name, modes, tools };
 }
 
 /** Built member by member, as `questionFrom` is. */

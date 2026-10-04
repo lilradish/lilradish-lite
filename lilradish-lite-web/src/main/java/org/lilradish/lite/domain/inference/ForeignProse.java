@@ -72,7 +72,7 @@ public final class ForeignProse {
                 break;
             } else {
                 kept++;
-                readable |= !standing.blankInProse();
+                readable |= !standing.blankInProse() && !CharacterStanding.ignorable(codePoint);
                 if (rebuilt != null) {
                     rebuilt.appendCodePoint(codePoint);
                 }

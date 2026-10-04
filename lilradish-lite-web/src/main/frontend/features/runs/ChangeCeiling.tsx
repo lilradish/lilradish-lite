@@ -26,6 +26,8 @@ const DIGITS_INPUT = { htmlInput: { inputMode: "numeric" } } as const;
 export function ChangeCeiling({
   groupId,
   runId,
+  targetRunId,
+  targetRunNumber,
   ceiling,
   open,
   changing,
@@ -33,6 +35,8 @@ export function ChangeCeiling({
 }: {
   readonly groupId: string;
   readonly runId: string;
+  readonly targetRunId?: string;
+  readonly targetRunNumber?: number;
   readonly ceiling: OwnCeiling;
   readonly open: boolean;
   readonly changing: Action<Run>;
@@ -46,7 +50,11 @@ export function ChangeCeiling({
   return (
     <ActDialog
       open={open}
-      title={say("ceiling.title")}
+      title={
+        targetRunNumber === undefined
+          ? say("ceiling.title")
+          : say("ceiling.titleOf", { number: targetRunNumber })
+      }
       onShut={onShut}
       action={changing}
       act={(signal) => {
@@ -56,6 +64,7 @@ export function ChangeCeiling({
           runId,
           typed === "" ? null : typed,
           signal,
+          targetRunId,
         ).then((changed) => {
           onShut();
           return changed;
@@ -103,7 +112,7 @@ export function ChangeCeiling({
 /** A count the server would refuse, and the ceiling the run has, are both nothing to change to. */
 function heldFor(fits: boolean, unchanged: boolean): Reason | undefined {
   if (!fits) {
-    return { severity: "info", words: say("ceiling.limit") };
+    return { severity: "warning", words: say("ceiling.limit") };
   }
   return unchanged
     ? { severity: "info", words: say("ceiling.unchanged") }

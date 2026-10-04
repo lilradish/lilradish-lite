@@ -42,6 +42,11 @@ describe("usePickedRow", () => {
 
     expect(read.mock.calls.map(([key]) => key)).toEqual(["k1"]);
     expect(hooked.result.current.read.loading).toBe(false);
+    expect(hooked.result.current.read.problem).toBeNull();
+    expect(hooked.result.current.read.value).toEqual({
+      key: "k1",
+      from: "one",
+    });
   });
 
   /** Read from somewhere else, the same key is another row: a row of one group is not a row of the next. */
@@ -80,5 +85,48 @@ describe("usePickedRow", () => {
       }),
     );
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("takes an action answer immediately and rereads only when explicitly asked", async () => {
+    const read = readFrom("store");
+    const hooked = picking("k1", read);
+    await waitFor(() =>
+      expect(hooked.result.current.read.value?.from).toBe("store"),
+    );
+
+    act(() => hooked.result.current.answered({ key: "k1", from: "action" }));
+    expect(hooked.result.current.read.value?.from).toBe("action");
+    expect(read).toHaveBeenCalledTimes(1);
+
+    act(() => hooked.result.current.reread());
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(read.mock.calls.map(([key]) => key)).toEqual(["k1", "k1"]);
+  });
+
+  it("uses a seed for the current key but keeps another key's seed for its later pick", async () => {
+    const read = readFrom("store");
+    const hooked = picking("k1", read);
+    await waitFor(() =>
+      expect(hooked.result.current.read.value?.from).toBe("store"),
+    );
+
+    act(() => hooked.result.current.seed({ key: "k2", from: "other action" }));
+    expect(hooked.result.current.read.value?.from).toBe("store");
+    expect(read).toHaveBeenCalledTimes(1);
+
+    hooked.rerender({ picked: "k2", reading: read });
+    await waitFor(() =>
+      expect(hooked.result.current.read.value).toEqual({
+        key: "k2",
+        from: "other action",
+      }),
+    );
+    expect(read).toHaveBeenCalledTimes(1);
+
+    act(() => hooked.result.current.seed({ key: "k2", from: "new action" }));
+    await waitFor(() =>
+      expect(hooked.result.current.read.value?.from).toBe("new action"),
+    );
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });

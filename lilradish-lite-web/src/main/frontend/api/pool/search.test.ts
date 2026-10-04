@@ -4,10 +4,10 @@ import { answering, refusalOf } from "../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT } from "../problem";
 import { searchPool } from "./search";
 
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-000000000130",
   userId: "000130",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
 };
 
 const NAMELESS = {
@@ -31,7 +31,7 @@ describe("searchPool", () => {
   it("reads each match by who they are, a name only where one is held, and nothing else", async () => {
     answering([
       JSON.stringify({
-        items: [{ ...ADA, estateRoles: ["steward"] }, NAMELESS],
+        items: [{ ...AVO, estateRoles: ["steward"] }, NAMELESS],
         more: true,
       }),
       200,
@@ -39,7 +39,7 @@ describe("searchPool", () => {
 
     const found = await searchPool("a", new AbortController().signal);
 
-    expect(found).toEqual({ items: [ADA, NAMELESS], more: true });
+    expect(found).toEqual({ items: [AVO, NAMELESS], more: true });
     expect("displayName" in found.items[1]!).toBe(false);
     expect(Object.keys(found.items[0]!).sort()).toEqual([
       "displayName",
@@ -49,24 +49,24 @@ describe("searchPool", () => {
   });
 
   it.each([
-    ["no word on whether there are more", { items: [ADA] }],
-    ["more that is not a yes or a no", { items: [ADA], more: "yes" }],
+    ["no word on whether there are more", { items: [AVO] }],
+    ["more that is not a yes or a no", { items: [AVO], more: "yes" }],
     ["no list of matches", { more: false }],
     [
       "a match with no address",
-      { items: [{ ...ADA, subjectId: null }], more: false },
+      { items: [{ ...AVO, subjectId: null }], more: false },
     ],
     [
       "a match with no user number",
-      { items: [{ ...ADA, userId: 130 }], more: false },
+      { items: [{ ...AVO, userId: 130 }], more: false },
     ],
     [
       "a name that is not text",
-      { items: [{ ...ADA, displayName: null }], more: false },
+      { items: [{ ...AVO, displayName: null }], more: false },
     ],
     [
       "a name that is empty",
-      { items: [{ ...ADA, displayName: "" }], more: false },
+      { items: [{ ...AVO, displayName: "" }], more: false },
     ],
     ["a match that is no document", { items: ["000130"], more: false }],
   ])("refuses an answer carrying %s", async (_, body) => {

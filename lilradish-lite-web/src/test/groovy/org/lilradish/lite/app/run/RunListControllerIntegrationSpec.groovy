@@ -39,28 +39,21 @@ import spock.lang.Specification
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * A group's runs as a member is answered them over a real dispatcher and a real store: which runs, spelt as a
- * page draws them, and every way of naming no group in view answered alike. Only who is calling is replaced.
- */
 @WebMvcTest(RunListController)
 @ImportAutoConfiguration(ApiErrorAutoConfiguration)
-@Import([RunList, RunSnapshots, org.lilradish.lite.app.codestep.CodeSteps, GroupRoles, Store])
+@Import([RunList, RunSnapshots, org.lilradish.lite.app.search.SearchWays, org.lilradish.lite.app.codestep.CodeSteps, GroupRoles, Store])
 class RunListControllerIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000001401"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000001402"
 
-    /** More runs than a page holds, all Ann's. */
     static final String PAGED_GROUP = "00000003-0000-4000-8000-000000001403"
 
-    /** An overseer here and in the paged group, and in no role in the other group. */
     static final String ANN = "00000002-0000-4000-8000-000000001401"
 
     static final UserId ANN_USER = new UserId("001401")
 
-    /** An operator here and in the paged group, held with no name. */
     static final String CAT = "00000002-0000-4000-8000-000000001403"
 
     static final UserId CAT_USER = new UserId("001403")
@@ -77,7 +70,6 @@ class RunListControllerIntegrationSpec extends Specification {
 
     static final String PAGED_VERSION = "00000007-0000-4000-8000-000000001403"
 
-    /** Named with two spaces in a row, as its starter typed it. */
     static final String CATS_RUN = "00000008-0000-4000-8000-000000001401"
 
     static final String ANNS_RUN = "00000008-0000-4000-8000-000000001402"
@@ -95,7 +87,7 @@ class RunListControllerIntegrationSpec extends Specification {
     @MockitoBean
     private EstateRoleGrants grants
 
-    /** Sent as written: a template would encode each percent sign again. */
+    // Send the URI as written; a template would encode the percent signs again.
     private MvcResult reading(String address, UserId reader) {
         given(identification.identify(any(HttpServletRequest))).willReturn(Optional.of(reader))
         given(grants.heldBy(reader)).willReturn(EnumSet.allOf(EstateRole))
@@ -114,13 +106,11 @@ class RunListControllerIntegrationSpec extends Specification {
         document(answered).get("items").collect { it.get("number").asInt() }
     }
 
-    /** Everything an answer says, but the address it was sent to, which is each caller's own. */
     private static List<Object> apartFromWhere(MvcResult answered) {
         def document = JSON.convertValue(document(answered), Map)
         [answered.response.status, answered.response.contentType, document.findAll { it.key != "instance" }]
     }
 
-    /** A stopped run is on no step, and says so by leaving it out rather than with a null. */
     def "answers every run of the group newest first to one who may read every run, spelt as a page draws it"() {
         when:
         def answered = reading("/api/groups/${GROUP}/runs", ANN_USER)
@@ -129,14 +119,14 @@ class RunListControllerIntegrationSpec extends Specification {
         answered.response.status == 200
         document(answered) == JSON.readTree("""
                 {"items":[
-                  {"runId":"${ANNS_RUN}","number":2,"name":"Refund for Grace",
+                  {"runId":"${ANNS_RUN}","number":2,"name":"Refund for Greno",
                    "workflow":{"name":"Handle a claim","version":1},
                    "startedBy":{"userId":"001401","displayName":"Ann Example"},
-                   "startedAt":"2026-09-25T09:00:00Z","lastHappenedAt":"2026-09-25T09:30:00Z","state":"stopped"},
-                  {"runId":"${CATS_RUN}","number":1,"name":"Claim  from Ada",
+                   "startedAt":"2026-09-25T09:00:00Z","state":"stopped"},
+                  {"runId":"${CATS_RUN}","number":1,"name":"Claim  from Ari",
                    "workflow":{"name":"Handle a claim","version":1},
                    "startedBy":{"userId":"001403"},
-                   "startedAt":"2026-09-25T08:00:00Z","lastHappenedAt":"2026-09-25T08:00:00Z","state":"running",
+                   "startedAt":"2026-09-25T08:00:00Z","state":"running",
                    "at":"ask"}],
                  "reading":"all"}
                 """ as String)
@@ -154,7 +144,6 @@ class RunListControllerIntegrationSpec extends Specification {
         document(answered).get("reading").asString() == "own"
     }
 
-    /** A run's name is matched as typed, spaces and all; a workflow's once what was typed is spaced as names are. */
     def "narrows the runs to those whose name or workflow holds the filter sent"() {
         when:
         def answered = reading("/api/groups/${GROUP}/runs?sort=run&filter=${filter}", ANN_USER)
@@ -167,7 +156,7 @@ class RunListControllerIntegrationSpec extends Specification {
         filter              || listed
         "claim%20%20from"   || [CATS_RUN]
         "claim%20from"      || []
-        "GRACE"             || [ANNS_RUN]
+        "GRENO"             || [ANNS_RUN]
         "handle%C2%A0%20a"  || [CATS_RUN, ANNS_RUN]
         "zzz"               || []
     }
@@ -224,7 +213,6 @@ class RunListControllerIntegrationSpec extends Specification {
         Long.MIN_VALUE || []
     }
 
-    /** A group the caller holds nothing in, one nobody holds, and an address that is no identifier. */
     def "every way of naming no group in view is answered alike"() {
         when:
         def answers = [OTHER_GROUP, "00000003-0000-4000-8000-000000001409", "not-a-group"].collect {
@@ -237,7 +225,6 @@ class RunListControllerIntegrationSpec extends Specification {
         document(answers.first()).get("code").asString() == "GROUP_NOT_IN_VIEW"
     }
 
-    /** Where a run is is worked out as it is read, so the runs never sort by it. */
     def "refuses a column the runs do not sort by, naming no run: #sort"() {
         when:
         def answered = reading("/api/groups/${GROUP}/runs?sort=${sort}", ANN_USER)
@@ -245,7 +232,7 @@ class RunListControllerIntegrationSpec extends Specification {
         then:
         answered.response.status == 400
         document(answered).get("code").asString() == "LIST_SORT_UNUSABLE"
-        !answered.response.contentAsString.contains("Refund for Grace")
+        !answered.response.contentAsString.contains("Refund for Greno")
 
         where:
         sort << ["cost", "where", "-where"]
@@ -264,6 +251,7 @@ class RunListControllerIntegrationSpec extends Specification {
             LibraryStore.template(server)
             def store = LibraryStore.copied(server, "run_list_answers")
             store.person(ANN, "001401", "Ann Example")
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
             store.session.sql("insert into subjects (subject_id, kind, user_id, created_by) values (?::uuid, 'person', ?, ?::uuid)")
                     .params(CAT, "001403", LibraryStore.SEEDER).update()
             store.group(GROUP, "SUPPORT", "Customer support")
@@ -278,16 +266,15 @@ class RunListControllerIntegrationSpec extends Specification {
             RunRows.workflow(store, ELSEWHERE, ELSEWHERE_VERSION, OTHER_GROUP, "Handle a claim", null, false)
             RunRows.workflow(store, PAGED, PAGED_VERSION, PAGED_GROUP, "Page through", null, false)
             StepRows.askingSomebody(store, HANDLE_VERSION, GROUP)
-            RunRows.run(store, CATS_RUN, GROUP, 1, "Claim  from Ada", HANDLE, HANDLE_VERSION, CAT)
-            RunRows.run(store, ANNS_RUN, GROUP, 2, "Refund for Grace", HANDLE, HANDLE_VERSION, ANN)
-            RunRows.run(store, OTHER_GROUPS_RUN, OTHER_GROUP, 1, "Claim from Alan", ELSEWHERE, ELSEWHERE_VERSION, CAT)
+            RunRows.run(store, CATS_RUN, GROUP, 1, "Claim  from Ari", HANDLE, HANDLE_VERSION, CAT)
+            RunRows.run(store, ANNS_RUN, GROUP, 2, "Refund for Greno", HANDLE, HANDLE_VERSION, ANN)
+            RunRows.run(store, OTHER_GROUPS_RUN, OTHER_GROUP, 1, "Claim from Arlo", ELSEWHERE, ELSEWHERE_VERSION, CAT)
             RunRows.stopped(store, ANNS_RUN, ANN)
             [(CATS_RUN): "2026-09-25T08:00:00Z", (ANNS_RUN): "2026-09-25T09:00:00Z"].each { run, at ->
+                // DB-SPECIFIC: PostgreSQL ::uuid casts.
                 store.session.sql("update runs set created_at = cast(? as timestamptz) where run_id = ?::uuid")
                         .params(at, run).update()
             }
-            store.session.sql("update run_stops set created_at = cast(? as timestamptz) where run_id = ?::uuid")
-                    .params("2026-09-25T09:30:00Z", ANNS_RUN).update()
             (1..ListPage.SIZE + 1).each { number ->
                 RunRows.run(store, String.format("00000008-0000-4000-8000-%012d", 1410 + number), PAGED_GROUP,
                         number, "Paged ${number}", PAGED, PAGED_VERSION, ANN)

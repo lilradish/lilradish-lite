@@ -7,17 +7,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.libprunus.core.log.annotation.DoNotLog;
 import org.lilradish.lite.app.filling.FillFieldAnswer;
 import org.lilradish.lite.app.pool.PersonAnswer;
 import org.lilradish.lite.domain.codestep.CodeError;
 import org.lilradish.lite.domain.failure.RefusalCode;
+import org.lilradish.lite.domain.run.RunStepHoldReason;
 import org.lilradish.lite.domain.run.StepAct;
 import org.lilradish.lite.domain.workflow.Pointer;
 import tools.jackson.databind.JsonNode;
 
 /**
  * What a run's steps are read as, and what every act on a step answers with, each from one moment of the store;
- * every list is in the order it means and none is sorted, and spend goes out as digits in a string.
+ * every list is in the order it means, and spend goes out as digits in a string.
  */
 final class StepAnswers {
 
@@ -46,6 +48,7 @@ final class StepAnswers {
      * @param wentInFrom as {@link WentInFrom} spells it
      * @param cameOut absent where it has produced nothing
      * @param answering only where the reader may answer it
+     * @param drawing how the pinned question version lays out its inputs, only where it says
      * @param rereadAfterSeconds as {@link RunStepsAnswer#rereadAfterSeconds} has it
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -58,7 +61,23 @@ final class StepAnswers {
             @Nullable List<CameOutAnswer> cameOut,
             List<TryAnswer> triesMade,
             @Nullable AnsweringAnswer answering,
-            @Nullable Integer rereadAfterSeconds) {}
+            @Nullable String drawing,
+            @Nullable Integer rereadAfterSeconds) {
+
+        StepAnswer withDrawing(String drawing) {
+            return new StepAnswer(
+                    run,
+                    declarations,
+                    step,
+                    wentIn,
+                    wentInFrom,
+                    cameOut,
+                    triesMade,
+                    answering,
+                    drawing,
+                    rereadAfterSeconds);
+        }
+    }
 
     /**
      * The run as the same read of the store has it.
@@ -119,6 +138,7 @@ final class StepAnswers {
             int order,
             String name,
             RunsAnswer runs,
+            @Nullable BeneathAnswer beneath,
             @Nullable WhoAnswer producer,
             @Nullable WhoAnswer reviewer,
             String state,
@@ -133,6 +153,15 @@ final class StepAnswers {
             List<String> acts,
             List<WithheldAnswer> withheld) {}
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record BeneathAnswer(
+            UUID runId,
+            int number,
+            RunsAnswer runs,
+            @Nullable BeneathAtAnswer at) {}
+
+    record BeneathAtAnswer(UUID runId, int number, UUID stepId, String name) {}
+
     /**
      * What a step runs: a question or a workflow at the version pinned, a code step by its name, or a route.
      *
@@ -146,7 +175,9 @@ final class StepAnswers {
             @Nullable String name,
             @Nullable Integer version,
             @Nullable UUID versionId,
-            @Nullable String codeStep) {}
+            @Nullable String codeStep,
+            @Nullable String searchWay,
+            @Nullable String tool) {}
 
     /**
      * Who or what produced or reviewed: a person, code, or a model in a mode.
@@ -180,6 +211,8 @@ final class StepAnswers {
      * @param waitsOn whom it waits on, absent where it waits on nobody, which is everywhere on a stopped run
      * @param review how values waiting on a review stand with the model the step names to review them, as
      *     {@code ReviewSending} publishes it; absent where no model is named
+     * @param failedUnclaimed the value no case claimed, or that it is withheld, exactly where that is why it failed
+     * @param failedTooDeep how deep runs may go, exactly where a run that deep is why it failed
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record WhereAnswer(
@@ -198,7 +231,107 @@ final class StepAnswers {
             @Nullable StoppedAnswer stopped,
             @Nullable List<TurnawayAnswer> turnedAway,
             @Nullable String waitsOn,
-            @Nullable String review) {}
+            @Nullable String review,
+            @Nullable UnclaimedAnswer failedUnclaimed,
+            @Nullable TooDeepAnswer failedTooDeep,
+            @Nullable String tool,
+            @Nullable String searchQuestion,
+            @Nullable Boolean searchQuestionWithheld,
+            @Nullable HeldSourceAnswer source,
+            @Nullable SourceNoLongerMatchesAnswer failedSourceNoLongerMatches,
+            @Nullable SourceNoLongerMatchesAnswer failedSourceListNotHere) {
+
+        // A reader refuses a row whose reason and these disagree, so a mismatch fails here rather than there.
+        WhereAnswer {
+            if ((failedSourceNoLongerMatches != null)
+                            != FailureReason.SOURCE_NO_LONGER_MATCHES
+                                    .published()
+                                    .equals(reason)
+                    || (failedSourceNoLongerMatches != null
+                            && !WhereKind.FAILED.published().equals(kind))) {
+                throw new IllegalArgumentException("A source no longer matching is named exactly where it failed");
+            }
+            if ((failedSourceListNotHere != null)
+                            != FailureReason.SOURCE_LIST_NOT_HERE.published().equals(reason)
+                    || (failedSourceListNotHere != null
+                            && !WhereKind.FAILED.published().equals(kind))) {
+                throw new IllegalArgumentException("An unavailable source list is named exactly where it failed");
+            }
+            if (source != null
+                    && (!WhereKind.HELD_BACK.published().equals(kind)
+                            || !RunStepHoldReason.CODE_STEP_NOT_HELD.published().equals(reason))) {
+                throw new IllegalArgumentException("Only a missing source code step names a held source");
+            }
+            if ((tool != null) != FailureReason.TOOL_NOT_OFFERED.published().equals(reason)
+                    || (tool != null
+                            && (!WhereKind.FAILED.published().equals(kind) || model == null || reviewing != null))) {
+                throw new IllegalArgumentException("A tool failure names its tool and producing model");
+            }
+            boolean heldQuestion = searchQuestion != null || searchQuestionWithheld != null;
+            if (heldQuestion
+                    && (!WhereKind.HELD_BACK.published().equals(kind)
+                            || !(RunStepHoldReason.TOO_LONG.published().equals(reason)
+                                    || RunStepHoldReason.TURNED_AWAY.published().equals(reason))
+                            || (searchQuestion != null) == (searchQuestionWithheld != null)
+                            || Boolean.FALSE.equals(searchQuestionWithheld))) {
+                throw new IllegalArgumentException(
+                        "A held search question is named or withheld only where its attempt is held");
+            }
+            if ((failedUnclaimed != null)
+                            != FailureReason.UNCLAIMED_VALUE.published().equals(reason)
+                    || (failedTooDeep != null)
+                            != FailureReason.TOO_DEEP.published().equals(reason)) {
+                throw new IllegalArgumentException(
+                        "A step's whereabouts name the value no case claimed, or how deep runs may go, exactly where"
+                                + " that is why it failed");
+            }
+        }
+    }
+
+    record HeldSourceAnswer(UUID runId, int runNumber, UUID stepId, String name, String codeStep) {
+
+        HeldSourceAnswer {
+            requireNonNull(runId);
+            requireNonNull(stepId);
+            requireNonNull(name);
+            requireNonNull(codeStep);
+            if (runNumber < 1) {
+                throw new IllegalArgumentException("A held source belongs to a numbered run");
+            }
+        }
+    }
+
+    record SourceNoLongerMatchesAnswer(HeldSourceAnswer source, String field) {
+
+        SourceNoLongerMatchesAnswer {
+            requireNonNull(source);
+            requireNonNull(field);
+        }
+    }
+
+    /** The value no case claimed, as the reader may read it: named, or withheld where a model said it. */
+    sealed interface UnclaimedAnswer permits UnclaimedAnswer.Named, UnclaimedAnswer.Withheld {
+
+        /** @param term the value, written out as null where nothing was given */
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        record Named(@Nullable String term) implements UnclaimedAnswer {}
+
+        /** @param withheld always true: a reader takes a false as a value it may read, which this is not */
+        record Withheld(boolean withheld) implements UnclaimedAnswer {
+
+            public Withheld {
+                if (!withheld) {
+                    throw new IllegalArgumentException("A value no case claimed is withheld only as withheld");
+                }
+            }
+        }
+    }
+
+    /**
+     * @param most how many runs deep a tree may go as the deployment says now, the run at the top counted as one,
+     *     in decimal
+     */
+    record TooDeepAnswer(String most) {}
 
     /**
      * One time a model turned a call away, which cost nothing and spent no try.
@@ -229,7 +362,9 @@ final class StepAnswers {
     record WaitingValueAnswer(String field, String on) {}
 
     /** @param input the field it fills, its names from the first level joined by dots */
-    record TakesFromAnswer(String input, FromAnswer from) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record TakesFromAnswer(
+            String input, FromAnswer from, @Nullable UUID sourcePartId) {}
 
     /**
      * Where an input comes from, by {@link FromKind}: a path into what the run was started with, a path into what
@@ -238,6 +373,8 @@ final class StepAnswers {
      * @param versionId the version the earlier step pins, which {@code declarations} holds where it is a question's
      * @param codeStep the code step the earlier step runs, by which {@code declarations} holds what it declares
      *     where the release holds it
+     * @param runId the actual run holding this source, absent for a constant or a declared binding
+     * @param runNumber present exactly with {@code runId}
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record FromAnswer(
@@ -246,7 +383,17 @@ final class StepAnswers {
             @Nullable UUID stepId,
             @Nullable String name,
             @Nullable UUID versionId,
-            @Nullable String codeStep) {}
+            @Nullable String codeStep,
+            @Nullable UUID runId,
+            @Nullable Integer runNumber,
+            @Nullable String searchWay) {
+
+        FromAnswer {
+            if ((runId == null) != (runNumber == null)) {
+                throw new IllegalArgumentException("A source run has both an identifier and a number");
+            }
+        }
+    }
 
     /** @param current which try it is on, of the {@code declared} it declares */
     record TriesAnswer(int current, int declared, boolean beyond) {}
@@ -254,8 +401,7 @@ final class StepAnswers {
     /**
      * What a step or a try cost: nothing where no model is called, and otherwise its calls between them.
      *
-     * @param measuredHere present where any of it is what this system measured, the model having counted none of
-     *     that call; absent where the model counted all of it
+     * @param measuredHere wholly or partly measured here; absent where no call was measured here
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record CostAnswer(
@@ -264,7 +410,7 @@ final class StepAnswers {
             @Nullable String cameBack,
             @Nullable String spent,
             @Nullable Boolean cameBackUnknown,
-            @Nullable Boolean measuredHere) {}
+            @Nullable String measuredHere) {}
 
     /**
      * One value a try gave back.
@@ -288,17 +434,29 @@ final class StepAnswers {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record WentInAnswer(
             String input,
-            FromAnswer from,
+            @Nullable FromAnswer from,
             @Nullable JsonNode value,
             @Nullable Boolean withheld,
-            @Nullable Boolean earlierShape) {}
+            @Nullable Boolean earlierShape,
+            @Nullable List<SourceAnswer> sources,
+            @Nullable UUID sourcePartId) {
+
+        WentInAnswer {
+            if ((from == null) == (sources == null) || (sources != null && sources.isEmpty())) {
+                throw new IllegalArgumentException("An input has one origin or individual part origins");
+            }
+        }
+    }
+
+    record SourceAnswer(String targetPath, FromAnswer from) {}
 
     record NextAnswer(int number, boolean beyond) {}
 
     /**
      * @param refusal the code pressing it would be refused with
      * @param readBy as {@link GivesOtherwiseNames} has it, only where its code step giving otherwise refuses it
-     * @param field as {@link GivesOtherwiseNames} has it, only where its code step giving otherwise refuses it
+     * @param field as {@link GivesOtherwiseNames} has it, only where its code step giving otherwise refuses it;
+     *     the code step's own dotted path may not be found in {@code declarations}
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record WithheldAnswer(
@@ -323,7 +481,7 @@ final class StepAnswers {
      *
      * @param readBy what reads the field that no longer matches, only where that is why
      * @param field the field of what the code step gives back that no longer matches, or that pins a list this group
-     *     does not hold, its names joined by dots
+     *     does not hold, its own names joined by dots, which may not be found in {@code declarations}
      */
     record GivesOtherwiseNames(@Nullable ReadByAnswer readBy, String field) {
 
@@ -338,11 +496,16 @@ final class StepAnswers {
                         NOT_DECLARED,
                         NOTHING_GIVEN,
                         NOT_ITS_KIND,
+                        LINE_BREAK,
                         TOO_LONG,
                         TOO_MANY,
                         NOT_A_TERM,
                         UNKEEPABLE,
                         TOO_LONG_TO_KEEP,
+                        FILE_TYPE_UNUSABLE,
+                        FILE_NAME_UNUSABLE,
+                        FILE_TOO_LARGE,
+                        FILE_TOTAL_TOO_LARGE,
                         TAKES_A_LIST_NOT_HERE,
                         TAKES_OTHERWISE,
                         FAILED_ON_THIS_SIDE,
@@ -358,15 +521,21 @@ final class StepAnswers {
      * @param now as {@link CameOutNow} spells it
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    record CameOutAnswer(String field, @Nullable StandingAnswer standing, String now) {}
+    record CameOutAnswer(
+            String field,
+            @Nullable StandingAnswer standing,
+            String now,
+            RunsController.@Nullable NumberedRunAnswer fromRun,
+            @Nullable FromAnswer from,
+            @Nullable List<SourceAnswer> sources) {}
 
     /**
-     * @param number the try it stands in
+     * @param number the try it stands in, absent where no try made it
      * @param value as {@link ShownValueAnswer#value} has it, as are {@code withheld} and {@code earlierShape}
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record StandingAnswer(
-            int number,
+            @Nullable Integer number,
             @Nullable JsonNode value,
             @Nullable Boolean withheld,
             @Nullable Boolean earlierShape) {}
@@ -384,6 +553,7 @@ final class StepAnswers {
      * @param erroredFor why code went wrong, where this system found it so rather than the code saying
      * @param returned what code gave back that did not fit, as it came back
      * @param turnedAway each time a call to produce it was turned away, oldest first; absent where none was
+     * @param declined what the model gave back when it declined, or a withheld marker where its words may not be read
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record TryAnswer(
@@ -399,8 +569,30 @@ final class StepAnswers {
             @Nullable WentWrongAnswer wentWrong,
             @Nullable ErroredForAnswer erroredFor,
             @Nullable String returned,
+            @Nullable List<KeptCodeFileAnswer> keptFiles,
             @Nullable List<TurnawayAnswer> turnedAway,
-            CostAnswer cost) {}
+            CostAnswer cost,
+            @Nullable SearchAnswer search,
+            @Nullable DeclinedAnswer declined,
+            @Nullable UnreadableResponseRecord unreadableResponse) {}
+
+    /** The bounded original service response for a call whose envelope could not be read. */
+    record UnreadableResponseRecord(
+            @DoNotLog String text,
+            @DoNotLog boolean altered,
+            @DoNotLog boolean truncated) {}
+
+    /** Each nonempty part of a model's declined answer, in its original order: words, then content. */
+    record DeclinedTextAnswer(String text, boolean altered, boolean truncated) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record DeclinedAnswer(
+            @Nullable DeclinedTextAnswer words,
+            @Nullable DeclinedTextAnswer content,
+            @Nullable Boolean withheld) {}
+
+    /** A file verified and held by this run even though its code try ended errored. */
+    record KeptCodeFileAnswer(String path, UUID id, String name, String type, long size) {}
 
     /**
      * @param value as {@link ShownValueAnswer#value} has it, as are {@code withheld} and {@code earlierShape}
@@ -429,6 +621,7 @@ final class StepAnswers {
      * @param lost how a model's review of it went wrong, as {@code TryLostReason} publishes it; absent where it did not
      * @param didNotFit which way what the model gave back did not fit, as {@code DidNotFitReason} publishes it, only
      *     where {@code lost} is {@code did_not_fit}
+     * @param declined what the model gave back when it declined, or a withheld marker where its words may not be read
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record ReviewAnswer(
@@ -436,7 +629,9 @@ final class StepAnswers {
             @Nullable WhoAnswer by,
             @Nullable Boolean wentWrong,
             @Nullable String lost,
-            @Nullable String didNotFit) {}
+            @Nullable String didNotFit,
+            @Nullable DeclinedAnswer declined,
+            @Nullable UnreadableResponseRecord unreadableResponse) {}
 
     /**
      * @param detail absent where a model said it and the reader may not read what a model said
@@ -450,14 +645,13 @@ final class StepAnswers {
             @Nullable Boolean withheld) {}
 
     /**
-     * @param reason {@code gave_nothing}, {@code not_declared}, {@code nothing_given}, {@code not_its_kind},
-     *     {@code too_long}, {@code too_many}, {@code not_a_term}, {@code unkeepable}, {@code too_long_to_keep},
-     *     {@code takes_a_list_not_here}, {@code gives_a_list_not_here}, {@code takes_otherwise},
-     *     {@code gives_otherwise}, {@code failed_on_this_side} or {@code said_nothing}
+     * @param reason the reason from {@link org.lilradish.lite.domain.codestep.CodeErrorReason#published()}
      * @param field the field of the code step it is about, its names from the first level joined by dots; absent
-     *     where it is about none, or about a member nothing declares at the first level
-     * @param member the name of a member nothing declares, as the code wrote it, cleaned for one line and cut past 64
-     *     characters, marked so; only where that is the reason, and kept though it is empty
+     *     where it is about none, or about a member nothing declares at the first level; the code step's own path
+     *     may not be found in {@code declarations}
+     * @param member the name of a member nothing declares, as the code wrote it, cleaned for one line and past 64
+     *     characters cut to its first 64; only where that is the reason, and kept though it is empty
+     * @param memberCut present, and true, exactly where {@code member} was cut
      * @param readBy what reads the field that no longer matches, only where that is the reason
      * @param returnedNotKept present, and true, exactly where the code gave something back and it could not be kept
      */
@@ -466,6 +660,7 @@ final class StepAnswers {
             String reason,
             @Nullable String field,
             @Nullable String member,
+            @Nullable Boolean memberCut,
             @Nullable ReadByAnswer readBy,
             @Nullable Boolean returnedNotKept) {}
 
@@ -500,7 +695,122 @@ final class StepAnswers {
             boolean beyond,
             @Nullable String instruction,
             List<FillFieldAnswer> gives,
-            @Nullable LastRefusedAnswer lastRefused) {}
+            @Nullable LastRefusedAnswer lastRefused,
+            @Nullable String searchQuestion,
+            @Nullable Boolean searchQuestionSent,
+            @Nullable Boolean searchQuestionWithheld) {
+        AnsweringAnswer {
+            if ((searchQuestion != null) != (searchQuestionSent != null)
+                    || (searchQuestionWithheld != null && (searchQuestion != null || !searchQuestionWithheld))) {
+                throw new IllegalArgumentException(
+                        "An answering search question is named with whether it was sent, or withheld");
+            }
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record SearchedAnswer(
+            @Nullable String searchedFor, @Nullable String found) {
+        SearchedAnswer {
+            if (searchedFor == null && found == null) {
+                throw new IllegalArgumentException("A search record says what was searched for or what was found");
+            }
+        }
+    }
+
+    enum SearchUsesCounted {
+        SAID("said"),
+        AT_MOST("at_most");
+
+        private final String published;
+
+        SearchUsesCounted(String published) {
+            this.published = published;
+        }
+
+        String published() {
+            return published;
+        }
+    }
+
+    enum SearchNoFeeReason {
+        NOT_IN_CURRENCY("not_in_currency"),
+        MANY_CURRENCIES("many_currencies"),
+        NO_PRICE("no_price");
+
+        private final String published;
+
+        SearchNoFeeReason(String published) {
+            this.published = published;
+        }
+
+        String published() {
+            return published;
+        }
+    }
+
+    record SearchFeeAnswer(String currency, String perUse, String amount) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record NoSearchFeeAnswer(String reason, @Nullable String currency) {
+        NoSearchFeeAnswer {
+            if (!(SearchNoFeeReason.NOT_IN_CURRENCY.published().equals(reason)
+                            || SearchNoFeeReason.MANY_CURRENCIES.published().equals(reason)
+                            || SearchNoFeeReason.NO_PRICE.published().equals(reason))
+                    || (currency != null)
+                            != SearchNoFeeReason.NOT_IN_CURRENCY.published().equals(reason)) {
+                throw new IllegalArgumentException(
+                        "A search fee is absent for one reason, with a currency only where it lacks that currency");
+            }
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record SearchAnswer(
+            @Nullable Boolean withheld,
+            @Nullable String question,
+            @Nullable List<SearchedAnswer> searches,
+            @Nullable Boolean searchesUnsaid,
+            @Nullable Boolean searchesCut,
+            @Nullable Boolean searchesNotAsItCame,
+            @Nullable String searchesLeftOut,
+            @Nullable String uses,
+            @Nullable String usesCounted,
+            @Nullable SearchFeeAnswer fee,
+            @Nullable NoSearchFeeAnswer noFee) {
+        SearchAnswer {
+            if (Boolean.FALSE.equals(withheld)
+                    || Boolean.FALSE.equals(searchesUnsaid)
+                    || Boolean.FALSE.equals(searchesCut)
+                    || Boolean.FALSE.equals(searchesNotAsItCame)
+                    || (searches != null && searches.isEmpty())
+                    || (searchesUnsaid != null && (searches != null || searchesCut != null || searchesLeftOut != null))
+                    || (withheld != null
+                            && (question != null
+                                    || searches != null
+                                    || searchesUnsaid != null
+                                    || searchesCut != null
+                                    || searchesNotAsItCame != null
+                                    || searchesLeftOut != null))
+                    || (withheld == null && question == null)) {
+                throw new IllegalArgumentException(
+                        "A search's words are named or withheld together, with a meaningful record");
+            }
+            if ((uses == null) != (usesCounted == null)
+                    || (uses != null) != ((fee != null) ^ (noFee != null))
+                    || (fee != null && noFee != null)
+                    || (uses != null
+                            && (!uses.matches("[0-9]+")
+                                    || !(SearchUsesCounted.SAID.published().equals(usesCounted)
+                                            || SearchUsesCounted.AT_MOST
+                                                    .published()
+                                                    .equals(usesCounted))))
+                    || (searchesLeftOut != null && !searchesLeftOut.matches("[1-9][0-9]*"))) {
+                throw new IllegalArgumentException(
+                        "A search count and its fee are one complete group of decimal values");
+            }
+        }
+    }
 
     record LastRefusedAnswer(int number, List<TriedValueAnswer> values) {}
 }

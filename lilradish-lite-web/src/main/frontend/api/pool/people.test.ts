@@ -12,10 +12,10 @@ function addressAsked(sent: ReturnType<typeof answering>, call = 0): URL {
 
 const EVERYBODY: PoolQuery = { filter: "", order: "userId" };
 
-const GRACE = {
+const GLINN = {
   subjectId: "00000002-0000-4000-8000-000000000140",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: ["steward", "watcher"],
   groupCount: 2,
 };
@@ -64,7 +64,7 @@ describe("peopleLoader", () => {
     answering([
       JSON.stringify({
         items: [
-          GRACE,
+          GLINN,
           {
             subjectId: "00000002-0000-4000-8000-000000000130",
             userId: "000130",
@@ -82,7 +82,7 @@ describe("peopleLoader", () => {
     );
 
     expect(page.items).toEqual([
-      { ...GRACE, estateRoles: new Set(["steward", "watcher"]) },
+      { ...GLINN, estateRoles: new Set(["steward", "watcher"]) },
       {
         subjectId: "00000002-0000-4000-8000-000000000130",
         userId: "000130",
@@ -99,7 +99,7 @@ describe("peopleLoader", () => {
       JSON.stringify({
         items: [
           {
-            ...GRACE,
+            ...GLINN,
             estateRoles: ["auditor"],
             createdBy: "00000000-0000-4000-8000-000000000000",
           },
@@ -132,15 +132,15 @@ describe("peopleLoader", () => {
    */
   it.each([
     ["no list of rows", { nextCursor: "AAEC" }],
-    ["a row with no user number", { items: [{ ...GRACE, userId: undefined }] }],
+    ["a row with no user number", { items: [{ ...GLINN, userId: undefined }] }],
     [
       "a count that is not a number",
-      { items: [{ ...GRACE, groupCount: "2" }] },
+      { items: [{ ...GLINN, groupCount: "2" }] },
     ],
-    ["a count that is not whole", { items: [{ ...GRACE, groupCount: 1.5 }] }],
-    ["a negative count", { items: [{ ...GRACE, groupCount: -1 }] }],
-    ["a row listing no roles", { items: [{ ...GRACE, estateRoles: null }] }],
-    ["a name that is not text", { items: [{ ...GRACE, displayName: null }] }],
+    ["a count that is not whole", { items: [{ ...GLINN, groupCount: 1.5 }] }],
+    ["a negative count", { items: [{ ...GLINN, groupCount: -1 }] }],
+    ["a row listing no roles", { items: [{ ...GLINN, estateRoles: null }] }],
+    ["a name that is not text", { items: [{ ...GLINN, displayName: null }] }],
     ["a cursor that is null", { items: [], nextCursor: null }],
     ["a row that is no document", { items: ["000140"] }],
   ])("refuses a page carrying %s", async (_, body) => {
@@ -178,10 +178,10 @@ describe("peopleLoader", () => {
    */
   it("reads the pool a page at a time, asking for each page with the cursor the one before it carried", async () => {
     const sent = answering(
-      [JSON.stringify({ items: [GRACE], nextCursor: "AAEC" }), 200],
+      [JSON.stringify({ items: [GLINN], nextCursor: "AAEC" }), 200],
       ['{"items":[]}', 200],
     );
-    const load = peopleLoader({ filter: "grace", order: "displayName" });
+    const load = peopleLoader({ filter: "glinn", order: "displayName" });
     const { result } = renderHook(() => usePagedResource(load));
     await waitFor(() => expect(result.current.hasNext).toBe(true));
 
@@ -193,7 +193,7 @@ describe("peopleLoader", () => {
 
     expect(addressAsked(sent, 0).searchParams.has("cursor")).toBe(false);
     expect(addressAsked(sent, 1).searchParams.get("cursor")).toBe("AAEC");
-    expect(addressAsked(sent, 1).searchParams.get("filter")).toBe("grace");
+    expect(addressAsked(sent, 1).searchParams.get("filter")).toBe("glinn");
     expect(addressAsked(sent, 1).searchParams.get("sort")).toBe("displayName");
     expect(result.current.items).toEqual([]);
     expect(result.current.hasNext).toBe(false);
@@ -203,7 +203,7 @@ describe("peopleLoader", () => {
 const BROUGHT_IN = {
   subjectId: "00000002-0000-4000-8000-000000000140",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: [],
   lastGrantingRoles: [],
   groups: [],
@@ -267,7 +267,7 @@ describe("bringIn", () => {
 const PANEL = {
   subjectId: "00000002-0000-4000-8000-00000000014c",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: ["watcher", "steward"],
   lastGrantingRoles: ["steward"],
   groups: ["Payroll", "finance"],

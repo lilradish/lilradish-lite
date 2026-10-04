@@ -18,6 +18,7 @@ public enum CodeErrorReason {
     NOTHING_GIVEN("nothing_given"),
     /** A value not written as its field's kind is, or many where one is declared, or one where many. */
     NOT_ITS_KIND("not_its_kind"),
+    LINE_BREAK("line_break"),
     TOO_LONG("too_long"),
     TOO_MANY("too_many"),
     NOT_A_TERM("not_a_term"),
@@ -25,6 +26,10 @@ public enum CodeErrorReason {
     UNKEEPABLE("unkeepable"),
     /** A value that fits its field, but that the store would keep longer than it keeps any one value. */
     TOO_LONG_TO_KEEP("too_long_to_keep"),
+    FILE_TYPE_UNUSABLE("file_type_unusable"),
+    FILE_NAME_UNUSABLE("file_name_unusable"),
+    FILE_TOO_LARGE("file_too_large"),
+    FILE_TOTAL_TOO_LARGE("file_total_too_large"),
     /** A field of what it takes is a term of a list this group does not hold. */
     TAKES_A_LIST_NOT_HERE("takes_a_list_not_here"),
     /** A field of what it gives back is a term of a list this group does not hold. */
@@ -54,11 +59,16 @@ public enum CodeErrorReason {
             case NOT_DECLARED,
                     NOTHING_GIVEN,
                     NOT_ITS_KIND,
+                    LINE_BREAK,
                     TOO_LONG,
                     TOO_MANY,
                     NOT_A_TERM,
                     UNKEEPABLE,
-                    TOO_LONG_TO_KEEP -> true;
+                    TOO_LONG_TO_KEEP,
+                    FILE_TYPE_UNUSABLE,
+                    FILE_NAME_UNUSABLE,
+                    FILE_TOO_LARGE,
+                    FILE_TOTAL_TOO_LARGE -> true;
             case GAVE_NOTHING,
                     TAKES_A_LIST_NOT_HERE,
                     GIVES_A_LIST_NOT_HERE,

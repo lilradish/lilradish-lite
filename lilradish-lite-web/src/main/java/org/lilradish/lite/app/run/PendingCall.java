@@ -3,9 +3,12 @@ package org.lilradish.lite.app.run;
 import static java.util.Objects.requireNonNull;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import org.lilradish.lite.app.inference.ToolUseLimit;
 import org.lilradish.lite.domain.declaration.AskedField;
 import org.lilradish.lite.domain.declaration.FieldName;
+import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.inference.CallRequest;
 import org.lilradish.lite.domain.inference.ModelCallPurpose;
@@ -49,9 +52,33 @@ record PendingCall(
     }
 
     /** What an answer is read against: what the try gives back, or which of its values are decided. */
-    sealed interface Reading permits Producing, Reviewing {
+    sealed interface Reading permits Producing, Searching, Reviewing {
 
         ModelCallPurpose purpose();
+    }
+
+    record Searching(List<AskedField> gives, Map<FieldName, FieldStanding> standings, ToolUseLimit tool)
+            implements Reading {
+
+        Searching {
+            gives = List.copyOf(requireNonNull(gives, "PendingCall.Searching gives must not be null"));
+            standings = Map.copyOf(requireNonNull(standings, "PendingCall.Searching standings must not be null"));
+            requireNonNull(tool, "PendingCall.Searching tool must not be null");
+            if (gives.size() != standings.size()) {
+                throw new IllegalArgumentException("PendingCall.Searching names each field's standing");
+            }
+            for (AskedField field : gives) {
+                FieldStanding standing = standings.get(field.name());
+                if (standing != FieldStanding.ALWAYS && standing != FieldStanding.NEVER) {
+                    throw new IllegalArgumentException("PendingCall.Searching stands each field always or never");
+                }
+            }
+        }
+
+        @Override
+        public ModelCallPurpose purpose() {
+            return ModelCallPurpose.PRODUCE;
+        }
     }
 
     /**

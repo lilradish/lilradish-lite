@@ -14,6 +14,7 @@ import type {
 import {
   readStep,
   type StepAnswer,
+  type Try,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import {
   refusedAsMovedOn,
@@ -29,17 +30,18 @@ import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
-import { ACTS_SX } from "../../../lib/layout/parts";
+import { Fields } from "../../../lib/form/Fields";
+import { ACTS_SX, SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
 import { useAction } from "../../../lib/request/useAction";
 import { reasonRefused } from "../../../lib/text/legibility";
 import { STEP_ACT_RULES } from "../actRules";
+import { useRunReadAccess } from "../RunReadAccess";
 import { FilledValue } from "../fill/FilledValue";
 import { declaredFor, fieldAt, labelAt, type Declaring } from "./declared";
 import { REASON_WORDS, whoSaid } from "./stepStates";
 import { WentInValues } from "./WentInValues";
-
-const PART_SX = { mt: 2 };
+import { SearchRecord, SearchesCountedRows } from "./SearchRecord";
 
 const REVIEW_RULE: Rule = { inGroup: STEP_ACT_RULES.review };
 
@@ -72,15 +74,30 @@ export function waitingOnReader(step: StepRow): readonly string[] {
     : [];
 }
 
-/**
- * Every value waiting on the reader's review, in full, each assured or refused with a reason, sent as one review;
- * with what went in, where the row carries it. A lone value is assured at a press. Whatever answers, the step read
- * with it is handed to `onShown`; a refusal saying the step moved reads it again and hands that on too.
- */
+export function searchWaitingOnReader(
+  step: StepRow,
+  inHand: StepAnswer | null | undefined,
+): Try | undefined {
+  if (
+    step.runs.kind !== "search" ||
+    waitingOnReader(step).length === 0 ||
+    inHand?.step.stepId !== step.stepId ||
+    inHand.step.where?.kind !== "waiting_on_review" ||
+    inHand.step.where.number !== step.where?.number
+  ) {
+    return undefined;
+  }
+  return inHand.triesMade.find(
+    (each) => each.number === step.where?.number && each.search !== undefined,
+  );
+}
+
 export function ReviewControls({
   groupId,
   runId,
   step,
+  inHand,
+  searchDrawn = false,
   declaring,
   heading,
   landsOn,
@@ -89,8 +106,10 @@ export function ReviewControls({
   readonly groupId: string;
   readonly runId: string;
   readonly step: StepRow;
+  readonly inHand?: StepAnswer | null;
+  readonly searchDrawn?: boolean;
   readonly declaring: Declaring;
-  readonly heading: "h3" | "h4";
+  readonly heading: "h2" | "h3";
   /** The element the keyboard goes to once the review's answer is shown, as its controls go with it. */
   readonly landsOn: string;
   readonly onShown: (answer: StepAnswer) => void;
@@ -100,6 +119,7 @@ export function ReviewControls({
   const headingId = useId();
   const noticeId = useId();
   const reloadStanding = useStandingRead().reload;
+  const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const waiting = waitingOnReader(step);
   const number = step.where?.number ?? 0;
@@ -115,6 +135,7 @@ export function ReviewControls({
   const shown = draft.number === number ? draft : blank(number);
   const declared = declaredFor(step, declaring.declarations);
   const gives = declared?.gives;
+  const searchTry = searchWaitingOnReader(step, inHand);
   const several = waiting.length > 1;
 
   const rereading = useAction<StepAnswer>(
@@ -143,7 +164,9 @@ export function ReviewControls({
       }
       if (refusedAsMovedOn(problem) || refusedAsWithdrawn(problem)) {
         rereading.run((signal) =>
-          readStep(groupId, runId, step.stepId, signal),
+          access.read(signal, () =>
+            readStep(groupId, runId, step.stepId, signal),
+          ),
         );
       }
       const concerned = refusedForTheReason(problem)
@@ -242,13 +265,16 @@ export function ReviewControls({
     ? null
     : noticesOf(reviewing.problem, rereading.running, firstBy, marked !== null);
   const rereadRefusal = stale ? null : rereading.problem;
-  const variant = heading === "h3" ? "h6" : "subtitle1";
 
   return (
     <>
       {waiting.length === 0 || step.wentIn === undefined ? null : (
-        <Box component="section" aria-labelledby={wentInId} sx={PART_SX}>
-          <Typography id={wentInId} variant={variant} component={heading}>
+        <Box
+          component="section"
+          aria-labelledby={wentInId}
+          sx={SPACED_ABOVE_SX}
+        >
+          <Typography id={wentInId} variant={heading}>
             {say("step.wentIn")}
           </Typography>
           <WentInValues
@@ -259,10 +285,24 @@ export function ReviewControls({
         </Box>
       )}
       {waiting.length === 0 ? null : (
-        <Box component="section" aria-labelledby={headingId} sx={PART_SX}>
-          <Typography id={headingId} variant={variant} component={heading}>
+        <Box
+          component="section"
+          aria-labelledby={headingId}
+          sx={SPACED_ABOVE_SX}
+        >
+          <Typography id={headingId} variant={heading}>
             {say("step.yourReview")}
           </Typography>
+          {searchDrawn || searchTry?.search === undefined ? null : (
+            <>
+              <SearchRecord said={searchTry.search.said} />
+              {searchTry.search.counted === undefined ? null : (
+                <Fields>
+                  <SearchesCountedRows counted={searchTry.search.counted} />
+                </Fields>
+              )}
+            </>
+          )}
           {waiting.map((field, index) => {
             const label = labelAt(gives, field);
             const labelId = `${baseId}-label-${index}`;
@@ -277,7 +317,7 @@ export function ReviewControls({
                   ? null
                   : say(REASON_WORDS[judged]);
             return (
-              <Box key={field} sx={PART_SX}>
+              <Box key={field} sx={SPACED_ABOVE_SX}>
                 <Typography id={labelId} variant="subtitle2" component="p">
                   {label}
                 </Typography>
@@ -312,6 +352,7 @@ export function ReviewControls({
                 ) : (
                   <Box role="group" aria-labelledby={labelId} sx={ACTS_SX}>
                     <ActButton
+                      variant="contained"
                       action={reviewing}
                       waiting={rereading.running}
                       act={(signal) =>
@@ -346,15 +387,16 @@ export function ReviewControls({
                     multiline
                     minRows={2}
                     fullWidth
-                    sx={PART_SX}
+                    sx={SPACED_ABOVE_SX}
                   />
                 ) : null}
               </Box>
             );
           })}
           {several || shown.chosen.get(waiting[0]!) === "refused" ? (
-            <Box sx={{ ...ACTS_SX, ...PART_SX }}>
+            <Box sx={{ ...ACTS_SX, ...SPACED_ABOVE_SX }}>
               <ActButton
+                variant="contained"
                 action={reviewing}
                 waiting={rereading.running}
                 reason={
@@ -374,7 +416,7 @@ export function ReviewControls({
         </Box>
       )}
       {notices === null && rereadRefusal === null ? null : (
-        <Box id={noticeId} tabIndex={-1} sx={PART_SX}>
+        <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
           {notices}
           {rereadRefusal === null ? null : (
             <ProblemView problem={rereadRefusal} />

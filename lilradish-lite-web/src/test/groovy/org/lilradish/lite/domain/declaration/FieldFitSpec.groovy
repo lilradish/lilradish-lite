@@ -9,6 +9,23 @@ class FieldFitSpec extends Specification {
 
     static final EntryVersionId OTHER_LIST = new EntryVersionId(UUID.fromString("00000007-0000-4000-8000-000000000102"))
 
+    def "one line may fill several lines but several cannot fill one, including fields held many times"() {
+        given:
+        def source = field("value", new FieldShape.Text(30, from), new HowMany.Many(2))
+        def target = field("value", new FieldShape.Text(30, to), new HowMany.Many(2))
+
+        expect:
+        FieldFit.fits(source, target) == fits
+        FieldFit.fits(nested("details", [source]), nested("details", [target])) == fits
+
+        where:
+        from              | to                || fits
+        TextLines.ONE     | TextLines.ONE     || true
+        TextLines.ONE     | TextLines.SEVERAL || true
+        TextLines.SEVERAL | TextLines.SEVERAL || true
+        TextLines.SEVERAL | TextLines.ONE     || false
+    }
+
     /** Nothing longer or more numerous may reach a field than it declares, and one never turns into many. */
     def "what a field holds fits another where it is the same kind, one or many alike, and within its limits"() {
         expect:
@@ -91,25 +108,25 @@ class FieldFitSpec extends Specification {
         demanding("a", false)                                         | demanding("a", true)                                          || true
     }
 
-    def "two levels are alike where they name the same fields, each declaring the same, in whatever order"() {
+    def "a case gives only what its route declares and assures every value the route requires"() {
         expect:
-        FieldFit.alike(one, other) == alike
+        differences(one, other).isEmpty() == within
 
         where:
-        one                                                    | other                                                  || alike
+        one                                                    | other                                                  || within
         []                                                     | []                                                     || true
         [text("a", 10), text("b", 20)]                         | [text("b", 20), text("a", 10)]                         || true
-        [text("a", 10)]                                        | [text("a", 11)]                                        || false
+        [text("a", 10)]                                        | [text("a", 11)]                                        || true
         [text("a", 10)]                                        | [text("a", 10), text("b", 20)]                         || false
         [text("a", 10), text("b", 20)]                         | [text("a", 10)]                                        || false
         [text("a", 10)]                                        | [text("b", 10)]                                        || false
         [field("a", new FieldShape.Term(LIST), new HowMany.One())] | [field("a", new FieldShape.Term(OTHER_LIST), new HowMany.One())] || false
-        [field("a", new FieldShape.Text(10), new HowMany.Many(2))] | [field("a", new FieldShape.Text(10), new HowMany.Many(3))]   || false
+        [field("a", new FieldShape.Text(10), new HowMany.Many(2))] | [field("a", new FieldShape.Text(10), new HowMany.Many(3))]   || true
         [field("a", new FieldShape.Text(10), new HowMany.Many(2))] | [text("a", 10)]                                        || false
         [field("a", new FieldShape.Plain(FieldKind.DATE), new HowMany.One())] | [field("a", new FieldShape.Plain(FieldKind.MOMENT), new HowMany.One())] || false
         [nested("a", [text("x", 1)])]                          | [nested("a", [text("x", 1)])]                          || true
         [nested("a", [text("x", 1), text("y", 2)])]            | [nested("a", [text("y", 2), text("x", 1)])]            || true
-        [nested("a", [text("x", 1)])]                          | [nested("a", [text("x", 2)])]                          || false
+        [nested("a", [text("x", 1)])]                          | [nested("a", [text("x", 2)])]                          || true
         [nested("a", [text("x", 1)])]                          | [text("a", 1)]                                         || false
         [demanding("a", false)]                                | [demanding("a", true)]                                 || false
         [demanding("a", true)]                                 | [demanding("a", false)]                                || true
@@ -117,9 +134,43 @@ class FieldFitSpec extends Specification {
         [nested("n", [demanding("a", true)])]                  | [nested("n", [demanding("a", false)])]                 || true
     }
 
+    def "nested differences follow case order before missing required route fields"() {
+        given:
+        def given = [nested("outer", [text("extra", 3), demanding("count", false),
+                field("kind", new FieldShape.Plain(FieldKind.NUMBER), new HowMany.One())])]
+        def declared = [nested("outer", [demanding("count", true),
+                field("kind", new FieldShape.Plain(FieldKind.DATE), new HowMany.One()),
+                demanding("optional", false), demanding("missing", true)])]
+
+        expect:
+        differences(given, declared) == [
+                [kind: FieldFit.CaseDifferenceKind.UNDECLARED, inCase: true, path: [0, 0]],
+                [kind: FieldFit.CaseDifferenceKind.MAY_GIVE_NOTHING, inCase: true, path: [0, 1]],
+                [kind: FieldFit.CaseDifferenceKind.OTHER_KIND, inCase: true, path: [0, 2]],
+                [kind: FieldFit.CaseDifferenceKind.MAY_GIVE_NOTHING, inCase: false, path: [0, 3]]]
+    }
+
+    def "one field with several differences reports its first reason by kind then limit then assurance"() {
+        expect:
+        differences([source], [target])*.kind == [reason]
+
+        where:
+        source | target || reason
+        new Field(new FieldName("x"), null, null, new FieldShape.Plain(FieldKind.NUMBER),
+                new HowMany.Many(5), new Demand.Given(false)) |
+                new Field(new FieldName("x"), null, null, new FieldShape.Text(10),
+                        new HowMany.Many(3), new Demand.Given(true)) || FieldFit.CaseDifferenceKind.OTHER_KIND
+        new Field(new FieldName("x"), null, null, new FieldShape.Text(20),
+                new HowMany.Many(5), new Demand.Given(false)) |
+                new Field(new FieldName("x"), null, null, new FieldShape.Text(10),
+                        new HowMany.Many(3), new Demand.Given(true)) || FieldFit.CaseDifferenceKind.PAST_LIMIT
+        demanding("x", false) | demanding("x", true) || FieldFit.CaseDifferenceKind.MAY_GIVE_NOTHING
+    }
+
     def "what is fitted and compared is never absent"() {
         when:
-        FieldFit."${asked}"(one, other)
+        asked == "visitCaseDifferences" ? FieldFit.visitCaseDifferences(one, other, { kind, inCase, path, depth -> }) :
+                FieldFit."${asked}"(one, other)
 
         then:
         def refused = thrown(NullPointerException)
@@ -131,8 +182,16 @@ class FieldFitSpec extends Specification {
         "fits"  | text("a", 1)   | null           || "FieldFit target must not be null"
         "givenWithin" | null     | text("a", 1)   || "FieldFit source must not be null"
         "givenWithin" | text("a", 1) | null       || "FieldFit target must not be null"
-        "alike" | null           | []             || "FieldFit one must not be null"
-        "alike" | []             | null           || "FieldFit other must not be null"
+        "visitCaseDifferences" | null | []         || "FieldFit given must not be null"
+        "visitCaseDifferences" | []   | null           || "FieldFit declared must not be null"
+    }
+
+    private static List<Map<String, Object>> differences(List<Field> given, List<Field> declared) {
+        def found = []
+        FieldFit.visitCaseDifferences(given, declared, { kind, inCase, path, depth ->
+            found.add([kind: kind, inCase: inCase, path: Arrays.copyOf(path, depth).toList()])
+        })
+        found
     }
 
     private static Field text(String name, int longest) {

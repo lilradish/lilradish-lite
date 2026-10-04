@@ -1,5 +1,6 @@
 package org.lilradish.lite.domain.declaration
 
+import org.lilradish.lite.domain.file.MediaTypeName
 import org.lilradish.lite.domain.registry.EntryVersionId
 import spock.lang.Specification
 
@@ -9,6 +10,28 @@ class FieldShapeSpec extends Specification {
 
     static final Field HELD = new Field(new FieldName("product"), null, null, new FieldShape.Text(128),
             new HowMany.One(), new Demand.Given(true))
+
+    def "text with no lines chosen keeps accepting several lines, while one rejects every line break"() {
+        expect:
+        new FieldShape.Text(30).lines() == TextLines.SEVERAL
+        new FieldShape.Text(null, TextLines.ONE).lines() == TextLines.ONE
+        TextLines.values()*.published() == ["one", "several"]
+        TextLines.SEVERAL.accepts("Demo Sample" + Character.toString(codePoint))
+        !TextLines.ONE.accepts("Demo Sample" + Character.toString(codePoint))
+        !TextLines.ONE.accepts(Character.toString(codePoint))
+        TextLines.ONE.accepts("Demo Sample\t")
+
+        where:
+        codePoint << [0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029]
+    }
+
+    def "a text shape must say one or several lines"() {
+        when:
+        new FieldShape.Text(30, null)
+
+        then:
+        thrown(NullPointerException)
+    }
 
     def "each shape says the kind it is, and what it carries of that kind"() {
         expect:
@@ -96,5 +119,44 @@ class FieldShapeSpec extends Specification {
         then:
         def refused = thrown(NullPointerException)
         refused.message == "FieldShape.Nested fields must not be null"
+    }
+
+    def "a file field takes one through sixty-four media types, and one more is over its bound"() {
+        expect:
+        FieldShape.File.typesFit(count) == fits
+
+        where:
+        count || fits
+        0     || false
+        1     || true
+        64    || true
+        65    || false
+    }
+
+    def "a file field's largest byte count is positive and no larger than the wire can carry exactly"() {
+        expect:
+        FieldShape.File.maximumBytesFit(bytes) == fits
+
+        where:
+        bytes                 || fits
+        -1L                   || false
+        0L                    || false
+        1L                    || true
+        9_007_199_254_740_991L || true
+        9_007_199_254_740_992L || false
+    }
+
+    def "a file shape keeps the declaration for a code step's contextual veto, including an overbound limit"() {
+        given:
+        def types = (0..<65).collect { new MediaTypeName("application/x${it}" as String) }
+
+        when:
+        def file = new FieldShape.File(types, 9_007_199_254_740_992L)
+
+        then:
+        file.types() == types
+        file.maximumBytes() == 9_007_199_254_740_992L
+        !FieldShape.File.typesFit(file.types().size())
+        !FieldShape.File.maximumBytesFit(file.maximumBytes())
     }
 }

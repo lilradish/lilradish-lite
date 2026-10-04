@@ -17,9 +17,11 @@ export function ActDialog<T>({
   open,
   title,
   onShut,
+  onExited,
   action,
   act,
   actLabel,
+  warns,
   reason,
   abandonLabel,
   underway,
@@ -29,9 +31,11 @@ export function ActDialog<T>({
   readonly open: boolean;
   readonly title: string;
   readonly onShut: () => void;
+  readonly onExited?: () => void;
   readonly action: Action<T>;
   readonly act: (signal: AbortSignal) => Promise<T>;
   readonly actLabel: string;
+  readonly warns?: boolean;
   /** Why the act cannot be pressed yet; absent where it can. */
   readonly reason?: Reason;
   readonly abandonLabel: string;
@@ -46,6 +50,7 @@ export function ActDialog<T>({
     <Dialog
       open={open}
       onClose={running ? undefined : onShut}
+      onTransitionExited={onExited}
       fullWidth
       maxWidth="sm"
     >
@@ -59,11 +64,18 @@ export function ActDialog<T>({
           reason={
             running ? { severity: "warning", words: underway } : undefined
           }
+          variant="neutral"
           onPress={onShut}
         >
           {abandonLabel}
         </Press>
-        <ActButton action={action} act={act} reason={reason}>
+        <ActButton
+          action={action}
+          act={act}
+          variant="contained"
+          warns={warns}
+          reason={reason}
+        >
           {actLabel}
         </ActButton>
       </DialogActions>

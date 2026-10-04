@@ -26,11 +26,7 @@ const LEAVING_THE_SITE = [
   "//exa mple",
 ];
 
-/**
- * The addresses are stand-ins and are deliberately no address this application
- * answers: this card is built before the screens it would lead to, and a
- * plausible-looking one here would read as a destination that exists.
- */
+/** Fixture paths do not imply that an application screen exists there. */
 function waiting(count: number): Task[] {
   return Array.from({ length: count }, (_unused, index) => ({
     id: `id${index}`,

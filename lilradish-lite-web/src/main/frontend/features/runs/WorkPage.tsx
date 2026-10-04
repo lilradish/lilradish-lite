@@ -1,10 +1,11 @@
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardActionArea from "@mui/material/CardActionArea";
 import CardContent from "@mui/material/CardContent";
-import ToggleButton from "@mui/material/ToggleButton";
-import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
 import {
   useCallback,
@@ -13,18 +14,18 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
-  Link as RouterLink,
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router";
 
 import {
-  readOffered,
+  offeredLoader,
   type OfferedWorkflow,
 } from "../../api/groups/{groupId}/offered-workflows";
 import {
@@ -33,102 +34,109 @@ import {
   type RunRow,
   type StartedRun,
 } from "../../api/groups/{groupId}/runs";
-import type { Problem } from "../../api/problem";
-import { mayIn } from "../../api/standing";
-import { Async } from "../../app/Async";
-import { groupPage, WORK_ITEM } from "../../app/destinations";
+import {
+  asProblem,
+  BROKEN_HERE,
+  RequestFailed,
+  type Problem,
+} from "../../api/problem";
+import { mayIn, type GroupStanding } from "../../api/standing";
 import { ProblemView } from "../../app/ProblemView";
 import { movesTheReader } from "../../app/refusal";
 import { useStandingRead } from "../../app/standing/StandingContext";
 import { say, type MessageId } from "../../i18n/app";
 import { FilterField } from "../../lib/collection/FilterField";
-import { orderSpelled } from "../../lib/collection/ordering";
-import { PagingControls } from "../../lib/collection/PagingControls";
-import { NavigableList } from "../../lib/collection/RowList";
 import { SortableTable } from "../../lib/collection/SortableTable";
 import { useListAddress } from "../../lib/collection/useListAddress";
+import { useKeptChoice } from "../../lib/device/useKeptChoice";
+import { Press } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { PageHeading } from "../../lib/heading/PageHeading";
-import { HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { QUIET_SX, SPACED_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
+import { reportCaught } from "../../lib/report/reportCaught";
+import { useAccumulatedResource } from "../../lib/request/useAccumulatedResource";
+import { usePagedResource } from "../../lib/request/usePagedResource";
 import {
-  usePagedResource,
-  type PagedResource,
-} from "../../lib/request/usePagedResource";
-import { useResource } from "../../lib/request/useResource";
-import { listQuery, runHref } from "./runAddress";
-import {
-  LAST_HAPPENED_FIRST,
-  NEWEST_FIRST,
-  RUNS_SORTABLE,
-  listedWhereSaid,
-  runColumns,
-} from "./runColumns";
-import { byDay, type RunDay } from "./runDays";
+  listQuery,
+  NAMED_TAB,
+  runHref,
+  tabNamed,
+  WORK_TABS,
+  type WorkTab,
+} from "./runAddress";
+import { NEWEST_FIRST, RUNS_SORTABLE, runColumns } from "./runColumns";
 import { RunPage } from "./RunPage";
-import { StartDialog, StartHere, type StartSettled } from "./StartRun";
+import { StartHere, type StartSettled } from "./StartRun";
 import { StepPage } from "./steps/StepPage";
-import { useWorkDrawing, type WorkDrawing } from "./useWorkDrawing";
 
-/** The words each day the runs are listed under is said in, closed over the days. */
-const DAYS = {
-  today: "work.today",
-  yesterday: "work.yesterday",
-  earlier: "work.earlier",
-} as const satisfies Record<RunDay, MessageId>;
+const KEPT_TAB_AS = "lilradish.work.tab";
 
-const LAST_HAPPENED_ORDER = orderSpelled(LAST_HAPPENED_FIRST);
+/** The words each tab is drawn with, closed over the tabs in both directions. */
+const TAB_WORDS = {
+  newRun: "work.newRun",
+  history: "work.history",
+} as const satisfies Record<WorkTab, MessageId>;
 
-const NONE_OFFERED: readonly OfferedWorkflow[] = [];
-
-const CONVERSATION_SX = {
-  display: "flex",
-  flexWrap: "wrap",
-  alignItems: "flex-start",
-  gap: 3,
-};
-
-const LEADING_SX = { flex: "1 1 18rem", maxWidth: "26rem", minWidth: 0 };
-
-const REST_SX = { flex: "999 1 28rem", minWidth: 0 };
-
-const NEW_RUN_SX = { mb: 2 };
+const TABS_SX = { mb: 3 };
 
 const CARDS_SX = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(16rem, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 16rem), 1fr))",
   gap: 2,
+  bgcolor: "background.default",
+  border: 1,
+  borderColor: "text.secondary",
+  borderRadius: 2,
+  p: { xs: 2, sm: 3 },
 };
 
+const CARD_SX = { borderColor: "text.secondary", bgcolor: "background.paper" };
+
 // Drawn apart by more than colour: its border is thicker as well.
-const PICKED_SX = { borderColor: "primary.main", borderWidth: 2 };
+const PICKED_SX = { ...CARD_SX, borderColor: "primary.main", borderWidth: 2 };
 
-const OPENED_SX = { mt: 3 };
+const CARD_LINE_SX = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 1,
+  minWidth: 0,
+};
 
-const STATUS_SX = { my: 1 };
+const CARD_WORDS_SX = { minWidth: 0, overflowWrap: "anywhere" };
 
-/** What the group this page is under lets the reader do here, as the standing says. */
+const CARD_ICON_SX = { flexShrink: 0, mt: 0.25 };
+
+const CARD_NAME_SX = { display: "block" };
+
+const PICKED_PART_SX = {
+  mt: 3,
+  bgcolor: "background.paper",
+  border: 2,
+  borderColor: "primary.main",
+  borderRadius: 2,
+  p: { xs: 2, sm: 3 },
+  boxShadow: 1,
+  minWidth: 0,
+};
+
+const FILTER_STYLE = { width: "100%", maxWidth: "22rem" };
+
+/** The group the page is under, and what a refusal saying the reader's standing moved is handed to. */
 interface Reach {
   readonly groupId: string;
   readonly groupKey: string;
-  readonly mayStart: boolean;
   readonly onProblem: (problem: Problem | null) => void;
 }
 
-/**
- * One page drawn as a conversation or in detail, as this device last chose; both list the runs the server lets
- * the reader read, and a run opened is the run's own page, beside the runs or under them.
- */
 export function WorkPage() {
-  const standingRead = useStandingRead();
-  const reloadStanding = standingRead.reload;
-  const { groupId = "", runId, stepId } = useParams();
-  const [drawing, setDrawing] = useWorkDrawing();
-  const [starting, setStarting] = useState(false);
-  const detailToggle = useRef<HTMLButtonElement>(null);
-  const group = standingRead.value.groups.find(
-    (each) => each.groupId === groupId,
-  );
+  const group = useGroupOfWork();
+  const standing = useStandingRead();
+  const reloadStanding = standing.reload;
+  const [address, setAddress] = useSearchParams();
+  const [kept, keep] = useKeptChoice(KEPT_TAB_AS, WORK_TABS);
+  const tabsId = useId();
+  const newRunPanel = useRef<HTMLDivElement>(null);
   const onProblem = useCallback(
     (problem: Problem | null) => {
       if (problem !== null && movesTheReader(problem)) {
@@ -137,322 +145,281 @@ export function WorkPage() {
     },
     [reloadStanding],
   );
-
+  const named = tabNamed(address.toString());
+  const mayStart = group !== undefined && mayIn(group, "start_run");
+  const tab: WorkTab = mayStart ? (named ?? kept) : "history";
+  // In place of the entry it was on: Back leaves Work rather than going back through its tabs.
+  const naming = useCallback(
+    (drawn: WorkTab) =>
+      setAddress(
+        (previous) => {
+          const withTab = new URLSearchParams(previous);
+          withTab.set(NAMED_TAB, drawn);
+          return withTab;
+        },
+        { replace: true },
+      ),
+    [setAddress],
+  );
+  useEffect(() => {
+    if (group !== undefined && named !== tab) {
+      naming(tab);
+    }
+  }, [group, named, tab, naming]);
   if (group === undefined) {
     return null;
   }
+  const heading = workHeading(group);
   const reach: Reach = {
-    groupId,
+    groupId: group.groupId,
     groupKey: group.key,
-    mayStart: mayIn(group, "start_run"),
     onProblem,
   };
+  if (!mayStart) {
+    return (
+      <>
+        <PageHeading title={heading} />
+        <History reach={reach} />
+      </>
+    );
+  }
   return (
     <>
-      <PageHeading
-        title={say("work.heading", { group: isolatedInText(group.name) })}
-        actions={
-          <Box sx={HEADER_ACTS_SX}>
-            {drawing === "detail" && reach.mayStart ? (
-              <Button variant="contained" onClick={() => setStarting(true)}>
-                {say("work.startARun")}
-              </Button>
-            ) : null}
-            <DrawingSwitch
-              drawing={drawing}
-              detailRef={detailToggle}
-              onChange={setDrawing}
-            />
-          </Box>
-        }
-      />
-      {drawing === "conversation" ? (
-        <Conversation
+      <PageHeading title={heading} />
+      <Tabs
+        value={tab}
+        onChange={(_event, next: WorkTab) => {
+          keep(next);
+          naming(next);
+        }}
+        aria-label={heading}
+        sx={TABS_SX}
+      >
+        {WORK_TABS.map((each) => (
+          <Tab
+            key={each}
+            value={each}
+            label={say(TAB_WORDS[each])}
+            id={`${tabsId}-${each}`}
+            aria-controls={`${tabsId}-${each}-panel`}
+          />
+        ))}
+      </Tabs>
+      <TabPanel
+        ref={newRunPanel}
+        id={`${tabsId}-newRun`}
+        shown={tab === "newRun"}
+      >
+        <NewRun
+          key={`${group.groupId}/${standing.value.userId ?? ""}`}
           reach={reach}
-          runId={runId}
-          stepId={stepId}
-          onDetail={() => {
-            detailToggle.current?.focus();
-            setDrawing("detail");
-          }}
+          panel={newRunPanel}
         />
-      ) : (
-        <InDetail
-          reach={reach}
-          runId={runId}
-          stepId={stepId}
-          starting={starting && reach.mayStart}
-          onStartShut={() => setStarting(false)}
-        />
-      )}
+      </TabPanel>
+      <TabPanel id={`${tabsId}-history`} shown={tab === "history"}>
+        <History reach={reach} />
+      </TabPanel>
     </>
   );
 }
 
-function DrawingSwitch({
-  drawing,
-  detailRef,
-  onChange,
-}: {
-  readonly drawing: WorkDrawing;
-  /** The switch to the detail, which takes the keyboard where the detail is asked for from a control it takes away. */
-  readonly detailRef: RefObject<HTMLButtonElement | null>;
-  readonly onChange: (next: WorkDrawing) => void;
-}) {
-  return (
-    <ToggleButtonGroup
-      exclusive
-      size="small"
-      value={drawing}
-      aria-label={say("work.drawn")}
-      onChange={(_event, next: WorkDrawing | null) => {
-        if (next !== null) {
-          onChange(next);
-        }
-      }}
-    >
-      <ToggleButton value="conversation">
-        {say("work.asConversation")}
-      </ToggleButton>
-      <ToggleButton ref={detailRef} value="detail">
-        {say("work.inDetail")}
-      </ToggleButton>
-    </ToggleButtonGroup>
-  );
-}
-
 /**
- * The runs down the leading side, the one something last happened in first, each under the day that was. The
- * rest of the page is the run opened, or what may start; New run takes the keyboard there either way.
+ * A run opened from Work, or one of its steps: a page of its own, titled by what it opens, which draws neither tab
+ * nor list. The way back to History is the run's own.
  */
-function Conversation({
-  reach,
-  runId,
-  stepId,
-  onDetail,
-}: {
-  readonly reach: Reach;
-  readonly runId: string | undefined;
-  readonly stepId: string | undefined;
-  /** Draws the page in detail instead, as the switch at its top does. */
-  readonly onDetail: () => void;
-}) {
-  const { groupId, mayStart, onProblem } = reach;
-  const search = listQuery(useLocation().search);
-  const navigate = useNavigate();
-  const { filter, onFilter } = useListAddress(RUNS_SORTABLE, NEWEST_FIRST);
-  const load = useMemo(
-    () => runsLoader(groupId, { filter, order: LAST_HAPPENED_ORDER }),
-    [groupId, filter],
-  );
-  const page = usePagedResource(load);
-  const reloadRuns = page.reload;
-  const dayId = useId();
-  const newRunHeading = useRef<HTMLHeadingElement>(null);
-  const focusNewRun = useRef(false);
-  const [newRunAsked, setNewRunAsked] = useState(0);
-  const [startedHere, setStartedHere] = useState<string | null>(null);
-  const [runShown, setRunShown] = useState(runId);
-  // The run begun here takes the keyboard as it arrives, and never again once another is opened.
-  if (runShown !== runId) {
-    setRunShown(runId);
-    if (runShown === startedHere) {
-      setStartedHere(null);
-    }
-  }
-
-  useEffect(() => onProblem(page.problem), [page.problem, onProblem]);
-
-  // Once the run open has made way for what may start, where a run was open.
-  useEffect(() => {
-    if (focusNewRun.current && newRunHeading.current !== null) {
-      focusNewRun.current = false;
-      newRunHeading.current.focus();
-    }
-  }, [runId, newRunAsked]);
-
-  const onReadable = useCallback(
-    (started: StartedRun) => {
-      reloadRuns();
-      setStartedHere(started.runId);
-      void navigate(`${runHref(groupId, started.runId)}${search}`);
-    },
-    [reloadRuns, navigate, groupId, search],
-  );
-
-  return (
-    <Box sx={CONVERSATION_SX}>
-      <Box role="region" aria-label={say("work.theRuns")} sx={LEADING_SX}>
-        {mayStart ? (
-          <Button
-            variant="contained"
-            component={RouterLink}
-            to={{ pathname: groupPage(groupId, WORK_ITEM.segment), search }}
-            onClick={(event: MouseEvent) => {
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              ) {
-                return;
-              }
-              focusNewRun.current = true;
-              if (runId === undefined) {
-                event.preventDefault();
-                setNewRunAsked((asked) => asked + 1);
-              }
-            }}
-            sx={NEW_RUN_SX}
-          >
-            {say("work.newRun")}
-          </Button>
-        ) : null}
-        <FilterField
-          label={say("work.filter")}
-          value={filter}
-          onChange={onFilter}
-        />
-        {page.problem === null ? null : <ProblemView problem={page.problem} />}
-        {byDay(page.items, (row) => row.lastHappenedAt, new Date()).map(
-          ({ day, rows }) => (
-            <div key={day}>
-              <Typography
-                id={`${dayId}-${day}`}
-                variant="overline"
-                component="h2"
-              >
-                {say(DAYS[day])}
-              </Typography>
-              <NavigableList
-                items={rows}
-                keyOf={runIdOf}
-                pathOf={(row) => `${runHref(groupId, row.runId)}${search}`}
-                isCurrent={(row) => row.runId === runId}
-                labelledBy={`${dayId}-${day}`}
-                title={(row) => isolatedInText(row.name)}
-                detail={(row) =>
-                  say("work.line", {
-                    workflow: isolatedInText(row.workflow.name),
-                    where: listedWhereSaid(row),
-                  })
-                }
-              />
-            </div>
-          ),
-        )}
-        <ListStatus
-          page={page}
-          empty={emptySaid(page.answered?.reading, filter)}
-        />
-        <PagingControls page={page} />
-      </Box>
-      <Box sx={REST_SX}>
-        {runId === undefined ? (
-          <NewRun
-            reach={reach}
-            listsAny={
-              page.answered !== null && page.answered.reading !== "none"
-            }
-            headingRef={newRunHeading}
-            onReadable={onReadable}
-          />
-        ) : stepId === undefined ? (
-          <RunPage
-            key={runId}
-            drawing="conversation"
-            onDetail={onDetail}
-            focusOnArrival={runId === startedHere}
-            onActed={reloadRuns}
-          />
-        ) : (
-          <StepPage key={`${runId}/${stepId}`} onActed={reloadRuns} />
-        )}
-      </Box>
-    </Box>
+export function OpenedRun() {
+  const { runId, stepId } = useParams();
+  return stepId === undefined ? (
+    <RunPage key={runId} />
+  ) : (
+    <StepPage key={`${runId}/${stepId}`} />
   );
 }
 
+/** The group the address names, as the reader's standing holds it; none where it holds no such group. */
+function useGroupOfWork(): GroupStanding | undefined {
+  const { groupId } = useParams();
+  return useStandingRead().value.groups.find(
+    (each) => each.groupId === groupId,
+  );
+}
+
+function workHeading(group: GroupStanding): string {
+  return say("work.heading", { group: isolatedInText(group.name) });
+}
+
+/** One tab's panel, which holds what it draws only while it is shown, and takes the keyboard where it is handed it. */
+function TabPanel({
+  ref,
+  id,
+  shown,
+  children,
+}: {
+  readonly ref?: RefObject<HTMLDivElement | null>;
+  /** The tab's own, which the panel's is made from. */
+  readonly id: string;
+  readonly shown: boolean;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div
+      ref={ref}
+      role="tabpanel"
+      id={`${id}-panel`}
+      aria-labelledby={id}
+      tabIndex={-1}
+      hidden={!shown}
+    >
+      {shown ? children : null}
+    </div>
+  );
+}
+
+async function findOffered(
+  groupId: string,
+  name: string,
+  entryId: string,
+  signal: AbortSignal,
+): Promise<OfferedWorkflow | null> {
+  const search = async (filter: string): Promise<OfferedWorkflow | null> => {
+    const load = offeredLoader(groupId, filter);
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    for (;;) {
+      const page = await load(cursor, signal);
+      const found = page.items.find((each) => each.entryId === entryId);
+      if (found !== undefined) {
+        return found;
+      }
+      const next = page.nextCursor;
+      if (next === undefined) {
+        return null;
+      }
+      if (seen.has(next)) {
+        throw new RequestFailed({ code: BROKEN_HERE });
+      }
+      seen.add(next);
+      cursor = next;
+    }
+  };
+  const named = await search(name);
+  return named ?? (name === "" ? null : search(""));
+}
+
+// Changing the read source abandons a pending card request after verification closes the page.
+const closedOffers = async () => ({ items: [] });
+
 /**
- * Where no run is open: what a run may be started of, for one who may start one, or where to open one, where the
- * server lists the reader any run to open.
+ * One card per workflow on offer, by name, each saying what it is for, and nothing of a run already started. Picking
+ * one draws beneath the cards what its newest version takes; a run begun there opens its own page for a reader who
+ * may read it. Where the form goes with the control pressed in it, the keyboard starts again at the panel.
  */
 function NewRun({
   reach,
-  listsAny,
-  headingRef,
-  onReadable,
+  panel,
 }: {
   readonly reach: Reach;
-  readonly listsAny: boolean;
-  readonly headingRef: RefObject<HTMLHeadingElement | null>;
-  readonly onReadable: (started: StartedRun) => void;
-}) {
-  if (reach.mayStart) {
-    return (
-      <Offered reach={reach} headingRef={headingRef} onReadable={onReadable} />
-    );
-  }
-  return listsAny ? (
-    <Typography variant="body2" sx={QUIET_SX}>
-      {say("work.openOne")}
-    </Typography>
-  ) : null;
-}
-
-/**
- * One card per workflow on offer, by name, each saying what it is for. Picking one draws beneath the cards what
- * its newest version takes, and a run begun there becomes the rest of the page for a reader who may read it.
- */
-function Offered({
-  reach,
-  headingRef,
-  onReadable,
-}: {
-  readonly reach: Reach;
-  readonly headingRef: RefObject<HTMLHeadingElement | null>;
-  readonly onReadable: (started: StartedRun) => void;
+  readonly panel: RefObject<HTMLDivElement | null>;
 }) {
   const { groupId, groupKey, onProblem } = reach;
-  const headingId = useId();
+  const search = listQuery(useLocation().search);
+  const navigate = useNavigate();
   const pickedHeadingId = useId();
-  const pickedHeading = useRef<HTMLHeadingElement>(null);
-  const load = useCallback(
-    (signal: AbortSignal) => readOffered(groupId, signal),
-    [groupId],
+  const nameInput = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState("");
+  const [checkProblem, setCheckProblem] = useState<Problem | null>(null);
+  const checkClosed = checkProblem !== null && movesTheReader(checkProblem);
+  const offered = useMemo(
+    () => offeredLoader(groupId, filter),
+    [groupId, filter],
   );
-  const read = useResource(load, NONE_OFFERED);
-  const reloadOffered = read.reload;
-  const [picked, setPicked] = useState<string | null>(null);
+  const load = checkClosed ? closedOffers : offered;
+  const read = useAccumulatedResource(load, movesTheReader);
+  const reloadOffered = useRef(read.reload);
+  const [picked, setPicked] = useState<OfferedWorkflow | null>(null);
   const [begun, setBegun] = useState<number | null>(null);
   const [readAgain, setReadAgain] = useState(false);
-  const workflow = read.value.find((each) => each.entryId === picked);
+  const [checking, setChecking] = useState<{
+    readonly entryId: string;
+    readonly name: string;
+    readonly attempt: number;
+  } | null>(null);
+  const closed = read.terminal || checkClosed;
+  const workflow = closed ? null : picked;
+  const pickedId = picked?.entryId;
+  const [terminalNoted, setTerminalNoted] = useState(false);
+  const problem = checkClosed ? checkProblem : (read.problem ?? checkProblem);
+  if (closed && !terminalNoted) {
+    setTerminalNoted(true);
+    setPicked(null);
+    setChecking(null);
+  }
 
   useEffect(() => {
-    if (picked !== null) {
-      pickedHeading.current?.focus();
+    if (pickedId !== undefined) {
+      nameInput.current?.focus();
     }
-  }, [picked]);
+  }, [pickedId]);
 
-  // Read again without the workflow picked, whose form goes with the control pressed in it.
-  const gone = readAgain && picked !== null && workflow === undefined;
   useEffect(() => {
-    if (gone) {
-      headingRef.current?.focus();
-    }
-  }, [gone, headingRef]);
+    onProblem(problem);
+  }, [problem, onProblem]);
 
-  // The form goes with the control pressed in it, so the keyboard starts again at what may start.
+  useEffect(() => {
+    reloadOffered.current = read.reload;
+  }, [read.reload]);
+
+  useEffect(() => {
+    if (checking === null) {
+      return;
+    }
+    const controller = new AbortController();
+    void findOffered(
+      groupId,
+      checking.name,
+      checking.entryId,
+      controller.signal,
+    )
+      .then((found) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setChecking(null);
+        reloadOffered.current();
+        if (found === null) {
+          setPicked(null);
+          panel.current?.focus();
+        } else {
+          setPicked(found);
+        }
+      })
+      .catch((failure: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (!(failure instanceof RequestFailed)) {
+          reportCaught(failure);
+        }
+        const problem = asProblem(failure, controller.signal);
+        setCheckProblem(problem);
+        if (movesTheReader(problem)) {
+          setChecking(null);
+        }
+      });
+    return () => controller.abort();
+  }, [checking, groupId, panel]);
+
   const putAway = () => {
     setPicked(null);
-    headingRef.current?.focus();
+    setChecking(null);
+    setCheckProblem(null);
+    setReadAgain(false);
+    panel.current?.focus();
   };
   const settled: StartSettled = {
-    onStarted: (started) => {
+    onStarted: (started: StartedRun) => {
       if (started.readable) {
-        setPicked(null);
-        onReadable(started);
+        void navigate(`${runHref(groupId, started.runId)}${search}`);
       } else {
         putAway();
         setBegun(started.number);
@@ -460,23 +427,16 @@ function Offered({
     },
     onNotOffered: () => {
       setReadAgain(true);
-      reloadOffered();
+      setCheckProblem(null);
+      if (picked !== null) {
+        setChecking({ entryId: picked.entryId, name: picked.name, attempt: 0 });
+      }
     },
     onProblem,
   };
 
   return (
-    <Box role="group" aria-labelledby={headingId}>
-      <Typography
-        ref={headingRef}
-        id={headingId}
-        tabIndex={-1}
-        variant="h6"
-        component="h2"
-        sx={NEW_RUN_SX}
-      >
-        {say("work.aNewRun")}
-      </Typography>
+    <>
       <div role="status">
         {begun === null ? null : (
           <Notice severity="info">
@@ -489,67 +449,125 @@ function Offered({
           <Notice severity="warning">{say("work.noLongerOffered")}</Notice>
         ) : null}
       </div>
-      <Async
-        read={read}
-        rule={{ inGroup: "start_run" }}
-        empty={(offered) =>
-          offered.length === 0 ? say("work.nothingOffered") : null
-        }
-      >
-        {(offered) => (
-          <Box sx={CARDS_SX}>
-            {offered.map((each) => (
-              <Card
-                key={each.entryId}
-                variant="outlined"
-                sx={each.entryId === picked ? PICKED_SX : undefined}
+      {closed ? null : (
+        <Box style={FILTER_STYLE}>
+          <FilterField
+            label={say("library.filter")}
+            value={filter}
+            onChange={setFilter}
+          />
+        </Box>
+      )}
+      {checkClosed || read.problem === null ? null : (
+        <>
+          <ProblemView problem={read.problem} rule={{ inGroup: "start_run" }} />
+          {closed ? null : (
+            <Press onPress={read.retry}>{say("read.retry")}</Press>
+          )}
+        </>
+      )}
+      {!closed && read.loading ? (
+        <Typography role="status">{say("read.pending")}</Typography>
+      ) : null}
+      {!closed &&
+      read.problem === null &&
+      !read.loading &&
+      read.items.length === 0 &&
+      !read.hasNext ? (
+        <Notice severity="info">
+          {say(filter === "" ? "work.nothingOffered" : "newRun.noMatch")}
+        </Notice>
+      ) : null}
+      {closed || read.items.length === 0 ? null : (
+        <Box sx={CARDS_SX}>
+          {read.items.map((each) => (
+            <Card
+              key={each.entryId}
+              variant="outlined"
+              sx={each.entryId === picked?.entryId ? PICKED_SX : CARD_SX}
+            >
+              <CardActionArea
+                aria-pressed={each.entryId === picked?.entryId}
+                onClick={() => {
+                  if (each.entryId === picked?.entryId) {
+                    nameInput.current?.focus();
+                  }
+                  setPicked(each);
+                  setBegun(null);
+                  setReadAgain(false);
+                  setChecking(null);
+                  setCheckProblem(null);
+                }}
               >
-                <CardActionArea
-                  aria-pressed={each.entryId === picked}
-                  onClick={() => {
-                    setPicked(each.entryId);
-                    setBegun(null);
-                    setReadAgain(false);
-                  }}
-                >
-                  <CardContent>
-                    <Typography
-                      variant="subtitle1"
-                      component="span"
-                      sx={{ display: "block" }}
-                    >
-                      {isolatedInText(each.name)}
-                    </Typography>
-                    {each.purpose === undefined ? null : (
+                <CardContent>
+                  <Box sx={CARD_LINE_SX}>
+                    <AccountTreeIcon
+                      fontSize="small"
+                      aria-hidden="true"
+                      sx={CARD_ICON_SX}
+                    />
+                    <Box sx={CARD_WORDS_SX}>
                       <Typography
-                        variant="body2"
+                        variant="subtitle1"
                         component="span"
-                        sx={{ ...QUIET_SX, display: "block", mb: 0 }}
+                        sx={CARD_NAME_SX}
                       >
-                        {isolatedInText(each.purpose)}
+                        {isolatedInText(each.name)}
                       </Typography>
-                    )}
-                  </CardContent>
-                </CardActionArea>
-              </Card>
-            ))}
-          </Box>
-        )}
-      </Async>
-      {workflow === undefined ? null : (
+                      {each.purpose === undefined ? null : (
+                        <Typography
+                          variant="body2"
+                          component="span"
+                          sx={{ ...QUIET_SX, display: "block", mb: 0 }}
+                        >
+                          {isolatedInText(each.purpose)}
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          ))}
+        </Box>
+      )}
+      {!closed && read.hasNext ? (
+        <Stack direction="row" sx={{ my: 2 }}>
+          <Press
+            navigation
+            unavailable={read.loading || read.problem !== null}
+            onPress={read.next}
+          >
+            {say("newRun.loadMore")}
+          </Press>
+        </Stack>
+      ) : null}
+      {checkProblem === null ? null : (
+        <>
+          <ProblemView problem={checkProblem} />
+          {closed ? null : (
+            <Press
+              onPress={() => {
+                setCheckProblem(null);
+                setChecking((prior) =>
+                  prior === null
+                    ? null
+                    : { ...prior, attempt: prior.attempt + 1 },
+                );
+              }}
+            >
+              {say("read.retry")}
+            </Press>
+          )}
+        </>
+      )}
+      {workflow === null ? null : (
         <Box
           component="section"
           aria-labelledby={pickedHeadingId}
-          sx={OPENED_SX}
+          sx={PICKED_PART_SX}
         >
-          <Typography
-            ref={pickedHeading}
-            id={pickedHeadingId}
-            tabIndex={-1}
-            variant="subtitle1"
-            component="h3"
-            sx={NEW_RUN_SX}
-          >
+          <Typography id={pickedHeadingId} variant="h2" sx={SPACED_SX}>
             {isolatedInText(workflow.name)}
           </Typography>
           <StartHere
@@ -557,71 +575,44 @@ function Offered({
             groupId={groupId}
             workflow={workflow}
             settled={settled}
+            nameRef={nameInput}
             onAbandon={putAway}
           />
         </Box>
       )}
-    </Box>
+    </>
   );
 }
 
 /**
- * Every run as a table sorted by one column, newest first until another is asked for; a row opens its run under
- * the table, which keeps its page, its order and the row that opened it. A run begun from the dialog opens there
- * too, for a reader who may read it.
+ * Every run in a table under the filter, newest first until another column is asked for; a row opens its run's
+ * page, whose address keeps the list's own query.
  */
-function InDetail({
-  reach,
-  runId,
-  stepId,
-  starting,
-  onStartShut,
-}: {
-  readonly reach: Reach;
-  readonly runId: string | undefined;
-  readonly stepId: string | undefined;
-  readonly starting: boolean;
-  readonly onStartShut: () => void;
-}) {
+function History({ reach }: { readonly reach: Reach }) {
   const { groupId, groupKey, onProblem } = reach;
   const search = listQuery(useLocation().search);
-  const navigate = useNavigate();
-  const { order, sort, onOrder } = useListAddress(RUNS_SORTABLE, NEWEST_FIRST);
+  const { filter, order, sort, onFilter, onOrder } = useListAddress(
+    RUNS_SORTABLE,
+    NEWEST_FIRST,
+  );
   const load = useMemo(
-    () => runsLoader(groupId, { filter: "", order: sort }),
-    [groupId, sort],
+    () => runsLoader(groupId, { filter, order: sort }),
+    [groupId, filter, sort],
   );
   const page = usePagedResource(load);
   const columns = useMemo(() => runColumns(groupKey), [groupKey]);
-  const [begun, setBegun] = useState<number | null>(null);
 
   useEffect(() => onProblem(page.problem), [page.problem, onProblem]);
 
-  const settled = {
-    onStarted: (started: StartedRun) => {
-      onStartShut();
-      if (started.readable) {
-        setBegun(null);
-        page.reload();
-        void navigate(`${runHref(groupId, started.runId)}${search}`);
-      } else {
-        setBegun(started.number);
-      }
-    },
-    onProblem,
-  };
-
   return (
     <>
-      <div role="status">
-        {begun === null ? null : (
-          <Notice severity="info">
-            {say("work.startedUnreadable", {
-              run: say("work.runKey", { key: groupKey, number: begun }),
-            })}
-          </Notice>
-        )}
-      </div>
+      <Box style={FILTER_STYLE}>
+        <FilterField
+          label={say("work.filter")}
+          value={filter}
+          onChange={onFilter}
+        />
+      </Box>
       {page.problem === null ? null : <ProblemView problem={page.problem} />}
       <SortableTable
         label={say("work.whatIsRunning")}
@@ -630,48 +621,11 @@ function InDetail({
         onOrder={onOrder}
         page={page}
         keyOf={runIdOf}
-        picked={runId ?? null}
+        picked={null}
         hrefOf={(row) => `${runHref(groupId, row.runId)}${search}`}
-        empty={emptySaid(page.answered?.reading, "")}
-        quietWhileAnswered
+        empty={emptySaid(page.answered?.reading, filter)}
       />
-      {runId === undefined ? null : (
-        <Box sx={OPENED_SX}>
-          {stepId === undefined ? (
-            <RunPage key={runId} drawing="detail" onActed={page.reload} />
-          ) : (
-            <StepPage key={`${runId}/${stepId}`} onActed={page.reload} />
-          )}
-        </Box>
-      )}
-      {starting ? (
-        <StartDialog groupId={groupId} onShut={onStartShut} settled={settled} />
-      ) : null}
     </>
-  );
-}
-
-/** What the list says while it reads with nothing answered yet, and where a settled first page found nothing. */
-function ListStatus({
-  page,
-  empty,
-}: {
-  readonly page: PagedResource<RunRow> & { readonly answered: object | null };
-  readonly empty: string;
-}) {
-  // A read again after an act keeps the rows it replaces, and saying it reads would be news of nothing.
-  return (
-    <Box role="status" sx={STATUS_SX}>
-      {page.loading && page.answered === null ? (
-        <Typography variant="body2" sx={QUIET_SX}>
-          {say("read.pending")}
-        </Typography>
-      ) : page.problem === null &&
-        page.items.length === 0 &&
-        page.onFirstPage ? (
-        <Notice severity="info">{empty}</Notice>
-      ) : null}
-    </Box>
   );
 }
 

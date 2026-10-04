@@ -18,11 +18,14 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.PathContainer;
 import org.springframework.http.server.RequestPath;
 import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.util.ServletRequestPathUtils;
 import org.springframework.web.util.WebUtils;
@@ -32,21 +35,12 @@ import org.springframework.web.util.pattern.PathPatternParser;
 /**
  * The one door every request comes through, and the only place this application asks who is calling.
  *
- * <p>A filter rather than anything that runs at dispatch, and the difference is not a preference. An
- * address under this application's own prefix that names no operation is matched by no handler at
- * all, so it falls through to the static handling that claims every other address and is answered
- * that there is no static resource of that name — a sentence that names the framework's own
- * machinery and hands the caller back the path they sent. Nothing selected by a handler can reach
- * that address, because nothing was selected.
+ * <p>Admission runs before dispatch so every address under the API prefix, including one without a
+ * handler, receives the same decision and no-store rule.
  *
- * <p>Whether an address is under that prefix is the dispatcher's own judgement rather than a reading
- * of the request line. The container hands back the URI as it arrived — undecoded, path parameters
- * and all — while a handler is selected by matching a {@link PathPattern} against the segments of a
- * parsed {@link RequestPath}, which are decoded and stripped of those parameters first. A door that
- * compared the raw string would leave other spellings of the prefix unguarded and still routed, so the
- * same pattern is matched against the same parsed path here. The parse is the one cached ahead of the
- * reader — by {@link RequestTrace} out here, by the {@code DispatcherServlet} within — and taken afresh
- * only where nothing cached one.
+ * <p>Admission must use the dispatcher's parsed {@link RequestPath} and {@link PathPattern} rules,
+ * reusing the cached path when present and the same framework parser otherwise. It must not
+ * interpret the URL independently.
  *
  * <p>Who is calling is asked under that prefix and nowhere else. Every other address is the document
  * and the files it loads, served to whoever asks, so resolving an identity there would be work done
@@ -164,6 +158,15 @@ public final class CallerAdmission extends OncePerRequestFilter {
         // An answer the container gives before any filter runs never passes here, and is left without it.
         response.setHeader(HttpHeaders.CACHE_CONTROL, NEVER_KEPT);
         if (!guarded || (sentFromHere(request, response) && admits(request, response))) {
+            String method = request.getMethod();
+            if (guarded && (HttpMethod.GET.matches(method) || HttpMethod.HEAD.matches(method))) {
+                try {
+                    request.getParameterMap();
+                } catch (IllegalStateException undecodable) {
+                    refuse(refusals, request, response, new ResponseStatusException(HttpStatus.BAD_REQUEST));
+                    return;
+                }
+            }
             onward.doFilter(request, response);
         }
     }
@@ -201,8 +204,6 @@ public final class CallerAdmission extends OncePerRequestFilter {
     private boolean admits(HttpServletRequest request, HttpServletResponse response) throws ServletException {
         Optional<UserId> caller = identification.identify(request);
         if (caller.isEmpty()) {
-            /* This refusal owes a challenge naming the scheme a credential arrives under; one is
-             * added with the carrier. */
             refuse(
                     refusals,
                     request,
@@ -219,7 +220,7 @@ public final class CallerAdmission extends OncePerRequestFilter {
             HandlerExceptionResolver refusals,
             HttpServletRequest request,
             HttpServletResponse response,
-            ApiErrorException refusal)
+            Exception refusal)
             throws ServletException {
         if (refusals.resolveException(request, response, null, refusal) == null) {
             // Nothing rendered it, which the chain says by answering null; returning is an empty 200.

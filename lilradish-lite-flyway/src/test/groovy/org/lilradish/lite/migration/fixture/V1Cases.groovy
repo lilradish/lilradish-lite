@@ -28,18 +28,22 @@ final class V1Cases {
         attack("subjects_user_only_for_people", "subjects",
                 "insert into app.subjects (subject_id, kind, created_by)" +
                         " values ('${SPARE_SUBJECT}', 'person', '${SEEDER}')"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("subjects_user_id_visible", "subjects",
                 "insert into app.subjects (subject_id, kind, user_id, created_by)" +
                         " values ('${SPARE_SUBJECT}', 'person', '00' || chr(9) || '99', '${SEEDER}')"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("subjects_user_id_bounded", "subjects",
                 "insert into app.subjects (subject_id, kind, user_id, created_by)" +
                         " values ('${SPARE_SUBJECT}', 'person', repeat('9', 257), '${SEEDER}')"),
         attack("subjects_display_name_only_for_people", "subjects",
                 "insert into app.subjects (subject_id, kind, display_name, created_by)" +
                         " values ('${SPARE_SUBJECT}', 'system', 'Scheduler', '${SEEDER}')"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("subjects_display_name_visible", "subjects",
                 "insert into app.subjects (subject_id, kind, user_id, display_name, created_by)" +
-                        " values ('${SPARE_SUBJECT}', 'person', '000099', 'Ada' || chr(9) || 'Lovelace', '${SEEDER}')"),
+                        " values ('${SPARE_SUBJECT}', 'person', '000099', 'Demo Sample Ada' || chr(9) || 'One', '${SEEDER}')"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("subjects_display_name_bounded", "subjects",
                 "insert into app.subjects (subject_id, kind, user_id, display_name, created_by)" +
                         " values ('${SPARE_SUBJECT}', 'person', '000099', repeat('a', 257), '${SEEDER}')"),

@@ -1,12 +1,10 @@
 package org.lilradish.lite.app.library;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.registry.ContentPart;
 import org.lilradish.lite.domain.registry.ContentPlace;
-import org.lilradish.lite.domain.registry.ContentProblem;
 import org.lilradish.lite.domain.registry.ContentProblemCode;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
@@ -44,24 +42,24 @@ final class ReferenceListContentCheck implements ContentCheck {
     }
 
     @Override
-    public List<ContentProblem> problemsIn(GroupId group, EntryVersionId version) {
+    public ContentProblemReport.Result problemsIn(GroupId group, EntryVersionId version) {
         List<Held> terms = database.sql(TERMS)
                 .param("version", version.value())
                 .query((result, number) ->
                         new Held(result.getObject("reference_list_term_id", UUID.class), result.getBoolean("repeated")))
                 .list();
         if (terms.isEmpty()) {
-            return List.of(
-                    new ContentProblem(ContentProblemCode.NO_TERMS, new ContentPlace.Whole(ContentPart.TERMS), null));
+            ContentProblemReport found = new ContentProblemReport();
+            found.add(ContentProblemCode.NO_TERMS, new ContentPlace.Whole(ContentPart.TERMS));
+            return found.result();
         }
-        List<ContentProblem> problems = new ArrayList<>();
+        ContentProblemReport found = new ContentProblemReport();
         for (Held term : terms) {
             if (term.repeated()) {
-                problems.add(
-                        new ContentProblem(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(term.id()), null));
+                found.add(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(term.id()));
             }
         }
-        return List.copyOf(problems);
+        return found.result();
     }
 
     private record Held(UUID id, boolean repeated) {}

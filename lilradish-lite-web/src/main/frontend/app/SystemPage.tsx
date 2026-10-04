@@ -3,6 +3,7 @@
 import Typography from "@mui/material/Typography";
 
 import { say, type MessageId } from "../i18n/app";
+import { Part } from "../lib/layout/Part";
 
 /**
  * A screen that exists and holds nothing yet.
@@ -16,13 +17,10 @@ import { say, type MessageId } from "../i18n/app";
  */
 export function SystemPage({ title }: { readonly title: MessageId }) {
   return (
-    <section>
-      <Typography variant="h5" component="h1" gutterBottom>
-        {say(title)}
-      </Typography>
+    <Part title={say(title)} level="h1" depth={1}>
       <Typography variant="body2" sx={{ color: "text.secondary" }}>
         {say("page.notBuilt")}
       </Typography>
-    </section>
+    </Part>
   );
 }

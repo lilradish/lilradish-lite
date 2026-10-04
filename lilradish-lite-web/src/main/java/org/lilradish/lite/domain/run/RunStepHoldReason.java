@@ -11,8 +11,9 @@ public enum RunStepHoldReason {
     ENTRY_STOPPED("entry_stopped"),
     TOO_LONG("too_long"),
     TURNED_AWAY("turned_away"),
-    /** The running release holds no code step of the name the step runs, so neither code nor a person can make it. */
-    CODE_STEP_NOT_HELD("code_step_not_held");
+    /** The running release holds no code step the step runs, or that a source names for later model production. */
+    CODE_STEP_NOT_HELD("code_step_not_held"),
+    SEARCH_WAY_NOT_HELD("search_way_not_held");
 
     private final String published;
 

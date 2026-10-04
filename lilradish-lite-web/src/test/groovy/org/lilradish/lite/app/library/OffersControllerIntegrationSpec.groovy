@@ -13,6 +13,10 @@ import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.identification.UserIdentification
 import org.lilradish.lite.domain.identity.EstateRole
 import org.lilradish.lite.domain.identity.UserId
+import org.lilradish.lite.domain.listing.ListCursor
+import org.lilradish.lite.domain.listing.ListPosition
+import org.lilradish.lite.domain.listing.ListQuery
+import org.lilradish.lite.domain.registry.EntryKind
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.library.TakingWorkflow
 import org.springframework.beans.factory.annotation.Autowired
@@ -42,45 +46,37 @@ class OffersControllerIntegrationSpec extends Specification {
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000001502"
 
-    /** An operator here, and in no role in the other group. */
     static final String ANN = "00000002-0000-4000-8000-000000001501"
 
     static final UserId ANN_USER = new UserId("001501")
 
-    /** Two versions in service, one retired and a draft. */
     static final String HANDLE = "00000006-0000-4000-8000-000000001501"
 
-    /** One version in service, saying nothing of what it is for. */
     static final String REFUND = "00000006-0000-4000-8000-000000001502"
 
-    /** A draft alone. */
     static final String ARCHIVE = "00000006-0000-4000-8000-000000001503"
 
-    /** In service, and stopped. */
     static final String ESCALATE = "00000006-0000-4000-8000-000000001504"
 
-    /** A question in service. */
     static final String SORT = "00000006-0000-4000-8000-000000001505"
 
-    /** Another group's workflow in service. */
     static final String ELSEWHERE = "00000006-0000-4000-8000-000000001506"
 
-    /** A retired version alone. */
     static final String RETIRED = "00000006-0000-4000-8000-000000001507"
 
-    /** In service, stopped once and let go since. */
     static final String RESUMED = "00000006-0000-4000-8000-000000001508"
 
-    /** In service, taking what {@link TakingWorkflow#takes} declares, a term of a list of the group's among it. */
     static final String TAKE = "00000006-0000-4000-8000-000000001509"
 
-    /** Two versions in service, each taking a term of a list of its own. */
     static final String PICK = "00000006-0000-4000-8000-000000001511"
 
     static final JsonMapper JSON = JsonMapper.builder().build()
 
     @Autowired
     private MockMvc mockMvc
+
+    @Autowired
+    private LibraryStore store
 
     @MockitoBean
     private UserIdentification identification
@@ -101,6 +97,25 @@ class OffersControllerIntegrationSpec extends Specification {
         String.format("00000007-0000-4000-8000-%012d", 1500 + number)
     }
 
+    private static String id(int kind, int number) {
+        String.format("000000%02d-0000-4000-8000-%012d", kind, number)
+    }
+
+    private void newGroup(String group, String key) {
+        store.group(group, key, "Demo Sample ${key}")
+        store.member(group, ANN, "operator")
+    }
+
+    private void offer(String group, int number, String name, String purpose = null) {
+        def entry = id(6, number)
+        store.entry(entry, group, "workflow", name, purpose)
+        store.seeded(id(7, number), entry, 1)
+    }
+
+    private MvcResult filtered(String group, String filter) {
+        mockMvc.perform(get("/api/groups/{group}/offered-workflows", group).param("filter", filter)).andReturn()
+    }
+
     /** Everything an answer says, but the address it was sent to, which is each caller's own. */
     private static List<Object> apartFromWhere(MvcResult answered) {
         def document = JSON.convertValue(JSON.readTree(answered.response.contentAsString), Map)
@@ -113,7 +128,7 @@ class OffersControllerIntegrationSpec extends Specification {
 
         then:
         answered.response.status == 200
-        def workflows = JSON.readTree(answered.response.contentAsString).get("workflows")
+        def workflows = JSON.readTree(answered.response.contentAsString).get("items")
         workflows.findAll { !(it.get("entryId").asString() in [TAKE, PICK]) } == JSON.readTree("""
                 [{"entryId":"${HANDLE}","name":"Handle a claim","purpose":"Sorts a claim out.",
                   "versions":[{"versionId":"${version(2)}","number":2,"takes":[]},
@@ -131,22 +146,22 @@ class OffersControllerIntegrationSpec extends Specification {
     def "offers each version with every field it takes as whoever starts it fills it in, the terms of its list inline"() {
         when:
         def workflows = JSON.readTree(reading("/api/groups/${GROUP}/offered-workflows").response.contentAsString)
-                .get("workflows")
+                .get("items")
 
         then:
         workflows.find { it.get("entryId").asString() == TAKE }.get("versions") == JSON.readTree("""
                 [{"versionId":"${version(12)}","number":1,"takes":[
                   {"name":"complaint","label":"The complaint","help":"In the customer's words.","kind":"text",
-                   "longest":20,"mustBeGiven":true},
+                   "longest":20,"mustBeGiven":true,"lines":"several"},
                   {"name":"amount","kind":"number","mustBeGiven":false},
                   {"name":"category","kind":"term","mustBeGiven":true,
                    "terms":{"terms":[{"term":"late","meaning":"It came after the day promised."},
                                      {"term":"damaged","meaning":"It came broken."}],
                             "note":"Pick the one the customer names first."}},
-                  {"name":"tags","kind":"text","longest":10,"most":2,"mustBeGiven":false},
+                  {"name":"tags","kind":"text","longest":10,"most":2,"mustBeGiven":false,"lines":"several"},
                   {"name":"contact","kind":"fields","mustBeGiven":false,"fields":[
-                    {"name":"email","kind":"text","longest":50,"mustBeGiven":true},
-                    {"name":"phone","kind":"text","longest":20,"mustBeGiven":false}]}]}]
+                    {"name":"email","kind":"text","longest":50,"mustBeGiven":true,"lines":"several"},
+                    {"name":"phone","kind":"text","longest":20,"mustBeGiven":false,"lines":"several"}]}]}]
                 """ as String)
 
         and: "and the list itself is not offered, being no workflow"
@@ -157,7 +172,7 @@ class OffersControllerIntegrationSpec extends Specification {
     def "offers each version of a workflow the terms of the list it pins and of no list another version pins"() {
         when:
         def workflows = JSON.readTree(reading("/api/groups/${GROUP}/offered-workflows").response.contentAsString)
-                .get("workflows")
+                .get("items")
 
         then:
         workflows.find { it.get("entryId").asString() == PICK }.get("versions").collect { offered ->
@@ -169,7 +184,7 @@ class OffersControllerIntegrationSpec extends Specification {
     def "offers a workflow of the group only while a version of it is in service and nothing stops it: #entry"() {
         when:
         def offered = JSON.readTree(reading("/api/groups/${GROUP}/offered-workflows").response.contentAsString)
-                .get("workflows").collect { it.get("entryId").asString() }
+                .get("items").collect { it.get("entryId").asString() }
 
         then:
         offered.contains(entryId) == isOffered
@@ -207,6 +222,167 @@ class OffersControllerIntegrationSpec extends Specification {
         answered.response.status == 400
         JSON.readTree(answered.response.contentAsString).get("code").asString() == "PARAMETER_UNKNOWN"
         !answered.response.contentAsString.contains("Handle a claim")
+    }
+
+    def "pages only offered workflows with a fixed size and no missing or repeated entry"() {
+        given:
+        def group = id(3, groupNumber)
+        newGroup(group, key)
+        (0..<count).each { index ->
+            offer(group, first + index, "Demo Sample ${String.format('%03d', index)}")
+        }
+        if (count > 0) {
+            store.seeded(id(7, 9000 + groupNumber), id(6, first), 2)
+        }
+
+        when:
+        def pages = []
+        def cursor = null
+        while (pages.size() < 4) {
+            def address = "/api/groups/${group}/offered-workflows" + (cursor == null ? "" : "?cursor=${cursor}")
+            def response = reading(address)
+            pages.add([response.response.status, JSON.readTree(response.response.contentAsString)])
+            cursor = pages.last()[1].get("nextCursor")?.asString()
+            if (cursor == null) {
+                break
+            }
+        }
+
+        then:
+        pages*.getAt(0) == [200] * expectedSizes.size()
+        pages*.getAt(1)*.get("items")*.size() == expectedSizes
+        pages.collectMany { page -> page[1].get("items")*.get("entryId")*.asString() } ==
+                (0..<count).collect { index -> id(6, first + index) }
+        (count == 0 || pages[0][1].get("items").get(0).get("versions")*.get("number")*.asInt() == [2, 1])
+        pages.findAll { page -> page != pages.last() }.every { page -> page[1].has("nextCursor") }
+        !pages.last()[1].has("nextCursor")
+        cursor == null
+
+        where:
+        groupNumber | key       | first | count || expectedSizes
+        2001        | "PAGEZERO"| 2001  | 0     || [0]
+        2002        | "PAGEFIFTY"| 2101 | 50    || [50]
+        2003        | "PAGEEXTRA"| 2201 | 51    || [50, 1]
+        2004        | "PAGEMANY"| 2301  | 115   || [50, 50, 15]
+    }
+
+    def "filters the whole offered set before paging and never matches purpose alone"() {
+        given:
+        def group = id(3, 2010)
+        newGroup(group, "MATCHING")
+        (0..<60).each { index ->
+            offer(group, 3000 + index, "Demo Sample ${String.format('%03d', index)}",
+                    index == 0 ? "Demo Sample target" : null)
+        }
+        (0..<51).each { index ->
+            offer(group, 3100 + index, "Demo Sample Target ${String.format('%03d', index)}")
+        }
+
+        when:
+        def first = JSON.readTree(filtered(group, "TARGET").response.contentAsString)
+        def second = JSON.readTree(reading(
+                "/api/groups/${group}/offered-workflows?filter=TARGET&cursor=${first.get('nextCursor').asString()}")
+                .response.contentAsString)
+
+        then:
+        first.get("items").size() == 50
+        second.get("items").size() == 1
+        first.get("items")*.get("entryId")*.asString() + second.get("items")*.get("entryId")*.asString() ==
+                (0..<51).collect { index -> id(6, 3100 + index) }
+        !second.has("nextCursor")
+        !first.toString().contains(id(6, 3000))
+    }
+
+    def "filtering never offers an unavailable or out-of-group entry"() {
+        when:
+        def response = filtered(GROUP, typed)
+
+        then:
+        response.response.status == 200
+        JSON.readTree(response.response.contentAsString).get("items")*.get("entryId")*.asString() == expected
+
+        where:
+        typed        || expected
+        "Handle"     || [HANDLE]
+        "Archive"    || []
+        "Retired"    || []
+        "Escalate"   || []
+        "Sort a claim" || []
+        "Elsewhere"  || []
+    }
+
+    def "name filtering treats punctuation literally and uses the library's Unicode fold"() {
+        given:
+        def group = id(3, 2020)
+        newGroup(group, "LITERALS")
+        offer(group, 4001, "Demo Sample 100% done")
+        offer(group, 4002, "Demo Sample under_score")
+        offer(group, 4003, "Demo Sample back\\slash")
+        offer(group, 4004, "Demo Sample Straße")
+        offer(group, 4005, "Demo Sample Café")
+
+        when:
+        def answers = ["%", "_", "\\", "STRASSE", "café", "Cafe", ""].collect { typed -> filtered(group, typed) }
+        def documents = answers.collect { answer -> JSON.readTree(answer.response.contentAsString) }
+
+        then:
+        answers*.response*.status == [200] * 7
+        documents.collect { document -> document.get("items")*.get("entryId")*.asString() } == [
+                [4001], [4002], [4003], [4004], [4005], [], [4001, 4003, 4005, 4004, 4002]
+        ].collect { row -> row.collect { id(6, it) } }
+        documents.every { document -> !document.has("nextCursor") }
+    }
+
+    def "a cursor belongs to this group and filter and no other list"() {
+        given:
+        def group = id(3, 2030)
+        def other = id(3, 2031)
+        newGroup(group, "CURSORA")
+        newGroup(other, "CURSORB")
+        (0..<51).each { index -> offer(group, 5000 + index, "Demo Sample Card ${String.format('%03d', index)}") }
+        offer(other, 5100, "Demo Sample Elsewhere")
+        def first = JSON.readTree(filtered(group, "Card").response.contentAsString)
+        def cursor = first.get("nextCursor").asString()
+        def library = Library.listed(EntryKind.WORKFLOW)
+        def libraryQuery = new ListQuery<>(group, library.order(null), null)
+        def anotherList = ListCursor.mint(library, libraryQuery, new ListPosition("Demo Sample", "Demo Sample"))
+
+        when:
+        def answers = [filtered(group, "Elsewhere"),
+                       reading("/api/groups/${group}/offered-workflows?filter=Elsewhere&cursor=${cursor}"),
+                       reading("/api/groups/${other}/offered-workflows?filter=Card&cursor=${cursor}"),
+                       reading("/api/groups/${group}/offered-workflows?filter=Card&cursor=${anotherList}"),
+                       reading("/api/groups/${group}/offered-workflows?filter=Card&cursor=nope")]
+
+        then:
+        first.get("items").size() == 50
+        answers[0].response.status == 200
+        JSON.readTree(answers[0].response.contentAsString).get("items").isEmpty()
+        answers.tail()*.response*.status == [400] * 4
+        answers.tail().every { answer ->
+            JSON.readTree(answer.response.contentAsString).get("code").asString() == "LIST_CURSOR_UNUSABLE"
+        }
+    }
+
+    def "refuses unknown or malformed listing parameters without offering entries"() {
+        when:
+        def answer = mockMvc.perform(get("/api/groups/${GROUP}/offered-workflows").param(name, values as String[]))
+                .andReturn()
+
+        then:
+        answer.response.status == 400
+        JSON.readTree(answer.response.contentAsString).get("code").asString() == code
+        !answer.response.contentAsString.contains("Handle a claim")
+
+        where:
+        name     | values             || code
+        "sort"   | ["name"]           || "PARAMETER_UNKNOWN"
+        "limit"  | ["1"]              || "PARAMETER_UNKNOWN"
+        "entry"  | [HANDLE]           || "PARAMETER_UNKNOWN"
+        "filter" | ["one", "two"]    || "LIST_FILTER_UNUSABLE"
+        "filter" | ["x" * 257]       || "LIST_FILTER_UNUSABLE"
+        "filter" | ["one\ntwo"]       || "LIST_FILTER_UNUSABLE"
+        "cursor" | ["one", "two"]    || "LIST_CURSOR_UNUSABLE"
     }
 
     @TestConfiguration(proxyBeanMethods = false)

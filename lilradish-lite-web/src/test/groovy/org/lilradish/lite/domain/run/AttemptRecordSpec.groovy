@@ -3,6 +3,7 @@ package org.lilradish.lite.domain.run
 import static org.lilradish.lite.domain.inference.ModelCallPurpose.HELP
 import static org.lilradish.lite.domain.inference.ModelCallPurpose.PRODUCE
 import static org.lilradish.lite.domain.inference.ModelCallPurpose.REVIEW
+import static org.lilradish.lite.domain.run.ReviewUnbuiltReason.HOLDS_A_FILE
 import static org.lilradish.lite.domain.run.ReviewUnbuiltReason.LIST_NOT_HERE
 import static org.lilradish.lite.domain.run.ReviewUnbuiltReason.NO_LONGER_DECLARED
 import static org.lilradish.lite.domain.run.ReviewUnbuiltReason.TAKES_NO_LONGER_DECLARED
@@ -36,7 +37,7 @@ class AttemptRecordSpec extends Specification {
         made.purpose() == REVIEW
 
         where:
-        unbuilt << [LIST_NOT_HERE, TAKES_NO_LONGER_DECLARED, NO_LONGER_DECLARED]
+        unbuilt << [LIST_NOT_HERE, TAKES_NO_LONGER_DECLARED, NO_LONGER_DECLARED, HOLDS_A_FILE]
     }
 
     /** Only what a review would send is built from what a release declares now, and one not built sends nothing. */

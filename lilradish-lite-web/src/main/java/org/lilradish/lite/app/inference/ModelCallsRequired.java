@@ -42,6 +42,10 @@ final class ModelCallsRequired implements BeanFactoryPostProcessor, EnvironmentA
             "endpoint.models[].id",
             "endpoint.models[].modes[].mode",
             "endpoint.models[].modes[].reasoningeffort",
+            "endpoint.models[].calls[].tools[]",
+            "endpoint.models[].calls[].path",
+            "endpoint.models[].calls[].outbound",
+            "endpoint.models[].calls[].inbound",
             "resend.times",
             "resend.firstwait",
             "resend.longestwait");

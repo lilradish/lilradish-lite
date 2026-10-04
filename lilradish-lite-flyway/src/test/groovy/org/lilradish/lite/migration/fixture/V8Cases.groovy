@@ -52,8 +52,10 @@ final class V8Cases {
                 "insert into app.reference_list_versions (entry_version_id, entry_kind, created_by)" +
                         " values ('${VERSION}', 'question', '${STEWARD}')"),
         *authorshipAttacks("reference_list_versions"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("reference_list_versions_note_visible", "reference_list_versions",
                 setting("reference_list_versions", "note = 'Choose' || chr(13) || 'well'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("reference_list_versions_note_bounded", "reference_list_versions",
                 setting("reference_list_versions", "note = repeat('a', 2049)")),
 
@@ -66,12 +68,16 @@ final class V8Cases {
         attack("reference_list_terms_position_not_negative", "reference_list_terms",
                 setting("reference_list_terms", "position = -1")),
         *authorshipAttacks("reference_list_terms"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("reference_list_terms_term_visible", "reference_list_terms",
                 setting("reference_list_terms", "term = 'Bill' || chr(9) || 'ing'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("reference_list_terms_term_bounded", "reference_list_terms",
                 setting("reference_list_terms", "term = repeat('a', 129)")),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("reference_list_terms_meaning_visible", "reference_list_terms",
                 setting("reference_list_terms", "meaning = 'A charge' || chr(10) || 'is disputed.'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("reference_list_terms_meaning_bounded", "reference_list_terms",
                 setting("reference_list_terms", "meaning = repeat('a', 513)")),
 
@@ -83,10 +89,17 @@ final class V8Cases {
                 "insert into app.question_versions (entry_version_id, entry_kind, created_by)" +
                         " values ('${LIST_VERSION}', 'reference_list', '${STEWARD}')"),
         *authorshipAttacks("question_versions"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("question_versions_instruction_visible", "question_versions",
                 setting("question_versions", "instruction = 'Say' || chr(13) || 'which'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("question_versions_instruction_bounded", "question_versions",
                 setting("question_versions", "instruction = repeat('a', 8193)")),
+        attack("question_versions_drawing_visible", "question_versions",
+                setting("question_versions", "drawing = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("question_versions_drawing_bounded", "question_versions",
+                setting("question_versions", "drawing = repeat('a', 8193)")),
 
         attack("workflow_versions_pk", "workflow_versions",
                 "insert into app.workflow_versions (entry_version_id, created_by) values ('${WORKFLOW_VERSION}', '${STEWARD}')"),

@@ -221,7 +221,7 @@ class RequestTraceSpec extends Specification {
     def "leaves one line for a request, as its method, the pattern it matched, its status and its time"() {
         given:
         def request = new MockHttpServletRequest(method, GUARDED)
-        request.queryString = "search=Lovelace"
+        request.queryString = "search=Mockvale"
         request.addHeader("Sec-Fetch-Site", "same-origin")
 
         when:
@@ -238,7 +238,7 @@ class RequestTraceSpec extends Specification {
 
         and: "nothing else, and nothing of the query"
         KeyValuePairs.of(answeredLines().first()).keySet() == ["method", "route", "status", "durationMs"] as Set
-        !KeyValuePairs.of(answeredLines().first()).values()*.toString().any { it.contains("Lovelace") }
+        !KeyValuePairs.of(answeredLines().first()).values()*.toString().any { it.contains("Mockvale") }
 
         where:
         method                 || recorded
@@ -250,7 +250,7 @@ class RequestTraceSpec extends Specification {
 
     def "logs no pattern for a request that matched none, rather than the address it was sent to"() {
         when:
-        passing(new MockHttpServletRequest("GET", "/api/people/000501-Lovelace"), new MockHttpServletResponse(),
+        passing(new MockHttpServletRequest("GET", "/api/people/000501-Mockvale"), new MockHttpServletResponse(),
                 { asked, answer -> answer.status = 404 })
 
         then:

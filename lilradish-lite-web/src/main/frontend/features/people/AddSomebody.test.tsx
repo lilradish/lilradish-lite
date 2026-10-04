@@ -12,19 +12,16 @@ import { noticesIn } from "../../testutil/notices";
 import { AddSomebody } from "./AddSomebody";
 import type { Asked, Outcome } from "./changes";
 
-/** How long typing has to pause before what was typed is sent. */
-const QUIET_MS = 300;
+const AVO = { userId: "000130", displayName: "Avo Lumerace" };
 
-const ADA = { userId: "000130", displayName: "Ada Lovelace" };
-
-const GRACE = {
+const GLINN = {
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   subjectId: "00000002-0000-4000-8000-000000000140",
 };
 
-const ADA_BROUGHT_IN = {
-  ...ADA,
+const AVO_BROUGHT_IN = {
+  ...AVO,
   subjectId: "00000002-0000-4000-8000-000000000130",
   estateRoles: [],
   lastGrantingRoles: [],
@@ -33,7 +30,7 @@ const ADA_BROUGHT_IN = {
 };
 
 const FOUND: Reply = [
-  JSON.stringify({ items: [ADA, GRACE], more: false }),
+  JSON.stringify({ items: [AVO, GLINN], more: false }),
   200,
 ];
 
@@ -79,15 +76,11 @@ async function opened() {
   return screen.getByRole("dialog", { name: "Add somebody" });
 }
 
-/** Typed, and the pause that hands it on waited out in real time. */
 async function searchedFor(text: string) {
   await userEvent.type(
     screen.getByRole("searchbox", { name: "User number or name" }),
     text,
   );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  });
 }
 
 function bringIn(): HTMLElement {
@@ -116,11 +109,11 @@ describe("AddSomebody", () => {
 
     const offered = await screen.findAllByRole("radio");
     expect(offered.map((each) => each.closest("label")?.textContent)).toEqual([
-      "000130 Ada Lovelace",
+      "000130 Avo Lumerace",
     ]);
     expect(
       within(screen.getByRole("list")).getByRole("listitem"),
-    ).toHaveTextContent("000140 Grace HopperAlready in the pool.");
+    ).toHaveTextContent("000140 Glinn HavvenAlready in the pool.");
     expect(requestsTo(sent)).toEqual(["GET /api/people?search=a"]);
   });
 
@@ -142,7 +135,7 @@ describe("AddSomebody", () => {
 
   it("says more were found than it shows, and asks for more to be typed", async () => {
     adding({
-      "GET /api/people": [[JSON.stringify({ items: [ADA], more: true }), 200]],
+      "GET /api/people": [[JSON.stringify({ items: [AVO], more: true }), 200]],
     });
     await opened();
 
@@ -172,16 +165,15 @@ describe("AddSomebody", () => {
    * reader looks when it will not press, and what it describes. The choice it
    * points at is named on its own above.
    */
-  it("says why it holds the control as an information notice right under that control, among the actions", async () => {
+  it("says why it holds the control as a quiet line right under that control, among the actions", async () => {
     adding();
     const dialog = await opened();
 
     const holds = bringIn().parentElement!;
     const reason = within(holds).getByText("Pick somebody first.");
 
-    expect(noticesIn(holds)).toEqual([
-      { severity: "info", words: "Pick somebody first." },
-    ]);
+    expect(reason).toBeVisible();
+    expect(noticesIn(holds)).toEqual([]);
     expect(
       bringIn().compareDocumentPosition(reason) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -197,12 +189,12 @@ describe("AddSomebody", () => {
 
   it("brings the person picked into the pool by their user number, settles as who the pool now holds, and closes", async () => {
     const { sent, settled, told } = adding({
-      "POST /api/pool/people": [[JSON.stringify(ADA_BROUGHT_IN), 201]],
+      "POST /api/pool/people": [[JSON.stringify(AVO_BROUGHT_IN), 201]],
     });
     await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
 
     await userEvent.click(bringIn());
@@ -210,7 +202,7 @@ describe("AddSomebody", () => {
     await waitFor(() =>
       expect(settled).toHaveBeenCalledExactlyOnceWith({
         broughtIn: {
-          ...ADA_BROUGHT_IN,
+          ...AVO_BROUGHT_IN,
           estateRoles: new Set(),
           lastGrantingRoles: new Set(),
         },
@@ -240,7 +232,7 @@ describe("AddSomebody", () => {
     const dialog = await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(bringIn());
     const abandon = screen.getByRole("button", { name: "Cancel" });
@@ -271,7 +263,7 @@ describe("AddSomebody", () => {
     expect(screen.getByRole("dialog", { name: "Add somebody" })).toBe(dialog);
     expect(settled).not.toHaveBeenCalled();
 
-    await act(async () => answer.settle([JSON.stringify(ADA_BROUGHT_IN), 201]));
+    await act(async () => answer.settle([JSON.stringify(AVO_BROUGHT_IN), 201]));
 
     await waitFor(() => expect(settled).toHaveBeenCalledOnce());
     expect(requestsTo(sent)).toEqual([
@@ -296,7 +288,7 @@ describe("AddSomebody", () => {
       const dialog = await opened();
       await searchedFor("a");
       await userEvent.click(
-        await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+        await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
       );
 
       await userEvent.click(bringIn());
@@ -307,7 +299,7 @@ describe("AddSomebody", () => {
       expect(settled).not.toHaveBeenCalled();
       expect(screen.getByRole("dialog", { name: "Add somebody" })).toBe(dialog);
       expect(
-        screen.getByRole("radio", { name: "000130 Ada Lovelace" }),
+        screen.getByRole("radio", { name: "000130 Avo Lumerace" }),
       ).toBeChecked();
     },
   );
@@ -317,7 +309,7 @@ describe("AddSomebody", () => {
     await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -344,7 +336,7 @@ describe("AddSomebody", () => {
     await act(async () =>
       otherChange.settle({
         changed: {
-          ...ADA_BROUGHT_IN,
+          ...AVO_BROUGHT_IN,
           estateRoles: new Set(),
           lastGrantingRoles: new Set(),
         },
@@ -362,7 +354,7 @@ describe("AddSomebody", () => {
     await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(bringIn());
     await screen.findByRole("alert");
@@ -379,7 +371,7 @@ describe("AddSomebody", () => {
     await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -400,7 +392,7 @@ describe("AddSomebody", () => {
     await opened();
     await searchedFor("a");
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     const leaving = screen.queryByRole("dialog", { hidden: true });

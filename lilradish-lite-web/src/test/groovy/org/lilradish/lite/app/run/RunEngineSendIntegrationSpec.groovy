@@ -19,9 +19,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.lilradish.lite.app.codestep.CodeRuns
+import org.lilradish.lite.app.files.RunFiles
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.run.ReviewOutcome
 import org.lilradish.lite.domain.run.RunId
@@ -40,12 +42,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A model's try written down as sent, on a real server running the real baseline, the model scripted: the plan
- * asks the try and writes nothing of its sending, and the engine's thread writes the attempt and the call just
- * before it sends, only while the try is still the run's next act, the run not stopped and nothing new going out.
- * Until then the try is open and unsent, has spent nothing, and is sent again by the run going on by itself.
- */
 class RunEngineSendIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -77,7 +73,8 @@ class RunEngineSendIntegrationSpec extends Specification {
 
     RunEngine engine
 
-    /** Every pool made, so each is shut however a feature ends. */
+    RunFiles heldFiles
+
     List<EngineExecutor> pools = []
 
     @AutoCleanup("shutdownNow")
@@ -91,14 +88,16 @@ class RunEngineSendIntegrationSpec extends Specification {
         store = LibraryStore.copied(server, "run_engine_send_" + (++databasesMade))
         model = new RecordedModelCalls()
         tree = new RunTree(store.session)
-        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
         writes = new EngineWrites(store.session)
         ceilings = new CeilingReach(store.session, DeployedModels.HELD, writes)
         transactions = new CountingTransactions(store.transactions())
         executor = EngineExecutors.of(store.database)
         pools << executor
+        heldFiles = EngineWiring.files(store)
         engine = engineOn(executor)
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -110,13 +109,14 @@ class RunEngineSendIntegrationSpec extends Specification {
 
     private RunEngine engineOn(EngineExecutor pool) {
         new RunEngine(store.session, transactions, tree, snapshots, writes, pool,
-                new EngineCalls(model, transactions, tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), transactions, tree, snapshots, writes, pool),
-                DeployedModels.HELD, ceilings, new GroupRoles(store.session))
+                new EngineCalls(EngineWiring.withoutTools(), model, transactions, tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), transactions, tree, snapshots, writes, pool, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(store.session), Deployments.DEEP_ENOUGH, heldFiles)
     }
 
     private StepActs acts() {
-        new StepActs(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, writes, engine)
+        new StepActs(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, writes, engine,
+                heldFiles, EngineWiring.fileDeployment())
     }
 
     private static RunId runId() {
@@ -124,10 +124,10 @@ class RunEngineSendIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer) {
-        new CallOutcome.CameBack(answer, 321, 12, true, false)
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
     }
 
-    /** As a start does: the run written, its tree locked, the first step planned, in one transaction. */
+    // Write the run, lock its tree, and plan the first step in one transaction.
     private void started() {
         store.transactions().executeWithoutResult {
             StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, TicketWorkflow.STARTED_WITH)
@@ -147,12 +147,11 @@ class RunEngineSendIntegrationSpec extends Specification {
         until("${calls} calls ended") { store.count("select count(*) from model_calls where outcome is not null") == calls }
     }
 
-    /** How many threads the engine's pool runs, read off the pool itself as EngineExecutorSpec reads its field. */
     private int engineThreads() {
         executor.@pool.corePoolSize
     }
 
-    /** Every engine thread kept busy until the latch returned is let go, so whatever is handed over meanwhile waits. */
+    // Occupy every engine thread until the latch opens so submitted work cannot run early.
     private CountDownLatch occupied() {
         def letGo = new CountDownLatch(1)
         def busy = new CountDownLatch(engineThreads())
@@ -166,31 +165,39 @@ class RunEngineSendIntegrationSpec extends Specification {
         letGo
     }
 
-    /* A thread takes the next task only once its last has run, so all meeting here ran everything handed before. */
+    // Each worker reaches the barrier only after finishing the tasks already handed to it.
     private void drained() {
         def meeting = new CyclicBarrier(engineThreads() + 1)
         engineThreads().times { executor.execute { meeting.await(10, TimeUnit.SECONDS) } }
         meeting.await(10, TimeUnit.SECONDS)
     }
 
-    /** Each try of summarise as its number, producer, who asked for it, and whether it is open. */
     private List<String> tries() {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
-                select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
+                select coalesce(try.try_number::text, '-') || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open' else 'ended' end
                   from productions try join run_steps held on held.run_step_id = try.run_step_id
                  where held.workflow_step_id = ?::uuid order by try.try_number
                 """, SUMMARISE)
     }
 
-    /** How many attempts and how many calls try {@code number} of summarise has, as "attempts calls". */
-    private String sentOf(int number) {
+    private String newestProduction() {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts, LIMIT.
+        store.texts("""
+                select production_id::text from productions try join run_steps step using (run_step_id)
+                 where step.workflow_step_id = ?::uuid order by try.try_number desc nulls first limit 1
+                """, SUMMARISE)[0]
+    }
+
+    private String sentOf(String production) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.texts("""
                 select (select count(*) from run_step_send_attempts attempt
                          where attempt.production_id = try.production_id) || ' '
                        || (select count(*) from model_calls call where call.production_id = try.production_id)
-                  from productions try where try.try_number = ?
-                """, number)[0]
+                  from productions try where try.production_id = ?::uuid
+                """, production)[0]
     }
 
     private List<String> holds() {
@@ -211,10 +218,11 @@ class RunEngineSendIntegrationSpec extends Specification {
 
         when:
         started()
+        def production = newestProduction()
 
         then: "asked, open and unsent, spending nothing, and read as its try being made"
-        tries() == ["1 model ${SYSTEM} open" as String]
-        sentOf(1) == "0 0"
+        tries() == ["- model ${SYSTEM} open" as String]
+        sentOf(production) == "0 0"
         summarise() == new StepPosition.Running(RunningOn.NEXT_TRY)
         RunBudget.spentAsRead(store.session, runId(), true) == RunBudget.Spend.NOTHING
 
@@ -226,7 +234,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         untilEnded(1)
 
         then: "written down as sent once, and sent once"
-        sentOf(1) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 1
         model.madeOn == [[true, false]]
         tries() == ["1 model ${SYSTEM} ended" as String]
@@ -237,6 +245,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         model.scripted.answering(cameBack(FITS))
         def letGo = occupied()
         started()
+        def production = newestProduction()
         def destroying = racing.submit { executor.destroy() }
         until("stopping") { executor.stopping() }
 
@@ -245,9 +254,9 @@ class RunEngineSendIntegrationSpec extends Specification {
         destroying.get(10, TimeUnit.SECONDS)
 
         then: "nothing written, nothing sent, and the try as the plan left it"
-        sentOf(1) == "0 0"
+        sentOf(production) == "0 0"
         model.scripted.requests == []
-        tries() == ["1 model ${SYSTEM} open" as String]
+        tries() == ["- model ${SYSTEM} open" as String]
         summarise() == new StepPosition.Running(RunningOn.NEXT_TRY)
 
         and: "the one transaction on the engine's threads was the one that found it not to be sent, nothing gone on from"
@@ -261,7 +270,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         untilEnded(1)
 
         then:
-        sentOf(1) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 1
     }
 
@@ -270,6 +279,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         model.scripted.answering(cameBack(FITS))
         def letGo = occupied()
         started()
+        def production = newestProduction()
 
         when:
         RunRows.stopped(store, RUN, CAT)
@@ -277,9 +287,9 @@ class RunEngineSendIntegrationSpec extends Specification {
         drained()
 
         then:
-        sentOf(1) == "0 0"
+        sentOf(production) == "0 0"
         model.scripted.requests == []
-        tries() == ["1 model ${SYSTEM} open" as String]
+        tries() == ["- model ${SYSTEM} open" as String]
 
         when:
         new RunChanges(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, engine)
@@ -288,16 +298,16 @@ class RunEngineSendIntegrationSpec extends Specification {
         drained()
 
         then:
-        sentOf(1) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 1
     }
 
-    /** The hold is written only by the run going on from the send that found the stop, which a let-go then finds. */
     def "a stop on what the step runs made between the plan and the engine's thread holds the step, and a let-go sends it once"() {
         given:
         model.scripted.answering(cameBack(FITS))
         def letGo = occupied()
         started()
+        def production = newestProduction()
 
         when:
         store.stopped(TicketWorkflow.SUMMARISE_QUESTION, ANN)
@@ -306,10 +316,11 @@ class RunEngineSendIntegrationSpec extends Specification {
 
         then: "held on the stop, nothing written of its sending and nothing sent"
         holds() == ["entry_stopped held"]
-        sentOf(1) == "0 0"
+        sentOf(production) == "0 0"
         model.scripted.requests == []
 
         when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(ANN, TicketWorkflow.SUMMARISE_QUESTION).update()
         engine.goesOn(entryId(TicketWorkflow.SUMMARISE_QUESTION))
@@ -318,16 +329,16 @@ class RunEngineSendIntegrationSpec extends Specification {
 
         then:
         holds() == ["entry_stopped released"]
-        sentOf(1) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 1
     }
 
-    /** The start hands it over once and a drive meanwhile again; the one let through second finds it sent. */
     def "a try handed over twice is written down as sent once and sent once"() {
         given:
         model.scripted.answering(cameBack(FITS))
         def letGo = occupied()
         started()
+        def production = newestProduction()
         engine.drive(groupId(GROUP), runId())
 
         when:
@@ -336,7 +347,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         drained()
 
         then:
-        sentOf(1) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 1
         model.madeOn == [[true, false]]
 
@@ -349,6 +360,7 @@ class RunEngineSendIntegrationSpec extends Specification {
         model.scripted.answering(cameBack(FITS))
         model.scripted.answering(cameBack('{"values":{"summary":"A printer on fire."},"confidences":{}}'))
         started()
+        def production = newestProduction()
         untilEnded(1)
         def step = new WorkflowStepId(UUID.fromString(SUMMARISE))
         acts().review(groupId(GROUP), runId(), step, 1, ANN_USER,
@@ -357,10 +369,11 @@ class RunEngineSendIntegrationSpec extends Specification {
 
         when:
         acts().askAgain(groupId(GROUP), runId(), step, 2, ANN_USER)
+        production = newestProduction()
 
         then: "asked by the person, open and unsent, and read as its try being made"
-        tries() == ["1 model ${SYSTEM} ended" as String, "2 model ${ANN} open" as String]
-        sentOf(2) == "0 0"
+        tries() == ["1 model ${SYSTEM} ended" as String, "- model ${ANN} open" as String]
+        sentOf(production) == "0 0"
         summarise() == new StepPosition.Running(RunningOn.NEXT_TRY)
         model.scripted.requests.size() == 1
 
@@ -370,12 +383,11 @@ class RunEngineSendIntegrationSpec extends Specification {
         drained()
 
         then: "sent once, though the act and the drive after it each handed it over"
-        sentOf(2) == "1 1"
+        sentOf(production) == "1 1"
         model.scripted.requests.size() == 2
         tries() == ["1 model ${SYSTEM} ended" as String, "2 model ${ANN} ended" as String]
     }
 
-    /** The store's transactions, counting those the engine's own threads run. */
     static final class CountingTransactions implements TransactionOperations {
 
         final AtomicInteger handedOver = new AtomicInteger()

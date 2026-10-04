@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import { useId } from "react";
+import { Children, Fragment, useId, type ReactElement } from "react";
 
 import type { DeclaredField } from "../../api/declaration";
 import type {
@@ -14,17 +14,28 @@ import type {
   QuestionVersion,
   ReferenceListVersion,
   Step,
+  RunsKind,
   WorkflowVersion,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say, type MessageId } from "../../i18n/app";
+import { intl } from "../../i18n/intl";
+import { visible } from "../../i18n/visible";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { joinedInSentence } from "../people/wordLists";
+import { spokenName } from "../runs/steps/stepTitle";
 import ASKING from "./askingLimit.json";
+import { fileSizeSaid } from "./declarationWords";
 
 // Its markers taken away, so it is named a list outright.
 const LIST_SX = { listStyleType: "none", m: 0, mb: 2, p: 0 };
 
+const FIELD_LIST = new Intl.ListFormat(intl.defaultLocale, {
+  type: "conjunction",
+});
+
 const PARTS = {
   instruction: "contentPart.instruction",
+  drawing: "contentPart.drawing",
   takes: "contentPart.takes",
   gives: "contentPart.gives",
   steps: "contentPart.steps",
@@ -33,13 +44,26 @@ const PARTS = {
   asking: "contentPart.asking",
 } as const satisfies Record<ContentPart, MessageId>;
 
+const CASE_OUTPUT_PROBLEMS = {
+  case_gives_undeclared: "contentProblem.case_gives_undeclared",
+  case_gives_other_kind: "contentProblem.case_gives_other_kind",
+  case_gives_past_limit: "contentProblem.case_gives_past_limit",
+  case_may_give_nothing: "contentProblem.case_may_give_nothing",
+} as const satisfies Partial<Record<ContentProblemCode, MessageId>>;
+
 const PROBLEMS = {
   instruction_missing: "contentProblem.instruction_missing",
+  drawing_names_unknown: "contentProblem.drawing_names_unknown",
   nothing_given_back: "contentProblem.nothing_given_back",
   name_repeated: "contentProblem.name_repeated",
   longest_missing: "contentProblem.longest_missing",
+  file_size_missing: "contentProblem.file_size_missing",
+  file_types_too_many: "refusal.FILE_TYPES_TOO_MANY",
+  question_takes_file: "contentProblem.question_takes_file",
   list_missing: "contentProblem.list_missing",
   most_missing: "contentProblem.most_missing",
+  file_limit_past_deployment: "contentProblem.file_limit_past_deployment",
+  file_total_past_deployment: "contentProblem.file_total_past_deployment",
   limit_past_largest: "contentProblem.limit_past_largest",
   no_fields_held: "contentProblem.no_fields_held",
   standing_missing: "contentProblem.standing_missing",
@@ -63,13 +87,15 @@ const PROBLEMS = {
   reviewer_not_held: "contentProblem.reviewer_not_held",
   reviewer_mode_not_offered: "contentProblem.reviewer_mode_not_offered",
   model_gives_nothing: "contentProblem.model_gives_nothing",
+  step_file_made_by_model: "contentProblem.step_file_made_by_model",
+  step_file_reviewed_by_model: "contentProblem.step_file_reviewed_by_model",
   discriminator_missing: "contentProblem.discriminator_missing",
   discriminator_not_term: "contentProblem.discriminator_not_term",
   no_cases: "contentProblem.no_cases",
   case_target_missing: "contentProblem.case_target_missing",
   case_not_offered: "contentProblem.case_not_offered",
   case_repeated: "contentProblem.case_repeated",
-  case_gives_otherwise: "contentProblem.case_gives_otherwise",
+  ...CASE_OUTPUT_PROBLEMS,
   input_unbound: "contentProblem.input_unbound",
   target_unknown: "contentProblem.target_unknown",
   target_bound_twice: "contentProblem.target_bound_twice",
@@ -91,6 +117,11 @@ const PROBLEMS = {
   asking_past_largest: "contentProblem.asking_past_largest",
   takes_past_largest: "contentProblem.takes_past_largest",
   code_step_review_past_largest: "contentProblem.code_step_review_past_largest",
+  search_review_past_largest: "contentProblem.search_review_past_largest",
+  search_tool_not_offered: "contentProblem.search_tool_not_offered",
+  search_way_not_held: "contentProblem.search_way_not_held",
+  search_question_may_be_empty: "contentProblem.search_question_may_be_empty",
+  search_standing_missing: "contentProblem.search_standing_missing",
 } as const satisfies Record<ContentProblemCode, MessageId>;
 
 /** What a version holds as the page last read it, which a problem's place is found in by its keys. */
@@ -141,13 +172,15 @@ export function contentOf(
 }
 
 /**
- * Every place a submission was refused for, in the server's order, each level found by its key in what was read:
+ * Each listed place a submission was refused for, in the server's order, each level found by its key in what was read:
  * a field named down to it, a term with its place. A part, a problem or a place the page cannot name is still listed.
  */
 export function ContentProblems({
   problems,
+  problemTotal,
   content,
 }: {
+  readonly problemTotal?: number | null;
   readonly problems: readonly ContentProblem[] | null;
   readonly content: ReadContent | null;
 }) {
@@ -157,18 +190,31 @@ export function ContentProblems({
   }
   return (
     <>
-      <Typography id={labelId} variant="subtitle2" component="p">
+      <Typography id={labelId} variant="subtitle2">
         {say("contentProblems.label")}
       </Typography>
       <Box component="ul" role="list" aria-labelledby={labelId} sx={LIST_SX}>
-        {problems.map((problem, index) => (
-          <li
-            key={`${index}:${problem.code}:${problem.bindingId ?? problem.caseId ?? problem.stepId ?? problem.fieldId ?? problem.termId ?? problem.part}`}
-          >
-            {placeSaid(problem, content)}
-          </li>
-        ))}
+        {problems.map((problem, index) => {
+          const place = placeSaid(problem, content);
+          return (
+            <li
+              key={`${index}:${problem.code}:${problem.bindingId ?? problem.caseId ?? problem.stepId ?? problem.fieldId ?? problem.termId ?? problem.part}`}
+              aria-label={place.words}
+            >
+              {place.node}
+            </li>
+          );
+        })}
       </Box>
+      {problemTotal !== null &&
+      problemTotal !== undefined &&
+      problemTotal > problems.length ? (
+        <Typography component="p">
+          {say("contentProblems.more", {
+            count: problemTotal - problems.length,
+          })}
+        </Typography>
+      ) : null}
     </>
   );
 }
@@ -181,18 +227,54 @@ export function problemWords(problem: ContentProblem): MessageId {
 }
 
 /** What is wrong, in words carrying every figure the problem's words say; wherever a problem is shown, it is said so. */
-export function problemSaid(problem: ContentProblem): string {
+export function problemSaid(problem: ContentProblem, kind?: RunsKind): string {
   if (problem.code === "asking_past_largest") {
-    return askingPastSaid(problem.excess, problem.stepId !== undefined);
+    return askingPastSaid(
+      problem.excess,
+      problem.stepId !== undefined && kind !== "search",
+    );
   }
   if (problem.code === "code_step_review_past_largest") {
     return codeStepReviewPastSaid(problem.excess);
+  }
+  if (problem.code === "search_review_past_largest") {
+    return searchReviewPastSaid(problem.excess);
+  }
+  if (problem.code === "file_limit_past_deployment") {
+    return problem.fileLimits === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.file_limit_past_deployment", {
+          size: fileSizeSaid(problem.fileLimits.maximumBytes),
+          count: problem.fileLimits.maximumPerField,
+        });
+  }
+  if (problem.code === "file_total_past_deployment") {
+    return problem.fileLimits === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.file_total_past_deployment", {
+          total: fileSizeSaid(problem.fileLimits.maximumTotalBytes),
+        });
   }
   if (problem.code === "limit_past_largest") {
     return say("contentProblem.limitPastLargestOf", { most: ASKING.mostSent });
   }
   if (problem.code === "takes_past_largest") {
     return say("contentProblem.takesPastLargestOf", { most: ASKING.mostSent });
+  }
+  if (problem.code === "search_standing_missing") {
+    return problem.fields === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.search_standing_missing", {
+          fields: joinedInSentence(problem.fields.map(spokenName)),
+          count: problem.fields.length,
+        });
+  }
+  if (problem.code === "drawing_names_unknown") {
+    return problem.name === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.drawing_names_unknown", {
+          name: isolatedInText(problem.name),
+        });
   }
   return problem.code === "constant_too_long" && problem.excess !== undefined
     ? say("contentProblem.constantTooLongBy", { excess: problem.excess })
@@ -239,27 +321,49 @@ function codeStepReviewPastSaid(excess: number | undefined): string {
       });
 }
 
+function searchReviewPastSaid(excess: number | undefined): string {
+  if (excess === undefined) return say("contentProblem.unknown");
+  return excess > Number.MAX_SAFE_INTEGER
+    ? say("contentProblem.searchReviewPastLargestUncounted", {
+        max: Number.MAX_SAFE_INTEGER,
+        most: ASKING.mostSent,
+      })
+    : say("contentProblem.search_review_past_largest", {
+        excess,
+        most: ASKING.mostSent,
+      });
+}
+
+function isCaseOutputProblem(code: string): boolean {
+  return Object.hasOwn(CASE_OUTPUT_PROBLEMS, code);
+}
+
 function placeSaid(
   problem: ContentProblem,
   content: ReadContent | null,
-): string {
+): Located {
   const part =
     problem.part === "gives" && content?.kind === "workflow"
       ? say("contentPart.workflowGives")
       : Object.hasOwn(PARTS, problem.part)
         ? say(PARTS[problem.part as ContentPart])
-        : problem.part;
-  const said = problemSaid(problem);
+        : { words: problem.part, node: <bdi>{problem.part}</bdi> };
+  const kind = content?.steps.find((step) => step.stepId === problem.stepId)
+    ?.runs?.kind;
+  const said = problemLocated(problem, kind);
+  if (problem.part === "drawing") {
+    return located("contentProblems.atDrawing", { part, problem: said });
+  }
   const terms = problem.part === "terms" ? (content?.terms ?? []) : [];
   const at =
     problem.termId === undefined
       ? -1
       : terms.findIndex((held) => held.termId === problem.termId);
   if (at >= 0) {
-    return say("contentProblems.atTerm", {
+    return located("contentProblems.atTerm", {
       part,
       position: at + 1,
-      term: isolatedInText(terms[at]!.term),
+      term: named(terms[at]!.term),
       problem: said,
     });
   }
@@ -267,34 +371,61 @@ function placeSaid(
   if (problem.bindingId !== undefined) {
     const where = bindingSaid(problem.bindingId, content);
     if (where !== null) {
-      return say("contentProblems.atBinding", { part, where, problem: said });
+      return located("contentProblems.atBinding", {
+        part,
+        where,
+        problem: said,
+      });
     }
   }
   if (problem.stepId !== undefined) {
     const step = steps.find((each) => each.stepId === problem.stepId);
     if (step !== undefined) {
-      const stepName = isolatedInText(step.name);
+      const stepName = named(step.name);
       const routeCase = step.runs?.cases?.find(
         (each) => each.caseId === problem.caseId,
       );
       const caseName =
         routeCase === undefined ? null : caseSaid(routeCase.term);
+      if (routeCase !== undefined && isCaseOutputProblem(problem.code)) {
+        const down =
+          problem.fieldId === undefined
+            ? null
+            : (namesDownTo(routeCase.gives ?? [], problem.fieldId, true) ??
+              namesDownTo(step.runs?.gives ?? [], problem.fieldId, true));
+        return down === null
+          ? located("contentProblems.atCase", {
+              part,
+              step: stepName,
+              case: caseSaid(routeCase.term),
+              problem: said,
+            })
+          : located("contentProblems.atCaseField", {
+              part,
+              step: stepName,
+              case: caseSaid(routeCase.term),
+              field: down.reduce((outer, inner) =>
+                located("step.fieldWithin", { outer, inner }),
+              ),
+              problem: said,
+            });
+      }
       const takes =
         problem.caseId === undefined ? step.runs?.takes : routeCase?.takes;
       const down =
         problem.fieldId === undefined
           ? null
           : namesDownTo(takes ?? [], problem.fieldId);
-      const field = down?.map(isolatedInText).join(".");
+      const field = down === null ? undefined : pathOf(down);
       if (field !== undefined) {
         return caseName === null
-          ? say("contentProblems.atInput", {
+          ? located("contentProblems.atInput", {
               part,
               step: stepName,
               field,
               problem: said,
             })
-          : say("contentProblems.atCaseInput", {
+          : located("contentProblems.atCaseInput", {
               part,
               step: stepName,
               case: caseName,
@@ -303,8 +434,12 @@ function placeSaid(
             });
       }
       return caseName === null
-        ? say("contentProblems.atStep", { part, step: stepName, problem: said })
-        : say("contentProblems.atCase", {
+        ? located("contentProblems.atStep", {
+            part,
+            step: stepName,
+            problem: said,
+          })
+        : located("contentProblems.atCase", {
             part,
             step: stepName,
             case: caseName,
@@ -317,10 +452,10 @@ function placeSaid(
       ? null
       : namesDownTo(fieldsOfPart(problem.part, content), problem.fieldId);
   return down === null
-    ? say("contentProblems.at", { part, problem: said })
-    : say("contentProblems.atField", {
+    ? located("contentProblems.at", { part, problem: said })
+    : located("contentProblems.atField", {
         part,
-        field: down.map(isolatedInText).join("."),
+        field: pathOf(down),
         problem: said,
       });
 }
@@ -345,28 +480,40 @@ function fieldsOfPart(
 function bindingSaid(
   bindingId: string,
   content: ReadContent | null,
-): string | null {
+): Located | null {
   const steps = content?.steps ?? [];
   const output = content?.outputs.find(
     (binding) => binding.bindingId === bindingId,
   );
   if (output !== undefined) {
-    return say("contentProblems.boundTo", {
-      target: isolatedInText(output.target ?? ""),
+    return located("contentProblems.boundTo", {
+      target: named(output.target ?? ""),
     });
   }
   for (const step of steps) {
-    const stepName = isolatedInText(step.name);
+    const stepName = named(step.name);
+    const questionPosition =
+      step.runs?.question?.findIndex(
+        (part) => "partId" in part && part.partId === bindingId,
+      ) ?? -1;
+    if (questionPosition >= 0) {
+      return located("workflow.readAt", {
+        place: stepName,
+        path: located("workflow.searchPart", {
+          position: questionPosition + 1,
+        }),
+      });
+    }
     if (step.runs?.discriminator?.bindingId === bindingId) {
-      return say("contentProblems.chosenBy", { step: stepName });
+      return located("contentProblems.chosenBy", { step: stepName });
     }
     const own = step.bindings.find(
       (binding) => binding.bindingId === bindingId,
     );
     if (own !== undefined) {
-      return say("contentProblems.stepBoundTo", {
+      return located("contentProblems.stepBoundTo", {
         step: stepName,
-        target: isolatedInText(own.target ?? ""),
+        target: named(own.target ?? ""),
       });
     }
     for (const routeCase of step.runs?.cases ?? []) {
@@ -374,10 +521,10 @@ function bindingSaid(
         (binding) => binding.bindingId === bindingId,
       );
       if (bound !== undefined) {
-        return say("contentProblems.caseBoundTo", {
+        return located("contentProblems.caseBoundTo", {
           step: stepName,
           case: caseSaid(routeCase.term),
-          target: isolatedInText(bound.target ?? ""),
+          target: named(bound.target ?? ""),
         });
       }
     }
@@ -385,32 +532,160 @@ function bindingSaid(
   return null;
 }
 
-function caseSaid(term: string | undefined): string {
+function caseSaid(term: string | undefined): Located {
   return term === undefined
-    ? say("contentProblems.fallback")
-    : say("contentProblems.caseOn", { term: isolatedInText(term) });
+    ? located("contentProblems.fallback")
+    : located("contentProblems.caseOn", { term: named(term) });
 }
 
 /** Each level's name down to the field keyed so, with its place where a fellow shares the name; null where none is. */
 function namesDownTo(
   level: readonly DeclaredField[],
   fieldId: string,
-): string[] | null {
+  useLabel = false,
+): Located[] | null {
   for (const [index, field] of level.entries()) {
     const below =
-      field.fieldId === fieldId ? [] : namesDownTo(field.fields ?? [], fieldId);
+      field.fieldId === fieldId
+        ? []
+        : namesDownTo(field.fields ?? [], fieldId, useLabel);
     if (below !== null) {
       const shared = level.some(
         (fellow) => fellow !== field && fellow.name === field.name,
       );
+      const text = useLabel
+        ? (field.label ?? field.name.replaceAll("_", " "))
+        : field.name;
       const name = shared
-        ? say("contentProblems.sameNamed", {
-            name: field.name,
+        ? located("contentProblems.sameNamed", {
+            name: named(text),
             position: index + 1,
           })
-        : field.name;
-      return [name, ...below];
+        : named(text);
+      return [
+        {
+          words: shared
+            ? isolatedInText(
+                say("contentProblems.sameNamed", {
+                  name: text,
+                  position: index + 1,
+                }),
+              )
+            : name.words,
+          node: name.node,
+        },
+        ...below,
+      ];
     }
   }
   return null;
+}
+
+interface Located {
+  readonly words: string;
+  readonly node: ReactElement;
+}
+
+function named(words: string): Located {
+  return { words: isolatedInText(words), node: <bdi>{words}</bdi> };
+}
+
+function hint(words: string): ReactElement {
+  return (
+    <Box component="span" sx={{ typography: "systemHint" }}>
+      {words}
+    </Box>
+  );
+}
+
+function located(
+  id: MessageId,
+  values?: Readonly<Record<string, string | number | Located>>,
+): Located {
+  const entries = Object.entries(values ?? {});
+  return {
+    words: say(
+      id,
+      Object.fromEntries(
+        entries.map(([key, value]) => [
+          key,
+          typeof value === "object" ? value.words : value,
+        ]),
+      ),
+    ),
+    node: (
+      <>
+        {Children.map(
+          visible(
+            id,
+            Object.fromEntries(
+              entries.map(([key, value]) => [
+                key,
+                typeof value === "object" ? value.node : value,
+              ]),
+            ),
+          ),
+          (part) => (typeof part === "string" ? hint(part) : part),
+        )}
+      </>
+    ),
+  };
+}
+
+function pathOf(names: readonly Located[]): Located {
+  return {
+    words: names.map((name) => name.words).join("."),
+    node: (
+      <>
+        {names.map((name, index) => (
+          <Fragment key={index}>
+            {index > 0 ? hint(".") : null}
+            {name.node}
+          </Fragment>
+        ))}
+      </>
+    ),
+  };
+}
+
+function problemLocated(problem: ContentProblem, kind?: RunsKind): Located {
+  const words = problemSaid(problem, kind);
+  if (problem.code === "drawing_names_unknown" && problem.name !== undefined) {
+    return {
+      words,
+      node: located("contentProblem.drawing_names_unknown", {
+        name: named(problem.name),
+      }).node,
+    };
+  }
+  if (
+    problem.code === "search_standing_missing" &&
+    problem.fields !== undefined
+  ) {
+    const fields = problem.fields.map(spokenName);
+    const nodes = FIELD_LIST.formatToParts(fields);
+    return {
+      words,
+      node: located("contentProblem.search_standing_missing", {
+        count: fields.length,
+        fields: {
+          words: joinedInSentence(fields),
+          node: (
+            <>
+              {nodes.map((part, index) => (
+                <Fragment key={index}>
+                  {part.type === "element" ? (
+                    <bdi>{part.value}</bdi>
+                  ) : (
+                    hint(part.value)
+                  )}
+                </Fragment>
+              ))}
+            </>
+          ),
+        },
+      }).node,
+    };
+  }
+  return { words, node: hint(words) };
 }

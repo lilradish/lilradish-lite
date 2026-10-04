@@ -23,28 +23,25 @@ const NARROW = 700;
 /** Wider than either: what the list is given is less than the window. */
 const VIEWPORT = 1920;
 
-/** How long typing has to pause before what was typed is handed on. */
-const QUIET_MS = 300;
-
 const KEEPS_THE_POOL_AND_GRANTS_ROLES = ["keep_pool", "grant_estate_role"];
 
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-000000000130",
   userId: "000130",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
 };
 
-const GRACE = {
+const GLINN = {
   subjectId: "00000002-0000-4000-8000-000000000140",
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
 };
 
 /** In the pool, and on no page this list is ever answered with. */
-const HEDY = {
+const HAVO = {
   subjectId: "00000002-0000-4000-8000-000000000150",
   userId: "000150",
-  displayName: "Hedy Lamarr",
+  displayName: "Havo Lunnet",
 };
 
 const POOL = "/api/pool/people";
@@ -53,7 +50,7 @@ function personAt(person: { readonly subjectId: string }): string {
   return `${POOL}/${person.subjectId}`;
 }
 
-type Someone = typeof ADA;
+type Someone = typeof AVO;
 
 function row(person: Someone, estateRoles: string[] = [], groupCount = 0) {
   return { ...person, estateRoles, groupCount };
@@ -80,12 +77,12 @@ function panelOf(
   ];
 }
 
-const ADA_AND_GRACE = listOf(row(ADA, ["steward"], 2), row(GRACE));
+const AVO_AND_GLINN = listOf(row(AVO, ["steward"], 2), row(GLINN));
 
-/** The directory's answer to a search finding Hedy, who is not yet in the pool. */
-const HEDY_IN_DIRECTORY: Reply = [
+/** The directory's answer to a search finding Havo, who is not yet in the pool. */
+const HAVO_IN_DIRECTORY: Reply = [
   JSON.stringify({
-    items: [{ userId: HEDY.userId, displayName: HEDY.displayName }],
+    items: [{ userId: HAVO.userId, displayName: HAVO.displayName }],
     more: false,
   }),
   200,
@@ -118,11 +115,11 @@ function opening(
 ) {
   laidOutAt(width, VIEWPORT);
   const sent = serving({
-    [`GET ${POOL}`]: [ADA_AND_GRACE],
-    [`GET ${personAt(ADA)}`]: [panelOf(ADA, ["steward"], ["Payroll"])],
-    [`GET ${personAt(GRACE)}`]: [panelOf(GRACE)],
-    [`GET ${personAt(HEDY)}`]: [panelOf(HEDY)],
-    "GET /api/people": [HEDY_IN_DIRECTORY],
+    [`GET ${POOL}`]: [AVO_AND_GLINN],
+    [`GET ${personAt(AVO)}`]: [panelOf(AVO, ["steward"], ["Payroll"])],
+    [`GET ${personAt(GLINN)}`]: [panelOf(GLINN)],
+    [`GET ${personAt(HAVO)}`]: [panelOf(HAVO)],
+    "GET /api/people": [HAVO_IN_DIRECTORY],
     ...routes,
   });
   const router = createMemoryRouter(
@@ -165,6 +162,22 @@ function opening(
 async function listed(): Promise<string[]> {
   await screen.findByRole("link", { name: "000140", hidden: true });
   return firstCells();
+}
+
+async function confirmRemove(control?: HTMLElement) {
+  await userEvent.click(
+    control ??
+      (await screen.findByRole("button", { name: "Remove from the pool" })),
+  );
+  const confirmation = screen.getByRole("dialog", {
+    name: /Remove.*from the pool\?/,
+  });
+  expect(confirmation).toHaveTextContent(
+    "Bringing them in again later keeps them the same person, with their past acts.",
+  );
+  await userEvent.click(
+    within(confirmation).getByRole("button", { name: "Remove" }),
+  );
 }
 
 function table(): HTMLElement {
@@ -218,11 +231,11 @@ async function heard(words: string) {
   await waitFor(() => expect(heardLines()).toContain(words));
 }
 
-const GRACE_OUT = `${setApart("Grace Hopper")} is out of the pool.`;
+const GLINN_OUT = `${setApart("Glinn Havven")} is out of the pool.`;
 
-const HEDY_IN = `${setApart("Hedy Lamarr")} is in the pool.`;
+const HAVO_IN = `${setApart("Havo Lunnet")} is in the pool.`;
 
-const STILL_IN_GROUP = `${setApart("Grace Hopper")} is still in the pool: They have to leave this group first: ${setApart("Payroll")}.`;
+const STILL_IN_GROUP = `${setApart("Glinn Havven")} is still in the pool: They have to leave this group first: ${setApart("Payroll")}.`;
 
 /**
  * The page's own filter, named with the words of the search that brings
@@ -232,21 +245,14 @@ function filterBox(): HTMLElement {
   return screen.getByRole("searchbox", { name: "User number or name" });
 }
 
-/** The pause that hands typing on, waited out in real time. */
 async function typedInto(box: HTMLElement, text: string) {
   await userEvent.type(box, text);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  });
 }
 
-/** A covering panel leaves on a transition, and what follows it happens once it has gone. */
 async function settled() {
-  await act(async () => {
-    await new Promise((resolve) =>
-      setTimeout(resolve, theme.transitions.duration.leavingScreen * 2),
-    );
-  });
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+  );
 }
 
 /** The list's own box, named, where the keyboard is put down once the panel is gone. */
@@ -262,7 +268,7 @@ async function bringingIn(name: string) {
   await userEvent.click(screen.getByRole("button", { name: "Add somebody" }));
   await typedInto(
     screen.getByRole("searchbox", { name: "User number or name" }),
-    "hedy",
+    "havo",
   );
   await userEvent.click(await screen.findByRole("radio", { name }));
   await userEvent.click(
@@ -323,14 +329,14 @@ describe("PeoplePage", () => {
   });
 
   it("grants a role from the answer, reads the list and the reader's standing again, and keeps the keyboard on the control", async () => {
-    const { sent, readAgain } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, readAgain } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
         [`GET ${POOL}`]: [
-          ADA_AND_GRACE,
-          listOf(row(ADA, ["steward"], 2), row(GRACE, ["watcher"])),
+          AVO_AND_GLINN,
+          listOf(row(AVO, ["steward"], 2), row(GLINN, ["watcher"])),
         ],
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [
-          panelOf(GRACE, ["watcher"]),
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [
+          panelOf(GLINN, ["watcher"]),
         ],
       },
     });
@@ -345,8 +351,8 @@ describe("PeoplePage", () => {
     expect(readAgain).toHaveBeenCalledOnce();
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `PUT ${personAt(GRACE)}/estate-roles/watcher`,
+      `GET ${personAt(GLINN)}`,
+      `PUT ${personAt(GLINN)}/estate-roles/watcher`,
       `GET ${POOL}?sort=userId`,
     ]);
   });
@@ -359,33 +365,33 @@ describe("PeoplePage", () => {
     "takes somebody out from a panel %s: their row leaves, the panel shuts, the address goes back to the list in place of theirs, and the keyboard lands on the list",
     async (_where, width) => {
       const { sent, at, reached, readAgain } = opening(
-        `/system/people/${GRACE.subjectId}?sort=userId`,
+        `/system/people/${GLINN.subjectId}?sort=userId`,
         {
           width,
           routes: {
-            [`GET ${POOL}`]: [ADA_AND_GRACE, listOf(row(ADA, ["steward"], 2))],
-            [`DELETE ${personAt(GRACE)}`]: [["", 204]],
+            [`GET ${POOL}`]: [AVO_AND_GLINN, listOf(row(AVO, ["steward"], 2))],
+            [`DELETE ${personAt(GLINN)}`]: [["", 204]],
           },
         },
       );
       await listed();
 
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Remove from the pool" }),
-      );
+      await confirmRemove();
       await waitFor(() => expect(firstCells()).toEqual(["000130"]));
       await settled();
 
       expect(at()).toBe("/system/people?sort=userId");
       expect(reached()).toBe("REPLACE");
-      expect(screen.queryByRole("region", { name: "Grace Hopper" })).toBeNull();
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("region", { name: "Glinn Havven" })).toBeNull();
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+      );
       expectKeyboardOnTheList();
       expect(readAgain).not.toHaveBeenCalled();
       expect(requestsTo(sent)).toEqual([
         `GET ${POOL}?sort=userId`,
-        `GET ${personAt(GRACE)}`,
-        `DELETE ${personAt(GRACE)}`,
+        `GET ${personAt(GLINN)}`,
+        `DELETE ${personAt(GLINN)}`,
         `GET ${POOL}?sort=userId`,
       ]);
     },
@@ -393,11 +399,11 @@ describe("PeoplePage", () => {
 
   /** While the panel covers the list, everything around it is hidden, and a line written then is never heard. */
   it("says somebody is out of the pool only once the covering panel they were taken out from has gone", async () => {
-    const { at } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { at } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
-      routes: { [`DELETE ${personAt(GRACE)}`]: [["", 204]] },
+      routes: { [`DELETE ${personAt(GLINN)}`]: [["", 204]] },
     });
-    const appearances = appearancesOf(GRACE_OUT);
+    const appearances = appearancesOf(GLINN_OUT);
     const whileLeaving = firstSight(() =>
       at() === PEOPLE_PAGE
         ? {
@@ -406,29 +412,25 @@ describe("PeoplePage", () => {
           }
         : undefined,
     );
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
+    await confirmRemove();
 
-    await heard(GRACE_OUT);
+    await heard(GLINN_OUT);
 
-    expect(whileLeaving()).toEqual({ said: "", covering: 1 });
+    expect(whileLeaving()).toEqual({ said: "", covering: 2 });
     expect(appearances()).toEqual([{ hidden: false }]);
   });
 
   it("says somebody is out of the pool at once where they were taken out from beside the list", async () => {
-    opening(`/system/people/${GRACE.subjectId}`, {
-      routes: { [`DELETE ${personAt(GRACE)}`]: [["", 204]] },
+    opening(`/system/people/${GLINN.subjectId}`, {
+      routes: { [`DELETE ${personAt(GLINN)}`]: [["", 204]] },
     });
-    const appearances = appearancesOf(GRACE_OUT);
+    const appearances = appearancesOf(GLINN_OUT);
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
+    await confirmRemove();
 
-    await heard(GRACE_OUT);
+    await heard(GLINN_OUT);
 
-    expect(saidAs()).toEqual([{ severity: "info", words: GRACE_OUT }]);
+    expect(saidAs()).toEqual([{ severity: "info", words: GLINN_OUT }]);
     expect(appearances()).toEqual([{ hidden: false }]);
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -438,15 +440,13 @@ describe("PeoplePage", () => {
     opening("/system/people", {
       width: NARROW,
       routes: {
-        [`GET ${POOL}`]: [ADA_AND_GRACE, listOf(row(ADA, ["steward"], 2))],
-        [`DELETE ${personAt(GRACE)}`]: [["", 204]],
+        [`GET ${POOL}`]: [AVO_AND_GLINN, listOf(row(AVO, ["steward"], 2))],
+        [`DELETE ${personAt(GLINN)}`]: [["", 204]],
       },
     });
     await userEvent.click(await screen.findByRole("link", { name: "000140" }));
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
+    await confirmRemove();
     await waitFor(() => expect(firstCells()).toEqual(["000130"]));
     await settled();
 
@@ -456,62 +456,62 @@ describe("PeoplePage", () => {
   /** The change is the page's, not the panel's: its answer is taken in wherever the reader has gone. */
   it("reads the list again when a removal lands after another row was picked, leaving the reader on that row", async () => {
     const removal = deferred<readonly [string, number]>();
-    const { sent, at } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, at, go } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`GET ${POOL}`]: [ADA_AND_GRACE, listOf(row(ADA, ["steward"], 2))],
-        [`DELETE ${personAt(GRACE)}`]: [removal.promise],
+        [`GET ${POOL}`]: [AVO_AND_GLINN, listOf(row(AVO, ["steward"], 2))],
+        [`DELETE ${personAt(GLINN)}`]: [removal.promise],
       },
     });
     await listed();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
-    await userEvent.click(screen.getByRole("link", { name: "000130" }));
-    await screen.findByRole("region", { name: "Ada Lovelace" });
+    await confirmRemove();
+    await go(`/system/people/${AVO.subjectId}`);
+    await screen.findByRole("region", { name: "Avo Lumerace" });
 
     await act(async () => removal.settle(["", 204]));
 
     await waitFor(() => expect(firstCells()).toEqual(["000130"]));
-    expect(at()).toBe(`/system/people/${ADA.subjectId}`);
-    expect(screen.getByRole("region", { name: "Ada Lovelace" })).toBeVisible();
-    expect(said()).toBe(GRACE_OUT);
+    expect(at()).toBe(`/system/people/${AVO.subjectId}`);
+    expect(screen.getByRole("region", { name: "Avo Lumerace" })).toBeVisible();
+    await waitFor(() => expect(said()).toBe(GLINN_OUT));
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `DELETE ${personAt(GRACE)}`,
-      `GET ${personAt(ADA)}`,
+      `GET ${personAt(GLINN)}`,
+      `DELETE ${personAt(GLINN)}`,
+      `GET ${personAt(AVO)}`,
       `GET ${POOL}?sort=userId`,
     ]);
   });
 
   it("reads the list again when a grant lands after a covering panel was shut, leaving the list open", async () => {
     const granted = deferred<readonly [string, number]>();
-    const { sent, at } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, at } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
       routes: {
         [`GET ${POOL}`]: [
-          ADA_AND_GRACE,
-          listOf(row(ADA, ["steward"], 2), row(GRACE, ["watcher"])),
+          AVO_AND_GLINN,
+          listOf(row(AVO, ["steward"], 2), row(GLINN, ["watcher"])),
         ],
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [granted.promise],
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [granted.promise],
       },
     });
-    const panel = await screen.findByRole("dialog", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
     await userEvent.click(
       within(panel).getByRole("button", { name: "Grant Watcher" }),
     );
     await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
     await settled();
 
-    await act(async () => granted.settle(panelOf(GRACE, ["watcher"])));
+    await act(async () => granted.settle(panelOf(GLINN, ["watcher"])));
 
     await waitFor(() => expect(rolesOf("000140")).toBe(setApart("Watcher")));
     expect(at()).toBe(PEOPLE_PAGE);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+    );
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `PUT ${personAt(GRACE)}/estate-roles/watcher`,
+      `GET ${personAt(GLINN)}`,
+      `PUT ${personAt(GLINN)}/estate-roles/watcher`,
       `GET ${POOL}?sort=userId`,
     ]);
   });
@@ -519,15 +519,13 @@ describe("PeoplePage", () => {
   /** Taken into the page as it stands when the answer lands, not as it stood when asked. */
   it("keeps a filter typed while a removal was out, and the list it asks for", async () => {
     const removal = deferred<readonly [string, number]>();
-    const { sent, at } = opening(
-      `/system/people/${GRACE.subjectId}?sort=userId`,
-      { routes: { [`DELETE ${personAt(GRACE)}`]: [removal.promise] } },
+    const { sent, at, go } = opening(
+      `/system/people/${GLINN.subjectId}?sort=userId`,
+      { routes: { [`DELETE ${personAt(GLINN)}`]: [removal.promise] } },
     );
     await listed();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
-    await typedInto(filterBox(), "ad");
+    await confirmRemove();
+    await go(`/system/people/${GLINN.subjectId}?sort=userId&filter=ad`);
 
     await act(async () => removal.settle(["", 204]));
 
@@ -537,8 +535,8 @@ describe("PeoplePage", () => {
     expect(filterBox()).toHaveValue("ad");
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `DELETE ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
+      `DELETE ${personAt(GLINN)}`,
       `GET ${POOL}?sort=userId&filter=ad`,
       `GET ${POOL}?sort=userId&filter=ad`,
     ]);
@@ -547,19 +545,19 @@ describe("PeoplePage", () => {
   /** The answer that brought them in is what the pool holds of them; reading them again would ask for it twice. */
   it("brings somebody in: their address is pushed with the list's query, the list is read again, it is said, and they are picked without being read", async () => {
     const { sent, at, reached } = opening("/system/people?sort=userId", {
-      routes: { [`POST ${POOL}`]: [[panelOf(HEDY)[0], 201]] },
+      routes: { [`POST ${POOL}`]: [[panelOf(HAVO)[0], 201]] },
     });
     await listed();
 
-    await bringingIn("000150 Hedy Lamarr");
-    await heard(HEDY_IN);
+    await bringingIn("000150 Havo Lunnet");
+    await heard(HAVO_IN);
 
-    expect(screen.getByRole("region", { name: "Hedy Lamarr" })).toBeVisible();
-    expect(at()).toBe(`/system/people/${HEDY.subjectId}?sort=userId`);
+    expect(screen.getByRole("region", { name: "Havo Lunnet" })).toBeVisible();
+    expect(at()).toBe(`/system/people/${HAVO.subjectId}?sort=userId`);
     expect(reached()).toBe("PUSH");
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      "GET /api/people?search=hedy",
+      "GET /api/people?search=havo",
       `POST ${POOL}`,
       `GET ${POOL}?sort=userId`,
     ]);
@@ -571,12 +569,12 @@ describe("PeoplePage", () => {
    */
   it("says somebody is in the pool only once the dialog that brought them in has gone", async () => {
     const { at } = opening("/system/people", {
-      routes: { [`POST ${POOL}`]: [[panelOf(HEDY)[0], 201]] },
+      routes: { [`POST ${POOL}`]: [[panelOf(HAVO)[0], 201]] },
     });
     await listed();
-    const appearances = appearancesOf(HEDY_IN);
+    const appearances = appearancesOf(HAVO_IN);
     const whileLeaving = firstSight(() =>
-      at() === `${PEOPLE_PAGE}/${HEDY.subjectId}`
+      at() === `${PEOPLE_PAGE}/${HAVO.subjectId}`
         ? {
             said: said(),
             leaving: document.querySelectorAll('[role="dialog"]').length,
@@ -584,12 +582,14 @@ describe("PeoplePage", () => {
         : undefined,
     );
 
-    await bringingIn("000150 Hedy Lamarr");
-    await heard(HEDY_IN);
+    await bringingIn("000150 Havo Lunnet");
+    await heard(HAVO_IN);
 
     expect(whileLeaving()).toEqual({ said: "", leaving: 1 });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(saidAs()).toEqual([{ severity: "info", words: HEDY_IN }]);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+    );
+    expect(saidAs()).toEqual([{ severity: "info", words: HAVO_IN }]);
     expect(appearances()).toEqual([{ hidden: false }]);
   });
 
@@ -600,15 +600,19 @@ describe("PeoplePage", () => {
   it("says somebody brought in over a narrow list is in the pool inside the panel that answered it, and never again once it is shut", async () => {
     opening("/system/people", {
       width: NARROW,
-      routes: { [`POST ${POOL}`]: [[panelOf(HEDY)[0], 201]] },
+      routes: { [`POST ${POOL}`]: [[panelOf(HAVO)[0], 201]] },
     });
     await listed();
-    const appearances = appearancesOf(HEDY_IN);
+    const appearances = appearancesOf(HAVO_IN);
 
-    await bringingIn("000150 Hedy Lamarr");
-    const panel = await screen.findByRole("dialog", { name: "Hedy Lamarr" });
-    await heard(HEDY_IN);
-    await settled();
+    await bringingIn("000150 Havo Lunnet");
+    const panel = await screen.findByRole("dialog", { name: "Havo Lunnet" });
+    await heard(HAVO_IN);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Add somebody", hidden: true }),
+      ).toBeNull(),
+    );
     const whileCovered = {
       said: said(),
       inPanel: within(panel)
@@ -622,10 +626,11 @@ describe("PeoplePage", () => {
     };
     await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
     await settled();
-    await settled();
 
-    expect(whileCovered).toEqual({ said: "", inPanel: [HEDY_IN], adding: 0 });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(whileCovered).toEqual({ said: "", inPanel: [HAVO_IN], adding: 0 });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+    );
     expect(said()).toBe("");
     expect(appearances()).toEqual([{ hidden: false }]);
   });
@@ -633,24 +638,22 @@ describe("PeoplePage", () => {
   /** Only what the shut panel itself answered ends with it. */
   it("still says a line about somebody out of view once the reader shuts another person's covering panel", async () => {
     const removal = deferred<readonly [string, number]>();
-    opening(`/system/people/${GRACE.subjectId}`, {
+    const { go } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
-      routes: { [`DELETE ${personAt(GRACE)}`]: [removal.promise] },
+      routes: { [`DELETE ${personAt(GLINN)}`]: [removal.promise] },
     });
-    const appearances = appearancesOf(GRACE_OUT);
-    const grace = await screen.findByRole("dialog", { name: "Grace Hopper" });
-    await userEvent.click(
-      within(grace).getByRole("button", { name: "Remove from the pool" }),
+    const appearances = appearancesOf(GLINN_OUT);
+    const glinn = await screen.findByRole("dialog", { name: "Glinn Havven" });
+    await confirmRemove(
+      within(glinn).getByRole("button", { name: "Remove from the pool" }),
     );
-    await userEvent.click(within(grace).getByRole("button", { name: "Close" }));
-    await settled();
-    await userEvent.click(screen.getByRole("link", { name: "000130" }));
-    const ada = await screen.findByRole("dialog", { name: "Ada Lovelace" });
+    await go(`/system/people/${AVO.subjectId}`);
+    const avo = await screen.findByRole("dialog", { name: "Avo Lumerace" });
 
     await act(async () => removal.settle(["", 204]));
     const whileCovered = said();
-    await userEvent.click(within(ada).getByRole("button", { name: "Close" }));
-    await heard(GRACE_OUT);
+    await userEvent.click(within(avo).getByRole("button", { name: "Close" }));
+    await heard(GLINN_OUT);
 
     expect(whileCovered).toBe("");
     expect(appearances()).toEqual([{ hidden: false }]);
@@ -658,57 +661,57 @@ describe("PeoplePage", () => {
 
   /** Their address was open all along, so nothing moves and nothing else would read them. */
   it("shows somebody brought back whose address is already open, and reads them afresh when picked again later", async () => {
-    const { sent, at, go } = opening(`/system/people/${HEDY.subjectId}`, {
+    const { sent, at, go } = opening(`/system/people/${HAVO.subjectId}`, {
       routes: {
-        [`GET ${personAt(HEDY)}`]: [
+        [`GET ${personAt(HAVO)}`]: [
           ['{"code":"PERSON_NOT_IN_VIEW"}', 404],
-          panelOf(HEDY, ["watcher"]),
+          panelOf(HAVO, ["watcher"]),
         ],
-        [`POST ${POOL}`]: [[panelOf(HEDY)[0], 201]],
+        [`POST ${POOL}`]: [[panelOf(HAVO)[0], 201]],
       },
     });
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "That person is not in the pool.",
     );
 
-    await bringingIn("000150 Hedy Lamarr");
-    const panel = await screen.findByRole("region", { name: "Hedy Lamarr" });
+    await bringingIn("000150 Havo Lunnet");
+    const panel = await screen.findByRole("region", { name: "Havo Lunnet" });
     const broughtBack = {
       held: within(panel).getAllByText("Not held").length,
       refused: within(panel).queryByRole("alert"),
       readsOfThem: requestsTo(sent).filter(
-        (each) => each === `GET ${personAt(HEDY)}`,
+        (each) => each === `GET ${personAt(HAVO)}`,
       ).length,
     };
-    await go(`/system/people/${ADA.subjectId}`);
-    await screen.findByRole("region", { name: "Ada Lovelace" });
-    await go(`/system/people/${HEDY.subjectId}`);
+    await go(`/system/people/${AVO.subjectId}`);
+    await screen.findByRole("region", { name: "Avo Lumerace" });
+    await go(`/system/people/${HAVO.subjectId}`);
     const readAgain = await screen.findByRole("region", {
-      name: "Hedy Lamarr",
+      name: "Havo Lunnet",
     });
 
     expect(broughtBack).toEqual({ held: 2, refused: null, readsOfThem: 1 });
-    expect(at()).toBe(`/system/people/${HEDY.subjectId}`);
+    expect(at()).toBe(`/system/people/${HAVO.subjectId}`);
     await waitFor(() =>
       expect(within(readAgain).getAllByText("Held")).toHaveLength(1),
     );
     expect(
-      requestsTo(sent).filter((each) => each === `GET ${personAt(HEDY)}`),
-    ).toEqual([`GET ${personAt(HEDY)}`, `GET ${personAt(HEDY)}`]);
+      requestsTo(sent).filter((each) => each === `GET ${personAt(HAVO)}`),
+    ).toEqual([`GET ${personAt(HAVO)}`, `GET ${personAt(HAVO)}`]);
   });
 
   it("reads the person and the list again when taking them out is refused for what still holds them, naming it, the keyboard left on the control", async () => {
-    const { sent } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
         [`GET ${POOL}`]: [
-          ADA_AND_GRACE,
-          listOf(row(ADA, ["steward"], 2), row(GRACE, ["steward"])),
+          AVO_AND_GLINN,
+          listOf(row(AVO, ["steward"], 2), row(GLINN, ["steward"])),
         ],
-        [`GET ${personAt(GRACE)}`]: [
-          panelOf(GRACE),
-          panelOf(GRACE, ["steward"]),
+        [`GET ${personAt(GLINN)}`]: [
+          panelOf(GLINN),
+          panelOf(GLINN, ["steward"]),
         ],
-        [`DELETE ${personAt(GRACE)}`]: [
+        [`DELETE ${personAt(GLINN)}`]: [
           ['{"code":"PERSON_HOLDS_ESTATE_ROLES"}', 409],
         ],
       },
@@ -718,7 +721,7 @@ describe("PeoplePage", () => {
       name: "Remove from the pool",
     });
 
-    await userEvent.click(remove);
+    await confirmRemove(remove);
 
     await waitFor(() =>
       expect(remove).toHaveAccessibleDescription(
@@ -726,24 +729,29 @@ describe("PeoplePage", () => {
       ),
     );
     await waitFor(() => expect(rolesOf("000140")).toBe(setApart("Steward")));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /Remove.*from the pool\?/ }),
+      ).toBeNull(),
+    );
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Somebody holding an estate role cannot be taken out of the pool.",
     );
     expect(document.activeElement).toBe(remove);
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `DELETE ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
+      `DELETE ${personAt(GLINN)}`,
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
     ]);
   });
 
   /** Another steward may have taken the act away: the standing is read again, so dead controls go. */
   it("reads the reader's standing again when a change is refused the act, and says that act's rule beside the control", async () => {
-    const { readAgain } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { readAgain } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [
           ['{"code":"ACT_NOT_PERMITTED"}', 403],
         ],
       },
@@ -765,7 +773,7 @@ describe("PeoplePage", () => {
     });
     await listed();
 
-    await bringingIn("000150 Hedy Lamarr");
+    await bringingIn("000150 Havo Lunnet");
 
     expect(
       await within(screen.getByRole("dialog")).findByRole("alert"),
@@ -779,16 +787,16 @@ describe("PeoplePage", () => {
   /** Said beside the control while its person is in view, and in the page's own line once they are not. */
   it("says a change refused after the reader moved on in the page's line, naming whom it was asked of", async () => {
     const refusal = deferred<readonly [string, number]>();
-    opening(`/system/people/${GRACE.subjectId}`, {
+    opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [refusal.promise],
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [refusal.promise],
       },
     });
     await userEvent.click(
       await screen.findByRole("button", { name: "Grant Watcher" }),
     );
     await userEvent.click(screen.getByRole("link", { name: "000130" }));
-    const panel = await screen.findByRole("region", { name: "Ada Lovelace" });
+    const panel = await screen.findByRole("region", { name: "Avo Lumerace" });
 
     await act(async () =>
       refusal.settle(['{"code":"LAST_ESTATE_ROLE_GRANTOR"}', 409]),
@@ -797,7 +805,7 @@ describe("PeoplePage", () => {
     expect(saidAs()).toEqual([
       {
         severity: "error",
-        words: `${setApart("Grace Hopper")}'s estate roles were not changed: Withdrawing this would leave nobody who may grant an estate role.`,
+        words: `${setApart("Glinn Havven")}'s estate roles were not changed: Withdrawing this would leave nobody who may grant an estate role.`,
       },
     ]);
     expect(within(panel).queryByRole("alert")).toBeNull();
@@ -809,21 +817,19 @@ describe("PeoplePage", () => {
    */
   it("names what still holds somebody out of view whose removal was refused for it, reading them once more to do so", async () => {
     const refusal = deferred<readonly [string, number]>();
-    const { sent } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, go } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`GET ${personAt(GRACE)}`]: [
-          panelOf(GRACE),
-          panelOf(GRACE, [], ["Payroll"]),
+        [`GET ${personAt(GLINN)}`]: [
+          panelOf(GLINN),
+          panelOf(GLINN, [], ["Payroll"]),
         ],
-        [`DELETE ${personAt(GRACE)}`]: [refusal.promise],
+        [`DELETE ${personAt(GLINN)}`]: [refusal.promise],
       },
     });
     await listed();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
-    await userEvent.click(screen.getByRole("link", { name: "000130" }));
-    await screen.findByRole("region", { name: "Ada Lovelace" });
+    await confirmRemove();
+    await go(`/system/people/${AVO.subjectId}`);
+    await screen.findByRole("region", { name: "Avo Lumerace" });
 
     await act(async () => refusal.settle(['{"code":"PERSON_IN_GROUPS"}', 409]));
 
@@ -832,10 +838,10 @@ describe("PeoplePage", () => {
     expect(saidAs()).toEqual([{ severity: "error", words: STILL_IN_GROUP }]);
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `DELETE ${personAt(GRACE)}`,
-      `GET ${personAt(ADA)}`,
-      `GET ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
+      `DELETE ${personAt(GLINN)}`,
+      `GET ${personAt(AVO)}`,
+      `GET ${personAt(GLINN)}`,
       `GET ${POOL}?sort=userId`,
     ]);
   });
@@ -844,50 +850,48 @@ describe("PeoplePage", () => {
   it("reads the person again when a change to them lands while a read of them is out", async () => {
     const granted = deferred<readonly [string, number]>();
     const readOut = deferred<readonly [string, number]>();
-    const { sent, go } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, go } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`GET ${personAt(GRACE)}`]: [
-          panelOf(GRACE),
+        [`GET ${personAt(GLINN)}`]: [
+          panelOf(GLINN),
           readOut.promise,
-          panelOf(GRACE, ["watcher"]),
+          panelOf(GLINN, ["watcher"]),
         ],
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [granted.promise],
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [granted.promise],
       },
     });
     await userEvent.click(
       await screen.findByRole("button", { name: "Grant Watcher" }),
     );
-    await go(`/system/people/${ADA.subjectId}`);
-    await screen.findByRole("region", { name: "Ada Lovelace" });
-    await go(`/system/people/${GRACE.subjectId}`);
+    await go(`/system/people/${AVO.subjectId}`);
+    await screen.findByRole("region", { name: "Avo Lumerace" });
+    await go(`/system/people/${GLINN.subjectId}`);
 
-    await act(async () => granted.settle(panelOf(GRACE, ["watcher"])));
-    await act(async () => readOut.settle(panelOf(GRACE)));
+    await act(async () => granted.settle(panelOf(GLINN, ["watcher"])));
+    await act(async () => readOut.settle(panelOf(GLINN)));
 
-    const panel = await screen.findByRole("region", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("region", { name: "Glinn Havven" });
     await waitFor(() =>
       expect(
         within(panel).getByRole("button", { name: "Withdraw Watcher" }),
       ).toBeInTheDocument(),
     );
     expect(
-      requestsTo(sent).filter((each) => each === `GET ${personAt(GRACE)}`),
+      requestsTo(sent).filter((each) => each === `GET ${personAt(GLINN)}`),
     ).toHaveLength(3);
   });
 
   /** Anything asked of them now would be asked of a person about to be replaced on screen. */
   it("holds every change to the person while they are read again", async () => {
     const reread = deferred<readonly [string, number]>();
-    const { sent } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`GET ${personAt(GRACE)}`]: [panelOf(GRACE), reread.promise],
-        [`DELETE ${personAt(GRACE)}`]: [['{"code":"PERSON_IN_GROUPS"}', 409]],
+        [`GET ${personAt(GLINN)}`]: [panelOf(GLINN), reread.promise],
+        [`DELETE ${personAt(GLINN)}`]: [['{"code":"PERSON_IN_GROUPS"}', 409]],
       },
     });
     await listed();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove from the pool" }),
-    );
+    await confirmRemove();
     await screen.findByRole("alert");
     const grant = screen.getByRole("button", { name: "Grant Watcher" });
 
@@ -899,7 +903,7 @@ describe("PeoplePage", () => {
       [],
     );
 
-    await act(async () => reread.settle(panelOf(GRACE, [], ["Payroll"])));
+    await act(async () => reread.settle(panelOf(GLINN, [], ["Payroll"])));
 
     expect(grant).not.toHaveAttribute("aria-disabled");
   });
@@ -908,9 +912,9 @@ describe("PeoplePage", () => {
   it("holds Add somebody while a change to a person is out, and a person's controls while somebody is brought in", async () => {
     const granted = deferred<readonly [string, number]>();
     const broughtIn = deferred<readonly [string, number]>();
-    opening(`/system/people/${GRACE.subjectId}`, {
+    opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [granted.promise],
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [granted.promise],
         [`POST ${POOL}`]: [broughtIn.promise],
       },
     });
@@ -920,8 +924,8 @@ describe("PeoplePage", () => {
     const addWhileGranting = screen
       .getByRole("button", { name: "Add somebody" })
       .getAttribute("aria-disabled");
-    await act(async () => granted.settle(panelOf(GRACE, ["watcher"])));
-    await bringingIn("000150 Hedy Lamarr");
+    await act(async () => granted.settle(panelOf(GLINN, ["watcher"])));
+    await bringingIn("000150 Havo Lunnet");
 
     expect(addWhileGranting).toBe("true");
     expect(
@@ -932,25 +936,27 @@ describe("PeoplePage", () => {
   /** A pick is its own address, read on its own, so narrowing the list is no reason to drop it. */
   it("writes what is typed into the address in place of the entry it was on, keeping the order and the person picked", async () => {
     const { sent, at, reached } = opening(
-      `/system/people/${GRACE.subjectId}?sort=displayName`,
+      `/system/people/${GLINN.subjectId}?sort=displayName`,
     );
     await listed();
-    await screen.findByRole("region", { name: "Grace Hopper" });
+    await screen.findByRole("region", { name: "Glinn Havven" });
 
     await typedInto(filterBox(), "gr");
 
-    expect(at()).toBe(
-      `/system/people/${GRACE.subjectId}?sort=displayName&filter=gr`,
+    await waitFor(() =>
+      expect(at()).toBe(
+        `/system/people/${GLINN.subjectId}?sort=displayName&filter=gr`,
+      ),
     );
     expect(reached()).toBe("REPLACE");
     await waitFor(() =>
       expect(requestsTo(sent)).toEqual([
         `GET ${POOL}?sort=displayName`,
-        `GET ${personAt(GRACE)}`,
+        `GET ${personAt(GLINN)}`,
         `GET ${POOL}?sort=displayName&filter=gr`,
       ]),
     );
-    expect(screen.getByRole("region", { name: "Grace Hopper" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Glinn Havven" })).toBeVisible();
   });
 
   it("takes the filter out of the address once the box is emptied", async () => {
@@ -959,7 +965,7 @@ describe("PeoplePage", () => {
 
     await typedInto(filterBox(), "{Backspace}");
 
-    expect(at()).toBe("/system/people?sort=userId");
+    await waitFor(() => expect(at()).toBe("/system/people?sort=userId"));
   });
 
   it("sorts by the heading pressed, in the address in place of the entry it was on", async () => {
@@ -997,17 +1003,19 @@ describe("PeoplePage", () => {
   /** Opened from an address there is no row it was opened from, and the list is what comes next. */
   it("opens the same address over the list where there is no room, and shutting it goes back to the list with its query, the keyboard on the list", async () => {
     const { at, reached } = opening(
-      `/system/people/${GRACE.subjectId}?filter=r`,
+      `/system/people/${GLINN.subjectId}?filter=r`,
       { width: NARROW },
     );
-    const panel = await screen.findByRole("dialog", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
 
     await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
     await settled();
 
     expect(at()).toBe("/system/people?filter=r");
     expect(reached()).toBe("PUSH");
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+    );
     expectKeyboardOnTheList();
   });
 
@@ -1015,7 +1023,7 @@ describe("PeoplePage", () => {
     opening("/system/people", { width: NARROW });
     const link = await screen.findByRole("link", { name: "000140" });
     await userEvent.click(link);
-    const panel = await screen.findByRole("dialog", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
 
     await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
     await settled();
@@ -1025,10 +1033,10 @@ describe("PeoplePage", () => {
 
   /** Emptied as it goes, a panel on its way out would flash a wait for somebody nobody asked for. */
   it("keeps the person in a covering panel for as long as it is leaving", async () => {
-    const { sent } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
     });
-    const panel = await screen.findByRole("dialog", { name: "Grace Hopper" });
+    const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
 
     await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
 
@@ -1037,7 +1045,7 @@ describe("PeoplePage", () => {
     expect(within(panel).queryByText("Still reading…")).toBeNull();
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
     ]);
   });
 
@@ -1047,7 +1055,7 @@ describe("PeoplePage", () => {
 
     expect(
       screen.getByRole("link", { name: "000140" }).getAttribute("href"),
-    ).toBe(`/system/people/${GRACE.subjectId}?filter=a&sort=displayName`);
+    ).toBe(`/system/people/${GLINN.subjectId}?filter=a&sort=displayName`);
   });
 
   it("picks a row by pushing its address, reading that person once and the list no more", async () => {
@@ -1056,22 +1064,22 @@ describe("PeoplePage", () => {
 
     await userEvent.click(link);
 
-    const panel = await screen.findByRole("region", { name: "Grace Hopper" });
-    expect(at()).toBe(`/system/people/${GRACE.subjectId}?sort=userId`);
+    const panel = await screen.findByRole("region", { name: "Glinn Havven" });
+    expect(at()).toBe(`/system/people/${GLINN.subjectId}?sort=userId`);
     expect(reached()).toBe("PUSH");
     expect(within(panel).getByText("000140")).toBeVisible();
     expect(link).toHaveAttribute("aria-current", "true");
     expect(document.activeElement).toBe(link);
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
+      `GET ${personAt(GLINN)}`,
     ]);
   });
 
   it("opens an address naming somebody on no page in hand with them picked beside the list", async () => {
-    const { sent } = opening(`/system/people/${HEDY.subjectId}`);
+    const { sent } = opening(`/system/people/${HAVO.subjectId}`);
 
-    const panel = await screen.findByRole("region", { name: "Hedy Lamarr" });
+    const panel = await screen.findByRole("region", { name: "Havo Lunnet" });
 
     expect(within(panel).getByText("000150")).toBeVisible();
     expect(await listed()).toEqual(["000130", "000140"]);
@@ -1082,15 +1090,15 @@ describe("PeoplePage", () => {
     ).toEqual([]);
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(HEDY)}`,
+      `GET ${personAt(HAVO)}`,
     ]);
   });
 
   /** A read of the person refused the act is said as the rule of keeping the pool, as the list's is. */
   it("says a read of the person refused the act as the rule of keeping the pool", async () => {
-    opening(`/system/people/${GRACE.subjectId}`, {
+    opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`GET ${personAt(GRACE)}`]: [['{"code":"ACT_NOT_PERMITTED"}', 403]],
+        [`GET ${personAt(GLINN)}`]: [['{"code":"ACT_NOT_PERMITTED"}', 403]],
       },
     });
 
@@ -1102,9 +1110,9 @@ describe("PeoplePage", () => {
   });
 
   it("draws no role control for a reader who may keep the pool but not grant an estate role", async () => {
-    opening(`/system/people/${ADA.subjectId}`, { acts: ["keep_pool"] });
+    opening(`/system/people/${AVO.subjectId}`, { acts: ["keep_pool"] });
 
-    const panel = await screen.findByRole("region", { name: "Ada Lovelace" });
+    const panel = await screen.findByRole("region", { name: "Avo Lumerace" });
 
     expect(within(panel).getByText("Held")).toBeVisible();
     expect(
@@ -1117,9 +1125,9 @@ describe("PeoplePage", () => {
   /** Leaving abandons what is still out, and nothing is taken into a page that has gone. */
   it("abandons a change still out when the reader leaves, and reads nothing after", async () => {
     const granted = deferred<readonly [string, number]>();
-    const { sent, leave } = opening(`/system/people/${GRACE.subjectId}`, {
+    const { sent, leave } = opening(`/system/people/${GLINN.subjectId}`, {
       routes: {
-        [`PUT ${personAt(GRACE)}/estate-roles/watcher`]: [granted.promise],
+        [`PUT ${personAt(GLINN)}/estate-roles/watcher`]: [granted.promise],
       },
     });
     await listed();
@@ -1129,14 +1137,14 @@ describe("PeoplePage", () => {
     const change = sent.mock.results.at(-1)!.value as Promise<Response>;
 
     await leave();
-    await act(async () => granted.settle(panelOf(GRACE, ["watcher"])));
+    await act(async () => granted.settle(panelOf(GLINN, ["watcher"])));
 
     await expect(change).rejects.toMatchObject({ name: "AbortError" });
     expect(screen.getByText("Elsewhere")).toBeInTheDocument();
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
-      `GET ${personAt(GRACE)}`,
-      `PUT ${personAt(GRACE)}/estate-roles/watcher`,
+      `GET ${personAt(GLINN)}`,
+      `PUT ${personAt(GLINN)}/estate-roles/watcher`,
     ]);
   });
 });

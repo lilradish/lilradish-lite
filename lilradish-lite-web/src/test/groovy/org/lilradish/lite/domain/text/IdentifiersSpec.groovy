@@ -61,7 +61,7 @@ class IdentifiersSpec extends Specification {
         "team/summarise"  || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
         "prompt:v1"       || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
         "extr\u200Bact"   || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
-        "p\u0430ypal"     || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
+        "p\u0430yment"    || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
         "extract\nfake"   || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
         "a\u0060b"        || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"
         "a\u007Bb"        || IllegalArgumentException | "StepId must contain only lowercase letters, digits and _"

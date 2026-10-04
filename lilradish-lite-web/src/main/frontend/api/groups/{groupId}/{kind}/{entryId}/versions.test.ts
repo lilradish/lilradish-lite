@@ -5,8 +5,9 @@ import { NOT_AN_ADDRESS } from "../../../../problem";
 import {
   atVersion,
   contentProblemsIn,
+  contentProblemTotalIn,
   retiredPinsIn,
-  startDraft,
+  makeDraft,
 } from "./versions";
 
 const REPLACED = {
@@ -74,6 +75,14 @@ const PAST_ITS_BOUND = {
 };
 
 const PAST = { code: "asking_past_largest", part: "asking", excess: 1234567 };
+
+/** As the server spells a step whose way's fields are named beside it. */
+const AT_STEP_FIELDS = {
+  code: "search_standing_missing",
+  part: "steps",
+  stepId: "0000000c-0000-4000-8000-000000000aa1",
+  fields: ["references", "other"],
+};
 
 function contentRefused(problems: unknown) {
   return {
@@ -157,7 +166,50 @@ describe("retiredPinsIn", () => {
   });
 });
 
+describe("contentProblemTotalIn", () => {
+  it("reads the count beside a content refusal only when it covers every listed place", () => {
+    const refused = contentRefused([WHOLE, AT_FIELD]);
+    expect(
+      contentProblemTotalIn({
+        ...refused,
+        extensions: { ...refused.extensions, problemTotal: 203 },
+      }),
+    ).toBe(203);
+    expect(
+      contentProblemTotalIn({
+        ...refused,
+        extensions: { ...refused.extensions, problemTotal: 1 },
+      }),
+    ).toBeNull();
+    expect(
+      contentProblemTotalIn({
+        ...refused,
+        extensions: { ...refused.extensions, problemTotal: -1 },
+      }),
+    ).toBeNull();
+    expect(
+      contentProblemsIn({
+        ...refused,
+        extensions: { ...refused.extensions, problemTotal: 1 },
+      }),
+    ).toBeNull();
+    expect(contentProblemTotalIn(refused)).toBeNull();
+  });
+});
+
 describe("contentProblemsIn", () => {
+  it("reads an unknown input name at the drawing and refuses a malformed name", () => {
+    const named = {
+      code: "drawing_names_unknown",
+      part: "drawing",
+      name: "missing",
+    };
+    expect(contentProblemsIn(contentRefused([named]))).toEqual([named]);
+    expect(
+      contentProblemsIn(contentRefused([{ ...named, name: 7 }])),
+    ).toBeNull();
+  });
+
   it("reads every place a refusal for what a version holds names, in order, a field's key only where one arrived", () => {
     const places = contentProblemsIn(contentRefused([WHOLE, AT_FIELD]))!;
 
@@ -195,6 +247,22 @@ describe("contentProblemsIn", () => {
     expect("stepId" in places[2]!).toBe(false);
   });
 
+  it("reads the fields named beside a step in the order they arrived, and no other key", () => {
+    const places = contentProblemsIn(
+      contentRefused([AT_STEP_FIELDS, AT_BINDING]),
+    )!;
+
+    expect(places).toEqual([AT_STEP_FIELDS, AT_BINDING]);
+    expect(places[0]!.fields).toEqual(["references", "other"]);
+    expect(Object.keys(places[0]!).sort()).toEqual([
+      "code",
+      "fields",
+      "part",
+      "stepId",
+    ]);
+    expect("fields" in places[1]!).toBe(false);
+  });
+
   it.each([
     ["a count", 1234567],
     ["one", 1],
@@ -210,6 +278,37 @@ describe("contentProblemsIn", () => {
     },
   );
 
+  it("reads both deployment file limits only on the file limit problem", () => {
+    const limits = {
+      maximumBytes: 104857600,
+      maximumPerField: 100,
+      maximumTotalBytes: 1073741824,
+    };
+    const named = {
+      code: "file_limit_past_deployment",
+      part: "gives",
+      fieldId: AT_FIELD.fieldId,
+      fileLimits: limits,
+    };
+    const places = contentProblemsIn(contentRefused([named, AT_FIELD]))!;
+
+    expect(places).toEqual([named, AT_FIELD]);
+    expect("fileLimits" in places[1]!).toBe(false);
+    expect(
+      contentProblemsIn(
+        contentRefused([
+          {
+            code: "file_total_past_deployment",
+            part: "takes",
+            fileLimits: limits,
+          },
+        ]),
+      ),
+    ).toEqual([
+      { code: "file_total_past_deployment", part: "takes", fileLimits: limits },
+    ]);
+  });
+
   it("reads a count past what a double holds exactly as the reply's text arrives, rounded", async () => {
     answering([
       '{"code":"VERSION_CONTENT_DOES_NOT_HOLD","problems":[{"code":"asking_past_largest","part":"asking","excess":9007199254740993}]}',
@@ -217,7 +316,7 @@ describe("contentProblemsIn", () => {
     ]);
 
     const refused = await refusalOf(
-      startDraft(GROUP, "question", ENTRY, new AbortController().signal),
+      makeDraft(GROUP, "question", ENTRY, new AbortController().signal),
     );
 
     expect(contentProblemsIn(refused.problem)).toEqual([
@@ -267,6 +366,61 @@ describe("contentProblemsIn", () => {
       contentRefused([{ ...AT_TERM, termId: 3 }]),
     ],
     [
+      "a deployment file limit without its limits",
+      contentRefused([{ ...AT_FIELD, code: "file_limit_past_deployment" }]),
+    ],
+    [
+      "another problem carrying deployment limits",
+      contentRefused([
+        {
+          ...AT_FIELD,
+          fileLimits: {
+            maximumBytes: 104857600,
+            maximumPerField: 100,
+            maximumTotalBytes: 1073741824,
+          },
+        },
+      ]),
+    ],
+    [
+      "a deployment file limit with a fractional size",
+      contentRefused([
+        {
+          ...AT_FIELD,
+          code: "file_limit_past_deployment",
+          fileLimits: {
+            maximumBytes: 1.5,
+            maximumPerField: 100,
+            maximumTotalBytes: 1073741824,
+          },
+        },
+      ]),
+    ],
+    [
+      "a deployment file limit with no total",
+      contentRefused([
+        {
+          ...AT_FIELD,
+          code: "file_limit_past_deployment",
+          fileLimits: { maximumBytes: 104857600, maximumPerField: 100 },
+        },
+      ]),
+    ],
+    [
+      "a deployment total file limit without limits",
+      contentRefused([{ code: "file_total_past_deployment", part: "takes" }]),
+    ],
+    [
+      "a deployment file limit with no count",
+      contentRefused([
+        {
+          ...AT_FIELD,
+          code: "file_limit_past_deployment",
+          fileLimits: { maximumBytes: 104857600 },
+        },
+      ]),
+    ],
+    [
       "one with an excess that is no number",
       contentRefused([{ ...PAST_ITS_BOUND, excess: "12" }]),
     ],
@@ -289,6 +443,41 @@ describe("contentProblemsIn", () => {
     ],
     ["one saying by a fraction", contentRefused([{ ...PAST, excess: 1.5 }])],
     ["one saying by none at all", contentRefused([{ ...PAST, excess: null }])],
+    [
+      "one naming no field beside a step",
+      contentRefused([{ ...AT_STEP_FIELDS, fields: [] }]),
+    ],
+    [
+      "one naming a field by an empty name",
+      contentRefused([{ ...AT_STEP_FIELDS, fields: ["references", ""] }]),
+    ],
+    [
+      "one naming a field by what is no name",
+      contentRefused([{ ...AT_STEP_FIELDS, fields: ["references", 7] }]),
+    ],
+    [
+      "one naming fields by what is no list",
+      contentRefused([{ ...AT_STEP_FIELDS, fields: "references" }]),
+    ],
+    [
+      "one naming fields beside no step",
+      contentRefused([
+        { code: AT_STEP_FIELDS.code, part: "steps", fields: ["references"] },
+      ]),
+    ],
+    [
+      "one naming fields beside a key of another place",
+      contentRefused([
+        {
+          ...AT_STEP_FIELDS,
+          bindingId: "0000000e-0000-4000-8000-000000000aa1",
+        },
+      ]),
+    ],
+    [
+      "one naming fields beside a member never heard of",
+      contentRefused([{ ...AT_STEP_FIELDS, extra: true }]),
+    ],
   ])("reads nothing out of %s", (_case, problem) => {
     expect(contentProblemsIn(problem)).toBeNull();
   });
@@ -323,7 +512,7 @@ describe("atVersion", () => {
   });
 });
 
-describe("startDraft", () => {
+describe("makeDraft", () => {
   it("asks the entry's versions for a new one, sending nothing, and reads the entry it answers with", async () => {
     const sent = answering([
       JSON.stringify({
@@ -336,16 +525,14 @@ describe("startDraft", () => {
       201,
     ]);
 
-    const read = await startDraft(
-      GROUP,
-      "question",
-      ENTRY,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    const read = await makeDraft(GROUP, "question", ENTRY, signal);
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(`/api/groups/${GROUP}/questions/${ENTRY}/versions`);
     expect(init?.method).toBe("POST");
+    expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
     expect(read.entryId).toBe(ENTRY);
   });

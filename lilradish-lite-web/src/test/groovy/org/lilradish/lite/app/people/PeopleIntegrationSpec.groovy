@@ -13,15 +13,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * The directory as a search reaches it, asked of a real server running the real baseline: which rows
- * a search finds, how they are ordered and folded, and whether each of them is in the pool now are
- * all decided in SQL.
- *
- * <p>Asked of a database defaulting to the C locale, which folds no case outside ASCII and sorts by
- * byte, so a match or an order left to the default would be wrong here. Every expectation is written
- * out rather than derived, so what the store answers is compared with what a reader expects.
- */
+/** Ordering must be independent of the database default collation. */
 class PeopleIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -40,24 +32,24 @@ class PeopleIntegrationSpec extends Specification {
 
     static final String NO_BREAK_SPACE = Character.toString(0x00A0)
 
-    static final String MIXED_WHITESPACE_NAME = NO_BREAK_SPACE + "Hedy" + IDEOGRAPHIC_SPACE + Character.toString(0x2028) +
-            " Kiesler" + Character.toString(0x202F) + " " + "Lamarr" + Character.toString(0x2029)
+    static final String MIXED_WHITESPACE_NAME = NO_BREAK_SPACE + "Heno" + IDEOGRAPHIC_SPACE + Character.toString(0x2028) +
+            " Mockler" + Character.toString(0x202F) + " " + "Lomore" + Character.toString(0x2029)
 
     static final String ONLY_WHITESPACE_NAME = IDEOGRAPHIC_SPACE + " " + NO_BREAK_SPACE
 
     static final String NOTHING_VISIBLE_NAME = " " + Character.toString(0x200B) + " "
 
-    /** The user number and the name the directory holds for them. */
+
     static final List<List<String>> IN_DIRECTORY = [
-            ["000301", "Ada Lovelace"],
-            ["000302", "Ada Yonath"],
-            ["000303", "Adam Smith"],
-            ["000304", "grace hopper"],
-            ["000305", "Grace Hopper"],
-            ["000306", CAPITAL_E_ACUTE + "mile Zola"],
+            ["000301", "Ari Mockvale"],
+            ["000302", "Ari Zomock"],
+            ["000303", "Arin Moxen"],
+            ["000304", "greno nockal"],
+            ["000305", "Greno Nockal"],
+            ["000306", CAPITAL_E_ACUTE + "vren Mack"],
             ["000307", "山田" + IDEOGRAPHIC_SPACE + "太郎"],
-            ["000308", "Alan Turing"],
-            ["000309", "Alan Turing"],
+            ["000308", "Arlo Taffan"],
+            ["000309", "Arlo Taffan"],
             ["000310", "Under_Score"],
             ["AB-12", "Upper Case Number"],
     ]
@@ -76,13 +68,16 @@ class PeopleIntegrationSpec extends Specification {
         database = Baseline.appliedTo(server, "postgres")
         def session = JdbcClient.create(database)
         IN_DIRECTORY.each { inDirectory(session, it[0], it[1]) }
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("""
                 insert into subjects (subject_id, kind, user_id, display_name, created_by) values
-                    (?::uuid, 'person', '000301', 'Ada Lovelace', ?::uuid),
-                    (?::uuid, 'person', '000303', 'Adam Smith', ?::uuid)
+                    (?::uuid, 'person', '000301', 'Ari Mockvale', ?::uuid),
+                    (?::uuid, 'person', '000303', 'Arin Moxen', ?::uuid)
                 """).params(POOLED, SEEDER, REMOVED, SEEDER).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                 .params(POOLED, FIRST_STEWARD).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("""
                 insert into pool_members (subject_id, created_by, removed_at, removed_by)
                 values (?::uuid, ?::uuid, now(), ?::uuid)
@@ -90,12 +85,7 @@ class PeopleIntegrationSpec extends Specification {
         people = new People(session)
     }
 
-    /**
-     * Tried both ways on whatever was typed. A user number is found whole and exactly, its case being
-     * the identity provider's; a name is found by any part of it, folded as the pool's filter folds.
-     * A character a pattern would read as a wildcard finds only whoever holds that character. A name
-     * typed back as shown misses one the directory holds with another space.
-     */
+
     def "a search finds a user number typed whole and a name holding what was typed, in the order a reader expects"() {
         expect:
         found(typed)*.userId()*.value() == expected
@@ -107,13 +97,13 @@ class PeopleIntegrationSpec extends Specification {
         "0003"                        || []
         "AB-12"                       || ["AB-12"]
         "ab-12"                       || []
-        "ada"                         || ["000301", "000302", "000303"]
-        "ADA "                        || ["000301", "000302"]
-        "Lovelace"                    || ["000301"]
-        "hopper"                      || ["000304", "000305"]
-        "Alan Turing"                 || ["000308", "000309"]
-        SMALL_E_ACUTE + "mile"        || ["000306"]
-        "Emile"                       || []
+        "ari"                         || ["000301", "000302", "000303"]
+        "ARI "                        || ["000301", "000302"]
+        "Mockvale"                    || ["000301"]
+        "nockal"                      || ["000304", "000305"]
+        "Arlo Taffan"                 || ["000308", "000309"]
+        SMALL_E_ACUTE + "vren"        || ["000306"]
+        "Evren"                       || []
         "太郎"                          || ["000307"]
         "山田" + IDEOGRAPHIC_SPACE      || ["000307"]
         "山田 太郎"                       || []
@@ -122,25 +112,19 @@ class PeopleIntegrationSpec extends Specification {
         "nobody holds this"           || []
     }
 
-    /**
-     * Somebody in the pool is found like anybody else and carries what addresses them there; somebody
-     * whose stay ended, or who was never brought in, carries nothing, being in the pool now neither.
-     */
+
     def "each person found says whether they are in the pool now, by the subject addressing them there"() {
         when:
-        def pooled = found("ada").collectEntries { [(it.userId().value()): it.subjectId()] }
+        def pooled = found("ari").collectEntries { [(it.userId().value()): it.subjectId()] }
 
         then:
         pooled == ["000301": new SubjectId(UUID.fromString(POOLED)), "000302": null, "000303": null]
 
         and: "each under the name the directory holds, whatever the pool holds"
-        found("ada")*.displayName()*.value() == ["Ada Lovelace", "Ada Yonath", "Adam Smith"]
+        found("ari")*.displayName()*.value() == ["Ari Mockvale", "Ari Zomock", "Arin Moxen"]
     }
 
-    /**
-     * The directory's floor admits every White_Space code point but the controls. Found by name in part
-     * or by number whole, a name is shown spaced once; one holding nothing visible is shown as none.
-     */
+
     def "each person is found under the name the directory holds spaced once, and under none where it holds nothing visible"() {
         given:
         def connection = database.connection
@@ -164,12 +148,12 @@ class PeopleIntegrationSpec extends Specification {
 
         where:
         typed    | user     | held                  || spaced
-        "hedy"   | "000321" | MIXED_WHITESPACE_NAME || "Hedy Kiesler Lamarr"
+        "heno"   | "000321" | MIXED_WHITESPACE_NAME || "Heno Mockler Lomore"
         "000322" | "000322" | ONLY_WHITESPACE_NAME  || null
         "000323" | "000323" | NOTHING_VISIBLE_NAME  || null
     }
 
-    /** One past the most is how more are known of, so the boundary is where a count would go wrong. */
+
     def "a search stops at the most it was asked for, and says whether the directory holds more it finds"() {
         when:
         def search = people.search(new PeopleSearch("a"), most)
@@ -186,11 +170,7 @@ class PeopleIntegrationSpec extends Specification {
         10   || 9     | false
     }
 
-    /**
-     * More names hold what was typed than a search shows, and the one person whose user number it is
-     * sorts after all of them by name: they are found first all the same, so no crowd of names can
-     * hide the one person named whole.
-     */
+
     def "somebody whose user number was typed whole is found first, however many names hold it"() {
         given:
         def connection = database.connection
@@ -232,26 +212,23 @@ class PeopleIntegrationSpec extends Specification {
 
     def "a search asked to find fewer than one person is refused"() {
         when:
-        people.search(new PeopleSearch("ada"), 0)
+        people.search(new PeopleSearch("ari"), 0)
 
         then:
         def refused = thrown(IllegalArgumentException)
         refused.message == "A search must find at least one, not 0"
     }
 
-    /**
-     * The directory's floor admits a user number with a space in front; the type does not. Shown, it
-     * is a twin of somebody else nobody can tell apart; left out, the search lies about the directory.
-     */
+    /** Stored user identifiers must be readable; an invalid identifier fails the whole search. */
     def "a stored user number this system will not show fails the search loudly, rather than being shown or left out"() {
         given:
         def connection = database.connection
         connection.autoCommit = false
         def session = JdbcClient.create(new SingleConnectionDataSource(connection, true))
-        inDirectory(session, " 000399", "Ada Written By Hand")
+        inDirectory(session, " 000399", "Ari Written By Hand")
 
         when:
-        new People(session).search(new PeopleSearch("ada"), 20)
+        new People(session).search(new PeopleSearch("ari"), 20)
 
         then:
         def failed = thrown(IllegalStateException)

@@ -17,7 +17,9 @@ import org.lilradish.lite.app.change.Author;
 import org.lilradish.lite.domain.declaration.Declaration;
 import org.lilradish.lite.domain.declaration.DeclarationSide;
 import org.lilradish.lite.domain.declaration.Field;
+import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.declaration.FieldShape;
+import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.identity.UserId;
@@ -27,7 +29,9 @@ import org.lilradish.lite.domain.registry.EntryId;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 import org.lilradish.lite.domain.run.Ceiling;
+import org.lilradish.lite.domain.search.SearchWay;
 import org.lilradish.lite.domain.wire.StoreLabels;
+import org.lilradish.lite.domain.workflow.ConstantFit;
 import org.lilradish.lite.domain.workflow.ModelChoice;
 import org.lilradish.lite.domain.workflow.Pointer;
 import org.lilradish.lite.domain.workflow.Producer;
@@ -49,6 +53,8 @@ final class WorkflowDrafts {
     private static final String AUTHOR = Author.OF_CALLER;
 
     /* Every row naming a step goes before the steps; a route's fields go in one statement, parents with children. */
+    private static final String PARTS_CLEARED = "delete from search_question_parts where entry_version_id = :version";
+
     private static final String BINDINGS_CLEARED = "delete from bindings where entry_version_id = :version";
 
     private static final String ROUTE_FIELDS_CLEARED = """
@@ -67,18 +73,25 @@ final class WorkflowDrafts {
     private static final String STEPS = """
             insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind, pinned_version_id,
                                         pinned_kind, code_step, producer, producer_model, producer_mode, tries,
-                                        reviewer_model, reviewer_mode, tells_what_happened, created_by)
+                                        reviewer_model, reviewer_mode, tells_what_happened, search_way,
+                                        search_title_standing, search_body_standing, search_references_standing,
+                                        search_other_standing, created_by)
             select step.id, :version, step.position, step.name, cast(step.kind as step_kind), step.pinned,
                    cast(step.pinned_kind as entry_kind), cast(step.code_step as code_step),
                    cast(step.producer as step_producer), step.producer_model, step.producer_mode, step.tries,
-                   step.reviewer_model, step.reviewer_mode, step.told, %s
+                   step.reviewer_model, step.reviewer_mode, step.told, step.search_way,
+                   cast(step.title_standing as field_standing), cast(step.body_standing as field_standing),
+                   cast(step.references_standing as field_standing), cast(step.other_standing as field_standing), %s
               from unnest(cast(:ids as uuid[]), cast(:positions as integer[]), cast(:names as text[]),
                           cast(:kinds as text[]), cast(:pinned as uuid[]), cast(:pinnedKinds as text[]),
                           cast(:codeSteps as text[]), cast(:producers as text[]), cast(:producerModels as text[]),
                           cast(:producerModes as text[]), cast(:tries as integer[]), cast(:reviewerModels as text[]),
-                          cast(:reviewerModes as text[]), cast(:told as boolean[]))
+                          cast(:reviewerModes as text[]), cast(:told as boolean[]), cast(:searchWays as text[]),
+                          cast(:titleStandings as text[]), cast(:bodyStandings as text[]),
+                          cast(:referencesStandings as text[]), cast(:otherStandings as text[]))
                    as step(id, position, name, kind, pinned, pinned_kind, code_step, producer, producer_model,
-                           producer_mode, tries, reviewer_model, reviewer_mode, told)
+                           producer_mode, tries, reviewer_model, reviewer_mode, told, search_way, title_standing,
+                           body_standing, references_standing, other_standing)
             """.formatted(AUTHOR);
 
     private static final String CASES = """
@@ -99,6 +112,15 @@ final class WorkflowDrafts {
                           cast(:targets as text[]), cast(:sourceSteps as uuid[]), cast(:sourcePaths as text[]),
                           cast(:constants as text[]))
                    as bound(step, step_kind, route_case, target, source_step, source_path, constant)
+            """.formatted(AUTHOR);
+
+    private static final String PARTS = """
+            insert into search_question_parts (entry_version_id, workflow_step_id, position, literal_text,
+                                               source_step_id, source_path, created_by)
+            select :version, part.step, part.position, part.literal, part.source_step, part.source_path, %s
+              from unnest(cast(:steps as uuid[]), cast(:positions as integer[]), cast(:literals as text[]),
+                          cast(:sourceSteps as uuid[]), cast(:sourcePaths as text[]))
+                   as part(step, position, literal, source_step, source_path)
             """.formatted(AUTHOR);
 
     /* now() is when this transaction began, which can be before the row it waited on the lock for was made,
@@ -162,13 +184,15 @@ final class WorkflowDrafts {
         return written(group, entry, version, caller, sent.revision(), draft -> {
             Pins pins = pinsOf(group, draft, sent.steps());
             requireBounded(group, draft, sent);
-            for (String cleared : List.of(BINDINGS_CLEARED, ROUTE_FIELDS_CLEARED, CASES_CLEARED, STEPS_CLEARED)) {
+            for (String cleared :
+                    List.of(PARTS_CLEARED, BINDINGS_CLEARED, ROUTE_FIELDS_CLEARED, CASES_CLEARED, STEPS_CLEARED)) {
                 database.sql(cleared).param("version", draft.version().value()).update();
             }
             List<UUID> steps = keys(sent.steps().size());
             writeSteps(draft, sent.steps(), steps, pins, caller);
             List<List<UUID>> cases = writeRoutes(draft, sent.steps(), steps, pins, caller);
             Bindings bindings = new Bindings(steps);
+            Parts parts = new Parts(steps);
             for (int index = 0; index < sent.steps().size(); index++) {
                 FlowBody.SentStep step = sent.steps().get(index);
                 UUID key = steps.get(index);
@@ -183,10 +207,13 @@ final class WorkflowDrafts {
                                 null,
                                 cases.get(index).get(caseAt));
                     }
+                } else if (step.runs() instanceof FlowBody.SentRuns.Search search) {
+                    parts.addAll(key, search.question());
                 }
             }
             bindings.addAll(sent.outputs(), null, null);
             bindings.write(draft, caller);
+            parts.write(draft, caller);
         });
     }
 
@@ -305,6 +332,7 @@ final class WorkflowDrafts {
                     }
                 }
                 case FlowBody.SentRuns.Unchosen ignored -> {}
+                case FlowBody.SentRuns.Search ignored -> {}
             }
         }
         return pins;
@@ -326,6 +354,7 @@ final class WorkflowDrafts {
                             .forEach(targets::add);
                 case FlowBody.SentRuns.Code ignored -> {}
                 case FlowBody.SentRuns.Unchosen ignored -> {}
+                case FlowBody.SentRuns.Search ignored -> {}
             }
         }
         Map<EntryVersionId, StoredDeclarations.Halves> declared =
@@ -338,23 +367,56 @@ final class WorkflowDrafts {
                     switch (step.runs()) {
                         case FlowBody.SentRuns.Pinned held -> fieldsTaken(declared.get(held.version()));
                         case FlowBody.SentRuns.Route ignored -> 0;
+                        case FlowBody.SentRuns.Search ignored -> 0;
                         case FlowBody.SentRuns.Code ignored -> Declaration.MOST_FIELDS;
                         case FlowBody.SentRuns.Unchosen ignored -> Declaration.MOST_FIELDS;
                     };
             requireWithin(step.bindings(), taken);
+            StoredDeclarations.Halves target =
+                    switch (step.runs()) {
+                        case FlowBody.SentRuns.Pinned held -> declared.get(held.version());
+                        case FlowBody.SentRuns.Code code ->
+                            code.codeStep() == null ? null : released.of(code.codeStep());
+                        case FlowBody.SentRuns.Route ignored -> null;
+                        case FlowBody.SentRuns.Unchosen ignored -> null;
+                        case FlowBody.SentRuns.Search ignored -> null;
+                    };
+            requireTextLines(
+                    step.bindings(),
+                    target == null ? null : target.takes().declaration().fields());
             if (step.runs() instanceof FlowBody.SentRuns.Route route) {
                 if (route.cases().size() > termsOffered(group, route, sent.steps(), own, declared) + 1) {
                     throw LibraryRefusal.CASES_PAST_TERMS.raised();
                 }
                 for (FlowBody.SentCase routeCase : route.cases()) {
-                    EntryVersionId target = routeCase.workflow();
+                    EntryVersionId caseTarget = routeCase.workflow();
                     requireWithin(
                             routeCase.bindings(),
-                            target == null ? Declaration.MOST_FIELDS : fieldsTaken(declared.get(target)));
+                            caseTarget == null ? Declaration.MOST_FIELDS : fieldsTaken(declared.get(caseTarget)));
+                    StoredDeclarations.Halves caseDeclared = caseTarget == null ? null : declared.get(caseTarget);
+                    requireTextLines(
+                            routeCase.bindings(),
+                            caseDeclared == null
+                                    ? null
+                                    : caseDeclared.takes().declaration().fields());
                 }
             }
         }
         requireWithin(sent.outputs(), own.gives().declaration().fieldsHeld());
+        requireTextLines(sent.outputs(), own.gives().declaration().fields());
+    }
+
+    private static void requireTextLines(List<FlowBody.SentBinding> bindings, @Nullable List<Field> fields) {
+        if (fields == null) {
+            return;
+        }
+        for (FlowBody.SentBinding binding : bindings) {
+            if (binding.source() instanceof FlowBody.SentSource.Written written
+                    && binding.target().reach(fields) instanceof Pointer.Reach.At at
+                    && ConstantFit.breaksTextLines(ConstantJson.stored(written.stored()), at.field())) {
+                throw LibraryRefusal.CONSTANT_DOES_NOT_FIT.raised();
+            }
+        }
     }
 
     private static int fieldsTaken(StoredDeclarations.@Nullable Halves declared) {
@@ -392,6 +454,7 @@ final class WorkflowDrafts {
                 case FlowBody.SentRuns.Route earlier -> earlier.gives().half().fields();
                 case FlowBody.SentRuns.Code ignored -> null;
                 case FlowBody.SentRuns.Unchosen ignored -> null;
+                case FlowBody.SentRuns.Search ignored -> null;
             };
         }
         if (level == null
@@ -492,6 +555,13 @@ final class WorkflowDrafts {
         return cases;
     }
 
+    private static @Nullable String stepRead(FlowBody.SentRead read, List<UUID> steps) {
+        return switch (read) {
+            case FlowBody.SentSource.Input ignored -> null;
+            case FlowBody.SentSource.Step output -> steps.get(output.index()).toString();
+        };
+    }
+
     private List<UUID> keys(int count) {
         if (count == 0) {
             return List.of();
@@ -523,7 +593,7 @@ final class WorkflowDrafts {
         private final Deque<OpenDraft.PinnableVersion> cases = new ArrayDeque<>();
     }
 
-    /** Every step as one column per stored column, bound as arrays to a single statement. */
+    /** Steps sent in their declared order. */
     private static final class StepRows {
 
         private final List<String> ids = new ArrayList<>();
@@ -554,6 +624,16 @@ final class WorkflowDrafts {
 
         private final List<Boolean> told = new ArrayList<>();
 
+        private final List<@Nullable String> searchWays = new ArrayList<>();
+
+        private final List<@Nullable String> titleStandings = new ArrayList<>();
+
+        private final List<@Nullable String> bodyStandings = new ArrayList<>();
+
+        private final List<@Nullable String> referencesStandings = new ArrayList<>();
+
+        private final List<@Nullable String> otherStandings = new ArrayList<>();
+
         void add(UUID key, int position, FlowBody.SentStep step, OpenDraft.@Nullable PinnableVersion pin) {
             ids.add(key.toString());
             positions.add(position);
@@ -564,6 +644,7 @@ final class WorkflowDrafts {
                         case FlowBody.SentRuns.Pinned ignored -> StepKind.ENTRY;
                         case FlowBody.SentRuns.Code ignored -> StepKind.CODE_STEP;
                         case FlowBody.SentRuns.Route ignored -> StepKind.ROUTE;
+                        case FlowBody.SentRuns.Search ignored -> StepKind.SEARCH;
                     };
             kinds.add(kind == null ? null : StoreLabels.label(kind));
             pinned.add(pin == null ? null : pin.version().value().toString());
@@ -579,6 +660,17 @@ final class WorkflowDrafts {
             reviewerModels.add(reviewer == null ? null : reviewer.model().value());
             reviewerModes.add(reviewer == null ? null : modeStored(reviewer));
             told.add(producer instanceof Producer.Model chosen && chosen.toldWhatHappened());
+            FlowBody.SentRuns.Search search = step.runs() instanceof FlowBody.SentRuns.Search sent ? sent : null;
+            searchWays.add(search == null ? null : search.way());
+            titleStandings.add(standingStored(search, SearchWay.TITLE));
+            bodyStandings.add(standingStored(search, SearchWay.BODY));
+            referencesStandings.add(standingStored(search, SearchWay.REFERENCES));
+            otherStandings.add(standingStored(search, SearchWay.OTHER));
+        }
+
+        private static @Nullable String standingStored(FlowBody.SentRuns.@Nullable Search search, FieldName field) {
+            FieldStanding standing = search == null ? null : search.standings().get(field);
+            return standing == null ? null : StoreLabels.label(standing);
         }
 
         JdbcClient.StatementSpec bound(JdbcClient.StatementSpec statement) {
@@ -596,11 +688,15 @@ final class WorkflowDrafts {
                     .param("tries", tries.toArray(Integer[]::new))
                     .param("reviewerModels", reviewerModels.toArray(String[]::new))
                     .param("reviewerModes", reviewerModes.toArray(String[]::new))
-                    .param("told", told.toArray(Boolean[]::new));
+                    .param("told", told.toArray(Boolean[]::new))
+                    .param("searchWays", searchWays.toArray(String[]::new))
+                    .param("titleStandings", titleStandings.toArray(String[]::new))
+                    .param("bodyStandings", bodyStandings.toArray(String[]::new))
+                    .param("referencesStandings", referencesStandings.toArray(String[]::new))
+                    .param("otherStandings", otherStandings.toArray(String[]::new));
         }
     }
 
-    /** Every binding written, by what it fills, as one column per stored column. */
     private final class Bindings {
 
         private final List<UUID> steps;
@@ -636,14 +732,9 @@ final class WorkflowDrafts {
             cases.add(routeCase == null ? null : routeCase.toString());
             targets.add(target);
             switch (source) {
-                case FlowBody.SentSource.Input input -> {
-                    sourceSteps.add(null);
-                    sourcePaths.add(input.pointer().published());
-                    constants.add(null);
-                }
-                case FlowBody.SentSource.Step output -> {
-                    sourceSteps.add(steps.get(output.index()).toString());
-                    sourcePaths.add(output.pointer().published());
+                case FlowBody.SentRead read -> {
+                    sourceSteps.add(stepRead(read, steps));
+                    sourcePaths.add(read.pointer().published());
                     constants.add(null);
                 }
                 case FlowBody.SentSource.Written written -> {
@@ -666,6 +757,60 @@ final class WorkflowDrafts {
                     .param("sourceSteps", sourceSteps.toArray(String[]::new))
                     .param("sourcePaths", sourcePaths.toArray(String[]::new))
                     .param("constants", constants.toArray(String[]::new))
+                    .param("version", draft.version().value())
+                    .param("caller", caller.value())
+                    .update();
+        }
+    }
+
+    private final class Parts {
+
+        private final List<UUID> steps;
+
+        private final List<String> owners = new ArrayList<>();
+
+        private final List<Integer> positions = new ArrayList<>();
+
+        private final List<@Nullable String> literals = new ArrayList<>();
+
+        private final List<@Nullable String> sourceSteps = new ArrayList<>();
+
+        private final List<@Nullable String> sourcePaths = new ArrayList<>();
+
+        Parts(List<UUID> steps) {
+            this.steps = steps;
+        }
+
+        /* A part's place is counted from 0, which the store holds below the most parts; a step's is counted from 1. */
+        void addAll(UUID step, List<FlowBody.SentPart> question) {
+            for (int position = 0; position < question.size(); position++) {
+                owners.add(step.toString());
+                positions.add(position);
+                switch (question.get(position)) {
+                    case FlowBody.SentPart.Text text -> {
+                        literals.add(text.text());
+                        sourceSteps.add(null);
+                        sourcePaths.add(null);
+                    }
+                    case FlowBody.SentPart.Read read -> {
+                        literals.add(null);
+                        sourceSteps.add(stepRead(read.source(), steps));
+                        sourcePaths.add(read.source().pointer().published());
+                    }
+                }
+            }
+        }
+
+        void write(OpenDraft draft, UserId caller) {
+            if (owners.isEmpty()) {
+                return;
+            }
+            database.sql(PARTS)
+                    .param("steps", owners.toArray(String[]::new))
+                    .param("positions", positions.toArray(Integer[]::new))
+                    .param("literals", literals.toArray(String[]::new))
+                    .param("sourceSteps", sourceSteps.toArray(String[]::new))
+                    .param("sourcePaths", sourcePaths.toArray(String[]::new))
                     .param("version", draft.version().value())
                     .param("caller", caller.value())
                     .update();

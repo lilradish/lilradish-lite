@@ -1,5 +1,12 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useCallback, useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -7,7 +14,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { FillField, FillReason } from "../../../api/filling";
 import { codePointsIn } from "../../../lib/filling/writing";
 import { theme } from "../../../lib/theme/theme";
-import { draftOf, placedAt, type LevelDraft } from "./fillDrafts";
+import {
+  draftFrom,
+  draftOf,
+  draftReader,
+  placedAt,
+  type LevelDraft,
+} from "./fillDrafts";
 import {
   FillForm,
   placeId,
@@ -15,6 +28,23 @@ import {
   type Left,
   type Unread,
 } from "./FillForm";
+
+function fileStatus(
+  name: RegExp,
+  words: RegExp,
+  root: ParentNode = document,
+): HTMLElement | null {
+  return (
+    [...root.querySelectorAll("bdi")]
+      .map((part) => part.parentElement)
+      .find(
+        (part) =>
+          part?.lastElementChild?.tagName === "SPAN" &&
+          name.test(part.firstElementChild?.textContent ?? "") &&
+          words.test(part.lastElementChild.textContent ?? ""),
+      ) ?? null
+  );
+}
 
 vi.mock("../../../lib/filling/writing", async (importOriginal) => {
   const actual =
@@ -93,6 +123,22 @@ const CONTACT: FillField = {
   ],
 };
 
+const ATTACHMENT: FillField = {
+  name: "attachment",
+  label: "Attachment",
+  kind: "file",
+  types: ["text/plain", "application/vnd.demo-sample+json"],
+  maximumBytes: 8,
+  mustBeGiven: true,
+};
+
+const ATTACHMENTS: FillField = {
+  ...ATTACHMENT,
+  name: "attachments",
+  label: "Attachments",
+  most: 2,
+};
+
 const FIELDS = [
   COMPLAINT,
   ORDER_REFERENCE,
@@ -122,6 +168,7 @@ function Filled({
   onDrafted,
   onLeave,
   onUnread,
+  initial,
 }: {
   readonly fields: readonly FillField[];
   readonly marks: ReadonlyMap<string, FillReason>;
@@ -129,8 +176,9 @@ function Filled({
   readonly onDrafted: (draft: LevelDraft) => void;
   readonly onLeave: Left;
   readonly onUnread: Unread;
+  readonly initial?: LevelDraft;
 }) {
-  const [draft, setDraft] = useState(() => draftOf(fields));
+  const [draft, setDraft] = useState(() => initial ?? draftOf(fields));
   const placing = useCallback<Drafted>(
     (path, next, takenAway) => {
       onDraft(path, next, takenAway);
@@ -155,6 +203,7 @@ function Filled({
 function filling(
   fields: readonly FillField[] = FIELDS,
   marks: ReadonlyMap<string, FillReason> = NO_MARKS,
+  initial?: LevelDraft,
 ) {
   const onDraft = vi.fn<Drafted>();
   const onDrafted = vi.fn<(draft: LevelDraft) => void>();
@@ -169,6 +218,7 @@ function filling(
         onDrafted={onDrafted}
         onLeave={onLeave}
         onUnread={onUnread}
+        initial={initial}
       />
     </ThemeProvider>,
   );
@@ -211,6 +261,490 @@ describe("placeId", () => {
   });
 });
 
+describe("text lines", () => {
+  it("draws one line as an input and several or older text as a textarea", () => {
+    filling([
+      { ...COMPLAINT, lines: "one" },
+      { ...COMPLAINT, name: "details", label: "Details", lines: "several" },
+      { ...COMPLAINT, name: "older", label: "Older" },
+    ]);
+
+    expect(screen.getByRole("textbox", { name: "Complaint" }).tagName).toBe(
+      "INPUT",
+    );
+    expect(screen.getByRole("textbox", { name: "Details" }).tagName).toBe(
+      "TEXTAREA",
+    );
+    expect(screen.getByRole("textbox", { name: "Older" }).tagName).toBe(
+      "TEXTAREA",
+    );
+  });
+
+  it("refuses pasted and dropped line breaks before an input can change its value", () => {
+    const { drafted } = filling([{ ...COMPLAINT, lines: "one", longest: 20 }]);
+    const input = screen.getByRole("textbox", { name: "Complaint" });
+    fireEvent.change(input, { target: { value: "Demo Sample" } });
+    const newline = String.fromCodePoint(0x0a);
+    const paste = createEvent.paste(input, {
+      clipboardData: { getData: () => `a${newline}b` },
+    });
+
+    fireEvent(input, paste);
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(input).toHaveValue("Demo Sample");
+    expect(drafted().complaint).toBe("Demo Sample");
+    expect(input).toHaveAccessibleDescription(
+      /This field takes one line, and this holds a line break\./,
+    );
+
+    const drop = createEvent.drop(input, {
+      dataTransfer: { getData: () => `c${newline}d` },
+    });
+    fireEvent(input, drop);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(input).toHaveValue("Demo Sample");
+    expect(drafted().complaint).toBe("Demo Sample");
+
+    const keypress = createEvent.keyPress(input, {
+      key: "Enter",
+      which: 10,
+      charCode: 10,
+    });
+    fireEvent(input, keypress);
+    expect(keypress.defaultPrevented).toBe(true);
+    expect(input).toHaveValue("Demo Sample");
+  });
+
+  it("ends a rejected paste when a valid edit is made, even if the old value returns", () => {
+    const { drafted } = filling([{ ...COMPLAINT, lines: "one" }]);
+    const input = screen.getByRole("textbox", { name: "Complaint" });
+    fireEvent.change(input, { target: { value: "A" } });
+    const paste = createEvent.paste(input, {
+      clipboardData: {
+        getData: () => `A${String.fromCodePoint(0x0a)}B`,
+      },
+    });
+
+    fireEvent(input, paste);
+    expect(paste.defaultPrevented).toBe(true);
+    expect(input).toHaveValue("A");
+    expect(drafted().complaint).toBe("A");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(input, { target: { value: "B" } });
+    expect(input).toHaveAttribute("aria-invalid", "false");
+    fireEvent.change(input, { target: { value: "A" } });
+    expect(drafted().complaint).toBe("A");
+    expect(input).toHaveAttribute("aria-invalid", "false");
+    expect(input).not.toHaveAccessibleDescription(/holds a line break/);
+  });
+
+  it("restores the caller's mark after a valid edit ends a rejected paste", () => {
+    filling(
+      [{ ...COMPLAINT, lines: "one" }],
+      new Map([['["complaint"]', "too_long" as const]]),
+    );
+    const input = screen.getByRole("textbox", { name: "Complaint" });
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.paste(input, {
+      clipboardData: {
+        getData: () => `A${String.fromCodePoint(0x0a)}B`,
+      },
+    });
+    expect(input).toHaveAccessibleDescription(/holds a line break/);
+
+    fireEvent.change(input, { target: { value: "B" } });
+    expect(input).toHaveAccessibleDescription(/longer than this field takes/);
+    expect(input).not.toHaveAccessibleDescription(/holds a line break/);
+  });
+});
+
+describe("file controls", () => {
+  it("shows a single file field's type and size limits, holds a selected browser file, then removes it", () => {
+    const file = new File(["data"], "Demo Sample.txt", { type: "text/plain" });
+    const { drafted, touched } = filling([ATTACHMENT]);
+    const input = screen.getByLabelText(/Attachment/) as HTMLInputElement;
+
+    expect(input).toHaveAttribute(
+      "accept",
+      "text/plain,application/vnd.demo-sample+json",
+    );
+    expect(screen.getByText(/Accepted file types:/)).toBeInTheDocument();
+    expect(screen.getByText(/at most 8 bytes/)).toBeInTheDocument();
+    expect(drafted().attachment).toBeNull();
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(drafted().attachment).toEqual({ pending: file });
+    expect(touched()).toEqual(["attachment"]);
+    const status = fileStatus(
+      /Demo Sample.txt/,
+      /is selected and awaits upload/,
+    );
+    expect(status).toBeVisible();
+    expect(status).toHaveTextContent(
+      /Demo Sample.txt.*is selected and awaits upload/,
+    );
+    expect(getComputedStyle(status!.lastElementChild!).fontStyle).toBe(
+      "italic",
+    );
+    expect(input).toHaveAccessibleDescription(/Accepted file types:/);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Take away.*Demo Sample.txt/ }),
+    );
+    expect(drafted().attachment).toBeNull();
+    expect(screen.queryByText(/awaits upload/)).toBeNull();
+    expect(input).toHaveFocus();
+  });
+
+  it.each([
+    ["missing type", new File(["x"], "Demo Sample.txt"), /has no file type/],
+    [
+      "malformed type",
+      new File(["x"], "Demo Sample.txt", { type: "text/plain;" }),
+      /invalid file type/,
+    ],
+    [
+      "wrong type",
+      new File(["x"], "Demo Sample.png", { type: "image/png" }),
+      /not a type this field takes/,
+    ],
+    [
+      "too large",
+      new File(["123456789"], "Demo Sample.txt", { type: "text/plain" }),
+      /larger than this field allows/,
+    ],
+    [
+      "bad name",
+      new File(["x"], "Demo\nSample.txt", { type: "text/plain" }),
+      /no usable one-line name/,
+    ],
+  ])("names a selected file with %s immediately", (_case, file, message) => {
+    const { drafted } = filling([ATTACHMENT]);
+    const input = screen.getByLabelText(/Attachment/);
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(drafted().attachment).toBeNull();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    const status = fileStatus(/Demo/, message);
+    expect(status).toBeVisible();
+    expect(getComputedStyle(status!.lastElementChild!).fontStyle).toBe(
+      "italic",
+    );
+    expect(screen.queryByText(/awaits upload/)).toBeNull();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+
+    const dismiss = screen.getByRole("button", {
+      name: "Dismiss rejected files",
+    });
+    expect(dismiss).toHaveClass(
+      buttonClasses.outlined,
+      buttonClasses.colorInherit,
+    );
+    fireEvent.click(dismiss);
+    expect(screen.queryByText(message)).toBeNull();
+    expect(drafted().attachment).toBeNull();
+    expect(input).not.toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("keeps several selected files in order and removes one without changing the other", () => {
+    const first = new File(["one"], "Demo Sample one.txt", {
+      type: "text/plain",
+    });
+    const second = new File(["two"], "Demo Sample two.txt", {
+      type: "text/plain",
+    });
+    const { drafted, takenAway } = filling([ATTACHMENTS]);
+    const input = screen.getByLabelText(/Choose files for/);
+
+    fireEvent.change(input, { target: { files: [first, second] } });
+
+    expect(drafted().attachments).toEqual([
+      { pending: first },
+      { pending: second },
+    ]);
+    expect(screen.getByText("2 / at most 2")).toBeInTheDocument();
+    expect(fileStatus(/Demo Sample one.txt/, /is selected/)).toBeVisible();
+    expect(fileStatus(/Demo Sample two.txt/, /is selected/)).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Take away.*Demo Sample one.txt/ }),
+    );
+    expect(drafted().attachments).toEqual([{ pending: second }]);
+    expect(takenAway()).toBe(0);
+    expect(fileStatus(/Demo Sample one.txt/, /is selected/)).toBeNull();
+    expect(input).toHaveFocus();
+  });
+
+  it("names an invalid file in a multi-file selection and leaves the prior order alone", () => {
+    const first = new File(["one"], "Demo Sample first.txt", {
+      type: "text/plain",
+    });
+    const wrong = new File(["two"], "Demo Sample second.png", {
+      type: "image/png",
+    });
+    const { drafted, unread } = filling([ATTACHMENTS]);
+    const input = screen.getByLabelText(/Choose files for/);
+
+    fireEvent.change(input, { target: { files: [first] } });
+    fireEvent.change(input, { target: { files: [wrong] } });
+
+    expect(drafted().attachments).toEqual([{ pending: first }]);
+    expect(unread()).toEqual([["attachments"], true]);
+    expect(
+      fileStatus(/Demo Sample second.png/, /not a type this field takes/),
+    ).toBeVisible();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("rejects a multi-file selection above its count by the excess file's name without adding any of it", () => {
+    const files = ["one", "two", "three"].map(
+      (word) =>
+        new File(["x"], `Demo Sample ${word}.txt`, { type: "text/plain" }),
+    );
+    const { drafted, unread } = filling([ATTACHMENTS]);
+    const input = screen.getByLabelText(/Choose files for/);
+
+    fireEvent.change(input, { target: { files } });
+
+    expect(drafted().attachments).toEqual([]);
+    expect(unread()).toEqual([["attachments"], true]);
+    expect(fileStatus(/Demo Sample three.txt/, /would exceed/)).toBeVisible();
+    expect(
+      screen.getByText(/No files from this selection were added/),
+    ).toBeInTheDocument();
+
+    const dismiss = screen.getByRole("button", {
+      name: "Dismiss rejected files",
+    });
+    expect(dismiss).toHaveClass(
+      buttonClasses.outlined,
+      buttonClasses.colorInherit,
+    );
+    fireEvent.click(dismiss);
+    expect(unread()).toEqual([["attachments"], false]);
+    expect(screen.queryByText(/would exceed/)).toBeNull();
+    expect(input).toHaveFocus();
+  });
+
+  it("pages through a large rejected selection without drawing more than one page", () => {
+    const files = Array.from(
+      { length: 160 },
+      (_, index) =>
+        new File(["x"], `Demo Sample ${index}.txt`, { type: "text/plain" }),
+    );
+    const { drafted, unread } = filling([ATTACHMENTS]);
+    const input = screen.getByLabelText(/Choose files for/);
+
+    fireEvent.change(input, { target: { files } });
+
+    expect(drafted().attachments).toEqual([]);
+    expect(unread()).toEqual([["attachments"], true]);
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(50);
+    expect(fileStatus(/Demo Sample 2.txt/, /would exceed/)).toBeVisible();
+    expect(fileStatus(/Demo Sample 159.txt/, /would exceed/)).toBeNull();
+    const previous = screen.getByRole("button", {
+      name: "Show previous rejected files.",
+    });
+    const more = screen.getByRole("button", {
+      name: /Show 50 more rejected files/,
+    });
+    expect(previous).toHaveAttribute("aria-disabled", "true");
+    expect(previous).toHaveClass(
+      buttonClasses.colorInherit,
+      buttonClasses.sizeSmall,
+    );
+    expect(more).toHaveClass(
+      buttonClasses.colorInherit,
+      buttonClasses.sizeSmall,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 50 more rejected files/ }),
+    );
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(50);
+    expect(fileStatus(/Demo Sample 2.txt/, /would exceed/)).toBeNull();
+    expect(fileStatus(/Demo Sample 52.txt/, /would exceed/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 50 more rejected files/ }),
+    );
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(50);
+    expect(fileStatus(/Demo Sample 102.txt/, /would exceed/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 8 more rejected files/ }),
+    );
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(8);
+    expect(fileStatus(/Demo Sample 159.txt/, /would exceed/)).toBeVisible();
+    expect(fileStatus(/Demo Sample 102.txt/, /would exceed/)).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "All rejected files have been shown.",
+      }),
+    ).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show previous rejected files." }),
+    );
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(50);
+    expect(fileStatus(/Demo Sample 102.txt/, /would exceed/)).toBeVisible();
+    expect(fileStatus(/Demo Sample 159.txt/, /would exceed/)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show previous rejected files." }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show previous rejected files." }),
+    );
+    expect(screen.getAllByText(/would exceed/)).toHaveLength(50);
+    expect(fileStatus(/Demo Sample 2.txt/, /would exceed/)).toBeVisible();
+    expect(fileStatus(/Demo Sample 52.txt/, /would exceed/)).toBeNull();
+    expect(drafted().attachments).toEqual([]);
+  });
+
+  it("shows hidden filename controls as code points in selected, retained and rejected states", () => {
+    const turn = String.fromCodePoint(0x202e);
+    const name = `Demo${turn}Sample.txt`;
+    const file = new File(["x"], name, { type: "text/plain" });
+    const { container } = filling([ATTACHMENT, ATTACHMENTS]);
+    const single = screen.getByLabelText(/Attachment\b/);
+    const many = screen.getByLabelText(/Choose files for/);
+
+    fireEvent.change(single, { target: { files: [file] } });
+    expect(fileStatus(/DemoU\+202ESample.txt/, /awaits upload/)).toBeVisible();
+    const takeAway = screen.getByRole("button", {
+      name: /Take away.*U\+202E/,
+    });
+    expect(takeAway).toBeVisible();
+    expect(takeAway.getAttribute("aria-label")).not.toContain(turn);
+    expect(container.textContent).not.toContain(turn);
+
+    fireEvent.change(many, {
+      target: { files: [new File(["x"], name, { type: "image/png" })] },
+    });
+    expect(fileStatus(/DemoU\+202ESample.txt/, /not a type/)).toBeVisible();
+    expect(container.textContent).not.toContain(turn);
+
+    const kept = { id: "stored", name, type: "text/plain", size: 1 };
+    const retained = draftFrom([ATTACHMENT], { attachment: kept });
+    const onDraft = vi.fn();
+    const { container: prior } = render(
+      <ThemeProvider theme={theme}>
+        <FillForm
+          formId="retained-control"
+          fields={[ATTACHMENT]}
+          draft={retained}
+          marks={NO_MARKS}
+          onDraft={onDraft}
+          onLeave={vi.fn()}
+          onUnread={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    expect(
+      fileStatus(/DemoU\+202ESample.txt/, /previously given/, prior),
+    ).toBeVisible();
+    expect(prior.textContent).not.toContain(turn);
+    expect(JSON.stringify(retained)).toContain(name);
+  });
+
+  it("keeps an overlong native filename's data separate from the omitted-marker explanation", () => {
+    const turn = String.fromCodePoint(0x202e);
+    const name = `${Array.from({ length: 1001 }, () => `a${turn}`).join("")}.txt`;
+    const file = new File(["x"], name, { type: "text/plain" });
+    const { container, drafted } = filling([ATTACHMENT, ATTACHMENTS]);
+
+    fireEvent.change(screen.getByLabelText(/Attachment\b/), {
+      target: { files: [file] },
+    });
+    const rejected = fileStatus(/a+/, /no usable one-line name/);
+    expect(rejected).toBeVisible();
+    expect(rejected!.querySelector("bdi")).not.toHaveTextContent("left out");
+    expect(rejected!.querySelector("span")).toHaveTextContent("left out");
+    expect(rejected).toHaveTextContent("1,001 characters");
+    expect(container.textContent).not.toContain(turn);
+    expect(drafted().attachment).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/Choose files for/), {
+      target: {
+        files: [
+          new File(["x"], "Demo Sample 1.txt", { type: "text/plain" }),
+          new File(["x"], "Demo Sample 2.txt", { type: "text/plain" }),
+          file,
+        ],
+      },
+    });
+    expect(fileStatus(/a+/, /would exceed the number/)).toBeVisible();
+    expect(drafted().attachments).toHaveLength(0);
+    expect(container.textContent).not.toContain(turn);
+  });
+
+  it("accepts a selected file with a legal media-type parameter in single and many controls", () => {
+    const file = new File(["x"], "Demo Sample.txt", {
+      type: 'text/plain; charset="utf-8"',
+    });
+    const { drafted } = filling([ATTACHMENT, ATTACHMENTS]);
+    fireEvent.change(screen.getByLabelText(/Attachment\b/), {
+      target: { files: [file] },
+    });
+    fireEvent.change(screen.getByLabelText(/Choose files for/), {
+      target: { files: [file] },
+    });
+
+    expect(drafted().attachment).toEqual({ pending: file });
+    expect(drafted().attachments).toEqual([{ pending: file }]);
+    expect(
+      screen.queryByText(/invalid file type|not a type this field takes/),
+    ).toBeNull();
+  });
+
+  it("shows retained file metadata without presenting its id as a new browser file", () => {
+    const kept = {
+      id: "retained-file",
+      name: "Demo Sample kept.txt",
+      type: "text/plain",
+      size: 4,
+    };
+    const draft = draftFrom([ATTACHMENT], { attachment: kept });
+    render(
+      <ThemeProvider theme={theme}>
+        <FillForm
+          formId="retained"
+          fields={[ATTACHMENT]}
+          draft={draft}
+          marks={NO_MARKS}
+          onDraft={vi.fn()}
+          onLeave={vi.fn()}
+          onUnread={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(draft.attachment).toEqual({ kept, originalIndex: 0 });
+    expect(
+      fileStatus(/Demo Sample kept.txt/, /was previously given/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/retained-file/)).toBeNull();
+    expect(screen.getByLabelText(/Attachment/)).toHaveValue("");
+  });
+
+  it("draws a file field nested among ordinary fields through the same form", () => {
+    const nested: FillField = {
+      name: "details",
+      kind: "fields",
+      mustBeGiven: false,
+      fields: [ATTACHMENT],
+    };
+    const { drafted } = filling([nested]);
+    const input = screen.getByLabelText(/Attachment/);
+    const file = new File(["x"], "Demo Sample.txt", { type: "text/plain" });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(drafted().details).toEqual({ attachment: { pending: file } });
+    expect(screen.getByText(/awaits upload/)).toBeInTheDocument();
+  });
+});
+
 describe("FillForm", () => {
   it("draws one control to each field in declared order and what a field holds under it, each read by its label, or its name with underscores as spaces", () => {
     const { container } = filling();
@@ -244,7 +778,7 @@ describe("FillForm", () => {
     expect(complaint).toHaveAttribute("dir", "auto");
   });
 
-  it("keeps text typed past its limit whole rather than cutting it", async () => {
+  it("refuses text typed past its limit without cutting an accepted prefix", async () => {
     const { drafted } = filling();
 
     await userEvent.type(
@@ -252,11 +786,42 @@ describe("FillForm", () => {
       "Leaks everywhere",
     );
 
-    expect(drafted().complaint).toBe("Leaks everywhere");
+    expect(drafted().complaint).toBe("Leaks ever");
     expect(
       screen.getByRole("textbox", { name: "Complaint" }),
     ).toHaveAccessibleDescription(
-      "What went wrong, in the customer's words. 16 / at most 10",
+      "This is longer than this field takes. What went wrong, in the customer's words. 10 / at most 10",
+    );
+    expect(screen.getByRole("textbox", { name: "Complaint" })).toHaveValue(
+      "Leaks ever",
+    );
+  });
+
+  it("counts astral characters once, refuses an overlong paste, and accepts a selected replacement", async () => {
+    const field = { ...COMPLAINT, longest: 2 };
+    const { drafted } = filling([field]);
+    const complaint = screen.getByRole("textbox", {
+      name: "Complaint",
+    }) as HTMLTextAreaElement;
+    const astral = String.fromCodePoint(0x1f642);
+
+    await userEvent.type(complaint, `${astral}A`);
+    expect(drafted().complaint).toBe(`${astral}A`);
+    expect(complaint).toHaveAccessibleDescription(/2 \/ at most 2/);
+
+    await userEvent.paste("B");
+    expect(drafted().complaint).toBe(`${astral}A`);
+    expect(complaint).toHaveValue(`${astral}A`);
+    expect(complaint).toHaveAccessibleDescription(
+      /This is longer than this field takes/,
+    );
+    expect(complaint).toHaveFocus();
+
+    complaint.setSelectionRange(astral.length, astral.length + 1);
+    await userEvent.paste("C");
+    expect(drafted().complaint).toBe(`${astral}C`);
+    expect(complaint).toHaveAccessibleDescription(
+      "What went wrong, in the customer's words. 2 / at most 2",
     );
   });
 
@@ -264,7 +829,7 @@ describe("FillForm", () => {
     filling();
     await userEvent.type(
       within(group("Contact")).getByRole("textbox", { name: "Email" }),
-      "ada@example.org",
+      "avo@example.org",
     );
     vi.mocked(codePointsIn).mockClear();
 
@@ -273,7 +838,7 @@ describe("FillForm", () => {
       "K",
     );
 
-    expect(vi.mocked(codePointsIn).mock.calls).toEqual([["K"]]);
+    expect(vi.mocked(codePointsIn).mock.calls).toEqual([["K"], ["K"]]);
     expect(
       within(group("Contact")).getByRole("textbox", { name: "Email" }),
     ).toHaveAccessibleDescription("15 / at most 20");
@@ -286,6 +851,19 @@ describe("FillForm", () => {
     expect(complaint).toHaveAttribute("aria-invalid", "true");
     expect(complaint).toHaveAccessibleDescription(
       "This is longer than this field takes. What went wrong, in the customer's words. 0 / at most 10",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "order reference" }),
+    ).toHaveAttribute("aria-invalid", "false");
+  });
+
+  it("says a line break refusal at its field and leaves every other field unmarked", () => {
+    filling(FIELDS, new Map([['["complaint"]', "line_break" as const]]));
+
+    const complaint = screen.getByRole("textbox", { name: "Complaint" });
+    expect(complaint).toHaveAttribute("aria-invalid", "true");
+    expect(complaint).toHaveAccessibleDescription(
+      "This field takes one line, and this holds a line break. What went wrong, in the customer's words. 0 / at most 10",
     );
     expect(
       screen.getByRole("textbox", { name: "order reference" }),
@@ -401,7 +979,7 @@ describe("FillForm", () => {
 
     for (const control of controls) {
       expect(control).toHaveAccessibleDescription(
-        "This is not written as this field takes it.",
+        "This is not written as this field takes it. Give the time to the second, with up to six digits after the point.",
       );
       expect(control).toHaveAttribute("aria-invalid", "true");
     }
@@ -413,7 +991,9 @@ describe("FillForm", () => {
 
     expect(
       within(at).getByRole("combobox", { name: "Offset" }),
-    ).toHaveAccessibleDescription("");
+    ).toHaveAccessibleDescription(
+      "Give the time to the second, with up to six digits after the point.",
+    );
     expect(
       within(at).getByRole("combobox", { name: "Offset" }),
     ).not.toHaveAttribute("aria-invalid");
@@ -632,6 +1212,56 @@ describe("FillForm", () => {
       time: "09:30",
       offset: "-03:30",
     });
+  });
+
+  it("shows a four-digit fractional time and keeps a six-digit edit exactly, while seven does not fit", () => {
+    const initial = draftFrom([AT], {
+      at: "2026-07-01T09:30:01.1234+05:43",
+    });
+    const { drafted } = filling([AT], NO_MARKS, initial);
+    const time = within(group("At")).getByRole("textbox", { name: "Time" });
+
+    expect(time).toHaveValue("09:30:01.1234");
+    expect(draftReader()([AT], drafted(), new Set()).values.at).toBe(
+      "2026-07-01T09:30:01.1234+05:43",
+    );
+
+    fireEvent.change(time, { target: { value: "09:30:01.123456" } });
+    expect(draftReader()([AT], drafted(), new Set()).values.at).toBe(
+      "2026-07-01T09:30:01.123456+05:43",
+    );
+
+    fireEvent.change(time, { target: { value: "09:30:01.1234567" } });
+    expect(time).toHaveValue("09:30:01.1234567");
+    expect(draftReader()([AT], drafted(), new Set()).problems).toEqual([
+      { path: ["at"], reason: "malformed" },
+    ]);
+  });
+
+  it("offers a standing non-quarter-hour offset once in order without changing the usual choices", async () => {
+    filling(
+      [AT],
+      NO_MARKS,
+      draftFrom([AT], { at: "2026-07-01T09:30:01+05:43" }),
+    );
+    const offset = within(group("At")).getByRole("combobox", {
+      name: "Offset",
+    });
+
+    await userEvent.click(offset);
+    const unusual = screen
+      .getAllByRole("option")
+      .map((each) => each.textContent);
+    expect(unusual).toHaveLength(114);
+    expect(unusual.filter((each) => each === "+05:43")).toHaveLength(1);
+    expect(unusual.indexOf("+05:43")).toBeLessThan(unusual.indexOf("+05:45"));
+
+    await userEvent.click(screen.getByRole("option", { name: "+05:45" }));
+    await userEvent.click(offset);
+    const usual = screen.getAllByRole("option").map((each) => each.textContent);
+    expect(usual).toHaveLength(113);
+    expect(usual).not.toContain("+05:43");
+    expect(usual).not.toContain("-00:00");
   });
 
   it("offers every quarter hour either way as far as fourteen hours, and never a zero offset with a minus sign", async () => {

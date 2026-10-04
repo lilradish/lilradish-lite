@@ -3,6 +3,7 @@ package org.lilradish.lite.app.library;
 import static java.util.Objects.requireNonNull;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import java.util.List;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.libprunus.spring.error.ApiErrorHandler;
@@ -26,6 +27,8 @@ final class ContentProblemsOutlet {
 
     private static final String PROBLEMS = "problems";
 
+    private static final String PROBLEM_TOTAL = "problemTotal";
+
     private static final String PINS = "pins";
 
     private final ApiErrorHandler outlet;
@@ -48,6 +51,7 @@ final class ContentProblemsOutlet {
                 refused.problems().stream()
                         .map(ContentProblemsOutlet::problemAnswer)
                         .toList());
+        problem.setProperty(PROBLEM_TOTAL, refused.problemTotal());
         if (!refused.pins().isEmpty()) {
             problem.setProperty(
                     PINS,
@@ -60,27 +64,71 @@ final class ContentProblemsOutlet {
         String code = problem.code().published();
         String part = problem.place().part().published();
         Long excess = problem.excess();
+        ContentProblem.FileLimits fileLimits = problem.fileLimits();
         return switch (problem.place()) {
-            case ContentPlace.Whole ignored -> new ProblemAnswer(code, part, null, null, null, null, null, excess);
+            case ContentPlace.Whole ignored ->
+                new ProblemAnswer(code, part, null, null, null, null, null, null, null, excess, fileLimits);
+            case ContentPlace.AtDrawing drawing ->
+                new ProblemAnswer(code, part, null, null, null, null, null, drawing.name(), null, excess, fileLimits);
             case ContentPlace.AtField field ->
-                new ProblemAnswer(code, part, field.fieldId(), null, null, null, null, excess);
+                new ProblemAnswer(code, part, field.fieldId(), null, null, null, null, null, null, excess, fileLimits);
             case ContentPlace.AtStep step ->
-                new ProblemAnswer(code, part, null, null, step.stepId(), null, null, excess);
+                new ProblemAnswer(code, part, null, null, step.stepId(), null, null, null, null, excess, fileLimits);
+            case ContentPlace.AtStepFields step ->
+                new ProblemAnswer(
+                        code, part, null, null, step.stepId(), null, null, null, step.fields(), excess, fileLimits);
             case ContentPlace.AtCase routeCase ->
-                new ProblemAnswer(code, part, null, null, routeCase.stepId(), routeCase.caseId(), null, excess);
+                new ProblemAnswer(
+                        code,
+                        part,
+                        null,
+                        null,
+                        routeCase.stepId(),
+                        routeCase.caseId(),
+                        null,
+                        null,
+                        null,
+                        excess,
+                        fileLimits);
+            case ContentPlace.AtCaseField field ->
+                new ProblemAnswer(
+                        code,
+                        part,
+                        field.fieldId(),
+                        null,
+                        field.stepId(),
+                        field.caseId(),
+                        null,
+                        null,
+                        null,
+                        excess,
+                        fileLimits);
             case ContentPlace.AtBinding binding ->
-                new ProblemAnswer(code, part, null, null, null, null, binding.bindingId(), excess);
+                new ProblemAnswer(
+                        code, part, null, null, null, null, binding.bindingId(), null, null, excess, fileLimits);
             case ContentPlace.AtInput input ->
-                new ProblemAnswer(code, part, input.fieldId(), null, input.stepId(), input.caseId(), null, excess);
+                new ProblemAnswer(
+                        code,
+                        part,
+                        input.fieldId(),
+                        null,
+                        input.stepId(),
+                        input.caseId(),
+                        null,
+                        null,
+                        null,
+                        excess,
+                        fileLimits);
             case ContentPlace.AtTerm term ->
-                new ProblemAnswer(code, part, null, term.termId(), null, null, null, excess);
+                new ProblemAnswer(code, part, null, term.termId(), null, null, null, null, null, excess, fileLimits);
         };
     }
 
     /**
      * Each key absent where the place names none: a field alone is one of the version's own or a route's, a field
-     * beside a step is an input of what that step, or that case of it, leads to.
+     * beside a step is either an input or a case output, distinguished by its problem code.
      *
+     * @param fields fields of what a step runs, beside the step, as what declares them names them, in its order
      * @param excess how far past its bound a size runs, absent for every problem that is not one of size
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -92,5 +140,8 @@ final class ContentProblemsOutlet {
             @Nullable UUID stepId,
             @Nullable UUID caseId,
             @Nullable UUID bindingId,
-            @Nullable Long excess) {}
+            @Nullable String name,
+            @Nullable List<String> fields,
+            @Nullable Long excess,
+            ContentProblem.@Nullable FileLimits fileLimits) {}
 }

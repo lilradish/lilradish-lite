@@ -2,13 +2,18 @@ package org.lilradish.lite.app.start;
 
 import static java.util.Objects.requireNonNull;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.UUID;
 import org.lilradish.lite.app.change.Author;
 import org.lilradish.lite.app.change.ChangeTransactions;
+import org.lilradish.lite.app.files.FileDeployment;
+import org.lilradish.lite.app.files.RunFiles;
 import org.lilradish.lite.app.filling.ValueProblemsRefusal;
 import org.lilradish.lite.app.group.GroupRoles;
 import org.lilradish.lite.app.library.OffersHeld;
 import org.lilradish.lite.app.run.RunEngine;
+import org.lilradish.lite.app.run.RunNumbering;
 import org.lilradish.lite.app.run.RunScope;
 import org.lilradish.lite.app.run.RunTree;
 import org.lilradish.lite.domain.filling.FillOutcome;
@@ -23,6 +28,7 @@ import org.lilradish.lite.domain.run.RunId;
 import org.lilradish.lite.domain.run.RunName;
 import org.lilradish.lite.domain.wire.CanonicalJson;
 import org.lilradish.lite.domain.wire.JsonValue;
+import org.lilradish.lite.web.MultipartFiles;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionOperations;
@@ -35,25 +41,25 @@ import org.springframework.transaction.support.TransactionOperations;
 @Component
 final class StartRuns {
 
-    /* The first key of every advisory lock on a group's run numbers; any other advisory lock, session-level ones
-    above all, takes a first key of its own. */
-    private static final int NUMBERING = 1;
-
-    // DB-SPECIFIC: advisory locks and hashtext are PostgreSQL's.
-    /* A statement of its own: one statement reads under the snapshot taken before a lock inside it was granted. */
-    private static final String NUMBERED = "select pg_advisory_xact_lock(:numbering, hashtext(cast(:group as text)))";
-
     // DB-SPECIFIC: uuidv7(), a jsonb cast and returning are PostgreSQL's.
     private static final String STARTED = """
             with minted as (select uuidv7() as run_id)
             insert into runs (run_id, group_id, number, name, entry_id, entry_version_id, root_run_id, depth,
                               started_with, created_by)
             select minted.run_id, :group,
-                   (select coalesce(max(taken.number), 0) + 1 from runs taken where taken.group_id = :group),
+                   %s,
                    :name, :entry, :version, minted.run_id, 0, cast(:values as jsonb), %s
               from minted
             returning run_id, number
-            """.formatted(Author.OF_CALLER);
+            """.formatted(RunNumbering.next(":group"), Author.OF_CALLER);
+
+    // DB-SPECIFIC: the file transaction needs its run ID before it reads the first file part.
+    private static final String STARTED_FILES = """
+            insert into runs (run_id, group_id, number, name, entry_id, entry_version_id, root_run_id, depth,
+                              started_with, created_by)
+            values (:run, :group, %s, :name, :entry, :version, :run, 0, cast(:values as jsonb), %s)
+            returning number
+            """.formatted(RunNumbering.next(":group"), Author.OF_CALLER);
 
     private final JdbcClient database;
 
@@ -65,13 +71,25 @@ final class StartRuns {
 
     private final RunEngine engine;
 
+    private final RunFiles files;
+
+    private final FileDeployment deployment;
+
     StartRuns(
-            JdbcClient database, TransactionOperations transactions, GroupRoles roles, RunTree tree, RunEngine engine) {
+            JdbcClient database,
+            TransactionOperations transactions,
+            GroupRoles roles,
+            RunTree tree,
+            RunEngine engine,
+            RunFiles files,
+            FileDeployment deployment) {
         this.database = database;
         this.transactions = transactions;
         this.roles = roles;
         this.tree = tree;
         this.engine = engine;
+        this.files = files;
+        this.deployment = deployment;
     }
 
     /** The run started, the number it took and whether the caller may read it, in one transaction. */
@@ -82,6 +100,53 @@ final class StartRuns {
         requireNonNull(values, "StartRuns values must not be null");
         requireNonNull(caller, "StartRuns caller must not be null");
         return requireNonNull(transactions.execute(status -> started(group, version, name, values, caller)));
+    }
+
+    /** Recheck the offered version and permissions before consuming any file part. */
+    Started startFiles(
+            GroupId group, EntryVersionId version, RunName name, JsonValue values, UserId caller, MultipartFiles body) {
+        requireNonNull(group, "StartRuns group must not be null");
+        requireNonNull(version, "StartRuns version must not be null");
+        requireNonNull(name, "StartRuns name must not be null");
+        requireNonNull(values, "StartRuns values must not be null");
+        requireNonNull(caller, "StartRuns caller must not be null");
+        requireNonNull(body, "StartRuns body must not be null");
+        return requireNonNull(transactions.execute(status -> {
+            try {
+                return startedFiles(group, version, name, values, caller, body);
+            } catch (IOException unread) {
+                throw new UncheckedIOException(unread);
+            }
+        }));
+    }
+
+    private Started startedFiles(
+            GroupId group, EntryVersionId version, RunName name, JsonValue values, UserId caller, MultipartFiles body)
+            throws IOException {
+        GroupRoles.StillReached reached = roles.stillReached(caller, group, GroupPermission.START_RUN);
+        OffersHeld.Held held =
+                OffersHeld.held(database, reached, version).orElseThrow(StartRefusal.WORKFLOW_NOT_OFFERED::raised);
+        RunId run = new RunId(database.sql("select uuidv7()").query(UUID.class).single());
+        FilledFields filled =
+                switch (body.fill(run, group, held.takes(), values, null, files, deployment)) {
+                    case FillOutcome.Unshaped ignored -> throw StartRefusal.BODY_UNUSABLE.raised();
+                    case FillProblems problems -> throw new ValueProblemsRefusal(problems);
+                    case FilledFields kept -> kept;
+                };
+        RunNumbering.hold(database, group);
+        boolean readable = RunScope.readsWhatTheyStart(reached.permitted());
+        int number = database.sql(STARTED_FILES)
+                .param("run", run.value())
+                .param("group", group.value())
+                .param("name", name.value())
+                .param("entry", held.entry().value())
+                .param("version", version.value())
+                .param("values", CanonicalJson.write(filled.values()))
+                .param("caller", caller.value())
+                .query(Integer.class)
+                .single();
+        engine.planStarted(tree.lock(group, run).orElseThrow());
+        return new Started(run, number, readable);
     }
 
     private Started started(GroupId group, EntryVersionId version, RunName name, JsonValue values, UserId caller) {
@@ -95,11 +160,7 @@ final class StartRuns {
                     case FilledFields kept -> kept;
                 };
         /* Held after every row lock above, so a start waiting on the numbering holds none another start waits on. */
-        database.sql(NUMBERED)
-                .param("numbering", NUMBERING)
-                .param("group", group.value())
-                .query()
-                .listOfRows();
+        RunNumbering.hold(database, group);
         boolean readable = RunScope.readsWhatTheyStart(reached.permitted());
         Started started = database.sql(STARTED)
                 .param("group", group.value())

@@ -1,3 +1,4 @@
+import { iconButtonClasses } from "@mui/material/IconButton";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -10,7 +11,24 @@ import type { TermWay } from "../../api/groups/{groupId}/{kind}/{entryId}/versio
 import { RequestFailed } from "../../api/problem";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { noticesIn } from "../../testutil/notices";
 import { TermsTable } from "./TermsTable";
+
+/** Every term a row names its controls with, in the order rows were drawn: one per row drawn. */
+const rowsNamed = vi.hoisted(() => ({ terms: [] as string[] }));
+
+vi.mock("../../lib/direction/isolated", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../lib/direction/isolated")>();
+  return {
+    ...actual,
+    isolatedInText: (words: string) => {
+      rowsNamed.terms.push(words);
+      return actual.isolatedInText(words);
+    },
+  };
+});
 
 const BILLING: ListTerm = {
   termId: "0000000c-0000-4000-8000-000000000e11",
@@ -189,23 +207,17 @@ async function typingNewTerm(): Promise<void> {
   await userEvent.paste("Goods sent back.");
 }
 
-/** Long enough for a line the table said to be put in: its region waits two frames to be heard. */
-async function waitForFrames(): Promise<void> {
-  await act(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-      ),
-  );
-}
-
 function heading(): HTMLElement {
   return screen.getByRole("heading", { level: 3, name: "The terms" });
 }
 
 describe("TermsTable", () => {
+  it("stands as a block of the version, framed apart from the next", () => {
+    editing([REFUNDS, BILLING], { editable: false });
+
+    expect(drawnOf(part())).toEqual(drawnAtDepth(2));
+  });
+
   it("reads each term and what it means in the order given where they may not be written, and offers nothing to change", () => {
     editing([REFUNDS, BILLING], { editable: false });
 
@@ -244,6 +256,94 @@ describe("TermsTable", () => {
     );
   });
 
+  /** Wider than the part it stands in, the table scrolls on its own and the page around it does not. */
+  it("holds the table in a block that scrolls it sideways", () => {
+    editing(LIST);
+
+    const holder = table().parentElement!;
+
+    expect(getComputedStyle(holder).overflowX).toBe("auto");
+    expect(getComputedStyle(holder).marginBottom).toBe("20px");
+    expect(part().contains(holder)).toBe(true);
+    expect(getComputedStyle(part()).overflowX).not.toBe("auto");
+  });
+
+  /** A row's controls add no room under the row, and none is stretched to the height of a box with words under it. */
+  it("lines each row's controls up along their tops, with no room of their own below", () => {
+    editing(LIST);
+
+    const controls = LIST.map(({ term }) =>
+      getComputedStyle(onTerm("Remove", term).parentElement!),
+    );
+
+    expect(controls.map((drawn) => drawn.alignItems)).toEqual(
+      LIST.map(() => "flex-start"),
+    );
+    expect(controls.map((drawn) => parseFloat(drawn.marginBottom))).toEqual(
+      LIST.map(() => 0),
+    );
+  });
+
+  /** Words on every row would outweigh the terms; each icon's name still says which term it acts on. */
+  it("draws each move and removal as an icon alone, named with its term, and only a removal in the warning colour", () => {
+    editing(LIST);
+
+    const icons = {
+      "Move up": "ArrowUpwardIcon",
+      "Move down": "ArrowDownwardIcon",
+      Remove: "DeleteOutlinedIcon",
+    };
+    const drawn = LIST.flatMap(({ term }) =>
+      Object.keys(icons).map((act) => ({
+        act,
+        button: onTerm(act, term),
+      })),
+    );
+
+    expect(drawn.map(({ button }) => button.textContent)).toEqual(
+      drawn.map(() => ""),
+    );
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("data-testid"),
+      ),
+    ).toEqual(drawn.map(({ act }) => icons[act as keyof typeof icons]));
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("aria-hidden"),
+      ),
+    ).toEqual(drawn.map(() => "true"));
+    expect(
+      drawn
+        .filter(({ button }) =>
+          button.classList.contains(iconButtonClasses.colorWarning),
+        )
+        .map(({ act }) => act),
+    ).toEqual(LIST.map(() => "Remove"));
+  });
+
+  it("says a move's words as a tip once it holds the keyboard", async () => {
+    editing(LIST);
+    meaningBox(2).focus();
+
+    await userEvent.tab();
+
+    expect(onTerm("Move up", "Delivery")).toHaveFocus();
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Move up");
+  });
+
+  /** A list may hold hundreds of terms, and each keystroke redrawing every row of them is felt as typing lags. */
+  it("redraws only the row typed in", async () => {
+    editing(LIST);
+    termBox(2).focus();
+    rowsNamed.terms = [];
+
+    await userEvent.keyboard("s");
+
+    expect(termBox(2)).toHaveValue("Deliverys");
+    expect(rowsNamed.terms).toEqual(["Delivery"]);
+  });
+
   it("holds moving the first term up and the last down, and no other move", () => {
     editing(LIST);
 
@@ -266,6 +366,7 @@ describe("TermsTable", () => {
   it("offers no save on a term before it is changed", () => {
     editing(LIST);
 
+    expect(within(part()).queryByText("Unsaved")).toBeNull();
     expect(within(table()).queryAllByRole("button", { name: /^Save/ })).toEqual(
       [],
     );
@@ -304,34 +405,39 @@ describe("TermsTable", () => {
       "",
       "Goods sent back.",
       "Write a term and what it means first.",
+      [],
     ],
     [
       "nothing it means",
       "Returns",
       "",
       "Write a term and what it means first.",
+      [],
     ],
     [
       "a term the server would refuse",
       "Goods  back",
       "Goods sent back.",
       "A term is one to 128 characters on one line: no space but single plain ones between words, none at either end, and something in it that shows.",
+      ["warning"],
     ],
     [
       "a term holding a character that shows nothing",
       `Bill${String.fromCodePoint(0x200b)}ing`,
       "Money taken wrongly.",
       "What was written holds a character that shows nothing, which a term may not hold.",
+      ["warning"],
     ],
     [
       "a meaning the server would refuse",
       "Returns",
       `Sent ${String.fromCodePoint(0x202e)}back`,
       "What was written holds a direction control, which text sent to a model may not hold.",
+      ["warning"],
     ],
-  ])(
-    "holds adding %s, saying why beside the control, and sends nothing",
-    async (_case, term, meaning, why) => {
+  ] as const)(
+    "holds adding %s, saying why beside the control, a refusal as a warning, and sends nothing",
+    async (_case, term, meaning, why, severities) => {
       const { changes } = editing(LIST);
       await userEvent.click(
         within(part()).getByRole("textbox", { name: "New term" }),
@@ -347,9 +453,11 @@ describe("TermsTable", () => {
 
       add.focus();
       await userEvent.keyboard("{Enter}");
-
       expect(add).toHaveAttribute("aria-disabled", "true");
       expect(add).toHaveAccessibleDescription(why);
+      expect(noticesIn(add.parentElement!)).toEqual(
+        severities.map((severity) => ({ severity, words: why })),
+      );
       expect(changes.add).not.toHaveBeenCalled();
     },
   );
@@ -359,19 +467,26 @@ describe("TermsTable", () => {
     [
       256,
       "A reference list holds at most 256 terms. Remove one to add another.",
+      ["warning"],
     ],
-    [255, "Write a term and what it means first."],
-  ])(
-    "holds adding to a list of %i terms for the reason beside the control, and sends nothing",
-    async (count, why) => {
+    [255, "Write a term and what it means first.", []],
+  ] as const)(
+    "holds adding to a list of %i terms for the reason beside the control, a full list's as a warning, and sends nothing",
+    async (count, why, severities) => {
       const { changes } = editing(termsNumbering(count));
-      const add = within(part()).getByRole("button", { name: "Add the term" });
+      const add = within(part()).getByText("Add the term", {
+        selector: "button",
+      });
 
       add.focus();
       await userEvent.keyboard("{Enter}");
 
+      expect(add).toHaveAccessibleName("Add the term");
       expect(add).toHaveAttribute("aria-disabled", "true");
       expect(add).toHaveAccessibleDescription(why);
+      expect(noticesIn(add.parentElement!)).toEqual(
+        severities.map((severity) => ({ severity, words: why })),
+      );
       expect(changes.add).not.toHaveBeenCalled();
     },
     // Some 256 rows of text boxes take seconds to draw under jsdom.
@@ -401,6 +516,8 @@ describe("TermsTable", () => {
     await userEvent.type(termBox(2), " times");
     await userEvent.clear(meaningBox(2));
     await userEvent.type(meaningBox(2), "Late.");
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+    expect(onTerm("Save", "Delivery")).toHaveClass("MuiButton-contained");
     await userEvent.click(onTerm("Save", "Delivery"));
 
     await waitFor(() =>
@@ -412,6 +529,7 @@ describe("TermsTable", () => {
       [DELIVERY.termId, { term: "Delivery times", meaning: "Late." }],
     ]);
     expect(within(table()).queryByRole("button", { name: /^Save/ })).toBeNull();
+    expect(within(part()).queryByText("Unsaved")).toBeNull();
   });
 
   it("puts the keyboard back in a saved term's own box once the save lands", async () => {
@@ -436,6 +554,9 @@ describe("TermsTable", () => {
       "A term is one to 128 characters on one line: no space but single plain ones between words, none at either end, and something in it that shows.";
     expect(save).toHaveAttribute("aria-disabled", "true");
     expect(save).toHaveAccessibleDescription(why);
+    expect(noticesIn(save.parentElement!)).toEqual([
+      { severity: "warning", words: why },
+    ]);
     expect(termBox(1)).toHaveAccessibleDescription(why);
     expect(changes.reword).not.toHaveBeenCalled();
   });
@@ -686,8 +807,7 @@ describe("TermsTable", () => {
       expect(await within(part()).findByRole("alert")).toHaveTextContent(
         "That version's standing does not admit this.",
       );
-      await waitForFrames();
-      expect(line).toHaveTextContent(/^$/);
+      await waitFor(() => expect(line).toHaveTextContent(/^$/));
     },
   );
 
@@ -697,8 +817,9 @@ describe("TermsTable", () => {
     await userEvent.click(onTerm("Remove", "Delivery"));
 
     await within(part()).findByRole("alert");
-    await waitForFrames();
-    expect(within(part()).getByRole("status")).toHaveTextContent(/^$/);
+    await waitFor(() =>
+      expect(within(part()).getByRole("status")).toHaveTextContent(/^$/),
+    );
   });
 
   it("holds every change while another write of the host's is out, which it would be refused beside, and sends nothing", async () => {

@@ -9,6 +9,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -16,16 +17,23 @@ import {
 import { createPortal } from "react-dom";
 
 import { say } from "../../i18n/lib";
+import { DEPTH_SX, HEADING_SX, TITLE_LINE_SX } from "../layout/parts";
 import { StatusLine, type Line } from "../notice/StatusLine";
 
 const PANEL_WIDTH = 360;
 
 const GAP = 24;
 
-const LEAST_TABLE_WIDTH = 560;
+/** The least width, in pixels, a table keeps before what stands beside it goes elsewhere. */
+export const LEAST_TABLE_WIDTH = 560;
 
 /** Beside only where the table keeps its least width with the panel and the gap taken out. */
-const ROOM_FOR_BOTH = LEAST_TABLE_WIDTH + GAP + PANEL_WIDTH;
+function roomForBoth(
+  panelWidth: number,
+  leastListWidth = LEAST_TABLE_WIDTH,
+): number {
+  return leastListWidth + GAP + panelWidth;
+}
 
 /**
  * Wider than a scrollbar. The panel beside the list makes the page taller and
@@ -33,30 +41,34 @@ const ROOM_FOR_BOTH = LEAST_TABLE_WIDTH + GAP + PANEL_WIDTH;
  */
 const SCROLLBAR_ALLOWANCE = 24;
 
+/**
+ * The width, in pixels, of a frame a panel of the usual width opening in it stands beside the list from, rather than
+ * over it.
+ */
+export const BESIDE_FROM = roomForBoth(PANEL_WIDTH) + SCROLLBAR_ALLOWANCE;
+
 const FRAME_SX = { display: "flex", alignItems: "flex-start", gap: `${GAP}px` };
 
 const LIST_SX = { flexGrow: 1, minWidth: 0 };
 
+const BESIDE_HEADING_LINE_SX = { ...TITLE_LINE_SX, ...HEADING_SX };
+
 const BESIDE_SX = {
-  width: PANEL_WIDTH,
+  ...DEPTH_SX[1],
   boxSizing: "border-box",
   flexShrink: 0,
-  pl: 3,
-  borderLeftWidth: 1,
-  borderLeftStyle: "solid",
-  borderLeftColor: "divider",
 };
 
 const OVER_SX = {
   // A covering panel is modal, so it takes the modal layer and not the
   // drawer's: nothing outside it may stand over its heading or close control.
   zIndex: (given: Theme) => given.zIndex.modal,
-  "& .MuiDrawer-paper": {
-    width: PANEL_WIDTH,
-    maxWidth: "100%",
-    boxSizing: "border-box",
-    p: 3,
-  },
+};
+
+const OVER_PAPER_SX = {
+  maxWidth: "100%",
+  boxSizing: "border-box",
+  p: 3,
 };
 
 const OVER_HEADER_SX = {
@@ -81,16 +93,16 @@ const OVER_MODAL_PROPS = { disableRestoreFocus: true };
  *
  * Shut from its own control, it hands the keyboard back to what opened it;
  * shut by the caller, or once what opened it has gone, to the list.
- *
- * `title` is isolated here, in an element of its own, so the name the region
- * or dialog takes from its heading carries none of this side's control
- * characters.
  */
 export function RowPanel({
   open,
   onClose,
   title,
+  visibleTitle,
   headingLevel = "h2",
+  width = PANEL_WIDTH,
+  leastListWidth = LEAST_TABLE_WIDTH,
+  besideHeading,
   list,
   listLabel,
   saidOver,
@@ -99,8 +111,16 @@ export function RowPanel({
   readonly open: boolean;
   readonly onClose: () => void;
   readonly title: string;
+  /** The same title drawn as nodes, with names isolated by the caller. */
+  readonly visibleTitle?: ReactNode;
   /** One below the heading the list sits under. */
-  readonly headingLevel?: "h2" | "h4";
+  readonly headingLevel?: "h2" | "h3" | "h4";
+  /** In pixels, for content a panel of the usual width would crowd; the room it needs beside the list grows with it. */
+  readonly width?: number;
+  /** The width, in pixels, the caller's list needs beside the panel. */
+  readonly leastListWidth?: number;
+  /** Drawn on the heading's line, and no part of its name. */
+  readonly besideHeading?: ReactNode;
   readonly list: ReactNode;
   /**
    * A line of the page's said inside the panel while it covers the page, whose
@@ -214,10 +234,12 @@ export function RowPanel({
     if (frame === null) {
       return;
     }
-    const judge = (width: number) =>
+    const judge = (frameWidth: number) =>
       setBeside(
         (was) =>
-          width >= ROOM_FOR_BOTH + (was === true ? 0 : SCROLLBAR_ALLOWANCE),
+          frameWidth >=
+          roomForBoth(width, leastListWidth) +
+            (was === true ? 0 : SCROLLBAR_ALLOWANCE),
       );
     judge(frame.getBoundingClientRect().width);
     const observer = new ResizeObserver((entries) => {
@@ -227,13 +249,35 @@ export function RowPanel({
     });
     observer.observe(frame);
     return () => observer.disconnect();
-  }, []);
+  }, [width, leastListWidth]);
 
-  const heading = (
-    <Typography id={headingId} variant="h6" component={headingLevel}>
-      <bdi>{title}</bdi>
+  const besideSx = useMemo(() => ({ ...BESIDE_SX, width }), [width]);
+  const overSx = useMemo(
+    () => ({ ...OVER_SX, "& .MuiDrawer-paper": { ...OVER_PAPER_SX, width } }),
+    [width],
+  );
+
+  const titled = (
+    <Typography
+      id={headingId}
+      aria-label={visibleTitle === undefined ? undefined : title}
+      variant={headingLevel}
+      sx={
+        beside === true && besideHeading === undefined ? HEADING_SX : undefined
+      }
+    >
+      {visibleTitle ?? <bdi>{title}</bdi>}
     </Typography>
   );
+  const heading =
+    besideHeading === undefined ? (
+      titled
+    ) : (
+      <Box sx={beside === true ? BESIDE_HEADING_LINE_SX : TITLE_LINE_SX}>
+        {titled}
+        {besideHeading}
+      </Box>
+    );
 
   return (
     <Box ref={frameRef} sx={FRAME_SX}>
@@ -248,7 +292,7 @@ export function RowPanel({
       </Box>
       {beside === null ? null : beside ? (
         open ? (
-          <Box component="section" aria-labelledby={headingId} sx={BESIDE_SX}>
+          <Box component="section" aria-labelledby={headingId} sx={besideSx}>
             {heading}
             <div ref={holdContent} />
           </Box>
@@ -264,11 +308,15 @@ export function RowPanel({
           // On the paper, which is the dialog; on the drawer it would name the
           // presentational root around it.
           slotProps={{ paper: { "aria-labelledby": headingId } }}
-          sx={OVER_SX}
+          sx={overSx}
         >
           <Box sx={OVER_HEADER_SX}>
             {heading}
-            <IconButton aria-label={say("panel.close")} onClick={shut}>
+            <IconButton
+              color="inherit"
+              aria-label={say("panel.close")}
+              onClick={shut}
+            >
               <CloseIcon />
             </IconButton>
           </Box>

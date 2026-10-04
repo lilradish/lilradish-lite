@@ -39,7 +39,9 @@ const ANSWERED = JSON.stringify({
     name: "Handle a claim",
     version: 3,
   },
+  runsAbove: [],
   startedAt: "2026-09-24T08:00:00Z",
+  conversationEvents: [],
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: FIVE_THOUSAND,
@@ -135,6 +137,10 @@ describe("ChangeCeiling", () => {
       expect(ceilingBox()).toHaveAttribute("aria-invalid", "true");
       expect(change()).toHaveAttribute("aria-disabled", "true");
       expect(change()).toHaveAccessibleDescription(LIMIT);
+      expect(
+        screen.getByText(LIMIT, { selector: ".MuiAlert-message" })
+          .parentElement,
+      ).toHaveClass("MuiAlert-colorWarning");
       expect(requestsTo(sent)).toEqual([]);
     },
   );
@@ -219,7 +225,7 @@ describe("ChangeCeiling", () => {
     await userEvent.click(change());
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, only by a role in it that may start one.",
+      "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.",
     );
     expect(screen.getByRole("dialog", { name: "Change the ceiling" })).toBe(
       dialog,

@@ -10,7 +10,7 @@ class RunNameSpec extends Specification {
         new RunName(value).value() == value
 
         where:
-        value << ["Complaint from Ada", "Two  spaces", " Leading", "Trailing ", "n" * 128,
+        value << ["Complaint from Ari", "Two  spaces", " Leading", "Trailing ", "n" * 128,
                   "Wide" + Character.toString(0x3000) + "space", Character.toString(0x1F600) * 128]
     }
 

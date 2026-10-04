@@ -36,8 +36,9 @@ final class StartedContent {
             """.formatted(AUTHOR);
 
     private static final String QUESTION_COPIED = """
-            insert into question_versions (entry_version_id, instruction, created_by)
-            select :started, source.instruction, %s from question_versions source where source.entry_version_id = :source
+            insert into question_versions (entry_version_id, instruction, drawing, created_by)
+            select :started, source.instruction, source.drawing, %s
+              from question_versions source where source.entry_version_id = :source
             """.formatted(AUTHOR);
 
     private static final String REFERENCE_LIST_COPIED = """
@@ -53,12 +54,14 @@ final class StartedContent {
                   from declaration_fields field
                  where field.entry_version_id = :source)
             insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side, parent_field_id,
-                                            position, name, label, help, kind, holds_many, text_limit, many_limit,
-                                            term_list_version_id, must_be_given, standing, standing_threshold,
+                                            position, name, label, help, kind, holds_many, text_limit, text_lines, many_limit,
+                                            term_list_version_id, file_types, file_maximum_bytes, must_be_given,
+                                            standing, standing_threshold,
                                             created_by)
             select source.copied_id, :started, source.entry_kind, source.side, parent.copied_id,
                    source.position, source.name, source.label, source.help, source.kind, source.holds_many,
-                   source.text_limit, source.many_limit, source.term_list_version_id, source.must_be_given,
+                   source.text_limit, source.text_lines, source.many_limit, source.term_list_version_id,
+                   source.file_types, source.file_maximum_bytes, source.must_be_given,
                    source.standing, source.standing_threshold, %s
               from source
               left join source parent on parent.declaration_field_id = source.parent_field_id
@@ -85,12 +88,25 @@ final class StartedContent {
                      insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind,
                                                  pinned_version_id, pinned_kind, code_step, producer, producer_model,
                                                  producer_mode, tries, reviewer_model, reviewer_mode,
-                                                 tells_what_happened, created_by)
+                                                 tells_what_happened, search_way, search_title_standing,
+                                                 search_body_standing, search_references_standing,
+                                                 search_other_standing, created_by)
                      select steps.copied_id, :started, steps.position, steps.name, steps.kind, steps.pinned_version_id,
                             steps.pinned_kind, steps.code_step, steps.producer, steps.producer_model,
                             steps.producer_mode, steps.tries, steps.reviewer_model, steps.reviewer_mode,
-                            steps.tells_what_happened, %1$s
+                            steps.tells_what_happened, steps.search_way, steps.search_title_standing,
+                            steps.search_body_standing, steps.search_references_standing, steps.search_other_standing,
+                            %1$s
                        from steps),
+                 parts_copied as (
+                     insert into search_question_parts (entry_version_id, workflow_step_id, position, literal_text,
+                                                        source_step_id, source_path, created_by)
+                     select :started, owner.copied_id, part.position, part.literal_text, source.copied_id,
+                            part.source_path, %1$s
+                       from search_question_parts part
+                       join steps owner on owner.workflow_step_id = part.workflow_step_id
+                       left join steps source on source.workflow_step_id = part.source_step_id
+                      where part.entry_version_id = :source),
                  cases_copied as (
                      insert into route_cases (route_case_id, entry_version_id, workflow_step_id, term,
                                               target_version_id, created_by)
@@ -99,11 +115,13 @@ final class StartedContent {
                        join steps on steps.workflow_step_id = cases.workflow_step_id),
                  fields_copied as (
                      insert into declaration_fields (declaration_field_id, workflow_step_id, side, parent_field_id,
-                                                     position, name, label, help, kind, holds_many, text_limit,
-                                                     many_limit, term_list_version_id, must_be_given, created_by)
+                                                     position, name, label, help, kind, holds_many, text_limit, text_lines,
+                                                     many_limit, term_list_version_id, file_types, file_maximum_bytes,
+                                                     must_be_given, created_by)
                      select fields.copied_id, steps.copied_id, fields.side, parent.copied_id, fields.position,
-                            fields.name, fields.label, fields.help, fields.kind, fields.holds_many, fields.text_limit,
-                            fields.many_limit, fields.term_list_version_id, fields.must_be_given, %1$s
+                            fields.name, fields.label, fields.help, fields.kind, fields.holds_many, fields.text_limit, fields.text_lines,
+                            fields.many_limit, fields.term_list_version_id, fields.file_types,
+                            fields.file_maximum_bytes, fields.must_be_given, %1$s
                        from fields
                        join steps on steps.workflow_step_id = fields.workflow_step_id
                        left join fields parent on parent.declaration_field_id = fields.parent_field_id)

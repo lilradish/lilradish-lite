@@ -11,11 +11,14 @@ import { useTheme, type Theme } from "@mui/material/styles";
 import { useRef, useState, type ReactNode } from "react";
 
 import { say } from "../i18n/app";
+import { UNSEEN_SX } from "../lib/layout/parts";
+import { useSidebarExpanded } from "./useSidebarExpanded";
 
 /** Within the 240–280px a dense enterprise sidebar stays legible at. */
 const NAVIGATION_WIDTH = 256;
 
 const CONTENT_ID = "content";
+const NAVIGATION_ID = "navigation";
 
 const SKIP_LINK_SX = {
   position: "absolute",
@@ -25,15 +28,7 @@ const SKIP_LINK_SX = {
   px: 2,
   py: 1,
   bgcolor: "background.paper",
-  "&:not(:focus)": {
-    // Written in pixels: `sx` reads a bare 1 on a size as a fraction and emits
-    // 100%, which would leave this covering the screen it is hiding behind.
-    height: "1px",
-    width: "1px",
-    clipPath: "inset(50%)",
-    overflow: "hidden",
-    whiteSpace: "nowrap",
-  },
+  "&:not(:focus)": UNSEEN_SX,
 };
 
 /**
@@ -68,6 +63,7 @@ export function AppShell({
   const theme = useTheme();
   const wide = useMediaQuery(theme.breakpoints.up("md"));
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useSidebarExpanded();
 
   // Adjusted while rendering, not in an effect: widening answers the request,
   // and a yes left standing would reopen the drawer on the way back down.
@@ -113,9 +109,24 @@ export function AppShell({
         }}
       >
         <Toolbar variant="dense">
-          {wide ? null : (
+          {wide ? (
             <IconButton
               edge="start"
+              color="inherit"
+              size="small"
+              aria-label={say("navigation.sidebar")}
+              aria-expanded={expanded}
+              aria-controls={NAVIGATION_ID}
+              onClick={() => setExpanded(!expanded)}
+              sx={{ mr: 1 }}
+            >
+              <MenuIcon />
+            </IconButton>
+          ) : (
+            <IconButton
+              edge="start"
+              color="inherit"
+              size="small"
               aria-label={say("navigation.open")}
               onClick={() => setOpen(true)}
               sx={{ mr: 1 }}
@@ -138,6 +149,9 @@ export function AppShell({
         sx={{
           width: { md: NAVIGATION_WIDTH },
           flexShrink: 0,
+          // Out of the layout and the tab order in one step. A persistent drawer
+          // hides its paper only once its slide ends, and keeps this width.
+          ...(wide && !expanded && { display: "none" }),
           "& .MuiDrawer-paper": {
             width: NAVIGATION_WIDTH,
             boxSizing: "border-box",
@@ -148,6 +162,7 @@ export function AppShell({
         <Toolbar variant="dense" />
         <Box
           component="nav"
+          id={NAVIGATION_ID}
           aria-label={say("navigation.site")}
           // A temporary drawer otherwise stays over the screen it navigated to.
           // Only a destination, though: a tap on a heading went nowhere.
@@ -177,9 +192,7 @@ export function AppShell({
         sx={{ flexGrow: 1, minWidth: 0 }}
       >
         <Toolbar variant="dense" />
-        <Container maxWidth="lg" sx={{ py: 3 }}>
-          {children}
-        </Container>
+        <Container sx={{ py: 3 }}>{children}</Container>
       </Box>
     </Box>
   );

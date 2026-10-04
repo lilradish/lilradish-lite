@@ -10,7 +10,11 @@ package org.lilradish.lite.domain.run;
 public enum RunStepFailureReason {
     UNCUTTABLE_LENGTH("uncuttable_length"),
     UNCLAIMED_VALUE("unclaimed_value"),
-    MODEL_NOT_DEPLOYED("model_not_deployed");
+    MODEL_NOT_DEPLOYED("model_not_deployed"),
+    TOO_DEEP("too_deep"),
+    TOOL_NOT_OFFERED("tool_not_offered"),
+    SOURCE_NO_LONGER_MATCHES("source_no_longer_matches"),
+    SOURCE_LIST_NOT_HERE("source_list_not_here");
 
     private final String published;
 

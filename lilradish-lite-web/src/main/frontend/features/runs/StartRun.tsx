@@ -4,13 +4,12 @@ import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useCallback, useRef, useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 
 import type { FillReason } from "../../api/filling";
-import {
-  readOffered,
-  type OfferedVersion,
-  type OfferedWorkflow,
+import type {
+  OfferedVersion,
+  OfferedWorkflow,
 } from "../../api/groups/{groupId}/offered-workflows";
 import {
   refusedAsNotOffered,
@@ -19,34 +18,26 @@ import {
   type StartedRun,
 } from "../../api/groups/{groupId}/runs";
 import type { Problem } from "../../api/problem";
-import { Async } from "../../app/Async";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
 import { readersIntl } from "../../i18n/intl";
 import { ActButton } from "../../lib/action/ActButton";
-import { ActDialog } from "../../lib/action/ActDialog";
-import { Press, type Reason } from "../../lib/action/Press";
-import { isolatedInText } from "../../lib/direction/isolated";
+import { Press } from "../../lib/action/Press";
 import { codePointsIn } from "../../lib/filling/writing";
 import { ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { useAction, type Action } from "../../lib/request/useAction";
-import { useResource } from "../../lib/request/useResource";
 import {
   FillForm,
   type Drafted,
   type Left,
   type Unread,
 } from "./fill/FillForm";
-import { draftOf, suggestedName, type LevelDraft } from "./fill/fillDrafts";
+import { draftOf, type LevelDraft } from "./fill/fillDrafts";
 import { useFillDraft } from "./fill/useFillDraft";
 import { MOST_IN_A_RUN_NAME, runNameFits } from "./runName";
 
 const START_RULE = { inGroup: "start_run" } as const;
-
-const NONE_OFFERED: readonly OfferedWorkflow[] = [];
-
-const FIELDS_SX = { pt: 1 };
 
 const SAID_SX = { mt: 2 };
 
@@ -62,22 +53,17 @@ export interface StartSettled {
   readonly onProblem: (problem: Problem) => void;
 }
 
-/** The name as the reader left it for one workflow, which starts again whenever the workflow does. */
+/** The name as the reader left it. */
 interface Naming {
-  readonly entryId: string;
   /** None until the reader changes the name, which is suggested until then. */
   readonly typed: string | null;
   /** The name last refused, said to be so while it is the name. */
   readonly refused: string | null;
 }
 
-/** What a start was asked with, so what is answered is taken to what was sent and no later change. */
-interface Sent {
-  readonly entryId: string;
-  readonly name: string;
-}
+const NOTHING_NAMED: Naming = { typed: null, refused: null };
 
-/** One run as it is being started, whichever way the page is drawn. */
+/** One run as it is being started. */
 interface StartDraft {
   readonly version: OfferedVersion | undefined;
   readonly onVersion: (versionId: string) => void;
@@ -91,8 +77,6 @@ interface StartDraft {
   readonly onLeave: Left;
   readonly onUnread: Unread;
   readonly marks: ReadonlyMap<string, FillReason>;
-  /** Why it cannot start yet; absent where it can. */
-  readonly held: Reason | undefined;
   /** What the page finds wrong in what is filled, which asking for a start takes the keyboard to. */
   readonly unfit: string | undefined;
   /** The last refusal, while what it was said of is still what is asked. */
@@ -105,31 +89,35 @@ interface StartDraft {
 
 /**
  * Starting a run beneath the workflow picked from the cards: the newest version in service, which another is
- * chosen only once asked for, a name already suggested, and what that version takes.
+ * chosen only once asked for, a name already suggested, and what that version takes. Nothing here starts the
+ * name or what is filled again for another workflow, so it is drawn anew for each.
  */
 export function StartHere({
   groupId,
   workflow,
   settled,
+  nameRef,
   onAbandon,
 }: {
   readonly groupId: string;
   readonly workflow: OfferedWorkflow;
   readonly settled: StartSettled;
+  readonly nameRef: RefObject<HTMLInputElement | null>;
   readonly onAbandon: () => void;
 }) {
-  const start = useStartDraft(groupId, workflow, settled);
+  const start = useStartDraft(groupId, workflow, settled, nameRef);
   return (
     <div>
-      <StartFields start={start} workflow={workflow} versionAsked={false} />
+      <StartFields start={start} workflow={workflow} />
       <Box sx={SAID_SX}>
         <StartSaid start={start} />
       </Box>
       <Box sx={ACTS_SX}>
-        <ActButton action={start.action} act={start.act} reason={start.held}>
+        <ActButton variant="contained" action={start.action} act={start.act}>
           {say("work.start")}
         </ActButton>
         <Press
+          variant="neutral"
           reason={
             start.action.running
               ? { severity: "warning", words: say("work.startUnderway") }
@@ -144,100 +132,15 @@ export function StartHere({
   );
 }
 
-/**
- * Starting a run in a dialog over the page: a workflow of those on offer, then its version with the newest
- * already picked, a name already suggested, and what that version takes. What is offered is read as it opens.
- */
-export function StartDialog({
-  groupId,
-  onShut,
-  settled,
-}: {
-  readonly groupId: string;
-  readonly onShut: () => void;
-  /** A version no longer offered is said, and what is offered read again, in the dialog itself. */
-  readonly settled: Omit<StartSettled, "onNotOffered">;
-}) {
-  const load = useCallback(
-    (signal: AbortSignal) => readOffered(groupId, signal),
-    [groupId],
-  );
-  const offered = useResource(load, NONE_OFFERED);
-  const [entryId, setEntryId] = useState("");
-  const [readAgain, setReadAgain] = useState(false);
-  const workflow = offered.value.find((each) => each.entryId === entryId);
-  const start = useStartDraft(groupId, workflow, {
-    ...settled,
-    onNotOffered: () => {
-      setReadAgain(true);
-      offered.reload();
-    },
-  });
-
-  return (
-    <ActDialog
-      open
-      title={say("work.startARun")}
-      onShut={onShut}
-      action={start.action}
-      act={start.act}
-      actLabel={say("work.start")}
-      reason={start.held}
-      abandonLabel={say("work.abandon")}
-      underway={say("work.startUnderway")}
-      refusal={<StartSaid start={start} />}
-    >
-      <Stack spacing={2} sx={FIELDS_SX}>
-        <div role="status">
-          {readAgain ? (
-            <Notice severity="warning">{say("work.noLongerOffered")}</Notice>
-          ) : null}
-        </div>
-        <Async
-          read={offered}
-          rule={START_RULE}
-          empty={(workflows) =>
-            workflows.length === 0 ? say("work.nothingOffered") : null
-          }
-        >
-          {(workflows) => (
-            <TextField
-              select
-              label={say("run.workflow")}
-              value={workflow === undefined ? "" : entryId}
-              onChange={(edit) => {
-                setEntryId(edit.target.value);
-                setReadAgain(false);
-              }}
-              fullWidth
-            >
-              {workflows.map((each) => (
-                <MenuItem key={each.entryId} value={each.entryId}>
-                  {isolatedInText(each.name)}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
-        </Async>
-        {workflow === undefined ? null : (
-          <StartFields start={start} workflow={workflow} versionAsked />
-        )}
-      </Stack>
-    </ActDialog>
-  );
-}
-
 /** The name, the version where it is asked for or offered to be, and a control to each field the version takes. */
 function StartFields({
   start,
   workflow,
-  versionAsked,
 }: {
   readonly start: StartDraft;
   readonly workflow: OfferedWorkflow;
-  readonly versionAsked: boolean;
 }) {
-  const [asked, setAsked] = useState(versionAsked);
+  const [asked, setAsked] = useState(false);
   const { version, name } = start;
   const fits = runNameFits(name);
   const another = workflow.versions.length > 1;
@@ -267,7 +170,7 @@ function StartFields({
           value={version?.versionId ?? ""}
           onChange={(edit) => start.onVersion(edit.target.value)}
           // Drawn in place of the control that asked for it, which takes the keyboard with it.
-          autoFocus={!versionAsked}
+          autoFocus
         >
           {workflow.versions.map((each) => (
             <MenuItem key={each.versionId} value={each.versionId}>
@@ -288,6 +191,7 @@ function StartFields({
         </Typography>
       ) : (
         <FillForm
+          key={version.versionId}
           formId={start.formId}
           fields={version.takes}
           draft={start.fill}
@@ -328,50 +232,31 @@ function StartSaid({ start }: { readonly start: StartDraft }) {
 
 function useStartDraft(
   groupId: string,
-  workflow: OfferedWorkflow | undefined,
+  workflow: OfferedWorkflow,
   settled: StartSettled,
+  nameRef: RefObject<HTMLInputElement | null>,
 ): StartDraft {
-  const newest = workflow?.versions[0];
-  const entryId = workflow?.entryId ?? "";
-  const nameRef = useRef<HTMLInputElement>(null);
-  const sent = useRef<Sent | null>(null);
+  const newest = workflow.versions[0];
+  const nameSent = useRef<string | null>(null);
   const [drawnAt] = useState(() => new Date());
-  const [refusedFor, setRefusedFor] = useState<string | null>(null);
-  const [namingHeld, setNaming] = useState(() => namingFor(entryId));
+  const [naming, setNaming] = useState(NOTHING_NAMED);
   const [chosen, setChosen] = useState(newest?.versionId ?? "");
-  const naming =
-    namingHeld.entryId === entryId ? namingHeld : namingFor(entryId);
-  if (naming !== namingHeld) {
-    setNaming(naming);
-  }
-  if (refusedFor !== null && refusedFor !== entryId) {
-    setRefusedFor(null);
-  }
   const version =
-    workflow?.versions.find((each) => each.versionId === chosen) ?? newest;
+    workflow.versions.find((each) => each.versionId === chosen) ?? newest;
   const versionId = version?.versionId ?? "";
-  // Another workflow, or the version gone from what was read again: start again on the newest.
+  // The version gone from what was read again: start again on the newest.
   if (versionId !== chosen) {
     setChosen(versionId);
   }
   const takes = version?.takes ?? [];
-  const draft = useFillDraft(takes, versionId, () => draftOf(takes));
-  const name =
-    naming.typed ??
-    suggestedName(takes, draft.fill) ??
-    (workflow === undefined ? "" : nameOfTheMoment(workflow.name, drawnAt));
+  const draft = useFillDraft(takes, versionId, () => draftOf(takes), false);
+  const name = naming.typed ?? nameOfTheMoment(workflow.name, drawnAt);
 
   const action = useAction(settled.onStarted, (problem) => {
-    const asked = sent.current;
     settled.onProblem(problem);
-    setRefusedFor(asked?.entryId ?? null);
-    // Of the render the answer lands in, so a workflow picked since is not the one it was said of.
-    if (asked?.entryId !== entryId) {
-      return;
-    }
     draft.refusedWith(problem);
     if (refusedForTheName(problem)) {
-      setNaming((prior) => ({ ...prior, refused: asked?.name ?? null }));
+      setNaming((prior) => ({ ...prior, refused: nameSent.current }));
       nameRef.current?.focus();
     }
     if (refusedAsNotOffered(problem)) {
@@ -379,12 +264,20 @@ function useStartDraft(
     }
   });
 
-  const refused =
-    action.problem !== null && refusedFor === entryId ? action.problem : null;
   const act = (signal: AbortSignal) => {
-    sent.current = { entryId, name };
+    nameSent.current = name;
     draft.sending();
-    return startRun(groupId, { name, versionId, values: draft.values }, signal);
+    return startRun(
+      groupId,
+      {
+        name,
+        versionId,
+        values: draft.values,
+        uploads: draft.uploads,
+        hasFilePositions: draft.hasFilePositions,
+      },
+      signal,
+    );
   };
   const run = (asked: (signal: AbortSignal) => Promise<StartedRun>) => {
     const first = draft.firstUnfit;
@@ -413,20 +306,12 @@ function useStartDraft(
     onLeave: draft.onLeave,
     onUnread: draft.onUnread,
     marks: draft.marks,
-    held:
-      workflow === undefined
-        ? { severity: "info", words: say("work.pickWorkflow") }
-        : undefined,
-    unfit: workflow === undefined ? undefined : draft.unfit,
-    refusal: draft.saying(refused),
+    unfit: draft.unfit,
+    refusal: draft.saying(action.problem),
     unmarked: draft.unmarked,
     act,
     action: { ...action, run },
   };
-}
-
-function namingFor(entryId: string): Naming {
-  return { entryId, typed: null, refused: null };
 }
 
 /** The workflow's name and when the form was drawn, the name cut short where the two would not fit in a name. */

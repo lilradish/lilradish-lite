@@ -21,6 +21,8 @@ import org.libprunus.spring.error.ApiErrorAutoConfiguration
 import org.libprunus.spring.error.ApiErrorHandler
 import org.lilradish.lite.app.currency.GroupCurrencies
 import org.lilradish.lite.app.estate.EstateRoleGrants
+import org.lilradish.lite.app.files.FileOpenAdmission
+import org.lilradish.lite.app.files.RunFiles
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.groupregister.GroupChanges
 import org.lilradish.lite.app.groupregister.GroupRegister
@@ -66,6 +68,7 @@ import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.http.ProblemDetail
 import org.springframework.http.converter.HttpMessageNotWritableException
+import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.test.context.bean.override.mockito.MockitoBean
@@ -204,6 +207,15 @@ class RefusalOutletIntegrationSpec extends Specification {
 
     @MockitoBean
     private GroupCurrencies currencies
+
+    @MockitoBean
+    private JdbcClient database
+
+    @MockitoBean
+    private RunFiles files
+
+    @MockitoBean
+    private FileOpenAdmission fileAdmission
 
     @MockitoBean
     private Runs runs
@@ -450,7 +462,7 @@ class RefusalOutletIntegrationSpec extends Specification {
         Mockito.verifyNoInteractions(grants, groupRoles, holdings, people, poolPeople, changes, register, groupChanges,
                 members, membershipChanges, library, entryChanges, versionChanges, measurements, questions,
                 questionDrafts, workflows, workflowDrafts, referenceLists, referenceListDrafts, currencies, runs,
-                runChanges, runSteps, stepActs, startRuns)
+                runChanges, runSteps, stepActs, startRuns, database, files, fileAdmission)
 
         where:
         address << ["/api/standing", "/api/people", "/api/pool/people", PERSON, PERSON + "/estate-roles/steward",
@@ -462,7 +474,8 @@ class RefusalOutletIntegrationSpec extends Specification {
                     A_TERM + "/down", A_QUESTION_VERSION,
                     A_QUESTION_VERSION + "/instruction", A_QUESTION_VERSION + "/takes", A_WORKFLOW_VERSION,
                     A_WORKFLOW_VERSION + "/gives", A_WORKFLOW_VERSION + "/steps", A_WORKFLOW_VERSION + "/ceiling",
-                    A_WORKFLOW_VERSION + "/help", IN_A_GROUP + "/runs", A_RUN + "/stop", A_RUN + "/steps", A_STEP,
+                    A_WORKFLOW_VERSION + "/help", IN_A_GROUP + "/runs", A_RUN + "/stop", A_RUN + "/steps",
+                    A_RUN + "/files/0000000d-0000-4000-8000-000000000501", A_STEP,
                     A_STEP + "/tries/1",
                     A_STEP + "/tries/1/review", A_STEP + "/tries/1/answer",
                     A_RAISE + "/approval", A_RAISE + "/refusal", A_RAISE + "/withdrawal",

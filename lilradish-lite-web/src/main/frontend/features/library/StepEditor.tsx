@@ -1,9 +1,13 @@
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import { memo, useCallback, useEffect, useRef, type ReactNode } from "react";
 
 import type { DeclaredField } from "../../api/declaration";
 import type { ContentProblem } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
@@ -12,9 +16,12 @@ import type {
   WorkflowVersion,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say, type MessageId } from "../../i18n/app";
+import { IconPress } from "../../lib/action/IconPress";
+import { Press } from "../../lib/action/Press";
+import { GROUP_SX, SPACED_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { fieldNameFits } from "../../lib/text/legibility";
-import { Inputs } from "./BindingControls";
+import { Inputs, sourceVisibleOf } from "./BindingControls";
 import { problemSaid, problemWords } from "./ContentProblems";
 import { ModelControls, modelSaid } from "./ModelControls";
 import { PinNote, versionSaid } from "./PinNote";
@@ -23,20 +30,25 @@ import {
   boundTo,
   flagsOf,
   pointsForward,
+  pointers,
+  searchTextRefused,
+  shapeHasFile,
   sourcesFor,
   takesOf,
   targetRows,
   termsChosenBy,
   tookVersion,
   triesFit,
+  unusedKey,
   type BindingDraft,
   type FlowDraft,
   type Named,
   type RunsDraft,
+  type SearchDraft,
+  type SearchPartDraft,
+  type SourceOffered,
   type StepDraft,
 } from "./workflowDrafts";
-
-const PART_SX = { mb: 3 };
 
 const ROW_SX = {
   display: "flex",
@@ -46,6 +58,17 @@ const ROW_SX = {
   mb: 2,
 };
 
+const FIELDS_SX = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  gap: 2,
+  mb: 2,
+  "& > .MuiFormControl-root": { width: "100%", minWidth: 0 },
+};
+const GROUPED_FIELDS_SX = { ...FIELDS_SX, ...GROUP_SX };
+const SECTION_HEADING_SX = { mb: 2 };
+
 const QUIET_SX = { color: "text.secondary" };
 
 const RUNS_WORDS = {
@@ -53,7 +76,8 @@ const RUNS_WORDS = {
   question: "workflow.runsQuestion",
   workflow: "workflow.runsWorkflow",
   code_step: "workflow.runsCodeStep",
-  route: "workflow.runsRouteOption",
+  route: "workflow.runsRoute",
+  search: "workflow.runsSearch",
 } as const satisfies Record<RunsDraft["kind"], MessageId>;
 
 /**
@@ -77,9 +101,32 @@ export function StepEditor({
   readonly editable: boolean;
   readonly change: (change: (step: StepDraft) => StepDraft) => void;
 }) {
+  const latestChange = useRef(change);
+  useEffect(() => {
+    latestChange.current = change;
+  }, [change]);
+  const changeSearch = useCallback(
+    (update: (runs: SearchDraft) => SearchDraft) =>
+      latestChange.current((now) =>
+        now.runs.kind === "search" ? { ...now, runs: update(now.runs) } : now,
+      ),
+    [],
+  );
   const set = (changed: Partial<StepDraft>) =>
     change((now) => ({ ...now, ...changed }));
   const models = workflow.offered.models;
+  const searchWay =
+    step.runs.kind === "search" ? step.runs.searchWay : undefined;
+  const selectedWay =
+    searchWay === undefined
+      ? undefined
+      : workflow.offered.searchWays.find((way) => way.name === searchWay);
+  const producerModels =
+    step.runs.kind !== "search"
+      ? models
+      : selectedWay === undefined
+        ? []
+        : models.filter((model) => model.tools.includes(selectedWay.tool));
   const sources = sourcesFor(flow, position, workflow, named, step);
   const rowsOf = (
     takes: readonly DeclaredField[],
@@ -95,7 +142,9 @@ export function StepEditor({
       "contentProblem.input_unbound",
     );
   const produces =
-    step.runs.kind === "question" || step.runs.kind === "code_step";
+    step.runs.kind === "question" ||
+    step.runs.kind === "code_step" ||
+    step.runs.kind === "search";
   const here = workflow.problems.filter(
     (problem) =>
       problem.stepId === step.stepId &&
@@ -109,20 +158,24 @@ export function StepEditor({
   return (
     <Box>
       {here.length === 0 ? null : (
-        <Box sx={PART_SX}>
-          <Typography variant="subtitle2" component="p">
+        <Box sx={SPACED_SX}>
+          <Typography variant="subtitle2">
             {say("workflow.problemsHere")}
           </Typography>
           {here.map((problem, index) => (
             <Notice key={`${index}:${problem.code}`} severity="warning">
-              {problemSaid(problem)}
+              {problemSaid(
+                problem,
+                step.runs.kind === "none" ? undefined : step.runs.kind,
+              )}
             </Notice>
           ))}
         </Box>
       )}
-      <Box sx={ROW_SX}>
+      <Box sx={FIELDS_SX}>
         {editable ? (
           <TextField
+            fullWidth
             size="small"
             label={say("workflow.stepName")}
             value={step.name}
@@ -138,6 +191,7 @@ export function StepEditor({
         ) : null}
         {editable ? (
           <TextField
+            fullWidth
             select
             size="small"
             label={say("workflow.stepRuns")}
@@ -161,56 +215,52 @@ export function StepEditor({
           workflow={workflow}
           named={named}
           editable={editable}
-          change={(runs) => set({ runs, bindings: [] })}
+          change={(runs) =>
+            change((now) => ({
+              ...now,
+              runs,
+              bindings: [],
+              ...(runs.kind === "search" &&
+              now.runs.kind === "search" &&
+              runs.searchWay !== now.runs.searchWay
+                ? { model: "", mode: "" }
+                : {}),
+            }))
+          }
           take={(versionId) =>
             change((now) => tookVersion(now, versionId, named))
           }
         />
       </Box>
       {produces ? (
-        <ProducerPart
-          step={step}
-          models={models}
+        <>
+          <ProducerPart
+            step={step}
+            models={producerModels}
+            editable={editable}
+            set={set}
+          />
+          <ReviewerPart
+            step={step}
+            models={models}
+            editable={editable}
+            set={set}
+          />
+        </>
+      ) : null}
+      {step.runs.kind === "search" ? (
+        <SearchQuestion
+          runs={step.runs}
+          sources={sources}
+          problems={workflow.problems}
+          flow={flow}
+          position={position}
           editable={editable}
-          set={set}
+          sourceSignature={JSON.stringify(sources)}
+          orderSignature={JSON.stringify(flow.steps.map((each) => each.key))}
+          change={changeSearch}
         />
-      ) : null}
-      {produces ? (
-        <Box sx={ROW_SX}>
-          {editable ? (
-            <TextField
-              size="small"
-              label={say("workflow.tries")}
-              value={step.tries}
-              error={step.tries !== "" && !triesFit(step.tries)}
-              helperText={
-                step.tries !== "" && !triesFit(step.tries)
-                  ? say("workflow.triesLimit")
-                  : undefined
-              }
-              slotProps={{ htmlInput: { inputMode: "numeric" } }}
-              onChange={(edit) => set({ tries: edit.target.value })}
-            />
-          ) : (
-            <Typography variant="body2">
-              {say("workflow.tries")}
-              {": "}
-              {step.tries === ""
-                ? say("workflow.producesUnchosen")
-                : step.tries}
-            </Typography>
-          )}
-        </Box>
-      ) : null}
-      {produces ? (
-        <ReviewerPart
-          step={step}
-          models={models}
-          editable={editable}
-          set={set}
-        />
-      ) : null}
-      {step.runs.kind === "route" ? (
+      ) : step.runs.kind === "route" ? (
         <RoutePart
           runs={step.runs}
           stepId={step.stepId}
@@ -238,6 +288,7 @@ export function StepEditor({
         <Inputs
           heading="workflow.inputs"
           level="h5"
+          depth={3}
           rows={
             takes === undefined
               ? undefined
@@ -280,6 +331,13 @@ function freshRuns(kind: RunsDraft["kind"]): RunsDraft {
       return { kind, version: "" };
     case "code_step":
       return { kind: "code_step", codeStep: "" };
+    case "search":
+      return {
+        kind: "search",
+        searchWay: "",
+        question: [],
+        standings: { title: "", body: "", references: "", other: "" },
+      };
     case "route":
       return {
         kind: "route",
@@ -290,6 +348,7 @@ function freshRuns(kind: RunsDraft["kind"]): RunsDraft {
   }
 }
 
+/** Which one of its kind a step runs; the kind itself the panel's head sets apart, so a route here says nothing. */
 function RunsChosen({
   step,
   workflow,
@@ -323,6 +382,7 @@ function RunsChosen({
       <>
         {editable ? (
           <TextField
+            fullWidth
             select
             size="small"
             label={say("workflow.version")}
@@ -340,13 +400,66 @@ function RunsChosen({
           </TextField>
         ) : (
           <Typography variant="body2">
-            {versionSaid(named.get(runs.version), runs.version)}
+            {runs.version === ""
+              ? say("workflow.runsNothing")
+              : versionSaid(named.get(runs.version), runs.version)}
           </Typography>
         )}
         {pinned === undefined ? null : (
           <PinNote pinned={pinned} take={editable ? take : undefined} />
         )}
       </>
+    );
+  }
+  if (runs.kind === "search") {
+    const offered = workflow.offered.searchWays;
+    const selectedWay = offered.find((way) => way.name === runs.searchWay);
+    const names = [
+      ...(runs.searchWay === "" ||
+      offered.some((way) => way.name === runs.searchWay)
+        ? []
+        : [runs.searchWay]),
+      ...offered.map((way) => way.name),
+    ];
+    return editable ? (
+      <TextField
+        fullWidth
+        select
+        size="small"
+        label={say("workflow.searchWay")}
+        value={runs.searchWay}
+        onChange={(edit) => change({ ...runs, searchWay: edit.target.value })}
+      >
+        <MenuItem value="">{say("workflow.searchWayNone")}</MenuItem>
+        {names.map((name) => {
+          const way = offered.find((each) => each.name === name);
+          return (
+            <MenuItem key={name} value={name}>
+              <Box>
+                <Typography variant="body2">{name}</Typography>
+                {way === undefined ? null : (
+                  <Typography variant="caption" sx={QUIET_SX}>
+                    {say("search.wayNeeds", { tool: way.tool })}
+                  </Typography>
+                )}
+              </Box>
+            </MenuItem>
+          );
+        })}
+      </TextField>
+    ) : (
+      <Box>
+        <Typography variant="body2">
+          {runs.searchWay === ""
+            ? say("workflow.searchWayNone")
+            : runs.searchWay}
+        </Typography>
+        {selectedWay === undefined ? null : (
+          <Typography variant="caption" sx={QUIET_SX}>
+            {say("search.wayNeeds", { tool: selectedWay.tool })}
+          </Typography>
+        )}
+      </Box>
     );
   }
   if (runs.kind === "code_step") {
@@ -357,6 +470,7 @@ function RunsChosen({
         : [runs.codeStep, ...offered];
     return editable ? (
       <TextField
+        fullWidth
         select
         size="small"
         label={say("workflow.codeStep")}
@@ -374,18 +488,435 @@ function RunsChosen({
       </TextField>
     ) : (
       <Typography variant="body2">
-        {runs.codeStep === ""
-          ? say("workflow.codeStepNone")
-          : say("workflow.runsCode", { name: runs.codeStep })}
+        {runs.codeStep === "" ? say("workflow.runsNothing") : runs.codeStep}
       </Typography>
     );
   }
-  return editable ? null : (
-    <Typography variant="body2">{say(RUNS_WORDS[runs.kind])}</Typography>
+  return editable || runs.kind === "route" ? null : (
+    <Typography variant="body2">{say("workflow.runsNothing")}</Typography>
   );
 }
 
-/** Who produces a step's values: a question's a model or a person, a code step's code or a person saying so. */
+const SearchQuestion = memo(
+  function SearchQuestion({
+    runs,
+    sources,
+    problems,
+    flow,
+    position,
+    editable,
+    sourceSignature,
+    change,
+  }: {
+    readonly runs: SearchDraft;
+    readonly sources: readonly SourceOffered[];
+    readonly problems: readonly ContentProblem[];
+    readonly flow: FlowDraft;
+    readonly position: number;
+    readonly editable: boolean;
+    readonly sourceSignature: string;
+    readonly orderSignature: string;
+    readonly change: (update: (runs: SearchDraft) => SearchDraft) => void;
+  }) {
+    const changePart = useCallback(
+      (index: number, part: SearchPartDraft) =>
+        change((current) => ({
+          ...current,
+          question: current.question.map((held, at) =>
+            at === index ? part : held,
+          ),
+        })),
+      [change],
+    );
+    const movePart = useCallback(
+      (index: number, by: -1 | 1) =>
+        change((current) => {
+          const there = index + by;
+          if (there < 0 || there >= current.question.length) return current;
+          const question = [...current.question];
+          [question[index], question[there]] = [
+            question[there]!,
+            question[index]!,
+          ];
+          return { ...current, question };
+        }),
+      [change],
+    );
+    const removePart = useCallback(
+      (index: number) =>
+        change((current) => ({
+          ...current,
+          question: current.question.filter((_part, at) => at !== index),
+        })),
+      [change],
+    );
+    const sourceByValue = new Map(
+      sources.map((source) => [source.value, source]),
+    );
+    const pointersBySource = new Map<string, ReturnType<typeof pointers>>();
+    const pointersFor = (place: SourceOffered | undefined) => {
+      if (place?.fields === undefined) return [];
+      let held = pointersBySource.get(place.value);
+      if (held === undefined) {
+        held = pointers(place.fields);
+        pointersBySource.set(place.value, held);
+      }
+      return held;
+    };
+    const sourceChoices = sources.map((each) => (
+      <MenuItem key={each.value} value={each.value}>
+        {sourceVisibleOf(each)}
+      </MenuItem>
+    ));
+    const positions = new Map(
+      flow.steps.map((step, index) => [step.key, index]),
+    );
+    const full = runs.question.length >= 256;
+    return (
+      <Box sx={GROUP_SX}>
+        <Typography variant="h5" sx={SECTION_HEADING_SX}>
+          {say("workflow.searchQuestion")}
+        </Typography>
+        {runs.question.map((part, index) => {
+          const source = "source" in part ? part.source : undefined;
+          const place =
+            source?.from === "input"
+              ? sourceByValue.get("input")
+              : source?.from === "step"
+                ? sourceByValue.get(source.stepKey)
+                : undefined;
+          return (
+            <SearchQuestionPart
+              key={part.key}
+              part={part}
+              index={index}
+              last={index === runs.question.length - 1}
+              editable={editable}
+              place={place}
+              pointersHere={pointersFor(place)}
+              sourceChoices={sourceChoices}
+              sourceSignature={sourceSignature}
+              pointsForward={
+                source?.from === "step" &&
+                (positions.get(source.stepKey) ?? -1) >= position
+              }
+              problems={problems}
+              changePart={changePart}
+              movePart={movePart}
+              removePart={removePart}
+            />
+          );
+        })}
+        {editable ? (
+          <Box sx={ROW_SX}>
+            <Press
+              unavailable={full}
+              reason={
+                full
+                  ? {
+                      severity: "warning",
+                      words: say("workflow.searchPartsFull", { most: 256 }),
+                    }
+                  : undefined
+              }
+              onPress={() =>
+                change((current) => ({
+                  ...current,
+                  question: [
+                    ...current.question,
+                    {
+                      key: unusedKey(
+                        "search",
+                        current.question.map((part) => part.key),
+                      ),
+                      text: "",
+                    },
+                  ],
+                }))
+              }
+            >
+              {say("workflow.searchAddText")}
+            </Press>
+            <Press
+              unavailable={full}
+              reason={
+                full
+                  ? {
+                      severity: "warning",
+                      words: say("workflow.searchPartsFull", { most: 256 }),
+                    }
+                  : undefined
+              }
+              onPress={() =>
+                change((current) => ({
+                  ...current,
+                  question: [
+                    ...current.question,
+                    {
+                      key: unusedKey(
+                        "search",
+                        current.question.map((part) => part.key),
+                      ),
+                      source: { from: "none" },
+                    },
+                  ],
+                }))
+              }
+            >
+              {say("workflow.searchAddValue")}
+            </Press>
+          </Box>
+        ) : null}
+        <Typography variant="h6" sx={SECTION_HEADING_SX}>
+          {say("workflow.searchStanding", { field: say("workflow.givesBack") })}
+        </Typography>
+        <Box sx={FIELDS_SX}>
+          {(["title", "body", "references", "other"] as const).map((field) => (
+            <TextField
+              fullWidth
+              key={field}
+              select
+              size="small"
+              label={say("workflow.searchStanding", { field })}
+              value={runs.standings[field]}
+              disabled={!editable}
+              onChange={(edit) =>
+                change((current) => ({
+                  ...current,
+                  standings: {
+                    ...current.standings,
+                    [field]: edit.target
+                      .value as SearchDraft["standings"][typeof field],
+                  },
+                }))
+              }
+            >
+              <MenuItem value="">{say("workflow.searchStandingNone")}</MenuItem>
+              <MenuItem value="always">
+                {say("workflow.searchStandingAlways")}
+              </MenuItem>
+              <MenuItem value="never">
+                {say("workflow.searchStandingReview")}
+              </MenuItem>
+            </TextField>
+          ))}
+        </Box>
+      </Box>
+    );
+  },
+  (before, after) =>
+    before.runs === after.runs &&
+    before.problems === after.problems &&
+    before.position === after.position &&
+    before.editable === after.editable &&
+    before.change === after.change &&
+    before.sourceSignature === after.sourceSignature &&
+    before.orderSignature === after.orderSignature,
+);
+
+const SearchQuestionPart = memo(
+  function SearchQuestionPart({
+    part,
+    index,
+    last,
+    editable,
+    place,
+    pointersHere,
+    sourceChoices,
+    pointsForward,
+    problems,
+    changePart,
+    movePart,
+    removePart,
+  }: {
+    readonly part: SearchPartDraft;
+    readonly index: number;
+    readonly last: boolean;
+    readonly editable: boolean;
+    readonly place: SourceOffered | undefined;
+    readonly pointersHere: ReturnType<typeof pointers>;
+    readonly sourceChoices: ReactNode;
+    readonly sourceSignature: string;
+    readonly pointsForward: boolean;
+    readonly problems: readonly ContentProblem[];
+    readonly changePart: (index: number, part: SearchPartDraft) => void;
+    readonly movePart: (index: number, by: -1 | 1) => void;
+    readonly removePart: (index: number) => void;
+  }) {
+    const source = "source" in part ? part.source : undefined;
+    const path =
+      source?.from === "input" || source?.from === "step" ? source.path : "";
+    const chosen = pointersHere.find((pointer) => pointer.path === path);
+    const short =
+      "text" in part
+        ? Array.from(part.text).slice(0, 40).join("") ||
+          say("workflow.searchPart", { position: index + 1 })
+        : path === ""
+          ? say("workflow.searchPart", { position: index + 1 })
+          : say("search.partOf", {
+              field: path,
+              source: place?.words ?? say("workflow.fromNothing"),
+            });
+    const errors: string[] = [];
+    if (source !== undefined) {
+      if (pointsForward) errors.push(say("workflow.pointsForward"));
+      if (chosen !== undefined && shapeHasFile(chosen.field))
+        errors.push(say("contentProblem.question_takes_file"));
+      if ("source" in part && part.partId !== undefined)
+        errors.push(
+          ...problems
+            .filter((problem) => problem.bindingId === part.partId)
+            .map((problem) => problemSaid(problem)),
+        );
+    }
+    const refusal = "text" in part ? searchTextRefused(part.text) : null;
+    return (
+      <Box sx={{ mb: 2 }}>
+        <Box sx={ROW_SX}>
+          <Typography variant="subtitle2">
+            <bdi>{say("workflow.searchPart", { position: index + 1 })}</bdi>
+          </Typography>
+          {editable ? (
+            <>
+              <IconPress
+                icon={<ArrowUpwardIcon />}
+                navigation
+                label={say("search.partUp", { part: short })}
+                unavailable={index === 0}
+                onPress={() => movePart(index, -1)}
+              >
+                {say("workflow.upTip")}
+              </IconPress>
+              <IconPress
+                icon={<ArrowDownwardIcon />}
+                navigation
+                label={say("search.partDown", { part: short })}
+                unavailable={last}
+                onPress={() => movePart(index, 1)}
+              >
+                {say("workflow.downTip")}
+              </IconPress>
+              <IconPress
+                icon={<DeleteOutlinedIcon />}
+                warns
+                label={say("search.partRemove", { part: short })}
+                unavailable={false}
+                onPress={() => removePart(index)}
+              >
+                {say("workflow.removeTip")}
+              </IconPress>
+            </>
+          ) : null}
+        </Box>
+        {"text" in part ? (
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            label={say("workflow.searchText")}
+            value={part.text}
+            disabled={!editable}
+            error={refusal !== null}
+            helperText={refusal === null ? undefined : say(refusal)}
+            slotProps={{ htmlInput: { dir: "auto" } }}
+            onChange={(edit) =>
+              changePart(index, { key: part.key, text: edit.target.value })
+            }
+          />
+        ) : (
+          <Box sx={FIELDS_SX}>
+            <TextField
+              fullWidth
+              select
+              size="small"
+              label={say("workflow.from")}
+              value={
+                source?.from === "input"
+                  ? "input"
+                  : source?.from === "step"
+                    ? source.stepKey
+                    : "none"
+              }
+              disabled={!editable}
+              onChange={(edit) =>
+                changePart(index, {
+                  key: part.key,
+                  source:
+                    edit.target.value === "none"
+                      ? { from: "none" }
+                      : edit.target.value === "input"
+                        ? { from: "input", path: "" }
+                        : {
+                            from: "step",
+                            stepKey: edit.target.value,
+                            path: "",
+                          },
+                })
+              }
+            >
+              <MenuItem value="none">{say("workflow.fromNothing")}</MenuItem>
+              {sourceChoices}
+            </TextField>
+            <TextField
+              fullWidth
+              select
+              size="small"
+              label={say("workflow.pointer")}
+              value={path}
+              disabled={
+                !editable || source?.from === "none" || place === undefined
+              }
+              onChange={(edit) =>
+                changePart(index, {
+                  key: part.key,
+                  source:
+                    source?.from === "input"
+                      ? { from: "input", path: edit.target.value }
+                      : source?.from === "step"
+                        ? { ...source, path: edit.target.value }
+                        : { from: "none" },
+                })
+              }
+            >
+              <MenuItem value="">{say("workflow.pointerNone")}</MenuItem>
+              {pointersHere
+                .filter(
+                  (pointer) =>
+                    !shapeHasFile(pointer.field) || pointer.path === path,
+                )
+                .map((pointer) => (
+                  <MenuItem key={pointer.path} value={pointer.path}>
+                    {pointer.path}
+                  </MenuItem>
+                ))}
+            </TextField>
+          </Box>
+        )}
+        {errors.map((error, at) => (
+          <Notice key={part.key + ":" + at} severity="warning">
+            {error}
+          </Notice>
+        ))}
+      </Box>
+    );
+  },
+  (before, after) =>
+    before.part === after.part &&
+    before.index === after.index &&
+    before.last === after.last &&
+    before.editable === after.editable &&
+    before.sourceSignature === after.sourceSignature &&
+    before.pointsForward === after.pointsForward &&
+    before.problems === after.problems &&
+    before.changePart === after.changePart &&
+    before.movePart === after.movePart &&
+    before.removePart === after.removePart,
+);
+
+/**
+ * Who produces a step's values — a question's a model or a person, a code step's code or a person saying so — and
+ * how many tries they may make.
+ */
 function ProducerPart({
   step,
   models,
@@ -397,14 +928,14 @@ function ProducerPart({
   readonly editable: boolean;
   readonly set: (changed: Partial<StepDraft>) => void;
 }) {
-  const asking = step.runs.kind === "question";
+  const asking = step.runs.kind === "question" || step.runs.kind === "search";
   const chosen =
     step.producer === "person" || step.producer === (asking ? "model" : "code")
       ? step.producer
       : "";
   if (!editable) {
     return (
-      <Box sx={ROW_SX}>
+      <Box sx={GROUPED_FIELDS_SX}>
         <Typography variant="body2">
           {say("workflow.producer")}
           {": "}
@@ -415,12 +946,19 @@ function ProducerPart({
             {say("workflow.told")}
           </Typography>
         ) : null}
+        <Typography variant="body2">
+          {say("workflow.tries")}
+          {": "}
+          {step.tries === "" ? say("workflow.producesUnchosen") : step.tries}
+        </Typography>
       </Box>
     );
   }
+  const triesPast = step.tries !== "" && !triesFit(step.tries);
   return (
-    <Box sx={ROW_SX}>
+    <Box sx={GROUPED_FIELDS_SX}>
       <TextField
+        fullWidth
         select
         size="small"
         label={say("workflow.producer")}
@@ -462,6 +1000,16 @@ function ProducerPart({
           label={say("workflow.told")}
         />
       ) : null}
+      <TextField
+        fullWidth
+        size="small"
+        label={say("workflow.tries")}
+        value={step.tries}
+        error={triesPast}
+        helperText={triesPast ? say("workflow.triesLimit") : undefined}
+        slotProps={{ htmlInput: { inputMode: "numeric" } }}
+        onChange={(edit) => set({ tries: edit.target.value })}
+      />
     </Box>
   );
 }
@@ -469,6 +1017,7 @@ function ProducerPart({
 export function producerSaid(step: StepDraft): string {
   switch (step.runs.kind) {
     case "question":
+    case "search":
       return step.producer === "person"
         ? say("workflow.producesPerson")
         : step.producer === "model"
@@ -502,7 +1051,7 @@ function ReviewerPart({
 }) {
   if (!editable) {
     return (
-      <Box sx={ROW_SX}>
+      <Box sx={GROUPED_FIELDS_SX}>
         <Typography variant="body2">
           {say("workflow.reviewer")}
           {": "}
@@ -514,10 +1063,12 @@ function ReviewerPart({
     );
   }
   const modelProduces =
-    step.runs.kind === "question" && step.producer === "model";
+    (step.runs.kind === "question" || step.runs.kind === "search") &&
+    step.producer === "model";
   return (
-    <Box sx={ROW_SX}>
+    <Box sx={GROUPED_FIELDS_SX}>
       <TextField
+        fullWidth
         select
         size="small"
         label={say("workflow.reviewer")}

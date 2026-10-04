@@ -72,15 +72,15 @@ public final class StampReference implements CodeStep {
     }
 
     @Override
-    public JsonValue.JsonObject run(JsonValue.JsonObject takes) {
-        for (JsonValue.JsonMember member : takes.members()) {
+    public Output run(Input takes) {
+        for (JsonValue.JsonMember member : takes.values().members()) {
             if (member.name().equals(TAKEN) && member.value() instanceof JsonValue.JsonString complaint) {
                 String reference = PREFIX
                         + Digest.sha256Hex(complaint.value())
                                 .substring(0, DIGITS)
                                 .toUpperCase(Locale.ROOT);
-                return new JsonValue.JsonObject(
-                        List.of(new JsonValue.JsonMember(GIVEN, new JsonValue.JsonString(reference))));
+                return Output.plain(new JsonValue.JsonObject(
+                        List.of(new JsonValue.JsonMember(GIVEN, new JsonValue.JsonString(reference)))));
             }
         }
         throw new IllegalArgumentException(NAME.value() + " takes a complaint in text, and was given none");

@@ -87,8 +87,10 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
         drafts.note(groupId(GROUP), entryId(LIST), versionId(DRAFT), ANN_USER, 1, new ListNote("Pick the nearest.\n\tAsk."))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select note || ' ' || updated_by from reference_list_versions where entry_version_id = ?::uuid",
                 DRAFT) == ["Pick the nearest.\n\tAsk. ${ANN}" as String]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select created_by::text from entry_version_writers") == [ANN]
         revision() == 2
         store.count("select count(*) from reference_list_versions where updated_at is not null") == 1
@@ -96,6 +98,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
     def "clearing the note holds none rather than an empty one, and the version in service as it was"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update reference_list_versions set note = 'Pick one.' where entry_version_id = ?::uuid")
                 .param(DRAFT).update()
 
@@ -103,6 +106,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
         drafts.note(groupId(GROUP), entryId(LIST), versionId(DRAFT), ANN_USER, 1, null)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from reference_list_versions where entry_version_id = ?::uuid and note is null",
                 DRAFT) == 1
         revision() == 2
@@ -112,17 +116,21 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
     /** A write that waited on the draft began before the one it waited on was stamped, and never goes back past it. */
     def "a note written after a change stamped later than this one began keeps its time from going back"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         store.session.sql("""
                 update reference_list_versions set updated_at = now() + interval '1 day', updated_by = ?::uuid
                  where entry_version_id = ?::uuid
                 """).params(FIRST_STEWARD, DRAFT).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         def stamped = store.texts("select updated_at::text from reference_list_versions where updated_at is not null")
 
         when:
         drafts.note(groupId(GROUP), entryId(LIST), versionId(DRAFT), ANN_USER, 1, new ListNote("Pick one."))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select updated_at::text from reference_list_versions where updated_at is not null") == stamped
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select updated_by::text from reference_list_versions where updated_at is not null") == [ANN]
     }
 
@@ -135,11 +143,13 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
         then:
         terms() == ["1 Billing A charge is disputed.", "2 Delivery It came late.", "3 billing A charge again."]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select distinct created_by::text from reference_list_terms") == [ANN]
         store.count("select count(*) from reference_list_terms where updated_at is not null") == 0
         revision() == 4
 
         and: "nothing added to the version in service"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from reference_list_terms where entry_version_id = ?::uuid", IN_SERVICE) == 0
     }
 
@@ -151,7 +161,9 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
         add(1, "Returns", "It was sent back.")
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from reference_list_terms where entry_version_id = ?::uuid", DRAFT) == 256
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select position || ' ' || term from reference_list_terms where created_by = ?::uuid", ANN) ==
                 ["256 Returns"]
         revision() == 2
@@ -177,6 +189,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
     def "two adds racing on one revision, one term short of the most a list holds, land once and refuse the other as written since"() {
         given:
         holdingTerms(Term.MOST_IN_A_LIST - 1)
+        // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
         def holder = store.holding("select 1 from entry_versions where entry_version_id = '${DRAFT}' for no key update")
 
         when:
@@ -190,6 +203,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
         then:
         outcomes.count { it == null } == 1
         outcomes.findAll { it != null }*.errorCode() == [RefusalCode.DRAFT_WRITTEN_SINCE_READ]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from reference_list_terms where entry_version_id = ?::uuid", DRAFT) == 256
         revision() == 2
     }
@@ -205,6 +219,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
         then:
         terms() == ["1 Invoicing An invoice is wrong.", "2 Delivery About Delivery."]
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         store.texts("select reference_list_term_id::text from reference_list_terms where updated_by = ?::uuid", ANN) ==
                 [billing.toString()]
         revision() == 2
@@ -243,7 +258,9 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
         then:
         terms() == ["1 Billing About Billing.", "2 Returns About Returns.", "3 Other About Other."]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from reference_list_terms where reference_list_term_id = ?::uuid", delivery) == 0
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select term from reference_list_terms where updated_by = ?::uuid order by position", ANN) ==
                 ["Returns", "Other"]
         revision() == 2
@@ -272,6 +289,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
         then:
         terms().collect { it.split(" ")[1] } == order
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select term from reference_list_terms where updated_by = ?::uuid order by position", ANN) ==
                 changed
         revision() == 2
@@ -328,6 +346,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
         given:
         def billing = termed(DRAFT, 1, "Billing")
         termed(DRAFT, 2, "Delivery")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update entry_versions set revision = 2 where entry_version_id = ?::uuid").param(DRAFT).update()
         def before = store.contents()
 
@@ -387,6 +406,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
     }
 
     private void holdingTerms(int many) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; generate_series().
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 select ?::uuid, place, 'Term ' || place, 'What it means.', ?::uuid from generate_series(1, ?) place
@@ -394,6 +414,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
     }
 
     private UUID termed(String version, int position, String term) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, ?, ?, ?, ?::uuid)
@@ -403,6 +424,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
 
     /** The draft's terms in its order, by place and words rather than any key. */
     private List<String> terms() {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; concat_ws().
         store.texts("""
                 select concat_ws(' ', position, term, meaning) from reference_list_terms
                  where entry_version_id = ?::uuid order by position
@@ -410,6 +432,7 @@ class ReferenceListDraftsIntegrationSpec extends Specification {
     }
 
     private int revision() {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select revision from entry_versions where entry_version_id = ?::uuid", DRAFT)
     }
 }

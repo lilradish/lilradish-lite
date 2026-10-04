@@ -75,6 +75,7 @@ class EntrySwitchIntegrationSpec extends Specification {
             store.stopped(ENTRY, FIRST_STEWARD)
         }
         if (letGo) {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
             store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid")
                     .params(FIRST_STEWARD).update()
         }
@@ -93,6 +94,7 @@ class EntrySwitchIntegrationSpec extends Specification {
     def "a start waiting on a stop being written reads the entry stopped once the stop lands"() {
         given:
         def stopping = store.holding(
+                // DB-SPECIFIC: PostgreSQL SELECT FOR NO KEY UPDATE.
                 "select 1 from entries where entry_id = '${ENTRY}' for no key update" as String,
                 "insert into entry_stops (entry_id, created_by) values ('${ENTRY}', '${FIRST_STEWARD}')" as String)
 
@@ -171,8 +173,10 @@ class EntrySwitchIntegrationSpec extends Specification {
         store.entry(LET_GO_ENTRY, GROUP, "question", "Confirm")
         store.stopped(ENTRY, FIRST_STEWARD)
         store.stopped(LET_GO_ENTRY, FIRST_STEWARD)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(FIRST_STEWARD, LET_GO_ENTRY).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         def since = store.session.sql("select created_at from entry_stops where entry_id = ?::uuid")
                 .params(ENTRY).query(OffsetDateTime).single().toInstant()
 

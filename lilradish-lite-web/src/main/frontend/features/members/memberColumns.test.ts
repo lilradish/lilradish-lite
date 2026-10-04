@@ -12,10 +12,10 @@ function setApart(words: string): string {
   return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
 }
 
-const ADA: Member = {
+const AVO: Member = {
   subjectId: "00000002-0000-4000-8000-0000000009b1",
   userId: "0009b1",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
   roles: new Set(["owner", "overseer", "operator"]),
 };
 
@@ -46,9 +46,9 @@ describe("memberColumns", () => {
 
   /** Every role they hold, and never only the highest of them. */
   it("shows every role held in the reader's words, in their own order and each set apart", () => {
-    expect(cellsOf(ADA)).toEqual([
+    expect(cellsOf(AVO)).toEqual([
       "0009b1",
-      "Ada Lovelace",
+      "Avo Lumerace",
       `${setApart("Operator")}, ${setApart("Overseer")}, ${setApart("Owner")}`,
     ]);
   });

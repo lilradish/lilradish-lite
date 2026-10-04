@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { entryHref, JUST_STARTED, justStarted } from "./entryAddress";
+import { entryHref, JUST_MADE, justMade } from "./entryAddress";
 import { LIBRARY_KINDS } from "./libraryKinds";
 
 const GROUP = "00000003-0000-4000-8000-000000000b11";
@@ -21,13 +21,13 @@ describe("entryHref", () => {
   });
 });
 
-describe("justStarted", () => {
+describe("justMade", () => {
   it.each([
-    ["the state an entry just started is opened with", JUST_STARTED, true],
+    ["the state an entry just made is opened with", JUST_MADE, true],
     ["no state", null, false],
-    ["state that says otherwise", { justStarted: "yes" }, false],
+    ["state that says otherwise", { justMade: "yes" }, false],
     ["another page's state", { from: "/groups" }, false],
-  ])("reads %s", (_case, state, started) => {
-    expect(justStarted(state)).toBe(started);
+  ])("reads %s", (_case, state, made) => {
+    expect(justMade(state)).toBe(made);
   });
 });

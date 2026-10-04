@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { theme } from "../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../testutil/depths";
 import { SystemPage } from "./SystemPage";
 
 function shown(title: "destination.soundness" | "destination.measurements") {
@@ -32,6 +33,18 @@ describe("SystemPage", () => {
       ).toBeInTheDocument();
     },
   );
+
+  it("is one part of the page, named by its heading and framed as a page's part", () => {
+    shown("destination.measurements");
+
+    const part = screen.getByRole("region", { name: "Measurements" });
+
+    expect(part).toContainElement(
+      screen.getByText("Nothing is built here yet."),
+    );
+    expect(drawnOf(part)).toEqual(drawnAtDepth(1));
+    expect(screen.getAllByRole("region")).toEqual([part]);
+  });
 
   /**
    * Said rather than left blank. A screen holding nothing and a screen whose

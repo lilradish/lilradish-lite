@@ -19,9 +19,9 @@ class ListFilterSpec extends Specification {
         new ListFilter(typed).text() == typed
 
         where:
-        typed << [" Ada", "Ada ", "Ada  Lovelace", "山田" + IDEOGRAPHIC_SPACE + "太郎", "%", "_", "\\",
+        typed << [" Ari", "Ari ", "Ari  Mockvale", "山田" + IDEOGRAPHIC_SPACE + "太郎", "%", "_", "\\",
                   "a%_\\b", GRINNING_FACE * 256, "Mi" + Character.toString(0x200C) + "tra",
-                  "Ada" + Character.toString(0x200D), "Love" + Character.toString(0x00AD) + "lace"]
+                  "Ari" + Character.toString(0x200D), "Mock" + Character.toString(0x00AD) + "vale"]
     }
 
     /**
@@ -51,8 +51,8 @@ class ListFilterSpec extends Specification {
         refused.message.startsWith("ListFilter must not contain a control, line or paragraph separator")
 
         where:
-        typed << ["Ada" + Character.toString(0x07), "Ada\nLovelace", "Ada" + Character.toString(0x2028),
-                  "Ada" + Character.toString(0x2029), "Ada" + Character.toString(0xD800)]
+        typed << ["Ari" + Character.toString(0x07), "Ari\nMockvale", "Ari" + Character.toString(0x2028),
+                  "Ari" + Character.toString(0x2029), "Ari" + Character.toString(0xD800)]
     }
 
     def "an empty filter cannot be built, and a filter cannot be built of nothing"() {
@@ -80,7 +80,7 @@ class ListFilterSpec extends Specification {
 
     def "something typed is parsed into the filter holding it, exactly as typed"() {
         expect:
-        ListFilter.parse(" grace ") == new ListFilter(" grace ")
+        ListFilter.parse(" greno ") == new ListFilter(" greno ")
     }
 
     def "something typed that could not be a filter is refused by the parse, not read as no filter"() {

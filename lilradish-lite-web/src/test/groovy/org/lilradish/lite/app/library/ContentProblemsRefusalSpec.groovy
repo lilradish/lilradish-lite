@@ -14,7 +14,7 @@ import spock.lang.Specification
 class ContentProblemsRefusalSpec extends Specification {
 
     static final ContentProblem PROBLEM = new ContentProblem(
-            ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null)
+            ContentProblemCode.INSTRUCTION_MISSING, new ContentPlace.Whole(ContentPart.INSTRUCTION), null, null)
 
     static final RetiredPinsRefusal.RetiredPin PIN = new RetiredPinsRefusal.RetiredPin(
             new EntryId(UUID.fromString("00000006-0000-4000-8000-000000000101")), EntryKind.REFERENCE_LIST,
@@ -30,7 +30,7 @@ class ContentProblemsRefusalSpec extends Specification {
         def pins = [PIN]
 
         when:
-        def refused = new ContentProblemsRefusal(problems, pins)
+        def refused = new ContentProblemsRefusal(problems == null ? null : new ContentProblemReport.Result(problems, problems.size()), pins)
         problems.clear()
         pins.clear()
 
@@ -43,7 +43,7 @@ class ContentProblemsRefusalSpec extends Specification {
 
     def "a refusal naming no problem is no refusal, and is refused"() {
         when:
-        new ContentProblemsRefusal(problems, pins)
+        new ContentProblemsRefusal(problems == null ? null : new ContentProblemReport.Result(problems, problems.size()), pins)
 
         then:
         def refused = thrown(expectedException)
@@ -52,7 +52,7 @@ class ContentProblemsRefusalSpec extends Specification {
         where:
         problems  | pins || expectedException        | expectedMessage
         []        | []   || IllegalArgumentException | "ContentProblemsRefusal names at least one problem"
-        null      | []   || NullPointerException     | "ContentProblemsRefusal problems must not be null"
+        null      | []   || NullPointerException     | "ContentProblemsRefusal report must not be null"
         [PROBLEM] | null || NullPointerException     | "ContentProblemsRefusal pins must not be null"
     }
 }

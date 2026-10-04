@@ -56,9 +56,9 @@ class RunTreeIntegrationSpec extends Specification {
                 "Handle a complaint", null, false)
         RunRows.workflow(store, "00000006-0000-4000-8000-000000000e02", "00000007-0000-4000-8000-000000000e02", GROUP,
                 "Escalate", null, false)
-        RunRows.run(store, ROOT, GROUP, 1, "Complaint from Ada", "00000006-0000-4000-8000-000000000e01",
+        RunRows.run(store, ROOT, GROUP, 1, "Complaint from Ari", "00000006-0000-4000-8000-000000000e01",
                 "00000007-0000-4000-8000-000000000e01", ANN)
-        RunRows.run(store, UNRELATED, GROUP, 2, "Complaint from Grace", "00000006-0000-4000-8000-000000000e01",
+        RunRows.run(store, UNRELATED, GROUP, 2, "Complaint from Greno", "00000006-0000-4000-8000-000000000e01",
                 "00000007-0000-4000-8000-000000000e01", ANN)
         RunRows.beneath(store, BENEATH, ROOT, GROUP, 3, "00000006-0000-4000-8000-000000000e02",
                 "00000007-0000-4000-8000-000000000e02", "00000009-0000-4000-8000-000000000e01",

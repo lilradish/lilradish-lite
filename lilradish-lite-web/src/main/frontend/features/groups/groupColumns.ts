@@ -51,6 +51,7 @@ export function groupColumns(
       label: say("group.members"),
       cell: (group: RegisteredGroup) => group.memberCount,
       sortKey: "memberCount",
+      numeric: true,
     },
     { label: "", cell: renameControl },
   ] as const;

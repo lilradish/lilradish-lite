@@ -4,7 +4,10 @@ import {
   fillFieldFrom,
   fillFieldsFrom,
   fillProblemsIn,
+  isDownloadableFileValue,
   isFillValue,
+  isShownValue,
+  isWithheldLeaf,
   pathKey,
   readFieldsFrom,
 } from "./filling";
@@ -43,6 +46,21 @@ const CONTACTS = {
   fields: [CATEGORY, COMPLAINT],
 };
 
+const FILE = {
+  name: "attachment",
+  kind: "file",
+  mustBeGiven: true,
+  types: ["application/pdf", "image/png"],
+  maximumBytes: 1048576,
+};
+
+const FILE_VALUE = {
+  id: "file-one",
+  name: "Demo Sample.pdf",
+  type: "application/pdf",
+  size: 42,
+};
+
 const REFUSED = (problems: unknown, problemsFound: unknown = 1) => ({
   status: 400,
   code: "VALUE_DOES_NOT_FIT",
@@ -53,6 +71,19 @@ describe("fillFieldFrom", () => {
   it("reads every member a field carries, and the fields it holds in the order sent", () => {
     expect(fillFieldFrom(CONTACTS)).toEqual(CONTACTS);
   });
+
+  it.each(["one", "several"])(
+    "reads %s lines in a form and a saved declaration",
+    (lines) => {
+      const text = { ...COMPLAINT, lines };
+      expect(fillFieldFrom(text)).toEqual(text);
+      expect(readFieldsFrom([{ ...CONTACTS, fields: [text] }])).toEqual([
+        { ...CONTACTS, fields: [text] },
+      ]);
+      expect(fillFieldFrom({ ...text, lines: "later" })).toBeNull();
+      expect(fillFieldFrom({ ...CATEGORY, lines })).toBeNull();
+    },
+  );
 
   it("leaves out what did not arrive rather than reading it as nothing", () => {
     const read = fillFieldFrom(COMPLAINT);
@@ -72,6 +103,64 @@ describe("fillFieldFrom", () => {
     expect(fillFieldFrom(quiet)?.terms).toEqual({
       terms: CATEGORY.terms.terms,
     });
+  });
+
+  it("reads file limits at the top level and inside fields holding many", () => {
+    const nested = { ...CONTACTS, fields: [FILE, COMPLAINT] };
+
+    expect(readFieldsFrom([FILE, nested])).toEqual([FILE, nested]);
+    expect(fillFieldFrom(FILE)).toEqual(FILE);
+    expect(fillFieldsFrom([FILE, nested])).toEqual([FILE, nested]);
+  });
+
+  it("reads a syntactically valid type beyond the common examples", () => {
+    const field = {
+      ...FILE,
+      types: ["application/vnd.demo-sample+json"],
+      maximumBytes: 100_000_000,
+      most: 100,
+    };
+
+    expect(readFieldsFrom([field])).toEqual([field]);
+    expect(fillFieldFrom(field)).toEqual(field);
+    expect(isFillValue({ ...FILE_VALUE, type: field.types[0] })).toBe(true);
+  });
+
+  it.each([
+    ["no allowed types", { ...FILE, types: undefined }],
+    ["empty allowed types", { ...FILE, types: [] }],
+    ["duplicate allowed types", { ...FILE, types: ["image/png", "image/png"] }],
+    [
+      "case-variant duplicate types",
+      { ...FILE, types: ["image/png", "IMAGE/PNG"] },
+    ],
+    ["media type missing its slash", { ...FILE, types: ["applicationpdf"] }],
+    ["media type containing a space", { ...FILE, types: ["application/ pdf"] }],
+    [
+      "media type beginning with punctuation",
+      { ...FILE, types: ["-application/pdf"] },
+    ],
+    ["non-text allowed type", { ...FILE, types: ["image/png", 1] }],
+    ["no byte limit", { ...FILE, maximumBytes: undefined }],
+    ["zero byte limit", { ...FILE, maximumBytes: 0 }],
+    ["zero files allowed", { ...FILE, most: 0 }],
+    ["negative byte limit", { ...FILE, maximumBytes: -1 }],
+    ["fractional byte limit", { ...FILE, maximumBytes: 1.5 }],
+    ["terms on a file", { ...FILE, terms: CATEGORY.terms }],
+    ["text length on a file", { ...FILE, longest: 10 }],
+    ["fields within a file", { ...FILE, fields: [COMPLAINT] }],
+    ["file limits on text", { ...COMPLAINT, types: FILE.types }],
+    ["file size on fields", { ...CONTACTS, maximumBytes: 100 }],
+  ])("refuses %s", (_case, body) => {
+    expect(readFieldsFrom([body])).toBeNull();
+    expect(fillFieldFrom(body)).toBeNull();
+  });
+
+  it("refuses a malformed file nested among valid fields", () => {
+    const nested = { ...CONTACTS, fields: [COMPLAINT, { ...FILE, types: [] }] };
+
+    expect(readFieldsFrom([nested])).toBeNull();
+    expect(fillFieldsFrom([nested])).toBeNull();
   });
 
   it.each([
@@ -177,6 +266,19 @@ describe("fillProblemsIn", () => {
     });
   });
 
+  it("keeps a line break refusal and its nested place without confusing it with a missing value", () => {
+    const problems = [
+      { path: ["contacts", 1, "complaint"], reason: "line_break" },
+    ];
+    expect(fillProblemsIn(REFUSED(problems))).toEqual({
+      listed: problems,
+      found: 1,
+    });
+    expect(
+      fillProblemsIn(REFUSED([{ ...problems[0], reason: "later" }])),
+    ).toBeNull();
+  });
+
   it("reads more found than listed as found, listing only what was listed", () => {
     const problems = [{ path: ["complaint"], reason: "missing" }];
 
@@ -250,11 +352,44 @@ describe("isFillValue", () => {
     ["text", "A printer fire."],
     ["none", null],
     ["many", ["a", null]],
-    ["fields, one of many within them", { name: "Ada", phones: ["1", "2"] }],
-    ["fields of many", [{ name: "Ada" }, { name: "Grace" }]],
+    ["fields, one of many within them", { name: "Avo", phones: ["1", "2"] }],
+    ["fields of many", [{ name: "Avo" }, { name: "Glinn" }]],
     ["no fields", {}],
+    [
+      "fields named like file metadata",
+      { id: "one", name: "Demo Sample", type: "plain" },
+    ],
+    [
+      "four text fields named like file metadata",
+      { id: "one", name: "Demo Sample", type: "plain", size: "large" },
+    ],
   ])("takes %s", (_case, said) => {
     expect(isFillValue(said)).toBe(true);
+  });
+
+  it("takes file metadata alone, among many and within fields", () => {
+    expect(isFillValue(FILE_VALUE)).toBe(true);
+    expect(
+      isFillValue([FILE_VALUE, { ...FILE_VALUE, id: "file-two", size: 0 }]),
+    ).toBe(true);
+    expect(isFillValue({ details: { attachments: [FILE_VALUE] } })).toBe(true);
+  });
+
+  it.each([
+    ["missing id", { name: FILE_VALUE.name, type: FILE_VALUE.type, size: 42 }],
+    ["missing name", { id: FILE_VALUE.id, type: FILE_VALUE.type, size: 42 }],
+    ["missing type", { id: FILE_VALUE.id, name: FILE_VALUE.name, size: 42 }],
+    ["empty id", { ...FILE_VALUE, id: "" }],
+    ["empty name", { ...FILE_VALUE, name: "" }],
+    ["name on two lines", { ...FILE_VALUE, name: "Demo\nSample.pdf" }],
+    ["name beyond the limit", { ...FILE_VALUE, name: "A".repeat(256) }],
+    ["malformed type", { ...FILE_VALUE, type: "application//pdf" }],
+    ["negative size", { ...FILE_VALUE, size: -1 }],
+    ["fractional size", { ...FILE_VALUE, size: 1.5 }],
+    ["unexpected member", { ...FILE_VALUE, content: "private" }],
+  ])("refuses file metadata with %s", (_case, said) => {
+    expect(isFillValue(said)).toBe(false);
+    expect(isFillValue({ nested: [said] })).toBe(false);
   });
 
   it.each([
@@ -264,6 +399,46 @@ describe("isFillValue", () => {
     ["a number deep within fields", { items: [{ count: 3 }] }],
   ])("refuses %s", (_case, said) => {
     expect(isFillValue(said)).toBe(false);
+  });
+});
+
+describe("isDownloadableFileValue", () => {
+  const downloadable = {
+    ...FILE_VALUE,
+    id: "0000000f-0000-4000-8000-000000000001",
+  };
+
+  it("accepts canonical file metadata with an identifier the download route can read", () => {
+    expect(isDownloadableFileValue(downloadable)).toBe(true);
+    expect(isDownloadableFileValue({ ...downloadable, id: "not-a-uuid" })).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["an unusable name", { ...downloadable, name: "Demo\nSample.pdf" }],
+    ["an unusable type", { ...downloadable, type: "application//pdf" }],
+    ["a negative size", { ...downloadable, size: -1 }],
+    ["an extra path", { ...downloadable, path: "attachments[0]" }],
+  ])("does not make %s downloadable", (_case, value) => {
+    expect(isDownloadableFileValue(value)).toBe(false);
+  });
+});
+
+describe("isShownValue", () => {
+  it("reads a hidden leaf beside readable text and file metadata without allowing it in a submitted value", () => {
+    const shown = {
+      details: { privateNote: { withheld: true }, visibleNote: "Demo Sample" },
+      attachment: FILE_VALUE,
+    };
+
+    expect(isShownValue(shown)).toBe(true);
+    expect(isFillValue(shown)).toBe(false);
+    expect(isWithheldLeaf(shown.details.privateNote)).toBe(true);
+    expect(isWithheldLeaf({ withheld: true, extra: "text" })).toBe(false);
+    expect(
+      isShownValue({ privateNote: { withheld: true, extra: "text" } }),
+    ).toBe(false);
   });
 });
 

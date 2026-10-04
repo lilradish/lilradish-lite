@@ -28,7 +28,9 @@ import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.declaration.FieldShape;
 import org.lilradish.lite.domain.declaration.FieldStanding;
 import org.lilradish.lite.domain.declaration.HowMany;
+import org.lilradish.lite.domain.declaration.TextLines;
 import org.lilradish.lite.domain.failure.RefusalCode;
+import org.lilradish.lite.domain.file.MediaTypeName;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 import org.lilradish.lite.web.MintedIdentifiers;
 import tools.jackson.databind.JsonNode;
@@ -63,7 +65,13 @@ final class DeclarationBody {
 
     private static final String LONGEST = "longest";
 
+    private static final String LINES = "lines";
+
     private static final String LIST = "list";
+
+    private static final String TYPES = "types";
+
+    private static final String MAXIMUM_BYTES = "maximumBytes";
 
     private static final String FIELDS = "fields";
 
@@ -125,9 +133,12 @@ final class DeclarationBody {
         Set<String> taken = requireNonNull(requireNonNull(MEMBERS.get(kind)).get(demands.at(first)));
         JsonNode key = sent.path(FIELD_ID);
         int keyed = sent.has(FIELD_ID) ? 1 : 0;
-        if (taken.size() != sent.size() - keyed
+        int lines = kind == FieldKind.TEXT && sent.has(LINES) ? 1 : 0;
+        if (taken.size() != sent.size() - keyed - lines
                 || !sent.propertyNames().stream()
-                        .allMatch(member -> member.equals(FIELD_ID) || taken.contains(member))) {
+                        .allMatch(member -> member.equals(FIELD_ID)
+                                || taken.contains(member)
+                                || (kind == FieldKind.TEXT && member.equals(LINES)))) {
             throw unusable();
         }
         readAs.add(keyIn(key));
@@ -138,8 +149,11 @@ final class DeclarationBody {
         }
         FieldShape shape =
                 switch (kind) {
-                    case TEXT -> limited(() -> new FieldShape.Text(limitIn(sent.get(LONGEST))));
+                    case TEXT ->
+                        limited(() -> new FieldShape.Text(limitIn(sent.get(LONGEST)), linesIn(sent.path(LINES))));
                     case TERM -> new FieldShape.Term(listIn(sent.get(LIST)));
+                    case FILE ->
+                        limited(() -> new FieldShape.File(typesIn(sent.get(TYPES)), bytesIn(sent.get(MAXIMUM_BYTES))));
                     case FIELDS -> {
                         JsonNode held = sent.get(FIELDS);
                         if (!held.isArray()) {
@@ -167,6 +181,7 @@ final class DeclarationBody {
                 switch (kind) {
                     case TEXT -> taken.add(LONGEST);
                     case TERM -> taken.add(LIST);
+                    case FILE -> taken.addAll(Set.of(TYPES, MAXIMUM_BYTES));
                     case FIELDS -> taken.add(FIELDS);
                     default -> {}
                 }
@@ -178,6 +193,20 @@ final class DeclarationBody {
             members.put(kind, byDemand);
         }
         return members;
+    }
+
+    private static TextLines linesIn(JsonNode sent) {
+        if (sent.isMissingNode()) {
+            return TextLines.SEVERAL;
+        }
+        if (!sent.isString()) {
+            throw unusable();
+        }
+        return switch (sent.asString()) {
+            case "one" -> TextLines.ONE;
+            case "several" -> TextLines.SEVERAL;
+            default -> throw unusable();
+        };
     }
 
     private static FieldName nameIn(JsonNode sent) {
@@ -214,6 +243,35 @@ final class DeclarationBody {
             throw unusable();
         }
         return sent.intValue();
+    }
+
+    private static List<MediaTypeName> typesIn(JsonNode sent) {
+        if (!sent.isArray() || sent.isEmpty()) {
+            throw unusable();
+        }
+        if (!FieldShape.File.typesFit(sent.size())) {
+            throw LibraryRefusal.FILE_TYPES_TOO_MANY.raised();
+        }
+        List<MediaTypeName> types = new ArrayList<>(sent.size());
+        for (JsonNode name : sent) {
+            if (!name.isString()) {
+                throw unusable();
+            }
+            types.add(new MediaTypeName(name.asString()));
+        }
+        return types;
+    }
+
+    private static @Nullable Long bytesIn(JsonNode sent) {
+        if (sent.isNull()) {
+            return null;
+        }
+        if (!sent.isIntegralNumber()
+                || !sent.canConvertToLong()
+                || !FieldShape.File.maximumBytesFit(sent.longValue())) {
+            throw LibraryRefusal.FILE_SIZE_LIMIT_UNUSABLE.raised();
+        }
+        return sent.longValue();
     }
 
     private static <T> T limited(Supplier<T> made) {

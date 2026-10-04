@@ -1,25 +1,28 @@
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import Box from "@mui/material/Box";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import type { SentChoice } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
 import { ActButton } from "../../lib/action/ActButton";
+import { Disclosure } from "../../lib/action/Disclosure";
+import { Part } from "../../lib/layout/Part";
+import { DEPTH_SX, HEADING_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import type { Action } from "../../lib/request/useAction";
 import { ceilingFits } from "../runs/ceilingTyped";
 import { VERSION_ACT_RULES } from "./actRules";
 import { problemSaid } from "./ContentProblems";
 import { ModelControls, modelSaid } from "./ModelControls";
-
-const PART_SX = { mb: 3 };
-
-const HEADING_SX = { mb: 1 };
+import { useDraftPartStatus } from "./useDraftStatus";
 
 const ROW_SX = {
   display: "flex",
@@ -29,50 +32,169 @@ const ROW_SX = {
   mb: 1,
 };
 
+type SaveCeiling = (
+  ceiling: string | null,
+  keepsOwnCeiling: boolean,
+  raiseNeedsApproval: boolean,
+  signal: AbortSignal,
+) => Promise<WorkflowVersion>;
+
+type SaveHelp = (
+  mayBeHelped: boolean,
+  helper: SentChoice | null,
+  signal: AbortSignal,
+) => Promise<WorkflowVersion>;
+
+export function RunSettings({
+  workflow,
+  editable,
+  spending,
+  helping,
+  waiting,
+  saveCeiling,
+  saveHelp,
+}: {
+  readonly workflow: WorkflowVersion;
+  readonly editable: boolean;
+  readonly spending: Action<WorkflowVersion>;
+  readonly helping: Action<WorkflowVersion>;
+  readonly waiting: (own: Action<WorkflowVersion>) => boolean;
+  readonly saveCeiling: SaveCeiling;
+  readonly saveHelp: SaveHelp;
+}) {
+  const headingId = useId();
+  const contentId = useId();
+  const [shown, setShown] = useState(false);
+  const [ceilingUnsaved, setCeilingUnsaved] = useState(false);
+  const [helpUnsaved, setHelpUnsaved] = useState(false);
+  const ceiling =
+    workflow.ceiling === undefined
+      ? say("workflow.ceilingNoneShort")
+      : say("workflow.ceilingShort", { ceiling: workflow.ceiling });
+  const help = !workflow.mayBeHelped
+    ? say("workflow.notHelpedShort")
+    : workflow.helper === undefined
+      ? say("workflow.helperUnchosenShort")
+      : say("workflow.helpedByShort", {
+          model: modelSaid(workflow.helper.model, workflow.helper.mode ?? ""),
+        });
+  return (
+    <Box component="section" aria-labelledby={headingId} sx={DEPTH_SX[2]}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Typography id={headingId} variant="h3" sx={HEADING_SX}>
+          <Disclosure
+            open={shown}
+            controls={contentId}
+            onToggle={() => setShown((was) => !was)}
+          >
+            {say("workflow.runSettings")}
+          </Disclosure>
+        </Typography>
+        {editable && !shown && (ceilingUnsaved || helpUnsaved) ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {say("draft.unsaved")}
+          </Typography>
+        ) : null}
+        <Tooltip title={say("workflow.ceilingHint")}>
+          <IconButton size="small" aria-label={say("workflow.ceilingHint")}>
+            <InfoOutlinedIcon />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {say("workflow.runSettingsSummary", { ceiling, help })}
+      </Typography>
+      {workflow.problems
+        .filter((problem) => problem.part === "helper")
+        .map((problem, index) => (
+          <Notice key={`${index}:${problem.code}`} severity="warning">
+            {problemSaid(problem)}
+          </Notice>
+        ))}
+      {spending.problem === null ? null : (
+        <ProblemView
+          problem={spending.problem}
+          rule={{ inGroup: VERSION_ACT_RULES.write }}
+        />
+      )}
+      {helping.problem === null ? null : (
+        <ProblemView
+          problem={helping.problem}
+          rule={{ inGroup: VERSION_ACT_RULES.write }}
+        />
+      )}
+      <div id={contentId} hidden={!shown}>
+        <CeilingPart
+          workflow={workflow}
+          editable={editable}
+          action={spending}
+          waiting={waiting(spending)}
+          save={saveCeiling}
+          onUnsaved={setCeilingUnsaved}
+        />
+        <HelpPart
+          workflow={workflow}
+          editable={editable}
+          action={helping}
+          waiting={waiting(helping)}
+          save={saveHelp}
+          onUnsaved={setHelpUnsaved}
+        />
+      </div>
+    </Box>
+  );
+}
+
 /**
  * The most a run may spend, which may be none, and whether a run keeps its own beneath another and a raise waits
  * on approving; set together, and read where the draft may not be written.
  */
-export function CeilingPart({
+function CeilingPart({
   workflow,
   editable,
   action,
   waiting,
   save,
+  onUnsaved,
 }: {
   readonly workflow: WorkflowVersion;
   readonly editable: boolean;
   readonly action: Action<WorkflowVersion>;
   /** Whether another write of the host's, or its read, is out, which saving this would be refused beside. */
   readonly waiting: boolean;
-  readonly save: (
-    ceiling: string | null,
-    keepsOwnCeiling: boolean,
-    raiseNeedsApproval: boolean,
-    signal: AbortSignal,
-  ) => Promise<WorkflowVersion>;
+  readonly save: SaveCeiling;
+  readonly onUnsaved: (unsaved: boolean) => void;
 }) {
-  const headingId = useId();
   const read = {
-    typed: workflow.ceiling ?? "",
+    typed: workflow.ceiling?.toString() ?? "",
     keeps: workflow.keepsOwnCeiling,
     raise: workflow.raiseNeedsApproval,
   };
   const readAs = JSON.stringify(read);
   const [typed, setTyped] = useState(read);
   const [shownAs, setShownAs] = useState(readAs);
-  const [asked, setAsked] = useState(false);
   if (readAs !== shownAs) {
     setShownAs(readAs);
     setTyped(read);
   }
   const fits = typed.typed === "" || ceilingFits(typed.typed);
   const running = action.running;
+  const unsaved = JSON.stringify(typed) !== readAs;
+  useDraftPartStatus("ceiling", unsaved, running || waiting);
+  useEffect(() => onUnsaved(unsaved), [onUnsaved, unsaved]);
   return (
-    <Box component="section" aria-labelledby={headingId} sx={PART_SX}>
-      <Typography id={headingId} variant="h6" component="h3" sx={HEADING_SX}>
-        {say("workflow.ceilingPart")}
-      </Typography>
+    <Part
+      title={say("workflow.ceilingPart")}
+      actions={
+        editable && unsaved ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {say("draft.unsaved")}
+          </Typography>
+        ) : undefined
+      }
+      level="h4"
+      depth={3}
+    >
       {editable ? (
         <>
           <Box sx={ROW_SX}>
@@ -81,9 +203,7 @@ export function CeilingPart({
               label={say("workflow.ceiling")}
               value={typed.typed}
               error={!fits}
-              helperText={say(
-                fits ? "workflow.ceilingHint" : "refusal.CEILING_UNUSABLE",
-              )}
+              helperText={fits ? undefined : say("refusal.CEILING_UNUSABLE")}
               slotProps={{
                 htmlInput: { inputMode: "numeric", readOnly: running },
               }}
@@ -123,23 +243,26 @@ export function CeilingPart({
           <Box>
             <ActButton
               action={action}
+              variant={unsaved ? "contained" : undefined}
               waiting={waiting}
               reason={
                 !fits
-                  ? { severity: "info", words: say("refusal.CEILING_UNUSABLE") }
-                  : JSON.stringify(typed) === readAs
+                  ? {
+                      severity: "warning",
+                      words: say("refusal.CEILING_UNUSABLE"),
+                    }
+                  : !unsaved
                     ? { severity: "info", words: say("workflow.unchanged") }
                     : undefined
               }
-              act={(signal) => {
-                setAsked(true);
-                return save(
+              act={(signal) =>
+                save(
                   typed.typed === "" ? null : typed.typed,
                   typed.keeps,
                   typed.raise,
                   signal,
-                );
-              }}
+                )
+              }
             >
               {say("workflow.saveCeiling")}
             </ActButton>
@@ -165,13 +288,7 @@ export function CeilingPart({
           ) : null}
         </>
       )}
-      {!asked || action.problem === null ? null : (
-        <ProblemView
-          problem={action.problem}
-          rule={{ inGroup: VERSION_ACT_RULES.write }}
-        />
-      )}
-    </Box>
+    </Part>
   );
 }
 
@@ -179,25 +296,22 @@ export function CeilingPart({
  * Whether a run may be helped, and the model and mode helping it where it may be; a model chosen is kept while
  * help is switched off, and sent only with help switched on.
  */
-export function HelpPart({
+function HelpPart({
   workflow,
   editable,
   action,
   waiting,
   save,
+  onUnsaved,
 }: {
   readonly workflow: WorkflowVersion;
   readonly editable: boolean;
   readonly action: Action<WorkflowVersion>;
   /** Whether another write of the host's, or its read, is out, which saving this would be refused beside. */
   readonly waiting: boolean;
-  readonly save: (
-    mayBeHelped: boolean,
-    helper: SentChoice | null,
-    signal: AbortSignal,
-  ) => Promise<WorkflowVersion>;
+  readonly save: SaveHelp;
+  readonly onUnsaved: (unsaved: boolean) => void;
 }) {
-  const headingId = useId();
   const read = {
     may: workflow.mayBeHelped,
     model: workflow.helper?.model ?? "",
@@ -206,7 +320,6 @@ export function HelpPart({
   const readAs = JSON.stringify(read);
   const [typed, setTyped] = useState(read);
   const [shownAs, setShownAs] = useState(readAs);
-  const [asked, setAsked] = useState(false);
   if (readAs !== shownAs) {
     setShownAs(readAs);
     setTyped(read);
@@ -226,20 +339,22 @@ export function HelpPart({
               mode: workflow.helper.mode ?? null,
             },
       );
-  const problems = workflow.problems.filter(
-    (problem) => problem.part === "helper",
-  );
   const running = action.running;
+  useDraftPartStatus("help", !unchanged, running || waiting);
+  useEffect(() => onUnsaved(!unchanged), [onUnsaved, unchanged]);
   return (
-    <Box component="section" aria-labelledby={headingId} sx={PART_SX}>
-      <Typography id={headingId} variant="h6" component="h3" sx={HEADING_SX}>
-        {say("workflow.helpPart")}
-      </Typography>
-      {problems.map((problem, index) => (
-        <Notice key={`${index}:${problem.code}`} severity="warning">
-          {problemSaid(problem)}
-        </Notice>
-      ))}
+    <Part
+      title={say("workflow.helpPart")}
+      actions={
+        editable && !unchanged ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {say("draft.unsaved")}
+          </Typography>
+        ) : undefined
+      }
+      level="h4"
+      depth={3}
+    >
       {editable ? (
         <>
           <FormControlLabel
@@ -272,16 +387,14 @@ export function HelpPart({
           <Box>
             <ActButton
               action={action}
+              variant={!unchanged ? "contained" : undefined}
               waiting={waiting}
               reason={
                 unchanged
                   ? { severity: "info", words: say("workflow.unchanged") }
                   : undefined
               }
-              act={(signal) => {
-                setAsked(true);
-                return save(typed.may, helper, signal);
-              }}
+              act={(signal) => save(typed.may, helper, signal)}
             >
               {say("workflow.saveHelp")}
             </ActButton>
@@ -304,12 +417,6 @@ export function HelpPart({
                 })}
         </Typography>
       )}
-      {!asked || action.problem === null ? null : (
-        <ProblemView
-          problem={action.problem}
-          rule={{ inGroup: VERSION_ACT_RULES.write }}
-        />
-      )}
-    </Box>
+    </Part>
   );
 }

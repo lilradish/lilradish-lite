@@ -1,6 +1,7 @@
 import Box from "@mui/material/Box";
+import Switch from "@mui/material/Switch";
 import Typography from "@mui/material/Typography";
-import { useId, useLayoutEffect, useRef } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import type { MemberPanel } from "../../api/groups/{groupId}/members";
 import { takeOut } from "../../api/groups/{groupId}/members/{subjectId}";
@@ -12,9 +13,14 @@ import type { Problem } from "../../api/problem";
 import { ProblemView } from "../../app/ProblemView";
 import type { Rule } from "../../app/standing/actRules";
 import { say } from "../../i18n/app";
-import { ActButton } from "../../lib/action/ActButton";
+import { ActDialog } from "../../lib/action/ActDialog";
+import { Press } from "../../lib/action/Press";
+import { isolatedInText } from "../../lib/direction/isolated";
+import { Part } from "../../lib/layout/Part";
+import { LIST_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import type { Action } from "../../lib/request/useAction";
+import { nameOrNumber } from "../../lib/text/names";
 import type { Asked, Outcome } from "./changes";
 import {
   GROUP_ROLES,
@@ -23,12 +29,7 @@ import {
   isGroupRole,
 } from "./groupRoles";
 
-const PART_SX = { mt: 3, mb: 1 };
-
 const QUIET_SX = { color: "text.secondary" };
-
-// Its markers taken away, so every list drawn with it is named a list outright.
-const LIST_SX = { listStyleType: "none", m: 0, p: 0 };
 
 const ROLE_SX = {
   display: "flex",
@@ -92,6 +93,11 @@ export function RolesPanel({
   const held = groupRolesInOrder(member.roles);
   const rows = [...GROUP_ROLES, ...held.filter((role) => !isGroupRole(role))];
   const isMember = member.roles.size > 0;
+  const [confirmation, setConfirmation] = useState<{
+    seenProblem: Problem | null;
+  } | null>(null);
+  const confirmOpen =
+    confirmation !== null && confirmation.seenProblem === changing.problem;
 
   // The control the keyboard was on can go with the right to use it; the keyboard stays in the panel.
   useLayoutEffect(() => {
@@ -107,83 +113,108 @@ export function RolesPanel({
 
   return (
     <>
-      <Typography
-        ref={heading}
-        id={headingId}
-        tabIndex={-1}
-        variant="subtitle2"
-        component="h3"
-        sx={PART_SX}
+      <Part
+        title={say("member.roles")}
+        level="h3"
+        depth={3}
+        headingId={headingId}
+        headingRef={heading}
       >
-        {say("member.roles")}
-      </Typography>
-      {isMember ? null : (
-        <Notice severity="info">{say("member.noLonger")}</Notice>
-      )}
-      <Box component="ul" role="list" aria-labelledby={headingId} sx={LIST_SX}>
-        {rows.map((role) => {
-          const holds = member.roles.has(role);
-          const offered =
-            mayChange &&
-            isGroupRole(role) &&
-            !member.lastChangingRoles.has(role);
-          return (
-            <Box component="li" key={role} sx={ROLE_SX}>
-              <Box component="span" sx={ROLE_NAME_SX}>
-                <bdi>{groupRoleSaid(role)}</bdi>
+        {isMember ? null : (
+          <Notice severity="info">{say("member.noLonger")}</Notice>
+        )}
+        <Box
+          component="ul"
+          role="list"
+          aria-labelledby={headingId}
+          sx={LIST_SX}
+        >
+          {rows.map((role) => {
+            const holds = member.roles.has(role);
+            const offered =
+              mayChange &&
+              isGroupRole(role) &&
+              !member.lastChangingRoles.has(role);
+            return (
+              <Box component="li" key={role} sx={ROLE_SX}>
+                <Box component="span" sx={ROLE_NAME_SX}>
+                  <bdi>{groupRoleSaid(role)}</bdi>
+                </Box>
+                <Typography component="span" variant="body2" sx={QUIET_SX}>
+                  {say(holds ? "person.holds" : "person.holdsNot")}
+                </Typography>
+                {mayChange && isGroupRole(role) ? (
+                  <Switch
+                    checked={holds}
+                    color={holds ? "warning" : "primary"}
+                    disabled={!offered}
+                    slotProps={{
+                      input: {
+                        "aria-label": groupRoleSaid(role),
+                        "aria-disabled":
+                          waiting || changing.running || undefined,
+                      },
+                    }}
+                    onChange={() => {
+                      if (waiting || changing.running) return;
+                      changing.run((signal) => {
+                        onAsk({ place: "roles", of: member });
+                        return (holds ? take : give)(
+                          groupId,
+                          subjectId,
+                          role,
+                          signal,
+                        ).then((changed) => ({ changed }));
+                      });
+                    }}
+                  />
+                ) : null}
               </Box>
-              <Typography component="span" variant="body2" sx={QUIET_SX}>
-                {say(holds ? "person.holds" : "person.holdsNot")}
-              </Typography>
-              {offered ? (
-                // One element whichever way it points, so the control just
-                // pressed is the one that still has the keyboard after.
-                <ActButton
-                  action={changing}
-                  waiting={waiting}
-                  act={(signal) => {
-                    onAsk({ place: "roles", of: member });
-                    return (holds ? take : give)(
-                      groupId,
-                      subjectId,
-                      role,
-                      signal,
-                    ).then((changed) => ({ changed }));
-                  }}
-                >
-                  {say(holds ? "member.take" : "member.give", {
-                    role: groupRoleSaid(role),
-                  })}
-                </ActButton>
-              ) : null}
-            </Box>
-          );
-        })}
-      </Box>
-      {mayChange && isMember && !member.removable ? (
-        <Notice severity="info">{say("member.lastChanger")}</Notice>
-      ) : null}
-      {refused?.place === "roles" ? (
-        <ProblemView problem={refused.problem} rule={CHANGES} />
-      ) : null}
-
+            );
+          })}
+        </Box>
+        {mayChange && isMember && !member.removable ? (
+          <Notice severity="info">{say("member.lastChanger")}</Notice>
+        ) : null}
+        {refused?.place === "roles" ? (
+          <ProblemView problem={refused.problem} rule={CHANGES} />
+        ) : null}
+      </Part>
       {mayChange && isMember && member.removable ? (
         <Box sx={ROW_SX}>
-          <ActButton
-            action={changing}
-            waiting={waiting}
-            act={(signal) => {
-              onAsk({ place: "removal", of: member });
-              return takeOut(groupId, subjectId, signal).then(() => ({
-                removed: member,
-              }));
-            }}
+          <Press
+            warns
+            unavailable={waiting || changing.running}
+            onPress={() => setConfirmation({ seenProblem: changing.problem })}
           >
             {say("member.remove")}
-          </ActButton>
+          </Press>
+          <ActDialog
+            open={confirmOpen}
+            title={say("member.removeConfirm", {
+              name: isolatedInText(nameOrNumber(member)),
+            })}
+            onShut={() => setConfirmation(null)}
+            action={changing}
+            act={(signal) => {
+              setConfirmation({ seenProblem: null });
+              onAsk({ place: "removal", of: member });
+              return takeOut(groupId, subjectId, signal).then(() => {
+                setConfirmation(null);
+                return { removed: member };
+              });
+            }}
+            actLabel={say("confirm.remove")}
+            warns
+            abandonLabel={say("confirm.cancel")}
+            underway={say("member.removeUnderway")}
+            refusal={null}
+          >
+            {say("member.removeConfirmBody")}
+          </ActDialog>
         </Box>
       ) : null}
-      {refused?.place === "removal" ? (
+      {refused?.place === "removal" && !confirmOpen ? (
         <ProblemView problem={refused.problem} rule={CHANGES} />
       ) : null}
     </>

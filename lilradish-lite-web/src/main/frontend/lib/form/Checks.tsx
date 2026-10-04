@@ -3,11 +3,7 @@ import type { ReactNode } from "react";
 
 import { say } from "../../i18n/lib";
 
-/**
- * Named things the estate reports about itself: readiness checks, capacity
- * triggers, trace spans, executed sweeps, incidents. They arrive from different
- * endpoints and are one shape to a reader — a name, and what is true of it.
- */
+/** Named checks shown as one list. */
 export function Checks({ children }: { readonly children: ReactNode }) {
   return (
     <Box

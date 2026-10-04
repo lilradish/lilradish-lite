@@ -6,6 +6,9 @@ import static org.lilradish.lite.migration.fixture.SchemaRows.*
 /** V9__step_and_declaration.sql's rules: the rows they are proved beside, and a case attacking each. */
 final class V9Cases {
 
+    static final String SEARCH_STEP = "0000000c-0000-4000-8000-000000000007"
+    static final String SEARCH_PART = "00000020-0000-4000-8000-000000000001"
+
     static final List<String> FIXTURE = [
         "insert into app.workflow_steps (workflow_step_id, entry_version_id, position, name, kind, pinned_version_id," +
                 " pinned_kind, producer, producer_model, producer_mode, tries, tells_what_happened, created_by)" +
@@ -13,6 +16,21 @@ final class V9Cases {
                 " 'model', 'general', 'ordinary', 3, true, '${STEWARD}')",
         "insert into app.workflow_steps (workflow_step_id, entry_version_id, position, name, kind, created_by)" +
                 " values ('${ROUTE}', '${WORKFLOW_VERSION}', 2, 'route_by_category', 'route', '${STEWARD}')",
+        "insert into app.workflow_steps (workflow_step_id, entry_version_id, position, name, kind, search_way," +
+                " producer, producer_model, producer_mode, reviewer_model, reviewer_mode, tries," +
+                " tells_what_happened, search_title_standing, search_body_standing," +
+                " search_references_standing, search_other_standing, created_by)" +
+                " values ('${SEARCH_STEP}', '${WORKFLOW_VERSION}', 9, 'find_context', 'search', 'web'," +
+                " 'model', 'general', 'ordinary', 'general', 'research', 3," +
+                " true, 'always', 'never', 'never', 'always', '${STEWARD}')",
+        "insert into app.search_question_parts (search_question_part_id, entry_version_id, workflow_step_id," +
+                " position, literal_text, created_by) values ('${SEARCH_PART}', '${WORKFLOW_VERSION}'," +
+                " '${SEARCH_STEP}', 0, 'Find ', '${STEWARD}')",
+        "insert into app.search_question_parts (entry_version_id, workflow_step_id, position," +
+                " source_step_id, source_path, created_by) values ('${WORKFLOW_VERSION}', '${SEARCH_STEP}'," +
+                " 1, '${STEP}', 'details', '${STEWARD}')",
+        "insert into app.search_question_parts (entry_version_id, workflow_step_id, position, source_path," +
+                " created_by) values ('${WORKFLOW_VERSION}', '${SEARCH_STEP}', 2, 'complaint', '${STEWARD}')",
         "insert into app.route_cases (route_case_id, entry_version_id, workflow_step_id, term, target_version_id, created_by)" +
                 " values ('${ROUTE_CASE}', '${WORKFLOW_VERSION}', '${ROUTE}', 'Billing', '${NEXT_WORKFLOW_VERSION}', '${STEWARD}')," +
                 " ('${FALLBACK}', '${WORKFLOW_VERSION}', '${ROUTE}', null, '${NEXT_WORKFLOW_VERSION}', '${STEWARD}')",
@@ -34,6 +52,14 @@ final class V9Cases {
     /** A row every rule admits beside the fixture, which a case or a feature alters in what it is about. */
     static final Map<String, String> A_STEP = [entry_version_id: "'${WORKFLOW_VERSION}'", position: "3",
                                                name: "'reply'", created_by: "'${STEWARD}'"]
+    static final Map<String, String> A_SEARCH_PART = [
+        entry_version_id: "'${WORKFLOW_VERSION}'", workflow_step_id: "'${SEARCH_STEP}'",
+        position: "3", literal_text: "' then report'", created_by: "'${STEWARD}'"]
+    static final String SEARCH_PART_ROW = "search_question_part_id = '${SEARCH_PART}'"
+    private static String changingSearchPart(String assignments) {
+        "update app.search_question_parts set ${assignments} where ${SEARCH_PART_ROW}"
+    }
+
     static final Map<String, String> A_CASE = [entry_version_id: "'${WORKFLOW_VERSION}'", workflow_step_id: "'${ROUTE}'",
                                                term: "'Delivery'", target_version_id: "'${NEXT_WORKFLOW_VERSION}'",
                                                created_by: "'${STEWARD}'"]
@@ -88,6 +114,63 @@ final class V9Cases {
                 setting("workflow_steps", "reviewer_model = 'general', reviewer_mode = 'Research'")),
         *authorshipAttacks("workflow_steps"),
 
+        attack("workflow_steps_search_only_for_search", "workflow_steps",
+                insertInto("workflow_steps", A_STEP + [kind: "'entry'", search_way: "'web'"])),
+        attack("workflow_steps_search_way_shape", "workflow_steps",
+                insertInto("workflow_steps", A_STEP + [kind: "'search'", search_way: "'Web'"])),
+        attack("workflow_steps_search_standing_without_confidence", "workflow_steps",
+                insertInto("workflow_steps", A_STEP + [kind: "'search'",
+                                                     search_title_standing: "'above_confidence'"])),
+        attack("workflow_steps_search_produced_by_model_or_person", "workflow_steps",
+                insertInto("workflow_steps", A_STEP + [kind: "'search'", producer: "'code'"])),
+
+        attack("search_question_parts_pk", "search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [search_question_part_id: "'${SEARCH_PART}'"])),
+        attack("search_question_parts_step_fk", "search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [entry_version_id: "'${NEXT_WORKFLOW_VERSION}'"])),
+        attack("search_question_parts_search_fk", "search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [workflow_step_id: "'${ROUTE}'"])),
+        attack("search_question_parts_step_kind_is_search", "search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [step_kind: "'route'"])),
+        attack("search_question_parts_position_unique", "search_question_parts",
+                insertInto("search_question_parts", A_SEARCH_PART + [position: "0"])),
+        attack("search_question_parts_position_not_negative", "search_question_parts",
+                changingSearchPart("position = -1")),
+        attack("search_question_parts_position_bounded", "search_question_parts",
+                changingSearchPart("position = 256")),
+        attack("search_question_parts_exactly_one_source", "search_question_parts",
+                changingSearchPart("source_step_id = '${STEP}', source_path = 'details'")),
+        attack("search_question_parts_literal_visible", "search_question_parts",
+                changingSearchPart("literal_text = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("search_question_parts_literal_bounded", "search_question_parts",
+                changingSearchPart("literal_text = repeat('a', 8193)")),
+        attack("search_question_parts_source_step_fk", "search_question_parts",
+                changingSearchPart("literal_text = null, source_step_id = '${ABSENT}', source_path = 'details'")),
+        attack("search_question_parts_not_from_itself", "search_question_parts",
+                changingSearchPart("literal_text = null, source_step_id = '${SEARCH_STEP}', source_path = 'details'")),
+        attack("search_question_parts_source_path_shape", "search_question_parts",
+                changingSearchPart("literal_text = null, source_step_id = '${STEP}', source_path = 'details.0'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
+        attack("search_question_parts_source_path_bounded", "search_question_parts",
+                changingSearchPart("literal_text = null, source_step_id = '${STEP}'," +
+                        " source_path = 'ab' || repeat('.a', 511)")),
+        attack("search_question_parts_author_fk", "search_question_parts",
+                changingSearchPart("created_by = '${ABSENT}'")),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("search_question_parts_editor_person_fk", "search_question_parts",
+                changingSearchPart("updated_at = now(), updated_by = '${SEEDER}'")),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("search_question_parts_editor_is_person", "search_question_parts",
+                changingSearchPart("updated_at = now(), updated_by = '${WORKFLOW_RUNNER}'," +
+                        " updated_by_kind = 'system'")),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("search_question_parts_updated_together", "search_question_parts",
+                changingSearchPart("updated_at = now()")),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
+        attack("search_question_parts_updated_after_created", "search_question_parts",
+                changingSearchPart("updated_at = created_at - interval '1 day', updated_by = '${STEWARD}'")),
+
         attack("route_cases_pk", "route_cases", insertInto("route_cases", A_CASE + [route_case_id: "'${ROUTE_CASE}'"])),
         attack("route_cases_step_fk", "route_cases", insertInto("route_cases",
                 A_CASE + [entry_version_id: "'${NEXT_WORKFLOW_VERSION}'", target_version_id: "'${WORKFLOW_VERSION}'"])),
@@ -100,6 +183,7 @@ final class V9Cases {
         attack("route_cases_not_own_version", "route_cases", insertInto("route_cases",
                 A_CASE + [target_version_id: "'${WORKFLOW_VERSION}'"])),
         attack("route_cases_term_visible", "route_cases", setting("route_cases", "term = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("route_cases_term_bounded", "route_cases", setting("route_cases", "term = repeat('a', 129)")),
         attack("route_cases_one_fallback", "route_cases", insertInto("route_cases", A_CASE + [term: "null"])),
         *authorshipAttacks("route_cases"),
@@ -134,10 +218,13 @@ final class V9Cases {
                 setting("declaration_fields", "position = -1")),
         attack("declaration_fields_name_shape", "declaration_fields", setting("declaration_fields", "name = 'Complaint'")),
         attack("declaration_fields_label_visible", "declaration_fields", setting("declaration_fields", "label = ''")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("declaration_fields_label_bounded", "declaration_fields",
                 setting("declaration_fields", "label = repeat('a', 129)")),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("declaration_fields_help_visible", "declaration_fields",
                 setting("declaration_fields", "help = 'What' || chr(9) || 'they wrote'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("declaration_fields_help_bounded", "declaration_fields",
                 setting("declaration_fields", "help = repeat('a', 513)")),
         attack("declaration_fields_text_limit_positive", "declaration_fields",
@@ -187,12 +274,15 @@ final class V9Cases {
         attack("bindings_one_discriminator", "bindings", insertInto("bindings",
                 A_BINDING + [workflow_step_id: "'${ROUTE}'", target_path: "null", step_kind: "'route'"])),
         attack("bindings_target_path_shape", "bindings", setting("bindings", "target_path = 'Complaint'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("bindings_target_path_bounded", "bindings", setting("bindings", "target_path = 'ab' || repeat('.a', 511)")),
         attack("bindings_exactly_one_source", "bindings", setting("bindings", "constant = '1'")),
         attack("bindings_source_step_fk", "bindings", setting("bindings", "source_step_id = '${ABSENT}'")),
         attack("bindings_not_from_itself", "bindings", setting("bindings", "source_step_id = '${STEP}'")),
         attack("bindings_source_path_shape", "bindings", setting("bindings", "source_path = 'complaint.'")),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("bindings_source_path_bounded", "bindings", setting("bindings", "source_path = 'ab' || repeat('.a', 511)")),
+        // DB-SPECIFIC: to_jsonb() and repeat() use PostgreSQL's syntax and semantics.
         attack("bindings_constant_bounded", "bindings", setting("bindings",
                 "source_path = null, constant = to_jsonb(repeat('a', 1048575))")),
         *authorshipAttacks("bindings"),

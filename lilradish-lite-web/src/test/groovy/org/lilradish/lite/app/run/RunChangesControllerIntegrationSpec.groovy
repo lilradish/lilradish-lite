@@ -61,15 +61,15 @@ class RunChangesControllerIntegrationSpec extends Specification {
 
     static final String RAISE_ADDRESS = "${ADDRESS}/ceiling-changes/${RAISE}"
 
-    static final Runs.RunView READ = new Runs.RunView(new RunId(RUN), 1, new RunName("Claim from Ada"), null,
+    static final Runs.RunView READ = new Runs.RunView(new RunId(RUN), 1, new RunName("Claim from Ari"), null, null, [],
             new Runs.Workflow(new EntryId(UUID.fromString("00000006-0000-4000-8000-000000001301")),
                     new EntryName("Handle a claim"), 1),
-            null, Instant.parse("2026-09-25T08:00:00Z"), JSON.readTree('{"claim":"Lost bag"}'), RunState.RUNNING, null,
-            null, new RunBudget.Spend(0, 0, false, false),
-            new Runs.CeilingHeld.Own(new RunBudget.InForce(null, false), null), EnumSet.of(RunAct.STOP))
+            null, Instant.parse("2026-09-25T08:00:00Z"), JSON.readTree('{"claim":"Lost bag"}'), null, RunState.RUNNING, null,
+            null, new RunBudget.Spend(0, 0, false, 0, 0),
+            new Runs.CeilingHeld.Own(new RunBudget.InForce(null, false), null), EnumSet.of(RunAct.STOP), [])
 
     static final String CEILING_REFUSED =
-            "This takes a JSON object holding a run's ceiling in digits, or null for none, and nothing else."
+            "This takes a JSON object holding a run's ceiling in digits, or null for none, and optionally a runId."
 
     static final String NAME_REFUSED = "This takes a JSON object holding a run's name, and nothing else."
 
@@ -169,11 +169,11 @@ class RunChangesControllerIntegrationSpec extends Specification {
         holding(EnumSet.of(GroupRole.OPERATOR))
 
         when:
-        def answered = sendingBody(patch(ADDRESS), '{"name":"Claim from Ada, again"}')
+        def answered = sendingBody(patch(ADDRESS), '{"name":"Claim from Ari, again"}')
 
         then:
         actedOnlyBy(answered) {
-            it.rename(new GroupId(GROUP), new RunId(RUN), new RunName("Claim from Ada, again"), READER)
+            it.rename(new GroupId(GROUP), new RunId(RUN), new RunName("Claim from Ari, again"), READER)
         }
         documentOf(answered).get("startedWith") == READ.startedWith()
     }
@@ -187,13 +187,17 @@ class RunChangesControllerIntegrationSpec extends Specification {
         def answered = sendingBody(patch(ADDRESS + "/ceiling"), body)
 
         then:
-        actedOnlyBy(answered) { it.changeCeiling(new GroupId(GROUP), new RunId(RUN), asked, READER) }
+        actedOnlyBy(answered) {
+            it.changeCeiling(new GroupId(GROUP), new RunId(RUN), new RunId(target), asked, READER)
+        }
 
         where:
-        body                                  || asked
-        '{"ceiling":"5000"}'                  || new Ceiling(5000)
-        '{"ceiling":"9007199254740991"}'      || new Ceiling(9007199254740991L)
-        '{"ceiling":null}'                    || null
+        body                                                        || target | asked
+        '{"ceiling":"5000"}'                                        || RUN    | new Ceiling(5000)
+        '{"ceiling":"9007199254740991"}'                            || RUN    | new Ceiling(9007199254740991L)
+        '{"ceiling":null}'                                          || RUN    | null
+        '{"ceiling":"700","runId":"00000008-0000-4000-8000-000000001302"}' ||
+                UUID.fromString("00000008-0000-4000-8000-000000001302") | new Ceiling(700)
     }
 
     /** A raise is decided by its identifier, so nobody decides one they never saw. */

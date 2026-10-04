@@ -28,23 +28,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Creating and renaming a group as the store makes each, on a real server running the real baseline
- * and under real transactions: whether a change lands whole or not at all, and what two changes
- * arriving at once leave behind, exist nowhere but in a database.
- *
- * <p>Each feature has a database of its own, copied from one the baseline was applied to, because
- * what is under test commits. Where two changes race, the database defaults to repeatable read, so
- * only a change naming Read Committed reads what it waited on; which change waits first is arranged by
- * holding what both need until both are seen waiting for it.
- */
+/** Changes must use Read Committed so reads after a lock wait observe the preceding change. */
 class GroupChangesIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
 
     static final String SYSTEM_ACTOR = SystemPrincipal.WORKFLOW_RUNNER.subject().value().toString()
 
-    /** Seeded by the baseline: in the pool, holding the steward role, and the one making changes here. */
+
     static final String FIRST_STEWARD = "00000001-0000-4000-8000-000000000001"
 
     static final UserId STEWARD = new UserId("000001")
@@ -76,12 +67,14 @@ class GroupChangesIntegrationSpec extends Specification {
     ExecutorService racing = Executors.newFixedThreadPool(2)
 
     def setupSpec() {
+        // DB-SPECIFIC: PostgreSQL CREATE DATABASE.
         administer("create database baseline_applied")
         Baseline.appliedTo(server, "baseline_applied")
     }
 
     def setup() {
         def name = "groups_" + (++databasesMade)
+        // DB-SPECIFIC: PostgreSQL CREATE DATABASE TEMPLATE.
         administer("create database ${name} template baseline_applied")
         database = Baseline.appliedTo(server, name)
         session = JdbcClient.create(database)
@@ -104,6 +97,7 @@ class GroupChangesIntegrationSpec extends Specification {
         storedGroups() == [storedAs(created.groupId(), "PAYROLL", "Payroll")]
 
         and: "one membership, the owner's, given by the caller and open"
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         texts("""
                 select subject_id || ' ' || role || ' ' || created_by || ' ' || coalesce(removed_at::text, '-')
                   from group_members where group_id = ?::uuid
@@ -114,7 +108,7 @@ class GroupChangesIntegrationSpec extends Specification {
         count("select count(*) from estate_role_grants") == 1
     }
 
-    /** Held in capitals whatever case it was typed in, so a key typed otherwise meets the one held. */
+
     def "creates a group under a key typed in any case, held in capitals"() {
         when:
         def created = changes.create(new GroupName("Payroll"), GroupKey.typed("pAyRoLl"), subjectId(PERSON), STEWARD)
@@ -143,7 +137,7 @@ class GroupChangesIntegrationSpec extends Specification {
         typed << ["PAYROLL", "payroll", "PayRoll"]
     }
 
-    /** Asked about the key first, so a group whose key and name are both held is told of the key. */
+
     def "refuses a name another group has, and a key and a name both held as the key, writing nothing"() {
         given:
         existing(GROUP, "PAYROLL", "Payroll")
@@ -166,7 +160,7 @@ class GroupChangesIntegrationSpec extends Specification {
         "Payroll" | "PAYROLL" || RefusalCode.GROUP_KEY_TAKEN  | "Another group already holds that key."
     }
 
-    /** A name another group holds is refused whatever case either was typed in, as a key is. */
+
     def "refuses a name another group holds in another case, writing nothing"() {
         given:
         existing(GROUP, "TRIAGE", "Triage")
@@ -187,7 +181,7 @@ class GroupChangesIntegrationSpec extends Specification {
         typed << ["TRIAGE", "triage", "tRiAgE"]
     }
 
-    /** Unequal only as written: a format character is kept, and a name holding one is another name. */
+
     def "creates a group whose name differs from another's by a format character, which is never folded away"() {
         given:
         existing(GROUP, "TRIAGE", "Triage")
@@ -200,10 +194,7 @@ class GroupChangesIntegrationSpec extends Specification {
         count("select count(*) from groups") == 2
     }
 
-    /**
-     * An identifier nobody holds, somebody whose stay ended, somebody never brought in, an actor that
-     * is no person, and the act of seeding: none is in the pool, and none may be told from another.
-     */
+
     def "refuses to make a group's first member of anybody not in the pool, writing nothing"() {
         given:
         pooled(OTHER, "000802")
@@ -227,11 +218,7 @@ class GroupChangesIntegrationSpec extends Specification {
                   SYSTEM_ACTOR, SEEDER]
     }
 
-    /**
-     * Another creation holds the key and has not committed, so nothing either could read first would
-     * decide between them. The index does: this one waits, and is refused if the other landed and
-     * made if it did not.
-     */
+    /** Uniqueness decides a competing insert only after the first transaction ends. */
     def "a creation racing another for the same key is decided by the key's uniqueness"() {
         given:
         repeatableReadByDefault()
@@ -261,7 +248,7 @@ class GroupChangesIntegrationSpec extends Specification {
         false      || null
     }
 
-    /** The other creation holds the name in another case, not the key; once it lands, what clashed was the name. */
+
     def "a creation racing another for the same name in another case is refused for the name once the other lands"() {
         given:
         repeatableReadByDefault()
@@ -286,10 +273,11 @@ class GroupChangesIntegrationSpec extends Specification {
         count("select count(*) from group_members") == 0
     }
 
-    /** The person's stay is what both wait on, and it ends before this creation reads it. */
+
     def "a creation waiting behind somebody leaving the pool reads that they left, and is refused"() {
         given:
         repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL SELECT FOR UPDATE.
         def leaving = holding("select 1 from pool_members where subject_id = '${PERSON}' and removed_at is null for update")
 
         when:
@@ -298,6 +286,7 @@ class GroupChangesIntegrationSpec extends Specification {
         }
         untilWaiting(1)
         leaving.createStatement().withCloseable {
+            // DB-SPECIFIC: PostgreSQL now().
             it.execute("update pool_members set removed_at = now(), removed_by = '${FIRST_STEWARD}'" +
                     " where subject_id = '${PERSON}' and removed_at is null")
         }
@@ -314,10 +303,7 @@ class GroupChangesIntegrationSpec extends Specification {
         count("select count(*) from group_members") == 0
     }
 
-    /**
-     * The creation holds the person's stay while it waits on a key another has not committed; the
-     * removal waits on that stay, and once the creation lands it reads the membership and is refused.
-     */
+    /** Holding the person's pool stay makes removal wait until group creation commits. */
     def "somebody taken out of the pool while a group is being made with them waits, and is refused for the group"() {
         given:
         repeatableReadByDefault()
@@ -351,7 +337,7 @@ class GroupChangesIntegrationSpec extends Specification {
                 """) == 0
     }
 
-    /** Its own name in another case is no other group's, so a group may be renamed to it. */
+
     def "renames a group as the caller's act, leaving its key and its members as they were"() {
         given:
         existing(GROUP, "PAYROLL", "Payroll")
@@ -378,10 +364,11 @@ class GroupChangesIntegrationSpec extends Specification {
         name << ["Salaries and wages", "payroll", "PAYROLL"]
     }
 
-    /** The transaction begins before the group is first read, so a group committed in between is the one renamed. */
+
     def "a group is renamed when the change's transaction began, or when it was made if that was later"() {
         given:
         existing(GROUP, "PAYROLL", "Payroll")
+        // DB-SPECIFIC: PostgreSQL :: casts to interval, uuid; now().
         session.sql("update groups set created_at = now() + ?::interval where group_id = ?::uuid")
                 .params(offset, GROUP).update()
         def others = (WRITTEN_TO - "groups").collectEntries { [it, digestOf(it)] }
@@ -390,6 +377,7 @@ class GroupChangesIntegrationSpec extends Specification {
         changes.rename(groupId(GROUP), new GroupName("Salaries and wages"), STEWARD)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         texts("""
                 select name || ' ' || updated_by || ' ' || case when updated_at = created_at then 'when made'
                                                                 when updated_at > created_at then 'after made' end
@@ -405,24 +393,28 @@ class GroupChangesIntegrationSpec extends Specification {
         "+1 hour" || "when made"
     }
 
-    /** A rename waits on the group's lock, so the one before it can have landed after this one's transaction began. */
+
     def "a rename never dates the group earlier than the rename before it"() {
         given:
         existing(GROUP, "PAYROLL", "Payroll")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("""
                 update groups set created_at = now() - interval '1 hour', updated_at = now() + interval '1 hour',
                                   updated_by = ?::uuid
                  where group_id = ?::uuid
                 """).params(FIRST_STEWARD, GROUP).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         def renamedBefore = texts("select updated_at::text from groups where group_id = ?::uuid", GROUP)
 
         when:
         changes.rename(groupId(GROUP), new GroupName("Salaries and wages"), STEWARD)
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         texts("select name from groups where group_id = ?::uuid", GROUP) == ["Salaries and wages"]
 
         and: "dated when the rename before it was, not moved back to when this one's transaction began"
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
         texts("select updated_at::text from groups where group_id = ?::uuid", GROUP) == renamedBefore
     }
 
@@ -482,7 +474,7 @@ class GroupChangesIntegrationSpec extends Specification {
         addressed << ["00000009-0000-4000-8000-000000000009", PERSON, FIRST_STEWARD]
     }
 
-    /** Only the store can see a name another has not committed, and the rename waits on it and then decides. */
+
     def "a rename racing a creation for the same name is decided by the name's uniqueness"() {
         given:
         existing(GROUP, "PAYROLL", "Payroll")
@@ -502,6 +494,7 @@ class GroupChangesIntegrationSpec extends Specification {
         refusal == null || outcome.errorCode() == refusal
 
         and:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         texts("select name from groups where group_id = ?::uuid", GROUP) == [named]
 
         where:
@@ -510,11 +503,7 @@ class GroupChangesIntegrationSpec extends Specification {
         false      || null                         | "Salaries"
     }
 
-    /**
-     * The caller holds the act when the change starts and loses it while the change waits on its
-     * lock; what the gate asked no longer holds, and under this database's default only a read made
-     * after the wait can say so.
-     */
+    /** Authorization must be read again after waiting for the group lock. */
     def "a change whose caller stops holding its act while it waits on its lock is refused, changing nothing"() {
         given:
         pooled(OTHER, "000802")
@@ -522,12 +511,15 @@ class GroupChangesIntegrationSpec extends Specification {
         existing(GROUP, "PAYROLL", "Payroll")
         repeatableReadByDefault()
         def held = holding(change == "create"
+                // DB-SPECIFIC: PostgreSQL SELECT FOR UPDATE.
                 ? "select 1 from pool_members where subject_id = '${PERSON}' and removed_at is null for update"
+                // DB-SPECIFIC: PostgreSQL SELECT FOR UPDATE.
                 : "select 1 from groups where group_id = '${GROUP}' for update")
 
         when:
         def changing = attempting { attemptAs(change, new UserId("000802")) }
         untilWaiting(1)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("update estate_role_grants set removed_at = now(), removed_by = ?::uuid where subject_id = ?::uuid")
                 .params(FIRST_STEWARD, OTHER).update()
         def before = contents()
@@ -583,8 +575,9 @@ class GroupChangesIntegrationSpec extends Specification {
         new ChangeTransactions().readCommitted(new DataSourceTransactionManager(database))
     }
 
-    /** Every column of every group stored, when it was made read only as having been made by now. */
+
     private List<List<Object>> storedGroups() {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; now().
         session.sql("""
                 select group_id::text, key, name, name_folded, created_at <= now(), created_by::text,
                        updated_at, updated_by::text, updated_by_kind::text
@@ -592,12 +585,12 @@ class GroupChangesIntegrationSpec extends Specification {
                 """).query { row, number -> (1..9).collect { row.getObject(it) } }.list()
     }
 
-    /** A group as a creation by the first steward stores it, changed by nobody since. */
+
     private static List<Object> storedAs(GroupId group, String key, String name) {
         [group.value().toString(), key, name, name.toLowerCase(Locale.ROOT), true, FIRST_STEWARD, null, null, "person"]
     }
 
-    /** What the change answered, or what it threw, taken on a thread of its own. */
+
     private Future<Object> attempting(Closure change) {
         racing.submit({
             try {
@@ -608,7 +601,7 @@ class GroupChangesIntegrationSpec extends Specification {
         } as Callable<Object>)
     }
 
-    /** A transaction of the test's own, left open holding whatever the statement took. */
+
     private Connection holding(String statement) {
         def connection = database.connection
         connection.autoCommit = false
@@ -618,6 +611,7 @@ class GroupChangesIntegrationSpec extends Specification {
 
     private void untilWaiting(int sessions) {
         def deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        // DB-SPECIFIC: PostgreSQL pg_stat_activity; current_database().
         while (count("""
                 select count(*) from pg_stat_activity
                  where datname = current_database() and wait_event_type = 'Lock'
@@ -628,9 +622,12 @@ class GroupChangesIntegrationSpec extends Specification {
     }
 
     private void repeatableReadByDefault() {
+        // DB-SPECIFIC: PostgreSQL current_database().
         session.sql("select current_database()").query(String).single().with { name ->
+            // DB-SPECIFIC: PostgreSQL ALTER DATABASE settings.
             session.sql("alter database \"${name}\" set default_transaction_isolation = 'repeatable read'").update()
         }
+        // DB-SPECIFIC: PostgreSQL SHOW default_transaction_isolation.
         assert text("show default_transaction_isolation") == "repeatable read"
     }
 
@@ -639,6 +636,7 @@ class GroupChangesIntegrationSpec extends Specification {
     }
 
     private String digestOf(String table) {
+        // DB-SPECIFIC: PostgreSQL :: casts to text; md5(), string_agg().
         text("select coalesce(md5(string_agg(t::text, '|' order by t::text)), 'empty') from ${table} t")
     }
 
@@ -663,6 +661,7 @@ class GroupChangesIntegrationSpec extends Specification {
     }
 
     private void person(String subject, String user) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("""
                 insert into subjects (subject_id, kind, user_id, display_name, created_by)
                 values (?::uuid, 'person', ?, 'Somebody', ?::uuid)
@@ -671,26 +670,31 @@ class GroupChangesIntegrationSpec extends Specification {
 
     private void pooled(String subject, String user) {
         person(subject, user)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                 .params(subject, FIRST_STEWARD).update()
     }
 
     private void endedStay(String subject) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         session.sql("update pool_members set removed_at = now(), removed_by = ?::uuid where subject_id = ?::uuid")
                 .params(FIRST_STEWARD, subject).update()
     }
 
     private void grant(String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, estate_role.
         session.sql("insert into estate_role_grants (subject_id, role, created_by) values (?::uuid, ?::estate_role, ?::uuid)")
                 .params(subject, role, FIRST_STEWARD).update()
     }
 
     private void existing(String group, String key, String name) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, ?, ?, ?::uuid)")
                 .params(group, key, name, FIRST_STEWARD).update()
     }
 
     private void member(String group, String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role.
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid)

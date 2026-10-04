@@ -23,11 +23,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionOperations;
 
 /**
- * What this system does as it starts, however it stopped, and the one place that knows it started. Before it serves,
- * whatever was out is settled, each tree in a transaction of its own under its lock: a call or code that was out is
- * a try or a review spent that nothing came back for, and a call waiting to be sent again ends turned away, its step
- * held, or its values left waiting where it was to review them. Once it serves, every run at the top not stopped goes
- * on from wherever its steps are, as a drive works it out.
+ * Settle abandoned work under each root's lock before serving; resume unstopped roots only after serving starts.
  */
 @Component
 final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle {
@@ -111,8 +107,9 @@ final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle 
      */
     @Override
     public void afterSingletonsInstantiated() {
-        List<Tree> out = database.sql(OUT).query(EngineRestart::treeOf).list();
-        for (Tree each : out) {
+        List<RunTreeAddress> out =
+                database.sql(OUT).query(EngineRestart::treeOf).list();
+        for (RunTreeAddress each : out) {
             @Nullable Settled settledHere;
             try {
                 settledHere = transactions.execute(status ->
@@ -245,7 +242,7 @@ final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle 
     void resume() {
         UUID after = new UUID(0, 0);
         while (going()) {
-            List<Tree> batch;
+            List<RunTreeAddress> batch;
             try {
                 batch = database.sql(UNSTOPPED)
                         .param("after", after)
@@ -259,7 +256,7 @@ final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle 
                         failed.getClass().getName());
                 return;
             }
-            for (Tree each : batch) {
+            for (RunTreeAddress each : batch) {
                 if (!going()) {
                     return;
                 }
@@ -276,8 +273,8 @@ final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle 
         return running && !executor.stopping();
     }
 
-    private static Tree treeOf(ResultSet result, int number) throws SQLException {
-        return new Tree(
+    private static RunTreeAddress treeOf(ResultSet result, int number) throws SQLException {
+        return new RunTreeAddress(
                 new GroupId(result.getObject("group_id", UUID.class)),
                 new RunId(result.getObject("run_id", UUID.class)));
     }
@@ -293,8 +290,6 @@ final class EngineRestart implements SmartInitializingSingleton, SmartLifecycle 
                 result.getBoolean("turned_away_before"),
                 result.getBoolean("resent"));
     }
-
-    private record Tree(GroupId group, RunId root) {}
 
     /** What one tree's transaction ended: its calls in the order they were written, then its code tries. */
     private record Settled(List<UnendedCall> calls, List<ProductionId> codeLost) {}

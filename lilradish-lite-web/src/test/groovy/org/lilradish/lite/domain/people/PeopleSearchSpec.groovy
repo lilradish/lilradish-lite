@@ -20,7 +20,7 @@ class PeopleSearchSpec extends Specification {
         new PeopleSearch(typed).text() == typed
 
         where:
-        typed << ["000101", "ada", " Ada", "Ada ", "Ada  Lovelace", "山田" + IDEOGRAPHIC_SPACE + "太郎", "%", "_",
+        typed << ["000101", "ari", " Ari", "Ari ", "Ari  Mockvale", "山田" + IDEOGRAPHIC_SPACE + "太郎", "%", "_",
                   "\\", "Mi" + Character.toString(0x200C) + "tra", GRINNING_FACE * 256, " a" + IDEOGRAPHIC_SPACE]
     }
 
@@ -50,8 +50,8 @@ class PeopleSearchSpec extends Specification {
         refused.message.startsWith("PeopleSearch must not contain a control, line or paragraph separator")
 
         where:
-        typed << ["Ada" + Character.toString(0x07), "Ada\nLovelace", "Ada\t", "Ada" + Character.toString(0x2028),
-                  "Ada" + Character.toString(0x2029), "Ada" + Character.toString(0xD800)]
+        typed << ["Ari" + Character.toString(0x07), "Ari\nMockvale", "Ari\t", "Ari" + Character.toString(0x2028),
+                  "Ari" + Character.toString(0x2029), "Ari" + Character.toString(0xD800)]
     }
 
     /**

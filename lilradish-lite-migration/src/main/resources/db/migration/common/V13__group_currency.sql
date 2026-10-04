@@ -1,5 +1,5 @@
--- Apart from groups, so a change of currency never overwrites the rename groups.updated_* records. A row is changed
--- to another currency, never deleted or moved to another group: the application holds that; nothing here refuses it.
+-- Currency changes are held apart from the group's rename record.
+-- DB-SPECIFIC: text, ~, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table group_currencies (
     group_id        uuid         not null,
     currency        text         not null,
@@ -19,8 +19,7 @@ create table group_currencies (
     constraint group_currencies_editor_person_fk foreign key (updated_by, updated_by_kind)
         references subjects (subject_id, kind),
     constraint group_currencies_editor_is_person check (updated_by_kind = 'person'),
-    -- Capitals only, so one currency is never held under two spellings. Which codes exist is the application's
-    -- to judge.
+    -- Capitals only, so one currency is never held under two spellings.
     constraint group_currencies_currency_shape check (currency ~ '^[A-Z]{3}$'),
     constraint group_currencies_updated_together check ((updated_at is null) = (updated_by is null)),
     constraint group_currencies_updated_after_created check (updated_at is null or updated_at >= created_at)

@@ -13,6 +13,8 @@ import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.declaration.FieldShape;
 import org.lilradish.lite.domain.declaration.HowMany;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
+import org.lilradish.lite.domain.declaration.TextLines;
+import org.lilradish.lite.domain.file.MediaTypeName;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 
 /**
@@ -26,6 +28,8 @@ import org.lilradish.lite.domain.registry.EntryVersionId;
  * @param most the most it holds where it holds many; none where it holds one
  * @param terms what it offers, in its list version's order with that version's note, only where it is a term
  * @param fields its own fields in declared order, exactly where it holds fields, and none otherwise
+ * @param fileTypes accepted types only for a file
+ * @param maximumBytes single-file limit only for a file
  */
 public record FillField(
         FieldName name,
@@ -36,7 +40,10 @@ public record FillField(
         @Nullable Integer most,
         boolean mustBeGiven,
         @Nullable OfferedTerms terms,
-        List<FillField> fields) {
+        List<FillField> fields,
+        @Nullable List<MediaTypeName> fileTypes,
+        @Nullable Long maximumBytes,
+        @Nullable TextLines lines) {
 
     public FillField {
         requireNonNull(name, "FillField name must not be null");
@@ -45,15 +52,67 @@ public record FillField(
         if ((kind == FieldKind.TEXT) != (longest != null) || (longest != null && longest < 1)) {
             throw new IllegalArgumentException("FillField says how long, of at least one, exactly where it is text");
         }
+        if ((kind == FieldKind.TEXT) != (lines != null)) {
+            throw new IllegalArgumentException("FillField says how many lines exactly where it is text");
+        }
         if (most != null && most < 1) {
             throw new IllegalArgumentException("FillField most must be at least one: " + most);
         }
         if ((kind == FieldKind.TERM) != (terms != null)) {
             throw new IllegalArgumentException("FillField offers terms exactly where it is a term");
         }
+        if ((kind == FieldKind.FILE) != (fileTypes != null && maximumBytes != null)) {
+            throw new IllegalArgumentException("FillField names types and maximum bytes exactly for a file");
+        }
+        if (fileTypes != null) {
+            fileTypes = List.copyOf(fileTypes);
+            if (fileTypes.isEmpty() || requireNonNull(maximumBytes) < 1) {
+                throw new IllegalArgumentException("FillField file limits must be positive and types nonempty");
+            }
+        }
         if ((kind == FieldKind.FIELDS) == fields.isEmpty()) {
             throw new IllegalArgumentException("FillField holds fields exactly where it is fields");
         }
+    }
+
+    public FillField(
+            FieldName name,
+            @Nullable FieldLabel label,
+            @Nullable FieldHelp help,
+            FieldKind kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            boolean mustBeGiven,
+            @Nullable OfferedTerms terms,
+            List<FillField> fields,
+            @Nullable List<MediaTypeName> fileTypes,
+            @Nullable Long maximumBytes) {
+        this(
+                name,
+                label,
+                help,
+                kind,
+                longest,
+                most,
+                mustBeGiven,
+                terms,
+                fields,
+                fileTypes,
+                maximumBytes,
+                kind == FieldKind.TEXT ? TextLines.SEVERAL : null);
+    }
+
+    public FillField(
+            FieldName name,
+            @Nullable FieldLabel label,
+            @Nullable FieldHelp help,
+            FieldKind kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            boolean mustBeGiven,
+            @Nullable OfferedTerms terms,
+            List<FillField> fields) {
+        this(name, label, help, kind, longest, most, mustBeGiven, terms, fields, null, null);
     }
 
     /**
@@ -82,7 +141,10 @@ public record FillField(
                 },
                 field.demand().mustBe(),
                 shape instanceof FieldShape.Term term ? offered(chosen(term.list(), field, "which list"), lists) : null,
-                shape instanceof FieldShape.Nested nested ? of(held(nested, field), lists) : List.of());
+                shape instanceof FieldShape.Nested nested ? of(held(nested, field), lists) : List.of(),
+                shape instanceof FieldShape.File file ? file.types() : null,
+                shape instanceof FieldShape.File file ? chosen(file.maximumBytes(), field, "how large") : null,
+                shape instanceof FieldShape.Text text ? text.lines() : null);
     }
 
     private static List<Field> held(FieldShape.Nested nested, Field field) {

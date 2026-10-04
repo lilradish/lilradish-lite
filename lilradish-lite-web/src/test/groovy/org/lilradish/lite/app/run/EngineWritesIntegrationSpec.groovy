@@ -1,25 +1,37 @@
 package org.lilradish.lite.app.run
 
+import static org.lilradish.lite.app.run.fixture.TicketWorkflow.CONFIRM
+import static org.lilradish.lite.app.run.fixture.TicketWorkflow.CONFIRM_VERSION
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.GROUP
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.RUN
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.SUMMARISE
 import static org.lilradish.lite.app.run.fixture.TicketWorkflow.SUMMARISE_VERSION
+import static org.lilradish.lite.app.run.fixture.TicketWorkflow.SUMMARY
+import static org.lilradish.lite.app.run.fixture.TicketWorkflow.SUMMARY_IN
+import static org.lilradish.lite.app.run.fixture.TicketWorkflow.TICKET_IN
 import static org.lilradish.lite.testutil.library.LibraryStore.groupId
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import org.lilradish.lite.app.run.fixture.CodeWorkflow
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.codestep.CodeError
 import org.lilradish.lite.domain.codestep.CodeErrorReason
 import org.lilradish.lite.domain.codestep.CodeOutcome
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldStanding
+import org.lilradish.lite.domain.run.InputRecord
 import org.lilradish.lite.domain.run.ModelCallId
 import org.lilradish.lite.domain.run.ProductionId
+import org.lilradish.lite.domain.run.ProductionValueId
+import org.lilradish.lite.domain.run.ReviewPayload
 import org.lilradish.lite.domain.run.RunId
+import org.lilradish.lite.domain.run.RunInTree
+import org.lilradish.lite.domain.run.RunPayloads
 import org.lilradish.lite.domain.run.RunStepHoldReason
 import org.lilradish.lite.domain.run.RunStepId
 import org.lilradish.lite.domain.wire.JsonValue
+import org.lilradish.lite.domain.workflow.StepProducer
 import org.lilradish.lite.testutil.codestep.CodeStepsHeld
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.run.RunRows
@@ -27,20 +39,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Every row a run's steps are written with, on a real server running the real baseline: each guarded write
- * changes exactly the one row it names or fails, and none is made for a run of another tree than the one held.
- */
 class EngineWritesIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
 
     static final String OTHER_RUN = "00000008-0000-4000-8000-000000000e41"
 
-    /** The code workflow's check, reading what send gives back. */
     static final CodeError.ReadBy READ_BY_CHECK = new CodeError.StepReads(UUID.fromString(CodeWorkflow.CHECK))
 
-    /** A field of what a workflow gives back, a level down, that what send gives back is read into. */
     static final CodeError.ReadBy READ_INTO_RESULT =
             new CodeError.OutputReads([new FieldName("result"), new FieldName("receipt")])
 
@@ -66,9 +72,10 @@ class EngineWritesIntegrationSpec extends Specification {
     def setup() {
         store = LibraryStore.copied(server, "engine_writes_" + (++databasesMade))
         tree = new RunTree(store.session)
-        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
         writes = new EngineWrites(store.session)
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid
@@ -81,8 +88,8 @@ class EngineWritesIntegrationSpec extends Specification {
         new RunId(UUID.fromString(spelled))
     }
 
-    /** Summarise's row in {@code run}, as the engine writes it with the first thing written of it. */
     private String runStep(String run) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         store.session.sql("""
                 insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, pinned_version_id,
                                        pinned_kind, producer, reviewed_by_model, tries, created_by, created_by_kind)
@@ -94,17 +101,18 @@ class EngineWritesIntegrationSpec extends Specification {
                 """).params(run, SYSTEM, SUMMARISE).query(String).single()
     }
 
-    /** Summarise held back in {@code run} for {@code reason}, a turning away holding the model's asked try. */
     private void heldFor(String run, String runStep, String reason) {
         String attempt = null
         if (reason == "turned_away") {
+            // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
             def production = store.session.sql("""
                     insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                              reviewed_by_model, tries, pinned_version_id, try_number, producer,
                                              created_by)
-                    values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', false, 2, ?::uuid, 1, 'model', ?::uuid)
+                    values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', false, 2, ?::uuid, null, 'model', ?::uuid)
                     returning cast(production_id as text)
                     """).params(runStep, run, run, SUMMARISE_VERSION, SYSTEM).query(String).single()
+            // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
             attempt = store.session.sql("""
                     insert into run_step_send_attempts (run_step_id, run_id, run_step_kind, workflow_step_id, purpose,
                                                         model, mode, production_id, payload, created_by,
@@ -114,6 +122,7 @@ class EngineWritesIntegrationSpec extends Specification {
                     returning cast(run_step_send_attempt_id as text)
                     """).params(runStep, run, SUMMARISE, production, SYSTEM).query(String).single()
         }
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, enum type run_step_hold_reason.
         store.session.sql("""
                 insert into run_step_holds (run_step_id, run_id, run_step_kind, calls_a_model, reason,
                                             run_step_send_attempt_id, created_by, created_by_kind)
@@ -121,11 +130,248 @@ class EngineWritesIntegrationSpec extends Specification {
                 """).params(runStep, run, reason, attempt, SYSTEM).update()
     }
 
+    private List<String> sourceAndValue(boolean reviewed = false) {
+        if (reviewed) {
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
+            store.session.sql("""
+                    update workflow_steps set reviewer_model = 'general', reviewer_mode = 'ordinary'
+                     where workflow_step_id = ?::uuid
+                    """).params(SUMMARISE).update()
+        }
+        def sourceStep = runStep(RUN)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now(), RETURNING.
+        def sourceTry = store.session.sql("""
+                insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
+                                         reviewed_by_model, tries, pinned_version_id, try_number, producer,
+                                         created_by, ended_at, ended_by, ended_by_kind, explanation)
+                values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', ?, 2, ?::uuid, 1, 'person',
+                        ?::uuid, now(), ?::uuid, 'person', 'Answered.')
+                returning cast(production_id as text)
+                """).params(sourceStep, RUN, RUN, reviewed, SUMMARISE_VERSION, SYSTEM, TicketWorkflow.CAT)
+                .query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                insert into production_inputs (production_id, run_id, root_run_id, run_step_id, run_step_kind,
+                                               workflow_step_id, binding_id, binding_reads_a_constant)
+                values (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'question', ?::uuid, ?::uuid, false)
+                """).params(sourceTry, RUN, RUN, sourceStep, SUMMARISE, TICKET_IN).update()
+        // DB-SPECIFIC: PostgreSQL ::jsonb/::uuid casts, RETURNING.
+        def sourceValue = store.session.sql("""
+                insert into production_values (production_id, run_step_kind, producer, pinned_version_id,
+                                               declaration_field_id, field_standing, value)
+                values (?::uuid, 'question', 'person', ?::uuid, ?::uuid, 'never', '"Earlier"'::jsonb)
+                returning cast(production_value_id as text)
+                """).params(sourceTry, SUMMARISE_VERSION, SUMMARY).query(String).single()
+        [sourceStep, sourceTry, sourceValue]
+    }
+
+    private List<String> consumingTry(String sourceStep, String sourceTry, String sourceValue, boolean model = true) {
+        if (model) {
+            // DB-SPECIFIC: PostgreSQL ::uuid casts.
+            store.session.sql("""
+                    update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
+                     where workflow_step_id = ?::uuid
+                    """).params(CONFIRM).update()
+        }
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
+        def step = store.session.sql("""
+                insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, pinned_version_id,
+                                       pinned_kind, producer, reviewed_by_model, tries, created_by, created_by_kind)
+                select ?::uuid, held.entry_version_id, held.workflow_step_id, held.kind, held.pinned_version_id,
+                       held.pinned_kind, held.producer, held.reviewed_by_model, held.tries, ?::uuid, 'system'
+                  from workflow_steps held where held.workflow_step_id = ?::uuid
+                returning cast(run_step_id as text)
+                """).params(RUN, SYSTEM, CONFIRM).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING, enum type step_producer.
+        def production = store.session.sql("""
+                insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
+                                         reviewed_by_model, tries, pinned_version_id, try_number, producer, created_by)
+                values (?::uuid, ?::uuid, ?::uuid, 'question', cast(? as step_producer), false, 1, ?::uuid, 1,
+                        cast(? as step_producer), ?::uuid)
+                returning cast(production_id as text)
+                """).params(step, RUN, RUN, model ? 'model' : 'person', CONFIRM_VERSION,
+                model ? 'model' : 'person', SYSTEM).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                insert into production_inputs (production_id, run_id, root_run_id, run_step_id, run_step_kind,
+                                               workflow_step_id, binding_id, binding_reads_a_constant,
+                                               source_workflow_step_id, source_run_step_id, source_run_step_kind,
+                                               source_production_id, source_production_value_id)
+                values (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'question', ?::uuid, ?::uuid, false,
+                        ?::uuid, ?::uuid, 'question', ?::uuid, ?::uuid)
+                """).params(production, RUN, RUN, step, CONFIRM, SUMMARY_IN, SUMMARISE, sourceStep, sourceTry,
+                sourceValue).update()
+        [step, production]
+    }
+
+    def "a later try of the same source step cannot replace a direct input's recorded maker"() {
+        given:
+        def source = sourceAndValue()
+        def consumer = consumingTry(source[0], source[1], source[2], false)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
+        store.session.sql("""
+                update productions set ended_at = now(), ended_by = ?::uuid, ended_by_kind = 'person',
+                                       explanation = 'Answered.'
+                 where production_id = ?::uuid
+                """).params(TicketWorkflow.CAT, consumer[1]).update()
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        assert store.texts("select source_production_value_id::text from production_inputs where production_id = ?::uuid",
+                consumer[1]) == [source[2]]
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now(), RETURNING.
+        def laterTry = store.session.sql("""
+                insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
+                                         reviewed_by_model, tries, pinned_version_id, try_number, producer,
+                                         created_by, ended_at, ended_by, ended_by_kind, explanation)
+                values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', false, 2, ?::uuid, 2,
+                        'person', ?::uuid, now(), ?::uuid, 'person', 'Later.')
+                returning cast(production_id as text)
+                """).params(source[0], RUN, RUN, SUMMARISE_VERSION, SYSTEM, TicketWorkflow.CAT)
+                .query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                insert into production_inputs (production_id, run_id, root_run_id, run_step_id, run_step_kind,
+                                               workflow_step_id, binding_id, binding_reads_a_constant)
+                values (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'question', ?::uuid, ?::uuid, false)
+                """).params(laterTry, RUN, RUN, source[0], SUMMARISE, TICKET_IN).update()
+        // DB-SPECIFIC: PostgreSQL ::jsonb/::uuid casts, RETURNING.
+        def laterValue = store.session.sql("""
+                insert into production_values (production_id, run_step_kind, producer, pinned_version_id,
+                                               declaration_field_id, field_standing, value)
+                values (?::uuid, 'question', 'person', ?::uuid, ?::uuid, 'never', '"Later"'::jsonb)
+                returning cast(production_value_id as text)
+                """).params(laterTry, SUMMARISE_VERSION, SUMMARY).query(String).single()
+        then:
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        store.texts("select source_production_value_id::text from production_inputs where production_id = ?::uuid",
+                consumer[1]) == [source[2]]
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, UPDATE FROM.
+        store.session.sql("""
+                update production_inputs input
+                   set source_production_id = value.production_id,
+                       source_production_value_id = value.production_value_id
+                  from production_values value
+                 where input.production_id = ?::uuid and value.production_value_id = ?::uuid
+                """).params(consumer[1], laterValue).update()
+
+        then:
+        thrown(org.springframework.dao.DataIntegrityViolationException)
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        def savedSource = store.texts("""
+                select source_production_value_id::text from production_inputs where production_id = ?::uuid
+                """, consumer[1])
+
+        then:
+        savedSource == [source[2]]
+    }
+
+    def "a yielded consumer retains its input when deletion is rejected"() {
+        given:
+        def source = sourceAndValue()
+        def consumer = consumingTry(source[0], source[1], source[2], false)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
+        store.session.sql("""
+                update productions set ended_at = now(), ended_by = ?::uuid, ended_by_kind = 'person',
+                                       explanation = 'Answered.'
+                 where production_id = ?::uuid
+                """).params(TicketWorkflow.CAT, consumer[1]).update()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        assert store.count("select count(*) from production_inputs where production_id = ?::uuid", consumer[1]) == 1
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("delete from production_inputs where production_id = ?::uuid")
+                .params(consumer[1]).update()
+
+        then:
+        thrown(org.springframework.dao.DataIntegrityViolationException)
+
+        and:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.count("select count(*) from production_inputs where production_id = ?::uuid", consumer[1]) == 1
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.count("select count(*) from productions where production_id = ?::uuid and yielded", consumer[1]) == 1
+    }
+
+    def "a review payload keeps its recorded input when deletion is rejected"() {
+        given:
+        def source = sourceAndValue(true)
+        def original = snapshots.asRead(groupId(GROUP), runId(RUN))
+        assert RunPayloads.toReview(RunInTree.root(original), original.steps()[0], original.steps()[0].tries()[0])
+                instanceof ReviewPayload.Built
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("delete from production_inputs where production_id = ?::uuid")
+                .params(source[1]).update()
+
+        then:
+        thrown(org.springframework.dao.DataIntegrityViolationException)
+
+        when:
+        def unchanged = snapshots.asRead(groupId(GROUP), runId(RUN))
+        def built = RunPayloads.toReview(RunInTree.root(unchanged), unchanged.steps()[0],
+                unchanged.steps()[0].tries()[0])
+
+        then:
+        built instanceof ReviewPayload.Built
+    }
+
+    private void writeInput(InputRecord input) {
+        store.transactions().executeWithoutResult {
+            def locked = tree.lock(groupId(GROUP), runId(RUN)).orElseThrow()
+            def root = snapshots.locked(locked, runId(RUN))
+            def step = root.steps()[0]
+            def held = writes.runStep(locked, root, step)
+            writes.tried(locked, root, held, 1, StepProducer.PERSON, null, null, [input])
+        }
+    }
+
+    def "a missing non-null direct or component maker is refused without leaving a try"() {
+        given:
+        def missing = new ProductionValueId(UUID.randomUUID())
+        def input = part
+                ? new InputRecord(UUID.fromString(TICKET_IN), null,
+                        [new InputRecord.Part([new FieldName("piece")], missing)])
+                : new InputRecord(UUID.fromString(TICKET_IN), missing)
+
+        when:
+        writeInput(input)
+
+        then:
+        thrown(RuntimeException)
+        store.count("select count(*) from productions") == 0
+        store.count("select count(*) from production_inputs") == 0
+        store.count("select count(*) from production_input_parts") == 0
+
+        where:
+        part << [false, true]
+    }
+
+    def "a root input with no maker remains a valid recorded input"() {
+        when:
+        writeInput(new InputRecord(UUID.fromString(TICKET_IN), null))
+
+        then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("""
+                select binding_id::text || ' ' || coalesce(source_production_value_id::text, '-')
+                  from production_inputs
+                """) == [TICKET_IN + " -"]
+        store.count("select count(*) from productions") == 1
+        store.count("select count(*) from production_input_parts") == 0
+    }
+
     private List<String> holds() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select reason || ' ' || coalesce(released_by::text, '-') from run_step_holds order by reason")
     }
 
-    /** Only a stop's hold goes when its stop is let go; one of any other kind waits on what answers it. */
     def "releasing the hold a stop made releases it, and a hold of any other reason is left and the release fails"() {
         given:
         def held = runStep(RUN)
@@ -174,7 +420,6 @@ class EngineWritesIntegrationSpec extends Specification {
         holds() == []
     }
 
-    /** Code has no confidence to offer, so a value standing above one waits on a review, as the store works it out. */
     def "a code try ended as it gave back is written with each value standing as the release declares, and no confidence"() {
         given:
         def aTry = codeTry()
@@ -185,17 +430,20 @@ class EngineWritesIntegrationSpec extends Specification {
 
         then:
         ended
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select producer || ' ' || field_name || ' ' || field_standing || ' ' || standing_threshold || ' '
                        || value::text || ' ' || coalesce(confidence::text, '-') || ' ' || needs_review
                   from production_values
                 """) == ['code receipt above_confidence 80 "R-1" - true']
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select ended_by_kind || ' ' || coalesce(lost_reason::text, '-') from productions") == ["system -"]
     }
 
     def "a code try ended already is not ended again, and nothing it gave back is written"() {
         given:
         def aTry = codeTry()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update productions set ended_at = now(), ended_by = ?::uuid, ended_by_kind = 'system',
                                        lost_reason = 'nothing_came_back'
@@ -208,11 +456,11 @@ class EngineWritesIntegrationSpec extends Specification {
         then:
         !ended
         store.count("select count(*) from production_values") == 0
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select coalesce(lost_reason::text, '-') from productions") == ["nothing_came_back"]
     }
 
-    /** Each part of why it went wrong is its own column, so nothing needs splitting from words to be read again. */
-    def "a code try gone wrong for this system's reason is written with that reason, the field and member it names, and no words"() {
+    def "a code try gone wrong for this system's reason is written with that reason, the field and member it names and whether that was cut, and no words"() {
         given:
         def aTry = codeTry()
 
@@ -228,15 +476,42 @@ class EngineWritesIntegrationSpec extends Specification {
         store.count("select count(*) from production_values") == 0
 
         where:
-        reason                              | path             | member  | readBy                  | returned            || row
-        CodeErrorReason.TOO_LONG            | ["receipt"]      | null    | null                    | '{"receipt":"R-9"}' || 'errored too_long receipt - - - - false {"receipt":"R-9"}'
-        CodeErrorReason.NOT_DECLARED        | ["lines"]        | "extra" | null                    | '{"lines":[{}]}'    || 'errored not_declared lines extra - - - false {"lines":[{}]}'
-        CodeErrorReason.NOT_DECLARED        | []               | ""      | null                    | '{"":1}'            || 'errored not_declared -  - - - false {"":1}'
-        CodeErrorReason.TAKES_OTHERWISE     | ["parts", "sku"] | null    | null                    | null                || 'errored takes_otherwise parts.sku - - - - false -'
-        CodeErrorReason.GIVES_OTHERWISE     | ["receipt"]      | null    | READ_BY_CHECK           | null                || "errored gives_otherwise receipt - ${CodeWorkflow.CHECK} - - false -"
-        CodeErrorReason.GIVES_OTHERWISE     | ["receipt"]      | null    | READ_INTO_RESULT        | null                || 'errored gives_otherwise receipt - - result.receipt - false -'
-        CodeErrorReason.GAVE_NOTHING        | []               | null    | null                    | null                || 'errored gave_nothing - - - - - false -'
-        CodeErrorReason.FAILED_ON_THIS_SIDE | []               | null    | null                    | null                || 'errored failed_on_this_side - - - - - false -'
+        reason                              | path             | member                                | readBy           | returned            || row
+        CodeErrorReason.TOO_LONG            | ["receipt"]      | null                                  | null             | '{"receipt":"R-9"}' || 'errored too_long receipt - false - - - false {"receipt":"R-9"}'
+        CodeErrorReason.NOT_DECLARED        | ["lines"]        | new CodeError.UndeclaredMember("extra", false)  | null             | '{"lines":[{}]}'    || 'errored not_declared lines extra false - - - false {"lines":[{}]}'
+        CodeErrorReason.NOT_DECLARED        | []               | new CodeError.UndeclaredMember("", false)       | null             | '{"":1}'            || 'errored not_declared -  false - - - false {"":1}'
+        CodeErrorReason.NOT_DECLARED        | ["lines"]        | new CodeError.UndeclaredMember("n" * 65, false) | null             | null                || "errored not_declared lines ${"n" * 64} true - - - false -"
+        CodeErrorReason.TAKES_OTHERWISE     | ["parts", "sku"] | null                                  | null             | null                || 'errored takes_otherwise parts.sku - false - - - false -'
+        CodeErrorReason.GIVES_OTHERWISE     | ["receipt"]      | null                                  | READ_BY_CHECK    | null                || "errored gives_otherwise receipt - false ${CodeWorkflow.CHECK} - - false -"
+        CodeErrorReason.GIVES_OTHERWISE     | ["receipt"]      | null                                  | READ_INTO_RESULT | null                || 'errored gives_otherwise receipt - false - result.receipt - false -'
+        CodeErrorReason.GAVE_NOTHING        | []               | null                                  | null             | null                || 'errored gave_nothing - - false - - - false -'
+        CodeErrorReason.FAILED_ON_THIS_SIDE | []               | null                                  | null             | null                || 'errored failed_on_this_side - - false - - - false -'
+    }
+
+    def "a fault written through the engine is read back with its path, reader and member cut intact"() {
+        given:
+        def aTry = codeTry()
+        def fault = new CodeError.Fault(reason, path, member, readBy)
+
+        when:
+        def ended = codeEnded(aTry, new CodeOutcome.Errored(fault, null))
+        def read = snapshots.asRead(groupId(CodeWorkflow.GROUP), runId(CodeWorkflow.RUN))
+                .steps().find { it.planned().id().value().toString() == CodeWorkflow.SEND }.tries()
+
+        then:
+        ended
+        read.size() == 1
+        read[0].fault() == fault
+        read[0].returned() == null
+        read[0].lostDetail() == null
+        store.count("select count(*) from production_values") == 0
+
+        where:
+        reason                        | path                                                       | member                                      | readBy
+        CodeErrorReason.GIVES_OTHERWISE | [new FieldName("lines"), new FieldName("sku")]          | null                                        | READ_BY_CHECK
+        CodeErrorReason.GIVES_OTHERWISE | [new FieldName("lines"), new FieldName("sku")]          | null                                        | READ_INTO_RESULT
+        CodeErrorReason.NOT_DECLARED    | [new FieldName("lines"), new FieldName("sku")]          | new CodeError.UndeclaredMember("n" * 65, false) | null
+        CodeErrorReason.NOT_DECLARED    | [new FieldName("lines"), new FieldName("sku")]          | new CodeError.UndeclaredMember("n" * 64, false) | null
     }
 
     def "a code try whose code threw is written with what it said and whether that was cut, and no reason of this system's"() {
@@ -248,7 +523,7 @@ class EngineWritesIntegrationSpec extends Specification {
 
         then:
         ended
-        codeEnd() == ["errored - - - - - ${"x" * keptLength} ${cut} -" as String]
+        codeEnd() == ["errored - - - false - - ${"x" * keptLength} ${cut} -" as String]
 
         where:
         saidLength || keptLength | cut
@@ -265,26 +540,27 @@ class EngineWritesIntegrationSpec extends Specification {
 
         then:
         ended
-        codeEnd() == ["errored said_nothing - - - - - false -"]
+        codeEnd() == ["errored said_nothing - - false - - - false -"]
 
         where:
         said << [null, " \t\n "]
     }
 
-    /** How the one code try ended: why, what that is about and reads it, what the code said and whether cut, what came back. */
     private List<String> codeEnd() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select lost_reason || ' ' || coalesce(code_error_reason::text, '-') || ' ' || coalesce(code_error_path, '-')
-                       || ' ' || coalesce(code_error_member, '-') || ' ' || coalesce(code_error_read_by_step::text, '-')
+                       || ' ' || coalesce(code_error_member, '-') || ' ' || code_error_member_truncated
+                       || ' ' || coalesce(code_error_read_by_step::text, '-')
                        || ' ' || coalesce(code_error_read_by_output, '-') || ' ' || coalesce(lost_detail, '-') || ' '
                        || lost_detail_truncated || ' ' || coalesce(returned_by_code, '-')
                   from productions where producer = 'code'
                 """)
     }
 
-    /** Summarise's model try in the ticket run, sent: its attempt and its call, out, measured at 40 units. */
     private String callOut() {
         def held = runStep(RUN)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         def production = store.session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, pinned_version_id, try_number, producer,
@@ -292,6 +568,7 @@ class EngineWritesIntegrationSpec extends Specification {
                 values (?::uuid, ?::uuid, ?::uuid, 'question', 'model', false, 2, ?::uuid, 1, 'model', ?::uuid)
                 returning cast(production_id as text)
                 """).params(held, RUN, RUN, SUMMARISE_VERSION, SYSTEM).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         def attempt = store.session.sql("""
                 insert into run_step_send_attempts (run_step_id, run_id, run_step_kind, workflow_step_id, purpose,
                                                     model, mode, production_id, payload, created_by,
@@ -300,6 +577,7 @@ class EngineWritesIntegrationSpec extends Specification {
                         ?::uuid, 'system')
                 returning cast(run_step_send_attempt_id as text)
                 """).params(held, RUN, SUMMARISE, production, SYSTEM).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         store.session.sql("""
                 insert into model_calls (run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id,
                                          production_id, model, mode, envelope_version, sent_count, created_by)
@@ -317,6 +595,7 @@ class EngineWritesIntegrationSpec extends Specification {
     }
 
     private List<String> calls() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select outcome || ' ' || sent_count || ' ' || coalesce(came_back_count::text, '-') || ' '
                        || counted_by_model || ' ' || coalesce(answer, '-') || ' ' || coalesce(error_detail, '-')
@@ -326,13 +605,13 @@ class EngineWritesIntegrationSpec extends Specification {
     }
 
     private List<String> modelTries() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select production_id || ' ' || coalesce(ended_at::text, 'open')
                   from productions where producer = 'model'
                 """)
     }
 
-    /** What was sent stays as measured here, and what came back is not known, which no count stands in for. */
     def "a call nothing came back for is ended so, what was sent kept as measured and nothing counted as come back"() {
         given:
         def call = callOut()
@@ -348,6 +627,7 @@ class EngineWritesIntegrationSpec extends Specification {
     def "a call ended already is not ended again as nothing came back, and is left as it ended"() {
         given:
         def call = callOut()
+        // DB-SPECIFIC: PostgreSQL now().
         store.session.sql("update model_calls set outcome = 'errored', error_detail = 'Gone.', ended_at = now()")
                 .update()
 
@@ -357,6 +637,52 @@ class EngineWritesIntegrationSpec extends Specification {
         then:
         !ended
         calls() == ["errored 40 - false - Gone. true"]
+    }
+
+    private String beneathRun() {
+        def beneath = "00000008-0000-4000-8000-000000000e42"
+        RunRows.workflow(store, "00000006-0000-4000-8000-000000000e42", "00000007-0000-4000-8000-000000000e42", GROUP,
+                "Demo Sample", 100L, false, true)
+        RunRows.beneath(store, beneath, RUN, GROUP, 3, "00000006-0000-4000-8000-000000000e42",
+                "00000007-0000-4000-8000-000000000e42", "00000009-0000-4000-8000-000000000e42",
+                "0000000a-0000-4000-8000-000000000e42", 3)
+        beneath
+    }
+
+    def "a stop for ceilings is written once, naming the first and keeping each of the rest: #further.size() besides"() {
+        given:
+        def reached = [RUN] + further.collect { it == "beneath" ? beneathRun() : it }
+
+        when:
+        store.transactions().executeWithoutResult {
+            writes.stoppedAtCeilings(tree.lock(groupId(GROUP), runId(RUN)).orElseThrow(), reached.collect { runId(it) })
+        }
+
+        then:
+        RunRows.stops(store) == ["system ${RUN} ${further.size()}" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select ceiling_run_id::text from run_stop_additional_ceilings") == reached.drop(1)
+
+        where:
+        further << [[], ["beneath"]]
+    }
+
+    def "a stop for no ceiling, or for one twice, is refused and nothing is written: #named"() {
+        given:
+        def before = ["run_stops", "run_stop_additional_ceilings"].collect { store.digestOf(it) }
+
+        when:
+        store.transactions().executeWithoutResult {
+            writes.stoppedAtCeilings(tree.lock(groupId(GROUP), runId(RUN)).orElseThrow(), named.collect { runId(it) })
+        }
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message.startsWith("A stop is made for one ceiling at least, each once: ")
+        ["run_stops", "run_stop_additional_ceilings"].collect { store.digestOf(it) } == before
+
+        where:
+        named << [[], [RUN, RUN]]
     }
 
     def "every open try of code under the tree held is ended by the system as nothing came back, and nothing else is"() {
@@ -388,6 +714,7 @@ class EngineWritesIntegrationSpec extends Specification {
     def "a tree with no try of code open has none ended"() {
         given:
         codeTry()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update productions set ended_at = now(), ended_by = ?::uuid, ended_by_kind = 'system',
                                        lost_reason = 'errored', lost_detail = 'Refused.'
@@ -404,10 +731,10 @@ class EngineWritesIntegrationSpec extends Specification {
         store.digestOf("productions") == before
     }
 
-    /** The code workflow's send, written in a run of its own with an open try of code, which may not run again. */
     private String codeTry() {
         CodeWorkflow.seed(store)
         CodeWorkflow.run(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         def runStep = store.session.sql("""
                 insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, producer,
                                        reviewed_by_model, tries, created_by, created_by_kind)
@@ -417,6 +744,7 @@ class EngineWritesIntegrationSpec extends Specification {
                  where step.workflow_step_id = ?::uuid
                 returning cast(run_step_id as text)
                 """).params(CodeWorkflow.RUN, SYSTEM, CodeWorkflow.SEND).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         store.session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, try_number, producer, may_run_again, created_by)
@@ -432,7 +760,6 @@ class EngineWritesIntegrationSpec extends Specification {
         }
     }
 
-    /** A hold on length or on a turnaway is written beside the attempt it is for, and by nothing here. */
     def "a hold naming no attempt is written or released only on a stop or on a code step the release does not hold"() {
         given:
         def held = runStep(RUN)

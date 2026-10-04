@@ -4,6 +4,7 @@ import org.libprunus.spring.error.ApiErrorHandler
 import org.lilradish.lite.domain.codestep.CodeError
 import org.lilradish.lite.domain.codestep.CodeErrorReason
 import org.lilradish.lite.domain.declaration.FieldName
+import org.lilradish.lite.domain.failure.RefusalCode
 import org.springframework.http.HttpStatus
 import org.springframework.http.ProblemDetail
 import org.springframework.mock.web.MockHttpServletRequest
@@ -14,6 +15,26 @@ import spock.lang.Specification
 class GivesOtherwiseOutletSpec extends Specification {
 
     static final UUID CHECK = UUID.fromString("00000009-0000-4000-8000-000000000c02")
+
+    def "a gives-otherwise refusal accepts its own code and refuses every other code"() {
+        given:
+        def fault = new CodeError.Fault(CodeErrorReason.GIVES_A_LIST_NOT_HERE, [new FieldName("grade")], null, null)
+
+        when:
+        def refusal = null
+        try {
+            refusal = new GivesOtherwiseRefusal(code, "The code gives otherwise.", fault)
+        } catch (IllegalArgumentException rejected) {
+            assert code != RefusalCode.CODE_STEP_GIVES_OTHERWISE
+        }
+
+        then:
+        (refusal != null) == (code == RefusalCode.CODE_STEP_GIVES_OTHERWISE)
+        refusal == null || refusal.fault() == fault
+
+        where:
+        code << RefusalCode.values()
+    }
 
     private static ServletWebRequest request() {
         new ServletWebRequest(new MockHttpServletRequest(), new MockHttpServletResponse())
@@ -67,10 +88,11 @@ class GivesOtherwiseOutletSpec extends Specification {
     /** Nothing else is why a code step gives otherwise, so a fault of another reason is a mistake, never answered. */
     def "a refusal for giving otherwise over a fault of any other reason is never answered"() {
         given:
-        def about = reason in [CodeErrorReason.GAVE_NOTHING, CodeErrorReason.FAILED_ON_THIS_SIDE,
-                               CodeErrorReason.SAID_NOTHING] ? [] : [new FieldName("receipt")]
+        def reasonsWithoutFieldPath = [CodeErrorReason.GAVE_NOTHING, CodeErrorReason.FILE_TOTAL_TOO_LARGE,
+                                       CodeErrorReason.FAILED_ON_THIS_SIDE, CodeErrorReason.SAID_NOTHING]
+        def about = reason in reasonsWithoutFieldPath ? [] : [new FieldName("receipt")]
         def refused = RunRefusal.givesOtherwise(new CodeError.Fault(reason, about,
-                reason == CodeErrorReason.NOT_DECLARED ? "extra" : null, null))
+                reason == CodeErrorReason.NOT_DECLARED ? new CodeError.UndeclaredMember("extra", false) : null, null))
         def sent = request()
 
         when:

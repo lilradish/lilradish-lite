@@ -23,6 +23,7 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.run.ReviewOutcome
 import org.lilradish.lite.domain.run.RunId
@@ -36,10 +37,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Acts on one step meeting another in flight, on a real server running the real baseline: each waits on the
- * tree's lock the other holds, and decides on what the other left, never on what it read before it waited.
- */
 class StepActsRaceIntegrationSpec extends Specification {
 
     static final String ANN = TicketWorkflow.ANN
@@ -68,15 +65,17 @@ class StepActsRaceIntegrationSpec extends Specification {
         store = LibraryStore.copied(server, "step_races_" + (++databasesMade))
         def session = store.session
         def tree = new RunTree(session)
-        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE)
+        def snapshots = new RunSnapshots(session, CodeStepsHeld.NONE, new SearchWays([]))
         def writes = new EngineWrites(session)
         executor = EngineExecutors.of(store.database)
         def ceilings = new CeilingReach(session, DeployedModels.HELD, writes)
+        def heldFiles = EngineWiring.files(store)
         def engine = new RunEngine(session, store.transactions(), tree, snapshots, writes, executor,
-                new EngineCalls(new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                DeployedModels.HELD, ceilings, new GroupRoles(session))
-        acts = new StepActs(session, store.transactions(), new GroupRoles(session), tree, snapshots, writes, engine)
+                new EngineCalls(EngineWiring.withoutTools(), new ScriptedModelCalls(), store.transactions(), tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(session), Deployments.DEEP_ENOUGH, heldFiles)
+        acts = new StepActs(session, store.transactions(), new GroupRoles(session), tree, snapshots, writes, engine,
+                heldFiles, EngineWiring.fileDeployment())
         TicketWorkflow.seed(store)
         store.transactions().executeWithoutResult {
             TicketWorkflow.run(store)
@@ -104,8 +103,8 @@ class StepActsRaceIntegrationSpec extends Specification {
         }
     }
 
-    /** The tree's root held by a transaction of the spec's own, which then makes {@code writes} and stays open. */
     private Connection inFlight(String... writes) {
+        // DB-SPECIFIC: PostgreSQL FOR NO KEY UPDATE.
         store.holding((["select 1 from runs where run_id = '${RUN}' for no key update" as String] + writes.toList())
                 as String[])
     }
@@ -172,6 +171,7 @@ class StepActsRaceIntegrationSpec extends Specification {
 
         and:
         store.count("select count(*) from reviews") == 0
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from run_steps where workflow_step_id = ?::uuid", CONFIRM) == 0
     }
 

@@ -5,6 +5,7 @@ import static java.util.Objects.requireNonNull;
 import java.time.Instant;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
+import org.libprunus.core.log.annotation.DoNotLog;
 import org.lilradish.lite.domain.identity.SubjectId;
 
 /** Where one step of one run is, and what that turns on: the state it reads as, and whatever that state names. */
@@ -15,6 +16,7 @@ public sealed interface StepPosition
                 StepPosition.AwaitingReview,
                 StepPosition.Owed,
                 StepPosition.Failed,
+                StepPosition.Beneath,
                 StepPosition.Done {
 
     StepState state();
@@ -34,6 +36,7 @@ public sealed interface StepPosition
             case NotStarted ignored -> null;
             case Running ignored -> null;
             case AwaitingReview ignored -> null;
+            case Beneath ignored -> null;
             case Done ignored -> null;
         };
     }
@@ -146,6 +149,32 @@ public sealed interface StepPosition
         @Override
         public StepState state() {
             return StepState.FAILED;
+        }
+    }
+
+    record Beneath(
+            @DoNotLog RunSnapshot run,
+            @DoNotLog StepSnapshot at,
+            @DoNotLog StepPosition where) implements StepPosition {
+
+        public Beneath {
+            requireNonNull(run, "StepPosition.Beneath run must not be null");
+            requireNonNull(at, "StepPosition.Beneath at must not be null");
+            requireNonNull(where, "StepPosition.Beneath where must not be null");
+            if (where instanceof Done) {
+                throw new IllegalArgumentException("StepPosition.Beneath must name a step not done");
+            }
+        }
+
+        @Override
+        public StepState state() {
+            return where instanceof NotStarted ? StepState.RUNNING : where.state();
+        }
+
+        @Override
+        public String toString() {
+            return "Beneath[run=" + run.run().value() + ", at="
+                    + at.planned().id().value() + "]";
         }
     }
 

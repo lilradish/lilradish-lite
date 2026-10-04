@@ -1,9 +1,7 @@
 package org.lilradish.lite.app.inference.development
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
-import java.util.function.Supplier
 import javax.sql.DataSource
-import org.flywaydb.core.Flyway
 import org.lilradish.lite.app.inference.AnswerReader
 import org.lilradish.lite.app.library.QuestionsAsked
 import org.lilradish.lite.domain.declaration.Asking
@@ -24,27 +22,19 @@ import org.lilradish.lite.domain.model.SentText
 import org.lilradish.lite.domain.registry.EntryVersionId
 import org.lilradish.lite.domain.wire.CanonicalJson
 import org.lilradish.lite.testutil.Baseline
+import org.lilradish.lite.testutil.DevelopmentSeed
 import org.lilradish.lite.testutil.inference.Json
-import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
-import org.springframework.context.ConfigurableApplicationContext
-import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.jdbc.support.JdbcTransactionManager
 import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * The stand-in's fixed answers held to what the development seed and the development catalog really hold,
- * read off a real server running the baseline and the seed, so neither can drift from the answers unseen.
- */
+/** Development seed data and the deployed catalog must agree. */
 class DevelopmentModelCallsSeedIntegrationSpec extends Specification {
 
     static final String MODEL_STEP = "0000000c-0000-4000-8000-000000000101"
-
-    static final String DEVELOPMENT_SEED = Objects.requireNonNull(System.getProperty("development-seed.location"),
-            "development-seed.location was not set; the build names it to test")
 
     static final SentText SENT = SentText.measure("answer in JSON", "the invoice")
 
@@ -73,14 +63,7 @@ class DevelopmentModelCallsSeedIntegrationSpec extends Specification {
 
     def setupSpec() {
         DataSource database = Baseline.appliedTo(server, "postgres")
-        Flyway.configure()
-                .dataSource(database)
-                .schemas("app")
-                .locations("filesystem:" + Baseline.MIGRATIONS, "filesystem:" + DEVELOPMENT_SEED)
-                .failOnMissingLocations(true)
-                .validateMigrationNaming(true)
-                .load()
-                .migrate()
+        DevelopmentSeed.appliedTo(database)
         session = JdbcClient.create(database)
         modelStep = session.sql("""
                 select cast(step.pinned_version_id as text) as question, step.producer_model, workflow.helper_model,
@@ -152,8 +135,9 @@ class DevelopmentModelCallsSeedIntegrationSpec extends Specification {
         new EntryVersionId(UUID.fromString(modelStep.question as String))
     }
 
-    /** The store's own rule for a produced value waiting on review, read off the column and applied to each field. */
+
     private List<FieldName> waitingOnReview(ProductionAnswer.Produced produced) {
+        // DB-SPECIFIC: PostgreSQL pg_attrdef/pg_attribute; pg_get_expr(); regclass type.
         String rule = session.sql("""
                 select pg_get_expr(definition.adbin, definition.adrelid)
                   from pg_attrdef definition
@@ -163,6 +147,7 @@ class DevelopmentModelCallsSeedIntegrationSpec extends Specification {
         String confidences = CanonicalJson.write(Json.of(produced.confidences().collectEntries { name, confidence ->
             [(name.value()): confidence.percent()]
         }))
+        // DB-SPECIFIC: PostgreSQL jsonb type; JSON ->> operator.
         session.sql("""
                 select field.name
                   from declaration_fields field
@@ -177,19 +162,11 @@ class DevelopmentModelCallsSeedIntegrationSpec extends Specification {
                 """.toString()).params(confidences, modelStep.question).query(String).list().collect { new FieldName(it) }
     }
 
-    /** The development file's list alone, bound by the configuration the application scans for. */
     private void bindDevelopmentCatalog() {
-        new ApplicationContextRunner({
-            def context = new AnnotationConfigApplicationContext()
-            context.scan("org.lilradish.lite.app.model")
-            context
-        } as Supplier<ConfigurableApplicationContext>)
-                .withInitializer(new ConfigDataApplicationContextInitializer())
-                .withPropertyValues("spring.config.location=classpath:/config/application-dev.yaml")
-                .run { context ->
-                    catalog = context.getBean(ModelCatalog)
-                    configurationSources = context.environment.propertySources*.name
-                            .findAll { it.startsWith("Config resource") }
-                }
+        DevelopmentSeed.catalogBinding().run { context ->
+            catalog = context.getBean(ModelCatalog)
+            configurationSources = context.environment.propertySources*.name
+                    .findAll { it.startsWith("Config resource") }
+        }
     }
 }

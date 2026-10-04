@@ -1,4 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
+import { tableCellClasses } from "@mui/material/TableCell";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -23,9 +24,9 @@ interface Item {
   readonly count: number;
 }
 
-const ADA: Item = { id: "p1", name: "Ada Lovelace", count: 3 };
-const GRACE: Item = { id: "p2", name: "Grace Hopper", count: 1 };
-const HEDY: Item = { id: "p3", name: "Hedy Lamarr", count: 2 };
+const AVO: Item = { id: "p1", name: "Avo Lumerace", count: 3 };
+const GLINN: Item = { id: "p2", name: "Glinn Havven", count: 1 };
+const HAVO: Item = { id: "p3", name: "Havo Lunnet", count: 2 };
 
 type ItemOrder = "name" | "count";
 
@@ -33,7 +34,7 @@ type ItemOrder = "name" | "count";
  * Out of order by every column, whichever way: a table that sorted the rows
  * itself, by any column and in either direction, would show it.
  */
-const ITEMS: readonly Item[] = [GRACE, ADA, HEDY];
+const ITEMS: readonly Item[] = [GLINN, AVO, HAVO];
 
 const EMPTY = "Nothing matches that.";
 
@@ -52,7 +53,12 @@ function acting(pressed = vi.fn()) {
 function columns(control: (row: Item) => ReactNode = acting()) {
   return [
     { label: "Name", cell: (row: Item) => row.name, sortKey: "name" },
-    { label: "Count", cell: (row: Item) => row.count, sortKey: "count" },
+    {
+      label: "Count",
+      cell: (row: Item) => row.count,
+      sortKey: "count",
+      numeric: true,
+    },
     { label: "Actions", cell: control },
   ] as const;
 }
@@ -181,7 +187,7 @@ function firstCellOf(name: string): HTMLElement {
   return cell;
 }
 
-/** Ada's count: a cell of her row that is not its link. */
+/** Avo's count: a cell of her row that is not its link. */
 function offTheLink(): HTMLElement {
   return within(bodyRows()[1]!).getByText("3");
 }
@@ -191,6 +197,63 @@ describe("SortableTable", () => {
     render(tableOf(paged({})), { wrapper: themed });
 
     expect(screen.getByRole("table")).toHaveAccessibleName("Records");
+  });
+
+  /** Figures are compared down a column, which reads only where their places line up. */
+  it.each([
+    ["rows that open nothing", undefined],
+    ["rows that open", null],
+  ])(
+    "sets a column of figures, its heading with it, at the trailing end in digits of one width, and no other, on %s",
+    (_case, picked) => {
+      if (picked === undefined) {
+        render(tableOf(paged({})), { wrapper: themed });
+      } else {
+        routed({ picked });
+      }
+
+      const columnOf = (at: number) => [
+        screen.getAllByRole("columnheader")[at]!,
+        ...bodyRows().map((row) => row.cells[at]!),
+      ];
+      const setAs = (cells: HTMLElement[]) =>
+        cells.map((cell) => {
+          const drawn = getComputedStyle(cell);
+          return `${drawn.textAlign} ${drawn.fontVariantNumeric}`;
+        });
+
+      expect(new Set(setAs(columnOf(1)))).toEqual(
+        new Set(["right tabular-nums"]),
+      );
+      expect(
+        [0, 2]
+          .flatMap(columnOf)
+          .map((cell) => getComputedStyle(cell))
+          .filter(
+            (drawn) =>
+              drawn.textAlign === "right" ||
+              drawn.fontVariantNumeric === "tabular-nums",
+          ),
+      ).toEqual([]);
+    },
+  );
+
+  it("draws every cell, its heading's included, dense", () => {
+    render(tableOf(paged({})), { wrapper: themed });
+
+    const cells = [...screen.getByRole("table").querySelectorAll("th, td")];
+
+    expect(cells).toHaveLength(4 * 3);
+    expect(
+      cells.filter(
+        (cell) => !cell.classList.contains(tableCellClasses.sizeSmall),
+      ),
+    ).toEqual([]);
+    expect(
+      cells.filter((cell) =>
+        cell.classList.contains(tableCellClasses.sizeMedium),
+      ),
+    ).toEqual([]);
   });
 
   it("makes a sortable header a real button, and leaves one that cannot sort as its words", () => {
@@ -251,9 +314,9 @@ describe("SortableTable", () => {
 
       expect(onOrder.mock.calls).toEqual([[asked]]);
       expect(bodyRows().map((row) => row.cells[0]!.textContent)).toEqual([
-        "Grace Hopper",
-        "Ada Lovelace",
-        "Hedy Lamarr",
+        "Glinn Havven",
+        "Avo Lumerace",
+        "Havo Lunnet",
       ]);
     },
   );
@@ -286,12 +349,12 @@ describe("SortableTable", () => {
         ) : (
           <SortableTable {...common} page={paged({ items })} />
         );
-      const { rerender } = render(alike([ADA]), { wrapper: themed });
+      const { rerender } = render(alike([AVO]), { wrapper: themed });
 
-      rerender(alike([GRACE]));
+      rerender(alike([GLINN]));
 
       expect([...bodyRows()[0]!.cells].map((cell) => cell.textContent)).toEqual(
-        ["Grace Hopper", "p2", "1"],
+        ["Glinn Havven", "p2", "1"],
       );
       expect(complaints).not.toHaveBeenCalled();
     },
@@ -337,40 +400,7 @@ describe("SortableTable", () => {
     },
   );
 
-  /** A page in hand read again, as it is kept up, is news of nothing; a first read is not. */
-  it.each([
-    ["nothing has been answered yet", null, ITEMS, "Still reading…"],
-    ["a page has been answered already", { items: ITEMS }, ITEMS, ""],
-    [
-      "a page has been answered already, and held nothing",
-      { items: [] },
-      [],
-      EMPTY,
-    ],
-  ])(
-    "says, where asked to keep quiet while a page is in hand, that it reads only while %s",
-    (_case, answered, items, said) => {
-      const page = { ...paged({ loading: true, items }), answered };
-
-      render(
-        <SortableTable
-          label="Records"
-          columns={columns()}
-          order={{ column: "name" as ItemOrder, descending: false }}
-          onOrder={vi.fn()}
-          page={page}
-          keyOf={(row) => row.id}
-          empty={EMPTY}
-          quietWhileAnswered
-        />,
-        { wrapper: themed },
-      );
-
-      expect(screen.getByRole("status").textContent).toBe(said);
-    },
-  );
-
-  it("says it reads while a page answered already is read again, where not asked to keep quiet", () => {
+  it("says it reads while a page answered already is read again, the rows in hand still drawn", () => {
     const page = { ...paged({ loading: true }), answered: { items: ITEMS } };
 
     render(tableOf(page), { wrapper: themed });
@@ -422,7 +452,7 @@ describe("SortableTable", () => {
 
     const name = bodyRows()[0]!.cells[0]!;
 
-    expect(name.querySelector("bdi")?.textContent).toBe(GRACE.name);
+    expect(name.querySelector("bdi")?.textContent).toBe(GLINN.name);
   });
 
   it("opens each row through a link to its own address, from its first cell", () => {
@@ -438,6 +468,52 @@ describe("SortableTable", () => {
     expect(links.map((link) => link.closest("td"))).toEqual(
       bodyRows().map((row) => row.cells[0]),
     );
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(links.map((link) => link.getAttribute("aria-description"))).toEqual([
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("can name a first-cell link separately from its visible detail", () => {
+    render(
+      <SortableTable
+        label="Records"
+        columns={[
+          {
+            label: "Name",
+            cell: (row: Item) => (
+              <>
+                <span>{row.name}</span>
+                <small>Count {row.count}</small>
+              </>
+            ),
+          },
+        ]}
+        order={{ column: "name" as ItemOrder, descending: false }}
+        onOrder={vi.fn()}
+        page={paged({ items: [AVO] })}
+        keyOf={(row) => row.id}
+        picked={null}
+        hrefOf={(row) => `${HERE}?picked=${row.id}`}
+        linkNameOf={(row) => row.name}
+        linkDescriptionOf={(row) => `Count ${row.count}`}
+        empty={EMPTY}
+      />,
+      { wrapper: themed },
+    );
+
+    const link = screen.getByRole("link", { name: "Avo Lumerace" });
+    expect(link).toHaveAccessibleDescription("Count 3");
+    expect(link).toHaveTextContent("Avo LumeraceCount 3");
+    expect(
+      screen.queryByRole("link", { name: "Avo LumeraceCount 3" }),
+    ).toBeNull();
   });
 
   /**
@@ -455,12 +531,12 @@ describe("SortableTable", () => {
   it("marks the picked row current on its link and leaves the attribute off every other", () => {
     routed({ picked: "p1" });
 
-    const ada = screen.getByRole("link", { name: "Ada Lovelace" });
-    const others = ["Grace Hopper", "Hedy Lamarr"].map((name) =>
+    const avo = screen.getByRole("link", { name: "Avo Lumerace" });
+    const others = ["Glinn Havven", "Havo Lunnet"].map((name) =>
       screen.getByRole("link", { name }),
     );
 
-    expect(ada.getAttribute("aria-current")).toBe("true");
+    expect(avo.getAttribute("aria-current")).toBe("true");
     expect(others.map((link) => link.hasAttribute("aria-current"))).toEqual([
       false,
       false,
@@ -471,8 +547,8 @@ describe("SortableTable", () => {
   it("draws a bar inside the picked row's first cell in the primary colour and in no other", () => {
     routed({ picked: "p1" });
 
-    const picked = getComputedStyle(firstCellOf("Ada Lovelace")).boxShadow;
-    const others = ["Grace Hopper", "Hedy Lamarr"].map(
+    const picked = getComputedStyle(firstCellOf("Avo Lumerace")).boxShadow;
+    const others = ["Glinn Havven", "Havo Lunnet"].map(
       (name) => getComputedStyle(firstCellOf(name)).boxShadow,
     );
 
@@ -499,7 +575,7 @@ describe("SortableTable", () => {
 
   /** A pick is somewhere to come back from, so moving to another row is pushed. */
   it.each([
-    ["its link", () => screen.getByRole("link", { name: "Ada Lovelace" })],
+    ["its link", () => screen.getByRole("link", { name: "Avo Lumerace" })],
     ["a cell that is not its link", offTheLink],
   ])(
     "goes to another row's address once, pushed, when %s is pressed",
@@ -514,7 +590,7 @@ describe("SortableTable", () => {
 
   /** Arriving again where the reader already is adds no step to go back through. */
   it.each([
-    ["its link", () => screen.getByRole("link", { name: "Ada Lovelace" })],
+    ["its link", () => screen.getByRole("link", { name: "Avo Lumerace" })],
     ["a cell that is not its link", offTheLink],
   ])(
     "takes the picked row's own address in place when %s is pressed",
@@ -710,6 +786,24 @@ describe("WholeTable", () => {
     expect(screen.queryByText(EMPTY)).toBeNull();
   });
 
+  it("draws every cell dense, and a column of figures at the trailing end", () => {
+    render(wholeOf(ITEMS), { wrapper: themed });
+
+    const cells = [...screen.getByRole("table").querySelectorAll("th, td")];
+
+    expect(cells).toHaveLength(4 * 3);
+    expect(
+      cells.filter(
+        (cell) => !cell.classList.contains(tableCellClasses.sizeSmall),
+      ),
+    ).toEqual([]);
+    expect(
+      cells
+        .filter((cell) => getComputedStyle(cell).textAlign === "right")
+        .map((cell) => (cell as HTMLTableCellElement).cellIndex),
+    ).toEqual([1, 1, 1, 1]);
+  });
+
   it.each([
     [false, "Count", { column: "count", descending: true }],
     [true, "Count", { column: "count", descending: false }],
@@ -756,5 +850,50 @@ describe("WholeTable", () => {
     expect(screen.queryAllByRole("link")).toEqual([]);
     expect(first!.classList.contains("MuiTableRow-hover")).toBe(false);
     expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+  });
+
+  /** Handed addresses, its rows open and the picked one is marked as `SortableTable` marks one. */
+  it("opens each row through its first cell's link, marking the picked row current with a bar and no other", () => {
+    render(
+      <WholeTable
+        label="Records"
+        columns={columns()}
+        order={{ column: "count" as ItemOrder, descending: false }}
+        onOrder={vi.fn()}
+        rows={ITEMS}
+        keyOf={(row) => row.id}
+        empty={EMPTY}
+        picked="p1"
+        hrefOf={(row) => `${HERE}?picked=${row.id}`}
+      />,
+      { wrapper: themed },
+    );
+
+    const links = screen.getAllByRole("link");
+
+    expect(
+      links.map((link) => [
+        link.getAttribute("href"),
+        link.getAttribute("aria-current"),
+      ]),
+    ).toEqual([
+      [`${HERE}?picked=p2`, null],
+      [`${HERE}?picked=p1`, "true"],
+      [`${HERE}?picked=p3`, null],
+    ]);
+    expect(links.map((link) => link.closest("td"))).toEqual(
+      bodyRows().map((row) => row.cells[0]),
+    );
+    expect(getComputedStyle(firstCellOf("Avo Lumerace")).boxShadow).toBe(
+      PICKED_BAR,
+    );
+    expect(
+      ["Glinn Havven", "Havo Lunnet"].filter((name) =>
+        getComputedStyle(firstCellOf(name)).boxShadow.includes("inset"),
+      ),
+    ).toEqual([]);
+    expect(
+      bodyRows().map((row) => row.classList.contains("MuiTableRow-hover")),
+    ).toEqual([true, true, true]);
   });
 });

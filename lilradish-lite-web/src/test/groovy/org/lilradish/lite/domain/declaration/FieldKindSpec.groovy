@@ -1,5 +1,8 @@
 package org.lilradish.lite.domain.declaration
 
+import org.lilradish.lite.domain.file.FileName
+import org.lilradish.lite.domain.file.MediaTypeName
+import org.lilradish.lite.domain.file.StoredFile
 import org.lilradish.lite.domain.wire.CanonicalJson
 import org.lilradish.lite.domain.wire.JsonValue
 import spock.lang.Specification
@@ -11,6 +14,10 @@ class FieldKindSpec extends Specification {
     /** A year written in digits that are digits, but not the ones a date is written in. */
     static final String ARABIC_INDIC_2024 = [0x662, 0x660, 0x662, 0x664].collect { Character.toString(it) }.join()
 
+    static final JsonValue FILE_VALUE = new StoredFile(
+            UUID.fromString("00000000-0000-4000-8000-000000000001"), new FileName("Demo Sample.pdf"),
+            new MediaTypeName("application/pdf"), 12).kept()
+
     static final List<FieldKind> STRING_WRITERS = [FieldKind.TEXT, FieldKind.TERM]
 
     static final List<FieldKind> DATE_WRITERS = [FieldKind.TEXT, FieldKind.DATE, FieldKind.TERM]
@@ -21,7 +28,7 @@ class FieldKindSpec extends Specification {
     def "the kinds a field may be are fixed, in the order they are declared"() {
         expect:
         FieldKind.values().toList() == [FieldKind.TEXT, FieldKind.NUMBER, FieldKind.DATE, FieldKind.MOMENT,
-                                         FieldKind.YES_NO, FieldKind.TERM, FieldKind.FIELDS]
+                                         FieldKind.YES_NO, FieldKind.TERM, FieldKind.FIELDS, FieldKind.FILE]
     }
 
     /** A page names what it draws by these, so a constant renamed without its spelling staying put breaks it. */
@@ -35,6 +42,7 @@ class FieldKindSpec extends Specification {
                 (FieldKind.YES_NO): "yes_no",
                 (FieldKind.TERM)  : "term",
                 (FieldKind.FIELDS): "fields",
+                (FieldKind.FILE)  : "file",
         ]
     }
 
@@ -63,9 +71,10 @@ class FieldKindSpec extends Specification {
         FieldKind.YES_NO | new JsonValue.JsonBoolean(true)
         FieldKind.YES_NO | new JsonValue.JsonBoolean(false)
         FieldKind.FIELDS | new JsonValue.JsonObject([])
+        FieldKind.FILE   | FILE_VALUE
     }
 
-    def "no kind but its own writes a value, bar text and a term, which write every string"() {
+    def "each kind writes only its own value, with text and term sharing strings and fields containing objects"() {
         expect:
         FieldKind.values().findAll { it.writes(value) } == writtenBy
 
@@ -77,6 +86,7 @@ class FieldKindSpec extends Specification {
         moment("9999-12-31T23:59:59.999999+14:00")          || MOMENT_WRITERS
         new JsonValue.JsonBoolean(false)                    || [FieldKind.YES_NO]
         new JsonValue.JsonObject([])                        || [FieldKind.FIELDS]
+        FILE_VALUE                                          || [FieldKind.FIELDS, FieldKind.FILE]
     }
 
     def "a value not written as its kind is written is not taken"() {
@@ -140,6 +150,8 @@ class FieldKindSpec extends Specification {
         FieldKind.YES_NO | number("1")
         FieldKind.FIELDS | new JsonValue.JsonString("{}")
         FieldKind.FIELDS | new JsonValue.JsonArray([])
+        FieldKind.FILE   | new JsonValue.JsonObject([])
+        FieldKind.FILE   | new JsonValue.JsonString("Demo Sample.pdf")
     }
 
     def "none is no value of any kind"() {
@@ -188,7 +200,7 @@ class FieldKindSpec extends Specification {
         refused.message == "FieldKind " + kind.published() + " is as long as its field makes it"
 
         where:
-        kind << [FieldKind.TEXT, FieldKind.TERM, FieldKind.FIELDS]
+        kind << [FieldKind.TEXT, FieldKind.TERM, FieldKind.FIELDS, FieldKind.FILE]
     }
 
     /** A decimal keeps no sign of a zero and no exponent as written, so only the text says either was written. */

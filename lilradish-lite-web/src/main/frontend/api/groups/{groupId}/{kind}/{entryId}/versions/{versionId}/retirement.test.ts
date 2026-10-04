@@ -22,20 +22,23 @@ describe("retire", () => {
       200,
     ]);
 
-    const read = await retire(
-      GROUP,
-      "question",
-      ENTRY,
-      VERSION,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    const read = await retire(GROUP, "question", ENTRY, VERSION, signal);
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(
       `/api/groups/${GROUP}/questions/${ENTRY}/versions/${VERSION}/retirement`,
     );
     expect(init?.method).toBe("PUT");
+    expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
-    expect(read.entryId).toBe(ENTRY);
+    expect(read).toEqual({
+      entryId: ENTRY,
+      kind: "question",
+      name: "Triage",
+      acts: new Set(),
+      versions: [],
+    });
   });
 });

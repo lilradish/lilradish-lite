@@ -2,10 +2,12 @@ package org.lilradish.lite.domain.inference;
 
 import static java.util.Objects.requireNonNull;
 
+import java.util.IdentityHashMap;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.declaration.AskedField;
 import org.lilradish.lite.domain.declaration.Asking;
+import org.lilradish.lite.domain.declaration.FieldKind;
 import org.lilradish.lite.domain.declaration.Instruction;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.wire.CanonicalJson;
@@ -16,15 +18,8 @@ import org.lilradish.lite.domain.wire.JsonValue.JsonNull;
 import org.lilradish.lite.domain.wire.JsonValue.JsonObject;
 import org.lilradish.lite.domain.wire.JsonValue.JsonString;
 
-/**
- * The most one asking could send, counted as it would be kept: the {@link Envelope}'s text beside the
- * {@link Payload} as {@link CanonicalJson} writes it, escapes included, a character being a code point. Every
- * input is at its declared limit, every free text escaped at its worst, and where the step tells the next
- * asking, or a review is sent, a refused answer at its limit is told with the words at theirs. Worked out, never
- * written: a text's limit may run to millions.
- *
- * <p>A count past what a long holds is held at {@link Long#MAX_VALUE}, which is then past counting: a many held
- * within a many reaches it, the limit each field is held to counting only its text.
+/** Counts what would be kept in Unicode code points without materializing declared maxima.
+ * A count beyond {@link Long#MAX_VALUE} saturates there.
  */
 public final class SendMeasure {
 
@@ -46,6 +41,9 @@ public final class SendMeasure {
     /* A control with no short escape is written as six characters, the most any one character is. */
     private static final long WORST_CHARACTER = written(new JsonString(Character.toString(0x1))) - QUOTES;
 
+    private static final long DOUBLE_WORST_CHARACTER =
+            doubleWritten(new JsonString(Character.toString(0x1))) - doubleWritten(new JsonString(""));
+
     /* The words a production is refused with hold no control but a tab and a line feed, so a quote is worst. */
     private static final long WORST_WORDS = written(new JsonString("\"".repeat(Envelope.MOST_REFUSAL_WORDS)));
 
@@ -59,7 +57,7 @@ public final class SendMeasure {
     public static long mostSent(Asking asking, boolean toldWhatHappened) {
         requireNonNull(asking, "SendMeasure asking must not be null");
         return measured(
-                PayloadMember.sent(toldWhatHappened, false),
+                PayloadMember.sent(toldWhatHappened, false, !asking.takes().isEmpty()),
                 asking.instruction(),
                 asking.takes(),
                 asking.gives(),
@@ -67,14 +65,13 @@ public final class SendMeasure {
     }
 
     /**
-     * The most a review of one production could send: what that production was sent, told a refused answer
-     * whatever the step says, since a person answering in a model's place is shown one; and every value it gave
-     * back at its limit, each to be decided.
+     * A review counts a refused answer even if the step would not tell its next asking:
+     * a person answering in the model's place would be shown it.
      */
     public static long mostSentToReview(Asking asking) {
         requireNonNull(asking, "SendMeasure asking must not be null");
         return measured(
-                PayloadMember.sent(true, true),
+                PayloadMember.sent(true, true, !asking.takes().isEmpty()),
                 asking.instruction(),
                 asking.takes(),
                 asking.gives(),
@@ -82,14 +79,40 @@ public final class SendMeasure {
     }
 
     /**
-     * The most a review could send of a production no instruction asked for, taking and giving back what
-     * {@code takes} and {@code gives} declare: every input at its limit, what is added, an answer at its limit to
-     * decide, and a refused one with the words it was refused with.
+     * With no instruction to count, a review still counts declared inputs and the answer
+     * at their limits, and a refused answer with its words.
      */
     public static long mostSentToReview(List<AskedField> takes, List<AskedField> gives) {
         requireNonNull(takes, "SendMeasure takes must not be null");
         requireNonNull(gives, "SendMeasure gives must not be null");
-        return measured(PayloadMember.sentUninstructed(true), null, takes, gives, Envelope.toReviewUninstructed(gives));
+        return measured(
+                PayloadMember.sentUninstructed(true, !takes.isEmpty()),
+                null,
+                takes,
+                gives,
+                Envelope.toReviewUninstructed(gives));
+    }
+
+    /** The most one search could send, including a refused output when the next asking is told. */
+    public static long mostSentToSearch(
+            List<Payload.SearchPart> parts, List<AskedField> gives, boolean toldWhatHappened) {
+        requireNonNull(parts, "SendMeasure search parts must not be null");
+        requireNonNull(gives, "SendMeasure gives must not be null");
+        return measured(
+                PayloadMember.sentSearch(toldWhatHappened), null, List.of(), gives, Envelope.toSearch(gives), parts);
+    }
+
+    /** The longest search review without its not-yet-known search record. */
+    public static long mostSentToReviewSearch(List<Payload.SearchPart> question, List<AskedField> gives) {
+        requireNonNull(question, "SendMeasure search parts must not be null");
+        requireNonNull(gives, "SendMeasure gives must not be null");
+        return measured(
+                PayloadMember.sentReviewSearch(true, false),
+                null,
+                List.of(),
+                gives,
+                Envelope.toReviewSearch(gives),
+                question);
     }
 
     private static long measured(
@@ -98,6 +121,17 @@ public final class SendMeasure {
             List<AskedField> takes,
             List<AskedField> gives,
             String envelope) {
+        return measured(sent, instruction, takes, gives, envelope, null);
+    }
+
+    private static long measured(
+            List<PayloadMember> sent,
+            @Nullable Instruction instruction,
+            List<AskedField> takes,
+            List<AskedField> gives,
+            String envelope,
+            @Nullable List<Payload.SearchPart> parts) {
+        LengthCache cache = new LengthCache();
         long payload = framed(EMPTY_OBJECT, sent.size());
         for (PayloadMember member : sent) {
             long most =
@@ -105,9 +139,12 @@ public final class SendMeasure {
                         case VERSION -> written(Payload.VERSION_WRITTEN);
                         case INSTRUCTION ->
                             written(new JsonString(requireNonNull(instruction).value()));
-                        case TAKES -> half(takes);
-                        case REFUSED -> refused(gives);
-                        case ANSWER -> half(gives);
+                        case QUESTION -> searchQuestion(requireNonNull(parts), cache);
+                        case TAKES -> half(takes, cache);
+                        case FOUND_ON_THE_WEB -> fromTheWeb(takes);
+                        case REFUSED -> refused(gives, cache);
+                        case SEARCH_RECORD -> throw new IllegalStateException("Search record length is not declared");
+                        case ANSWER -> half(gives, cache);
                         case DECIDING -> deciding(gives);
                     };
             payload = sum(payload, sum(named(member.written()), most));
@@ -115,40 +152,62 @@ public final class SendMeasure {
         return sum(envelope.codePointCount(0, envelope.length()), payload);
     }
 
-    private static long refused(List<AskedField> gives) {
-        long values = sum(named(PayloadMember.REFUSED_VALUES), half(gives));
-        long words = sum(named(PayloadMember.REFUSED_WORDS), words(gives));
-        return sum(framed(EMPTY_OBJECT, 2), sum(values, words));
-    }
-
-    /** Each field at its longest, or none where none is longer. */
-    private static long half(List<AskedField> fields) {
-        long length = framed(EMPTY_OBJECT, fields.size());
-        for (AskedField field : fields) {
-            length = sum(length, sum(named(field.name().value()), Math.max(NONE, longest(field))));
+    private static long searchQuestion(List<Payload.SearchPart> parts, LengthCache cache) {
+        long length = QUOTES;
+        for (Payload.SearchPart part : parts) {
+            long added =
+                    switch (part) {
+                        case Payload.SearchPart.LiteralPart literal -> literalLength(literal.text());
+                        case Payload.SearchPart.ValuePart from -> searchValue(from.field(), cache);
+                    };
+            length = sum(length, added);
         }
         return length;
     }
 
-    private static long words(List<AskedField> gives) {
-        long length = framed(EMPTY_OBJECT, gives.size());
-        for (AskedField field : gives) {
-            length = sum(length, sum(named(field.name().value()), WORST_WORDS));
+    private static long literalLength(String text) {
+        for (int index = 0; index < text.length(); index++) {
+            if (Character.isSurrogate(text.charAt(index)) && CanonicalJson.halfAPairAt(text, index)) {
+                throw new IllegalArgumentException("CanonicalJson refuses a text holding an unpaired surrogate");
+            }
         }
-        return length;
+        // Sent and stored JSON strings use the same escaping lengths.
+        return CanonicalJson.storedLength(new JsonString(text)) - QUOTES;
     }
 
-    private static long deciding(List<AskedField> gives) {
-        long length = framed(EMPTY_ARRAY, gives.size());
-        for (AskedField field : gives) {
-            length = sum(length, written(new JsonString(field.name().value())));
+    private static long searchValue(AskedField field, LengthCache cache) {
+        if (Payload.searchValueRaw(field)) {
+            return switch (field.kind()) {
+                case TEXT -> product(requireNonNull(field.longest()), WORST_CHARACTER);
+                case TERM -> longestRawTerm(requireNonNull(field.terms()), cache);
+                case DATE, MOMENT, FIELDS, NUMBER, YES_NO, FILE ->
+                    throw new IllegalStateException("Search value kind is not raw");
+            };
         }
-        return length;
+        if (field.most() == null) {
+            return embeddedOne(field, cache);
+        }
+        if (embeddedOne(field, cache) == 0) {
+            return 0;
+        }
+        return embedded(field, cache);
     }
 
-    /** The longest value of the field other than none, which is nothing where it could hold none other. */
-    private static long longest(AskedField field) {
-        long item = item(field);
+    private static long longestRawTerm(OfferedTerms offered, LengthCache cache) {
+        TermLengths lengths = cache.terms.computeIfAbsent(offered, ignored -> new TermLengths());
+        if (lengths.raw >= 0) {
+            return lengths.raw;
+        }
+        long longest = 0;
+        for (OfferedTerms.Offered term : offered.terms()) {
+            longest = Math.max(longest, written(new JsonString(term.term().value())) - QUOTES);
+        }
+        lengths.raw = longest;
+        return longest;
+    }
+
+    private static long embedded(AskedField field, LengthCache cache) {
+        long item = embeddedOne(field, cache);
         Integer most = field.most();
         if (most == null) {
             return item;
@@ -156,21 +215,173 @@ public final class SendMeasure {
         return item == 0 ? EMPTY_ARRAY : sum(framed(EMPTY_ARRAY, most), product(most, item));
     }
 
-    private static long item(AskedField field) {
+    private static long embeddedOne(AskedField field, LengthCache cache) {
         return switch (field.kind()) {
-            case TEXT -> sum(QUOTES, product(requireNonNull(field.longest()), WORST_CHARACTER));
-            case TERM -> longestTerm(requireNonNull(field.terms()));
-            case FIELDS -> half(field.fields());
-            case NUMBER, DATE, MOMENT, YES_NO -> written(field.kind().longestWritten());
+            case TEXT ->
+                sum(
+                        doubleWritten(new JsonString("")),
+                        product(requireNonNull(field.longest()), DOUBLE_WORST_CHARACTER));
+            case TERM -> longestDoubleTerm(requireNonNull(field.terms()), cache);
+            case FIELDS -> embeddedFields(field, cache);
+            case NUMBER, DATE, MOMENT, YES_NO -> doubleWritten(field.kind().longestWritten());
+            case FILE -> throw new IllegalArgumentException("A file is not sent to a model");
         };
     }
 
-    private static long longestTerm(OfferedTerms offered) {
+    private static long embeddedFields(AskedField outer, LengthCache cache) {
+        Long remembered = cache.embeddedFields.get(outer);
+        if (remembered != null) {
+            return remembered;
+        }
+        List<AskedField> fields = outer.fields();
+        long length = EMPTY_OBJECT;
+        boolean first = true;
+        for (AskedField field : fields) {
+            if (field.kind() == FieldKind.FILE) {
+                continue;
+            }
+            if (!first) {
+                length = sum(length, COMMA);
+            }
+            first = false;
+            long name = sum(doubleWritten(new JsonString(field.name().value())), COLON);
+            length = sum(length, sum(name, Math.max(doubleWritten(NOTHING), embedded(field, cache))));
+        }
+        cache.embeddedFields.put(outer, length);
+        return length;
+    }
+
+    private static long longestDoubleTerm(OfferedTerms offered, LengthCache cache) {
+        TermLengths lengths = cache.terms.computeIfAbsent(offered, ignored -> new TermLengths());
+        if (lengths.embedded >= 0) {
+            return lengths.embedded;
+        }
+        long longest = 0;
+        for (OfferedTerms.Offered term : offered.terms()) {
+            longest = Math.max(longest, doubleWritten(new JsonString(term.term().value())));
+        }
+        lengths.embedded = longest;
+        return longest;
+    }
+
+    private static long doubleWritten(JsonValue value) {
+        String once = CanonicalJson.write(value);
+        return written(new JsonString(once)) - QUOTES;
+    }
+
+    private static long fromTheWeb(List<AskedField> takes) {
+        long length = EMPTY_ARRAY;
+        boolean first = true;
+        for (AskedField field : takes) {
+            if (field.kind() == FieldKind.FILE) {
+                continue;
+            }
+            if (!first) {
+                length = sum(length, COMMA);
+            }
+            first = false;
+            length = sum(length, written(new JsonString(field.name().value())));
+        }
+        return length;
+    }
+
+    private static long refused(List<AskedField> gives, LengthCache cache) {
+        long values = sum(named(PayloadMember.REFUSED_VALUES), half(gives, cache));
+        long words = sum(named(PayloadMember.REFUSED_WORDS), words(gives));
+        return sum(framed(EMPTY_OBJECT, 2), sum(values, words));
+    }
+
+    /** Each field at its longest, or none where none is longer. */
+    private static long half(List<AskedField> fields, LengthCache cache) {
+        long length = EMPTY_OBJECT;
+        boolean first = true;
+        for (AskedField field : fields) {
+            if (field.kind() == FieldKind.FILE) {
+                continue;
+            }
+            if (!first) {
+                length = sum(length, COMMA);
+            }
+            first = false;
+            length = sum(length, sum(named(field.name().value()), Math.max(NONE, longest(field, cache))));
+        }
+        return length;
+    }
+
+    private static long words(List<AskedField> gives) {
+        long length = EMPTY_OBJECT;
+        boolean first = true;
+        for (AskedField field : gives) {
+            if (field.kind() == FieldKind.FILE) {
+                continue;
+            }
+            if (!first) {
+                length = sum(length, COMMA);
+            }
+            first = false;
+            length = sum(length, sum(named(field.name().value()), WORST_WORDS));
+        }
+        return length;
+    }
+
+    private static long deciding(List<AskedField> gives) {
+        long length = EMPTY_ARRAY;
+        boolean first = true;
+        for (AskedField field : gives) {
+            if (field.kind() == FieldKind.FILE) {
+                continue;
+            }
+            if (!first) {
+                length = sum(length, COMMA);
+            }
+            first = false;
+            length = sum(length, written(new JsonString(field.name().value())));
+        }
+        return length;
+    }
+
+    /** The longest value of the field other than none, which is nothing where it could hold none other. */
+    private static long longest(AskedField field, LengthCache cache) {
+        long item = item(field, cache);
+        Integer most = field.most();
+        if (most == null) {
+            return item;
+        }
+        return item == 0 ? EMPTY_ARRAY : sum(framed(EMPTY_ARRAY, most), product(most, item));
+    }
+
+    private static long item(AskedField field, LengthCache cache) {
+        return switch (field.kind()) {
+            case TEXT -> sum(QUOTES, product(requireNonNull(field.longest()), WORST_CHARACTER));
+            case TERM -> longestTerm(requireNonNull(field.terms()), cache);
+            case FIELDS -> half(field.fields(), cache);
+            case NUMBER, DATE, MOMENT, YES_NO -> written(field.kind().longestWritten());
+            case FILE -> throw new IllegalArgumentException("A file is not sent to a model");
+        };
+    }
+
+    private static long longestTerm(OfferedTerms offered, LengthCache cache) {
+        TermLengths lengths = cache.terms.computeIfAbsent(offered, ignored -> new TermLengths());
+        if (lengths.written >= 0) {
+            return lengths.written;
+        }
         long longest = 0;
         for (OfferedTerms.Offered term : offered.terms()) {
             longest = Math.max(longest, written(new JsonString(term.term().value())));
         }
+        lengths.written = longest;
         return longest;
+    }
+
+    private static final class LengthCache {
+        private final IdentityHashMap<OfferedTerms, TermLengths> terms = new IdentityHashMap<>();
+        private final IdentityHashMap<AskedField, Long> embeddedFields = new IdentityHashMap<>();
+    }
+
+    private static final class TermLengths {
+        private long raw = -1;
+        private long embedded = -1;
+        private long written = -1;
     }
 
     private static long framed(long empty, long members) {

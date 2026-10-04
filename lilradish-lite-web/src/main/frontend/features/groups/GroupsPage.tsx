@@ -20,7 +20,7 @@ import { BY_NAME, GROUP_SORTABLE, groupColumns } from "./groupColumns";
 import { RenameGroup } from "./RenameGroup";
 
 /** Where the page is. No address names a group on it: the estate cannot enter one. */
-export const GROUPS_PAGE = "/system/groups";
+export { GROUPS_PAGE } from "../../app/addresses";
 
 const SAID_SX = { mb: 1 };
 

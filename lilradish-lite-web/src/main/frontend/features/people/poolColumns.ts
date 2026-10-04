@@ -43,6 +43,7 @@ export function poolColumns() {
       label: say("person.groups"),
       cell: (person: PoolPerson) => person.groupCount,
       sortKey: "groupCount",
+      numeric: true,
     },
   ] as const;
 }

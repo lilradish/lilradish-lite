@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.libprunus.core.error.ApiErrorException
 import org.lilradish.lite.app.group.GroupRoles
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.registry.EntryKind
@@ -21,10 +22,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A draft pinning a version of another entry, on a real server running the real baseline: a workflow's
- * draft whose step runs a question stands in for whatever pins a version.
- */
+
 class OpenDraftIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000801"
@@ -114,7 +112,7 @@ class OpenDraftIntegrationSpec extends Specification {
         store.texts("select pinned_version_id || ' ' || pinned_kind from workflow_steps") == ["${IN_SERVICE} question" as String]
     }
 
-    /** Another group's version is refused whatever its standing, alike with one that is not there at all. */
+
     def "every version not this group's or not in service is refused alike, whether it exists or not"() {
         given:
         def before = store.contents()
@@ -136,6 +134,7 @@ class OpenDraftIntegrationSpec extends Specification {
     def "pinning a version waits on its retirement, and is refused where the retirement lands"() {
         given:
         store.repeatableReadByDefault()
+        // DB-SPECIFIC: PostgreSQL now().
         def retiring = store.holding("update entry_versions set retired_at = now(), retired_by = '${FIRST_STEWARD}'," +
                 " retired_by_kind = 'person' where entry_version_id = '${IN_SERVICE}'")
 
@@ -155,14 +154,14 @@ class OpenDraftIntegrationSpec extends Specification {
         retirementLands << [true, false]
     }
 
-    /** What a draft pinned while it was in service goes on pinning it once it is retired. */
+
     def "retiring a version waits on a draft pinning it until that draft's change ends"() {
         given:
         def pinned = new CountDownLatch(1)
         def release = new CountDownLatch(1)
         def retirements = new VersionChanges(store.session, store.transactions(), new GroupRoles(store.session),
-                new ContentChecks(store.session, [new QuestionContentCheck(store.session), new WorkflowContentCheck(store.session, LibraryStore.MODELS,
-                                   new ReleasedCodeSteps(LibraryStore.CODE_STEPS)),
+                new ContentChecks(store.session, [new QuestionContentCheck(store.session, LibraryStore.FILES), new WorkflowContentCheck(store.session, LibraryStore.MODELS,
+                                   new ReleasedCodeSteps(LibraryStore.CODE_STEPS), LibraryStore.FILES, new SearchWays([])),
                                    new ReferenceListContentCheck(store.session)]))
 
         when:
@@ -185,6 +184,7 @@ class OpenDraftIntegrationSpec extends Specification {
         pinning.get(10, TimeUnit.SECONDS) == true
         retiring.get(10, TimeUnit.SECONDS) == null
         retiredWhilePinned == 1
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select pinned_version_id::text from workflow_steps") == [IN_SERVICE]
         store.count("select count(*) from entry_versions where retired_at is not null") == 2
     }
@@ -239,16 +239,18 @@ class OpenDraftIntegrationSpec extends Specification {
         refused.message == "OpenDraft was asked after the change writing it had ended"
     }
 
-    /** Named at whatever revision the draft stands at, so no write here is refused for another's. */
+
     private Object write(Closure content) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         int seen = store.count("select revision from entry_versions where entry_version_id = ?::uuid", DRAFT)
         drafts.write(groupId(GROUP), EntryKind.WORKFLOW, entryId(WORKFLOW), versionId(DRAFT), ANN_USER, seen,
                 content as DraftContent)
     }
 
-    /** What a kind's pin writer does: asks the draft whether the finding is its own, then writes the pin. */
+
     private void step(OpenDraft draft, OpenDraft.PinnableVersion pinned) {
         draft.requireIssued(pinned)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, entry_kind.
         store.session.sql("""
                 insert into workflow_steps (workflow_step_id, entry_version_id, position, name, kind,
                                             pinned_version_id, pinned_kind, created_by)

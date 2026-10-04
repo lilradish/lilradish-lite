@@ -17,6 +17,7 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.inference.TurnAway
 import org.lilradish.lite.domain.run.Ceiling
@@ -38,12 +39,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A run held to its ceiling, on a real server running the real baseline, the model scripted: checked as a try is
- * written down as sent and as a call turned away would be sent again, the run stopped by the system naming whose
- * ceiling it was, and nothing sent once it is reached; the call that crosses it is made and counted as any other.
- * The model named here gives back at most 4,000, which is what a call still out counts beyond what it sent.
- */
 class RunCeilingIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -85,18 +80,21 @@ class RunCeilingIntegrationSpec extends Specification {
         store = LibraryStore.copied(server, "run_ceiling_" + (++databasesMade))
         model = new RecordedModelCalls()
         tree = new RunTree(store.session)
-        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
         writes = new EngineWrites(store.session)
         executor = EngineExecutors.of(store.database)
         def ceilings = new CeilingReach(store.session, DeployedModels.HELD, writes)
+        def heldFiles = EngineWiring.files(store)
         engine = new RunEngine(store.session, store.transactions(), tree, snapshots, writes, executor,
-                new EngineCalls(model, store.transactions(), tree, writes, ceilings),
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                DeployedModels.HELD, ceilings, new GroupRoles(store.session))
+                new EngineCalls(EngineWiring.withoutTools(), model, store.transactions(), tree, writes, ceilings, snapshots, heldFiles),
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                DeployedModels.HELD, ceilings, new GroupRoles(store.session), Deployments.DEEP_ENOUGH, heldFiles)
         def roles = new GroupRoles(store.session)
         changes = new RunChanges(store.session, store.transactions(), roles, tree, snapshots, engine)
-        acts = new StepActs(store.session, store.transactions(), roles, tree, snapshots, writes, engine)
+        acts = new StepActs(store.session, store.transactions(), roles, tree, snapshots, writes, engine,
+                heldFiles, EngineWiring.fileDeployment())
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
@@ -111,18 +109,16 @@ class RunCeilingIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer) {
-        new CallOutcome.CameBack(answer, 321, 12, true, false)
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
     }
 
     private void ceilingOf(long ceiling) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update workflow_versions set ceiling = ? where entry_version_id = ?::uuid")
                 .params(ceiling, VERSION).update()
     }
 
-    /**
-     * As a start does, the run having spent {@code spent} already on a call to its helper that came back, 700
-     * sent and the rest back: the run written, its tree locked, the first step planned, in one transaction.
-     */
+    // Write the run, lock its tree, and plan its first step in one transaction.
     private void started(long spent = 0) {
         store.transactions().executeWithoutResult {
             StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, TicketWorkflow.STARTED_WITH)
@@ -148,7 +144,7 @@ class RunCeilingIntegrationSpec extends Specification {
         drained()
     }
 
-    /* A thread takes the next task only once its last has run, so all meeting here ran everything handed before. */
+    // Each worker reaches the barrier only after finishing the tasks already handed to it.
     private void drained() {
         int threads = executor.@pool.corePoolSize
         def meeting = new CyclicBarrier(threads + 1)
@@ -156,8 +152,8 @@ class RunCeilingIntegrationSpec extends Specification {
         meeting.await(10, TimeUnit.SECONDS)
     }
 
-    /** Each stop of the run as who made it, whose ceiling it names and its author, and whether it still holds. */
     private List<String> stops() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select stop.created_by_kind || ' ' || coalesce(stop.ceiling_run_id::text, '-') || ' ' || stop.created_by
                        || ' ' || case when stop.opened_again_at is null then 'in force' else 'opened' end
@@ -165,18 +161,18 @@ class RunCeilingIntegrationSpec extends Specification {
                 """)
     }
 
-    /** Each try of summarise as its number, producer, who asked for it, and whether it is open. */
     private List<String> tries() {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
-                select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
+                select coalesce(try.try_number::text, '-') || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open' else 'ended' end
                   from productions try join run_steps held on held.run_step_id = try.run_step_id
                  where held.workflow_step_id = ?::uuid order by try.try_number
                 """, SUMMARISE)
     }
 
-    /** Each call about a try, as how it stands, what it sent and what came back. */
     private List<String> modelCalls() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select coalesce(call.outcome::text, 'out') || ' ' || call.sent_count || ' '
                        || coalesce(call.came_back_count::text, '-')
@@ -204,10 +200,10 @@ class RunCeilingIntegrationSpec extends Specification {
         then:
         stops() == ["${CEILING_STOP} in force" as String]
         read().state() == RunState.STOPPED
-        read().stop().by() == new Runs.Stopper.ByCeiling(new Runs.NumberedRun(runId(), 1))
+        read().stop().by() == new Runs.Stopper.ByCeiling([new Runs.NumberedRun(runId(), 1)])
 
         and: "the try left open and unsent, nothing written of its sending and nothing sent"
-        tries() == ["1 model ${SYSTEM} open" as String]
+        tries() == ["- model ${SYSTEM} open" as String]
         modelCalls() == []
         store.count("select count(*) from run_step_send_attempts") == 0
         summarise() == new StepPosition.Running(RunningOn.NEXT_TRY)
@@ -225,7 +221,7 @@ class RunCeilingIntegrationSpec extends Specification {
         drained()
 
         then:
-        RunBudget.spentAsRead(store.session, runId(), true) == new RunBudget.Spend(1021, 82, false, true)
+        RunBudget.spentAsRead(store.session, runId(), true) == new RunBudget.Spend(1021, 82, false, 1, 2)
         tries() == ["1 model ${SYSTEM} ended" as String]
         model.scripted.requests.size() == 1
 
@@ -250,7 +246,7 @@ class RunCeilingIntegrationSpec extends Specification {
         model.scripted.requests == []
 
         when:
-        changes.changeCeiling(groupId(GROUP), runId(), new Ceiling(5000), ANN_USER)
+        changes.changeCeiling(groupId(GROUP), runId(), runId(), new Ceiling(5000), ANN_USER)
         changes.openAgain(groupId(GROUP), runId(), ANN_USER)
         until("the call ended") { modelCalls() == ["came_back 321 12"] }
         drained()
@@ -260,7 +256,6 @@ class RunCeilingIntegrationSpec extends Specification {
         stops() == ["${CEILING_STOP} opened" as String] * 2
     }
 
-    /** The first call leaves the run at 1,103 of 1,000, which nothing checks until something is to be sent. */
     def "asking a model again under a ceiling reached writes the person's try, then stops the run rather than sending it"() {
         given:
         ceilingOf(1000)
@@ -277,21 +272,17 @@ class RunCeilingIntegrationSpec extends Specification {
         untilStoppedByCeiling(1)
 
         then: "the try the person's, open and unsent"
-        tries() == ["1 model ${SYSTEM} ended" as String, "2 model ${ANN} open" as String]
+        tries() == ["1 model ${SYSTEM} ended" as String, "- model ${ANN} open" as String]
         summarise() == new StepPosition.Running(RunningOn.NEXT_TRY)
         store.count("select count(*) from run_step_send_attempts") == 1
 
         and: "stopped once by the ceiling, and nothing sent for it"
         stops() == ["${CEILING_STOP} in force" as String]
-        read().stop().by() == new Runs.Stopper.ByCeiling(new Runs.NumberedRun(runId(), 1))
+        read().stop().by() == new Runs.Stopper.ByCeiling([new Runs.NumberedRun(runId(), 1)])
         modelCalls() == ["came_back 321 12"]
         model.scripted.requests.size() == 1
     }
 
-    /**
-     * A call to the helper still out is made while the model's is paused: 700 sent and 4,000 more it may come to.
-     * The model's own call, out too, would add more again, but is left out of its own check.
-     */
     def "a call turned away is sent again only while what the tree spent, less that call, stays under the ceiling: #ceiling"() {
         given:
         ceilingOf(ceiling)
@@ -307,12 +298,14 @@ class RunCeilingIntegrationSpec extends Specification {
         drained()
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text from model_calls where production_id is not null") == [ended]
         store.texts("select case when resent_at is null then 'not sent again' else 'sent again' end from model_call_turnaways") ==
                 [turnaway]
         model.scripted.events.count { it == ScriptedModelCalls.SENT } == sends
 
         and: "held and stopped exactly where it was not sent again"
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select reason || ' ' || coalesce(released_at::text, 'held') from run_step_holds") == holds
         stops() == stopped
 

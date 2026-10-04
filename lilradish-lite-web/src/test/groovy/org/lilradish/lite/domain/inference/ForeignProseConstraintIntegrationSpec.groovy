@@ -7,10 +7,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What cleaning leaves, judged by the schema's own checks on the columns it is stored in, read back
- * off a real server rather than copied here, so a check that changes is judged as it now stands.
- */
+/** Read the live schema check so changes are tested against the stored rule. */
 class ForeignProseConstraintIntegrationSpec extends Specification {
 
     @Shared
@@ -26,6 +23,7 @@ class ForeignProseConstraintIntegrationSpec extends Specification {
 
     def "every code point having been through cleaning, what is left passes #constraint"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to regnamespace; pg_constraint; pg_get_constraintdef().
         def condition = session.sql("""
                 select pg_get_constraintdef(oid) from pg_constraint
                 where conname = ? and connamespace = 'app'::regnamespace and contype = 'c'
@@ -55,7 +53,7 @@ class ForeignProseConstraintIntegrationSpec extends Specification {
                 .param(text).query(Boolean).single()
     }
 
-    /** Every code point, in pieces short enough to be kept whole, NUL included, lone surrogates among them. */
+
     private static List<String> everyCodePointInChunks() {
         (0..Character.MAX_CODE_POINT).collate(1000).collect { chunk ->
             def builder = new StringBuilder()

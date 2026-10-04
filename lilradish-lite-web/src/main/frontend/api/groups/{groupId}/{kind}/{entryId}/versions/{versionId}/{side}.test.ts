@@ -71,6 +71,7 @@ const WORKFLOW = {
     questions: [],
     workflows: [],
     codeSteps: [],
+    searchWays: [],
     models: [],
   },
   terms: {},

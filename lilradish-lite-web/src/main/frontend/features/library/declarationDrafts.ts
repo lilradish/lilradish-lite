@@ -1,11 +1,23 @@
-import type {
-  DeclaredField,
+import {
+  fileTypeFits,
+  MOST_FILE_TYPES,
+  type DeclaredField,
   FieldKind,
   FieldStanding,
   SentField,
+  type TextLines,
 } from "../../api/declaration";
 import type { MessageId } from "../../i18n/app";
 import { fieldNameFits, labelFits, lineFits } from "../../lib/text/legibility";
+
+export type FileSizeUnit = "bytes" | "KB" | "MB" | "GB";
+
+export const FILE_SIZE_UNITS = {
+  bytes: 1,
+  KB: 1024,
+  MB: 1024 ** 2,
+  GB: 1024 ** 3,
+} as const satisfies Record<FileSizeUnit, number>;
 
 /**
  * One field as typed, "" where nothing is. What its kind or depth does not take is kept, so switching back
@@ -21,8 +33,12 @@ export interface DraftField {
   readonly help: string;
   readonly kind: FieldKind;
   readonly longest: string;
+  readonly lines: TextLines;
   /** The version a field of terms pins, by its identifier. */
   readonly list: string;
+  readonly fileTypes: string;
+  readonly fileSize: string;
+  readonly fileSizeUnit: FileSizeUnit;
   readonly many: boolean;
   readonly most: string;
   readonly mustBeGiven: boolean;
@@ -77,7 +93,10 @@ export function draftOf(field: DeclaredField): DraftField {
     help: field.help ?? "",
     kind: field.kind,
     longest: field.longest?.toString() ?? "",
+    lines: field.lines ?? "several",
     list: field.list?.versionId ?? "",
+    fileTypes: field.types?.join("\n") ?? "",
+    ...fileSizeOf(field.maximumBytes),
     many: field.many,
     most: field.most?.toString() ?? "",
     mustBeGiven: field.mustBeGiven,
@@ -97,7 +116,11 @@ export function freshDraft(key: string): DraftField {
     help: "",
     kind: "text",
     longest: "",
+    lines: "one",
     list: "",
+    fileTypes: "",
+    fileSize: "",
+    fileSizeUnit: "bytes",
     many: false,
     most: "",
     mustBeGiven: true,
@@ -129,9 +152,17 @@ export function sentOf(
     kind: draft.kind,
     many: draft.many,
     most: draft.many ? numberOf(draft.most) : null,
-    ...(draft.kind === "text" ? { longest: numberOf(draft.longest) } : {}),
+    ...(draft.kind === "text"
+      ? { longest: numberOf(draft.longest), lines: draft.lines }
+      : {}),
     ...(draft.kind === "term"
       ? { list: draft.list === "" ? null : draft.list }
+      : {}),
+    ...(draft.kind === "file"
+      ? {
+          types: fileTypesOf(draft.fileTypes),
+          maximumBytes: fileBytesOf(draft.fileSize, draft.fileSizeUnit),
+        }
       : {}),
     ...(draft.kind === "fields"
       ? { fields: draft.fields.map((held) => sentOf(held, demands, false)) }
@@ -206,6 +237,17 @@ function heldForOne(draft: DraftField, demand: DemandKind): MessageId | null {
   ) {
     return "declaration.limit";
   }
+  if (draft.kind === "file") {
+    if (fileTypesTooMany(draft.fileTypes)) {
+      return "refusal.FILE_TYPES_TOO_MANY";
+    }
+    if (!fileTypesFit(draft.fileTypes)) {
+      return "declaration.fileTypesInvalid";
+    }
+    if (!fileSizeFits(draft.fileSize, draft.fileSizeUnit)) {
+      return "refusal.FILE_SIZE_LIMIT_UNUSABLE";
+    }
+  }
   if (
     demand === "stands" &&
     draft.stands === "above_confidence" &&
@@ -214,6 +256,67 @@ function heldForOne(draft: DraftField, demand: DemandKind): MessageId | null {
     return "declaration.floorLimit";
   }
   return null;
+}
+
+export function fileTypesTooMany(typed: string): boolean {
+  let count = 1;
+  for (
+    let index = typed.indexOf("\n");
+    index >= 0;
+    index = typed.indexOf("\n", index + 1)
+  ) {
+    if (++count > MOST_FILE_TYPES) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function fileTypesFit(typed: string): boolean {
+  if (fileTypesTooMany(typed)) {
+    return false;
+  }
+  const types = fileTypesOf(typed);
+  return (
+    types.length > 0 &&
+    types.every(fileTypeFits) &&
+    new Set(types).size === types.length
+  );
+}
+
+export function fileTypesOf(typed: string): string[] {
+  return typed.split("\n").map((type) => type.trim().toLowerCase());
+}
+
+export function fileSizeFits(typed: string, unit: FileSizeUnit): boolean {
+  return (
+    (typed === "" || WHOLE.test(typed)) &&
+    Number.isSafeInteger(Number(typed) * FILE_SIZE_UNITS[unit])
+  );
+}
+
+export function fileBytesOf(typed: string, unit: FileSizeUnit): number | null {
+  return typed !== "" && fileSizeFits(typed, unit)
+    ? Number(typed) * FILE_SIZE_UNITS[unit]
+    : null;
+}
+
+export function fileSizeOf(bytes: number | undefined): {
+  fileSize: string;
+  fileSizeUnit: FileSizeUnit;
+} {
+  if (bytes === undefined) {
+    return { fileSize: "", fileSizeUnit: "bytes" };
+  }
+  for (const unit of ["GB", "MB", "KB"] as const) {
+    if (bytes % FILE_SIZE_UNITS[unit] === 0) {
+      return {
+        fileSize: String(bytes / FILE_SIZE_UNITS[unit]),
+        fileSizeUnit: unit,
+      };
+    }
+  }
+  return { fileSize: String(bytes), fileSizeUnit: "bytes" };
 }
 
 /** Nothing typed is a limit not chosen yet, which is sent as none. */

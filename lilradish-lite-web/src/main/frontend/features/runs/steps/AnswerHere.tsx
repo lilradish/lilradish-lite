@@ -2,9 +2,27 @@ import Box from "@mui/material/Box";
 import Button, { buttonClasses } from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
-import type { FillField, FillValues } from "../../../api/filling";
+import {
+  isFileValue,
+  type FillField,
+  isWithheldLeaf,
+  type FillValue,
+  type FillValues,
+  type ReadField,
+  type ShownValue,
+  type ShownValues,
+} from "../../../api/filling";
 import type { StepRow } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import {
   readStep,
@@ -24,20 +42,22 @@ import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
-import { ACTS_SX, QUIET_SX } from "../../../lib/layout/parts";
+import { ACTS_SX, QUIET_SX, SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
 import { useAction } from "../../../lib/request/useAction";
+import { withoutMarkedIn } from "../../../lib/text/hidden";
 import { reasonRefused } from "../../../lib/text/legibility";
 import { STEP_ACT_RULES } from "../actRules";
+import { useRunReadAccess } from "../RunReadAccess";
 import { FillForm, placeId } from "../fill/FillForm";
 import { draftFrom } from "../fill/fillDrafts";
 import { useFillDraft } from "../fill/useFillDraft";
+import { DecisionDrawn } from "./DecisionDrawn";
 import { declaredFor, type Declaring } from "./declared";
 import { actedFirstSaid, movedOnNotice, staleFor } from "./movedOn";
-import { REASON_WORDS, decisionSaid, standingSaid } from "./stepStates";
+import { REASON_WORDS, standingSaid } from "./stepStates";
 import { WentInValues } from "./WentInValues";
-
-const PART_SX = { mt: 2 };
+import { SearchText } from "./SearchRecord";
 
 const STARTS_SX = { ...QUIET_SX, mt: 2 };
 
@@ -68,12 +88,7 @@ interface ReasonRefused {
   readonly words: string | null;
 }
 
-/**
- * Answer it here, drawn only where the step offers it the reader: a button, which reads the step where the try it
- * owes is not in hand, then opens the instruction, what went in, and one control per value it gives, started from
- * the try refused before it with the words each value was refused with; and why. The step the answer is answered
- * with is handed to `onShown`, as is the step read again once an answer is refused as changed since it was read.
- */
+// Keep a person's draft and focus while a newer read still describes the same owed try.
 export function AnswerHere({
   groupId,
   runId,
@@ -98,7 +113,7 @@ export function AnswerHere({
   readonly declaring: Declaring;
   /** Whether what went in is drawn beside it already, as the step's own page draws it. */
   readonly wentInDrawn: boolean;
-  readonly heading: "h3" | "h4";
+  readonly heading: "h2" | "h3";
   /** The element the keyboard goes to once the answer's answer is shown, as the form goes with it. */
   readonly landsOn: string;
   readonly onShown: (answer: StepAnswer) => void;
@@ -109,6 +124,7 @@ export function AnswerHere({
   const reasonId = useId();
   const noticeId = useId();
   const reloadStanding = useStandingRead().reload;
+  const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const keyboardWithin = useRef(false);
   const wasDrawn = useRef(false);
@@ -132,8 +148,16 @@ export function AnswerHere({
   const answering = read?.answering;
   const gives = answering?.gives ?? NONE_GIVEN;
   const key = keyOf(answering);
-  const draft = useFillDraft(gives, key, () =>
-    draftFrom(gives, lastGiven(answering)),
+  const given = useMemo(() => lastGiven(answering), [answering]);
+  const beside = useMemo(
+    () => refusedBeside(answering, given.leftOut),
+    [answering, given],
+  );
+  const draft = useFillDraft(
+    gives,
+    key,
+    () => draftFrom(gives, given.values),
+    true,
   );
   const [why, setWhy] = useState("");
   const [whyTried, setWhyTried] = useState(false);
@@ -216,7 +240,9 @@ export function AnswerHere({
       }
       if (refusedAsChanged(problem)) {
         rereading.run((signal) =>
-          readStep(groupId, runId, step.stepId, signal),
+          access.read(signal, () =>
+            readStep(groupId, runId, step.stepId, signal),
+          ),
         );
       }
       if (!refusedAsMovedOn(problem)) {
@@ -287,7 +313,11 @@ export function AnswerHere({
     } else if (owes(opened?.answer, step)) {
       opening(opened.answer);
     } else {
-      reading.run((signal) => readStep(groupId, runId, step.stepId, signal));
+      reading.run((signal) =>
+        access.read(signal, () =>
+          readStep(groupId, runId, step.stepId, signal),
+        ),
+      );
     }
   };
 
@@ -302,7 +332,11 @@ export function AnswerHere({
       runId,
       step.stepId,
       number,
-      draft.values,
+      {
+        values: draft.values,
+        uploads: draft.uploads,
+        hasFilePositions: draft.hasFilePositions,
+      },
       why,
       signal,
     );
@@ -357,14 +391,14 @@ export function AnswerHere({
         })
       : null;
   const declared = declaredFor(step, declaring.declarations);
-  const variant = heading === "h3" ? "h6" : "subtitle1";
   const lastRefused = answering?.lastRefused;
 
   return (
     <>
       {!offered ? null : (
-        <Box sx={PART_SX}>
+        <Box sx={SPACED_ABOVE_SX}>
           <Button
+            variant="contained"
             aria-expanded={drawn}
             aria-controls={drawn ? sectionId : undefined}
             aria-disabled={reading.running || undefined}
@@ -379,8 +413,12 @@ export function AnswerHere({
         </Box>
       )}
       {!drawn || wentInDrawn || read?.wentIn === undefined ? null : (
-        <Box component="section" aria-labelledby={wentInId} sx={PART_SX}>
-          <Typography id={wentInId} variant={variant} component={heading}>
+        <Box
+          component="section"
+          aria-labelledby={wentInId}
+          sx={SPACED_ABOVE_SX}
+        >
+          <Typography id={wentInId} variant={heading}>
             {say("step.wentIn")}
           </Typography>
           {read.wentInFrom === "not_yet_sent" ? (
@@ -392,6 +430,8 @@ export function AnswerHere({
             wentIn={read.wentIn}
             takes={declared?.takes}
             declaring={declaring}
+            drawing={read.drawing}
+            under={heading}
           />
         </Box>
       )}
@@ -400,7 +440,7 @@ export function AnswerHere({
           component="section"
           id={sectionId}
           aria-labelledby={headingId}
-          sx={PART_SX}
+          sx={SPACED_ABOVE_SX}
           onFocus={() => {
             keyboardWithin.current = true;
           }}
@@ -410,11 +450,11 @@ export function AnswerHere({
             keyboardWithin.current = false;
           }}
         >
-          <Typography id={headingId} variant={variant} component={heading}>
+          <Typography id={headingId} variant={heading}>
             {say("step.yourAnswer")}
           </Typography>
           {answering.instruction === undefined ? null : (
-            <Box sx={PART_SX}>
+            <Box sx={SPACED_ABOVE_SX}>
               <Typography variant="subtitle2" component="p">
                 {say("step.theInstruction")}
               </Typography>
@@ -423,13 +463,32 @@ export function AnswerHere({
               </Typography>
             </Box>
           )}
+          {answering.searchQuestion === undefined ? null : "withheld" in
+            answering.searchQuestion ? (
+            <Typography variant="body2">
+              {say("step.searchWithheld")}
+            </Typography>
+          ) : (
+            <Box sx={SPACED_ABOVE_SX}>
+              <Typography variant="subtitle2" component="p">
+                {say("hand.searchQuestion")}
+              </Typography>
+              {answering.searchQuestion.sent ? null : (
+                <Typography variant="body2" sx={QUIET_SX}>
+                  {say("step.notYetSent")}
+                </Typography>
+              )}
+              <SearchText text={answering.searchQuestion.text} />
+            </Box>
+          )}
           {lastRefused === undefined ? null : (
             <Typography variant="body2" sx={STARTS_SX}>
               {say("step.startsFromTry", { number: lastRefused.number })}
             </Typography>
           )}
-          <Box sx={PART_SX}>
+          <Box sx={SPACED_ABOVE_SX}>
             <FillForm
+              key={key}
               formId={draft.formId}
               fields={gives}
               draft={draft.fill}
@@ -437,7 +496,7 @@ export function AnswerHere({
               onLeave={draft.onLeave}
               onUnread={draft.onUnread}
               marks={draft.marks}
-              beside={refusedBeside(answering)}
+              beside={beside}
             />
           </Box>
           <TextField
@@ -457,10 +516,11 @@ export function AnswerHere({
             multiline
             minRows={2}
             fullWidth
-            sx={PART_SX}
+            sx={SPACED_ABOVE_SX}
           />
-          <Box sx={{ ...ACTS_SX, ...PART_SX }}>
+          <Box sx={{ ...ACTS_SX, ...SPACED_ABOVE_SX }}>
             <ActButton
+              variant="contained"
               action={{ ...sending, run }}
               waiting={rereading.running || held}
               act={act}
@@ -484,7 +544,7 @@ export function AnswerHere({
       noticed === null &&
       readRefusal === null &&
       rereadRefusal === null ? null : (
-        <Box id={noticeId} tabIndex={-1} sx={PART_SX}>
+        <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
           {overtaken === null ? null : (
             <Notice severity="info" alert>
               {overtaken.words}
@@ -531,30 +591,92 @@ function keyOf(answering: Answering | undefined): string {
 }
 
 /**
- * Every value the try refused before gave, assured ones too, as each is given again; none withheld from the reader,
- * and none kept in a shape the step no longer has, which no field now drafts.
+ * Every value the try refused before gave, assured ones too, as each is given again, less every character drawing
+ * it would mark, and how many it left out of each; none withheld from the reader, and none kept in a shape the step
+ * no longer has, which no field now drafts.
  */
-function lastGiven(answering: Answering | undefined): FillValues {
-  return Object.fromEntries(
-    (answering?.lastRefused?.values ?? []).flatMap((each) =>
-      "value" in each ? [[each.field, each.value]] : [],
-    ),
+function lastGiven(answering: Answering | undefined): {
+  readonly values: FillValues;
+  readonly leftOut: ReadonlyMap<string, number>;
+} {
+  const leftOut = new Map<string, number>();
+  const values = Object.fromEntries(
+    (answering?.lastRefused?.values ?? []).flatMap((each) => {
+      if (!("value" in each)) {
+        return [];
+      }
+      const field = answering?.gives.find((given) => given.name === each.field);
+      const kept = keptOf(each.value, field);
+      if (kept.leftOut > 0) {
+        leftOut.set(each.field, kept.leftOut);
+      }
+      return [[each.field, kept.value]];
+    }),
   );
+  return { values, leftOut };
+}
+
+/**
+ * A value with every text in it as `withoutMarkedIn` keeps it, each line ending in a line feed alone as a control
+ * takes it, and how many characters it left out of them all.
+ */
+function keptOf(
+  value: ShownValue,
+  field: ReadField | undefined,
+): {
+  readonly value: FillValue;
+  readonly leftOut: number;
+} {
+  if (isWithheldLeaf(value)) {
+    return { value: null, leftOut: 0 };
+  }
+  if (value === null || isFileValue(value)) {
+    return { value, leftOut: 0 };
+  }
+  if (typeof value === "string") {
+    const { kept, leftOut } = withoutMarkedIn(value);
+    // Only once what is marked is left out: rewritten first, a carriage return before one ending a line takes its
+    // place there, never counted.
+    return { value: kept.replaceAll("\r\n", "\n"), leftOut };
+  }
+  let leftOut = 0;
+  const keep = (each: ShownValue, declared: ReadField | undefined) => {
+    const kept = keptOf(each, declared);
+    leftOut += kept.leftOut;
+    return kept.value;
+  };
+  const kept = Array.isArray(value)
+    ? value.map((each) => keep(each, field))
+    : Object.fromEntries(
+        Object.entries(value as ShownValues).map(([name, each]) => [
+          name,
+          keep(
+            each,
+            field?.kind === "fields"
+              ? field.fields?.find((child) => child.name === name)
+              : undefined,
+          ),
+        ]),
+      );
+  return { value: kept, leftOut };
 }
 
 /**
  * What is said of each value of the try refused before, by its field: that it is withheld from the reader, or was
  * kept in a shape the step no longer has, and the words it was refused with; one refused for its length says so
- * whatever its review said.
+ * whatever its review said. Then how many characters were left out of what it starts filled with, where any were.
  */
-function refusedBeside(answering: Answering): ReadonlyMap<string, string> {
-  const lastRefused = answering.lastRefused;
+function refusedBeside(
+  answering: Answering | undefined,
+  leftOut: ReadonlyMap<string, number>,
+): ReadonlyMap<string, ReactNode> {
+  const lastRefused = answering?.lastRefused;
   if (lastRefused === undefined) {
     return new Map();
   }
   return new Map(
     lastRefused.values.flatMap((each) => {
-      const said: string[] = [];
+      const said: ReactNode[] = [];
       if ("withheld" in each) {
         said.push(say("step.lastWithheld", { number: lastRefused.number }));
       } else if ("asKept" in each) {
@@ -564,12 +686,30 @@ function refusedBeside(answering: Answering): ReadonlyMap<string, string> {
         said.push(standingSaid(each.now));
       } else if (each.now === "refused") {
         said.push(
-          each.decision === undefined
-            ? standingSaid(each.now)
-            : decisionSaid(each.decision),
+          each.decision === undefined ? (
+            standingSaid(each.now)
+          ) : (
+            <DecisionDrawn decision={each.decision} />
+          ),
         );
       }
-      return said.length === 0 ? [] : [[each.field, said.join(" ")] as const];
+      const left = leftOut.get(each.field);
+      if (left !== undefined) {
+        said.push(say("step.prefillLeftOut", { count: left }));
+      }
+      return said.length === 0
+        ? []
+        : [
+            [
+              each.field,
+              said.map((part, at) => (
+                <Fragment key={at}>
+                  {at === 0 ? null : " "}
+                  {part}
+                </Fragment>
+              )),
+            ] as const,
+          ];
     }),
   );
 }

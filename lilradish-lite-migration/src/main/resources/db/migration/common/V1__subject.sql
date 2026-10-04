@@ -1,40 +1,14 @@
--- DB-SPECIFIC, for every migration and development seed. Concepts that port, spelt otherwise elsewhere:
---   timestamptz
---   text
---   uuid, and uuidv7() as a time-ordered default for it
---   now()
---   partial indexes, unique or not
---   stored generated columns
---   on conflict do nothing / do update
---   the regex operators ~ and !~, and \uwxyz escapes inside a pattern, elsewhere only in recent versions
---   U&'' literals
---   immutable, strict and parallel safe, and a SQL-standard function body
---   boolean
---   jsonb, elsewhere only in recent versions, and jsonb_typeof()
---   is distinct from, elsewhere only in recent versions
---   the is json predicate, elsewhere a function
---   num_nonnulls
---   unique nulls not distinct
---   length(), counting characters, where elsewhere a length may drop trailing spaces or count code units
---   || as concatenation, and chr()
---   a foreign key listing its target's columns in another order than the target key declares them
--- Constructs that may have no counterpart:
---   enum types
---   deferrable unique constraints, checked when the transaction commits
---   every now() in one transaction is equal
---   :: casts
---   a unique over a nullable column admitting any number of nulls, where elsewhere it may admit one
---   a comparison used as a value inside a check, as in (a is null) = (b is null)
---   regex bracket ranges taken as code points, where elsewhere a range may follow the collation
---   casefold, normalize and the pg_unicode_fast collation
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type subject_kind as enum ('person', 'system', 'seeder');
 
 -- The one definition of how held text and typed text are compared, which every stored fold and every
 -- search goes through. Stable only within a server major version: every stored fold is computed again after one.
+-- DB-SPECIFIC: normalize(), casefold(), collate pg_unicode_fast, immutable, strict, parallel safe, language sql and text use PostgreSQL's syntax and semantics.
 create function search_fold(text) returns text
     language sql immutable strict parallel safe
     return normalize(casefold(normalize($1 collate pg_unicode_fast, NFD)), NFC);
 
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table subjects (
     -- No default: this key is minted before there is a row for it to name.
     subject_id    uuid         not null,
@@ -58,8 +32,7 @@ create table subjects (
     -- Ranges rather than [[:cntrl:]], classified per platform and per locale. \uwxyz is exactly
     -- four hexadecimal digits, where \xhhh is one character however many digits follow and so
     -- swallows whatever hexadecimal is written next to it; escaped rather than typed, so no invisible
-    -- character is written into the check that refuses it. The domain holds the rest of the rule,
-    -- which is versioned by Unicode and so cannot be kept level from in here.
+    -- character is written into the check that refuses it.
     constraint subjects_user_id_visible check (
         user_id is null
             or (length(user_id) > 0
@@ -81,8 +54,5 @@ create table subjects (
 insert into subjects (subject_id, kind, created_by) values
     ('00000000-0000-4000-8000-000000000000', 'seeder', '00000000-0000-4000-8000-000000000000');
 
--- This row pairs with a constant compiled into the application. Neither side can see the other, and
--- a test holds them level — editing one alone reddens there rather than at the first act recorded
--- against a system actor.
 insert into subjects (subject_id, kind, created_by) values
     ('00000000-0000-4000-8000-000000000001', 'system', '00000000-0000-4000-8000-000000000000');

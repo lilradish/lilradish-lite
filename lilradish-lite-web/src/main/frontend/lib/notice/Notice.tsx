@@ -4,12 +4,14 @@ import type { ReactNode } from "react";
 /**
  * How much a notice weighs. `info` is anything the reader is told that is
  * neither what has to go first nor a refusal; `warning` says what has to go
- * first, or what cannot be called back; `error` says what was refused or failed.
+ * first, what would be refused, or what cannot be called back; `error` says
+ * what was refused or failed.
  */
 export type Severity = "info" | "warning" | "error";
 
 /**
- * Every hint or message a screen shows, placed by its caller beside what it
+ * Every message a screen shows, and every hint but a held control's `info`
+ * reason, which `Press` says as a quiet line; placed by its caller beside what it
  * explains. The severity decides its colour and its icon; nothing about how it
  * looks is the caller's.
  *

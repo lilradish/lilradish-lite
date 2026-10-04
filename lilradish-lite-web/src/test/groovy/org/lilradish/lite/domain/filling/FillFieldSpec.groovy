@@ -10,6 +10,7 @@ import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.declaration.OfferedTerms
+import org.lilradish.lite.domain.declaration.TextLines
 import org.lilradish.lite.domain.referencelist.ListNote
 import org.lilradish.lite.domain.referencelist.Term
 import org.lilradish.lite.domain.referencelist.TermMeaning
@@ -74,6 +75,20 @@ class FillFieldSpec extends Specification {
         new FieldShape.Plain(FieldKind.YES_NO) | new HowMany.One()  || FieldKind.YES_NO | null    | null | null       | []
         new FieldShape.Term(LIST)              | new HowMany.Many(2) || FieldKind.TERM  | null    | 2    | CATEGORIES | []
         new FieldShape.Nested([SKU])           | new HowMany.One()  || FieldKind.FIELDS | null    | null | null       | [HELD]
+    }
+
+    def "a person's text field carries its declared lines instead of the older default"() {
+        given:
+        def field = new Field(NAME, null, null, new FieldShape.Text(40, TextLines.ONE), new HowMany.One(), new Demand.Given(false))
+
+        when:
+        def put = FillField.of([field], [:])
+
+        then:
+        put*.lines() == [TextLines.ONE]
+        put*.longest() == [40]
+        put*.mustBeGiven() == [false]
+        put*.fields() == [[]]
     }
 
     def "a declaration is put field by field in declared order, each term beside the terms of the list it pins"() {

@@ -19,7 +19,7 @@ class ContentChecksSpec extends Specification {
     static final EntryVersionId VERSION = new EntryVersionId(UUID.fromString("00000007-0000-4000-8000-000000000801"))
 
     static final ContentProblem PROBLEM = new ContentProblem(
-            ContentProblemCode.NOTHING_GIVEN_BACK, new ContentPlace.Whole(ContentPart.GIVES), null)
+            ContentProblemCode.NOTHING_GIVEN_BACK, new ContentPlace.Whole(ContentPart.GIVES), null, null)
 
     /** Each kind's check, answering with what it was told to and remembering each group and version it was asked of. */
     static final class Answering implements ContentCheck {
@@ -41,9 +41,9 @@ class ContentChecksSpec extends Specification {
         }
 
         @Override
-        List<ContentProblem> problemsIn(GroupId group, EntryVersionId version) {
+        ContentProblemReport.Result problemsIn(GroupId group, EntryVersionId version) {
             asked.add([group, version])
-            answer
+            new ContentProblemReport.Result(answer, answer.size())
         }
     }
 
@@ -81,7 +81,8 @@ class ContentChecksSpec extends Specification {
         def found = checks.problemsIn(EntryKind.QUESTION, GROUP, VERSION)
 
         then:
-        found == [PROBLEM]
+        found.problems() == [PROBLEM]
+        found.total() == 1
         question.asked == [[GROUP, VERSION]]
         workflow.asked.isEmpty()
         list.asked.isEmpty()

@@ -2,6 +2,7 @@ package org.lilradish.lite.app.inference;
 
 import java.net.http.HttpClient;
 import java.time.InstantSource;
+import java.util.List;
 import java.util.regex.Pattern;
 import org.lilradish.lite.domain.inference.ModelCalls;
 import org.lilradish.lite.domain.model.ModelCatalog;
@@ -35,6 +36,16 @@ class ModelCallsConfiguration {
     private static final Pattern BEARER_TOKEN = Pattern.compile("[A-Za-z0-9._~+/-]+=*");
 
     @Bean
+    OpenAiCompatibleCallConversion openAiCompatibleCallConversion() {
+        return new OpenAiCompatibleCallConversion();
+    }
+
+    @Bean
+    ModelCallConversions modelCallConversions(List<ModelCallOutbound> outbound, List<ModelCallInbound> inbound) {
+        return new ModelCallConversions(outbound, inbound);
+    }
+
+    @Bean
     ModelCallShutdown modelCallShutdown() {
         return new ModelCallShutdown();
     }
@@ -44,20 +55,40 @@ class ModelCallsConfiguration {
         return LongestSend.of(endpoint);
     }
 
-    // Never lazy, even where lazy initialisation is switched on: a mismatch or a missing key must stop the start.
+    // Eager so a missing route, conversion or key stops the start rather than the first call.
     @Bean
     @Lazy(false)
-    ModelCalls modelCalls(
+    ModelCallTransport modelCallTransport(
             ModelCatalog catalog,
             ModelEndpoint endpoint,
+            ModelCallConversions conversions,
             ResendPolicy resend,
             ModelCallShutdown shutdown,
             ConfigurableEnvironment environment) {
         TurnAwayResend turnAwayResend = new TurnAwayResend(resend, shutdown, InstantSource.system());
-        return new OpenAiCompatibleModelCalls(
-                modelClient(endpoint, apiKey(environment), turnAwayResend),
-                endpoint.completions(),
-                endpoint.pairedWith(catalog));
+        var ways = endpoint.callWays(catalog);
+        for (var entry : ways.entrySet()) {
+            for (var toolName : entry.getKey().tools()) {
+                var tool = catalog.tool(entry.getKey().model(), toolName).orElseThrow();
+                conversions.requireKind(
+                        entry.getValue().outbound(),
+                        entry.getValue().inbound(),
+                        tool.kind(),
+                        entry.getKey().model().value(),
+                        toolName.value());
+            }
+        }
+        return new ModelCallTransport(modelClient(endpoint, apiKey(environment), turnAwayResend), ways, conversions);
+    }
+
+    @Bean
+    ModelCalls modelCalls(ModelCallTransport transport) {
+        return new OpenAiCompatibleModelCalls(transport);
+    }
+
+    @Bean
+    ToolModelCalls toolModelCalls(ModelCallTransport transport) {
+        return new ConfiguredToolModelCalls(transport);
     }
 
     static RestClient modelClient(ModelEndpoint endpoint, String apiKey, TurnAwayResend turnAwayResend) {

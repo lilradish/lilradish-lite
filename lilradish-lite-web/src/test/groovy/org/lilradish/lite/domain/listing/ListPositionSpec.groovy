@@ -7,7 +7,7 @@ class ListPositionSpec extends Specification {
     /** The tie-breaking value is what places a row among its ties, so a position without one places no row at all. */
     def "a position cannot be taken without the value that breaks every tie"() {
         when:
-        new ListPosition("Ada Lovelace", null)
+        new ListPosition("Ari Mockvale", null)
 
         then:
         def refused = thrown(NullPointerException)

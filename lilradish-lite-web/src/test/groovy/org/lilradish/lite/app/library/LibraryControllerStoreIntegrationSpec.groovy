@@ -15,14 +15,23 @@ import org.libprunus.spring.error.ApiErrorAutoConfiguration
 import org.lilradish.lite.app.change.ChangeTransactions
 import org.lilradish.lite.app.codestep.CodeSteps
 import org.lilradish.lite.app.estate.EstateRoleGrants
+import org.lilradish.lite.app.files.FileDeployment
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.identification.UserIdentification
+import org.lilradish.lite.app.search.SearchWays
+import org.lilradish.lite.domain.declaration.AskedField
+import org.lilradish.lite.domain.declaration.FieldKind
+import org.lilradish.lite.domain.declaration.FieldName
+import org.lilradish.lite.domain.declaration.OfferedTerms
 import org.lilradish.lite.domain.identity.EstateRole
 import org.lilradish.lite.domain.identity.UserId
+import org.lilradish.lite.domain.inference.Envelope
 import org.lilradish.lite.domain.model.ModelCatalog
+import org.lilradish.lite.domain.referencelist.ListNote
 import org.lilradish.lite.testutil.library.LibraryStore
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration
+import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Bean
@@ -37,29 +46,20 @@ import org.springframework.transaction.PlatformTransactionManager
 import spock.lang.Specification
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * What only a request reaching a real store can show about the whole path. Whether an entry is in view is
- * decided in SQL — another kind, another group's, one nobody holds are the same empty answer there — so
- * whether those refusals leave the server alike is a question about the path and not about either half of
- * it. A version refused for its pins is refused under a lock, with the pins read in the same statement
- * that finds them retired, so what the refusal carries is only known once that has run.
- *
- * <p>Only who is calling is replaced. Each feature arranges entries of its own, since what it changes is
- * committed.
- */
+/** Refusals for unseen versions must be indistinguishable over the whole request path. */
 @WebMvcTest([LibraryController, EntryChangesController, VersionChangesController, QuestionController,
         ReferenceListController, WorkflowController])
 @ImportAutoConfiguration(ApiErrorAutoConfiguration)
 @Import([Library, EntryChanges, VersionChanges, GroupRoles, ChangeTransactions, Store, ContentChecks,
         QuestionContentCheck, WorkflowContentCheck, ReferenceListContentCheck, Questions, QuestionDrafts, Drafts,
-        ReferenceLists, ReferenceListDrafts, Workflows, WorkflowDrafts, ReleasedCodeSteps])
+        ReferenceLists, ReferenceListDrafts, Workflows, WorkflowDrafts, ReleasedCodeSteps, SearchWays])
 class LibraryControllerStoreIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000e81"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000000e82"
 
-    /** An overseer here and an owner there: what hides another group's entry is not whose group it is. */
+
     static final String ANN = "00000002-0000-4000-8000-000000000e81"
 
     static final UserId ANN_USER = new UserId("000e81")
@@ -78,7 +78,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
     @MockitoBean
     private EstateRoleGrants grants
 
-    /** What a let-go hands on belongs to the runs, which this surface does not hold. */
+
     @MockitoBean
     private EntryLetGo letGo
 
@@ -91,16 +91,13 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         mockMvc.perform(request.header("Sec-Fetch-Site", "same-origin")).andReturn()
     }
 
-    /** Everything an answer says, but the address it was sent to, which is each caller's own. */
+
     private static List<Object> apartFromWhere(MvcResult answered) {
         def document = JSON.convertValue(JSON.readTree(answered.response.contentAsString), Map)
         [answered.response.status, answered.response.contentType, document.findAll { it.key != "instance" }]
     }
 
-    /**
-     * An entry of another kind, one of another group the caller is in, one nobody holds, and an address
-     * that is no identifier: each read and each change of it answered exactly alike.
-     */
+
     def "every way of naming no entry in view is answered alike, reading it or changing it"() {
         given:
         def addressed = ["00000006-0000-4000-8000-000000000e81", "00000006-0000-4000-8000-000000000e82",
@@ -127,7 +124,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         "PUT"  | "/stop"
     }
 
-    /** What a start answers with is what the address it names reads, there and then. */
+
     def "starts an entry, and the address the answer names reads it exactly as the answer did"() {
         when:
         def started = sending(post("/api/groups/${GROUP}/reference-lists").contentType(MediaType.APPLICATION_JSON)
@@ -162,10 +159,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         store.texts("select name from entries where entry_id = '00000006-0000-4000-8000-000000000e83'") == ["Intake"]
     }
 
-    /**
-     * The pin is a row written straight into the store, as no page this round can write one: a draft whose
-     * field takes its terms from a list version since retired, that list having a newer version in service.
-     */
+
     def "refuses to submit a draft pinning a version retired since, naming the pin and the newest in service"() {
         given:
         def list = "00000006-0000-4000-8000-000000000e84"
@@ -206,11 +200,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /**
-     * Each write answers with the version as it then reads, and reading its address answers exactly the same:
-     * the instruction, a half taken, and a half given back pinning a list of the group's in service. Whole,
-     * it is submitted as any version is.
-     */
+
     def "writes a question draft through its address, reads it as each write answered, and submits it once whole"() {
         given:
         def question = "00000006-0000-4000-8000-000000000e87"
@@ -230,7 +220,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
                 .content('{"revision":1,"instruction":"Say what kind of claim it is."}'))
         def taken = sending(put(address + "/takes").contentType(MediaType.APPLICATION_JSON).content(
                 '{"revision":2,"fields":[{"name":"claim","label":"The claim","help":null,"kind":"text","many":false,' +
-                        '"most":null,"longest":4000,"mustBeGiven":true}]}'))
+                        '"most":null,"longest":4000,"lines":"one","mustBeGiven":true}]}'))
         def answering = sending(put(address + "/gives").contentType(MediaType.APPLICATION_JSON).content(
                 '{"revision":3,"fields":[{"name":"kind","label":null,"help":null,"kind":"term","many":false,' +
                         '"most":null,"list":"' + inService + '","mustBeGiven":true,"stands":"above_confidence",' +
@@ -247,19 +237,23 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         document.revision == 4
         document.instruction == "Say what kind of claim it is."
         document.takes*.name == ["claim"]
+        document.takes*.lines == ["one"]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.texts("select text_lines from declaration_fields where entry_version_id = ?::uuid and side = 'takes'", draft) == ["one"]
         document.gives*.list*.name == ["Claim types"]
-        document.added == [[name: "kind", kind: "term", many: false, mustBeGiven: true, terms: [],
-                            note: "Choose what is claimed.", confidence: true]]
+        document.added == Envelope.toProduce([new AskedField(new FieldName("kind"), FieldKind.TERM,
+                null, null, new OfferedTerms([], new ListNote("Choose what is claimed.")), [], true, true)])
 
         when:
         def submitted = sending(put(address + "/submission"))
 
         then:
         submitted.response.status == 200
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from entry_version_submissions where entry_version_id = ?::uuid", draft) == 1
     }
 
-    /** Saved from a page read before another save landed: refused whole, and what landed first is kept. */
+
     def "a write naming a revision another write has passed since is refused as written since, and changes nothing"() {
         given:
         def question = "00000006-0000-4000-8000-000000000e90"
@@ -279,13 +273,11 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         refused.response.status == 409
         JSON.readTree(refused.response.contentAsString).get("code").asString() == "DRAFT_WRITTEN_SINCE_READ"
         store.contents() == before
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select instruction from question_versions where entry_version_id = ?::uuid", draft) == ["First."]
     }
 
-    /**
-     * Two pages read a workflow draft at one revision and each writes a part of it: whichever lands second is
-     * refused whole, whatever part it writes, and what landed first is kept as it landed.
-     */
+
     def "two workflow writes naming the same revision: the second is refused as written since, the first kept whole"() {
         given:
         def workflow = "00000006-0000-4000-8000-000000000e92"
@@ -310,6 +302,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
 
         and: "the first write's content and revision stand, and nothing of the second landed"
         store.contents() == before
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("""
                 select workflow.ceiling || ' ' || workflow.keeps_own_ceiling || ' ' || workflow.may_be_helped
                        || ' ' || version.revision
@@ -319,10 +312,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
                 """, draft) == ["100 true false 2"]
     }
 
-    /**
-     * One change at a time, each answered with the list as it then reads at the revision it was read at, and
-     * reading its address answers the same. Two terms alike are written, and refused only at submitting.
-     */
+
     def "writes a reference list draft change by change through its address, and submits it once its terms hold"() {
         given:
         def list = "00000006-0000-4000-8000-000000000e91"
@@ -375,7 +365,64 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
 
         then:
         submitted.response.status == 200
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from entry_version_submissions where entry_version_id = ?::uuid", draft) == 1
+    }
+
+    def "a workflow's real write names a several-to-one binding and refuses submission, while one-to-several is submitted"() {
+        given:
+        def ending = source == "several" ? "ea1" : "ea2"
+        def question = "00000006-0000-4000-8000-000000000${ending}" as String
+        def pinned = "00000007-0000-4000-8000-000000000${ending}" as String
+        def workflow = "00000006-0000-4000-8000-000000000${ending == 'ea1' ? 'ea3' : 'ea4'}" as String
+        def draft = "00000007-0000-4000-8000-000000000${ending == 'ea1' ? 'ea3' : 'ea4'}" as String
+        store.entry(question, GROUP, "question", "Demo Sample ${source} question" as String)
+        store.seeded(pinned, question, 1)
+        store.wholeQuestion(pinned)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.session.sql("""
+                insert into declaration_fields (entry_version_id, entry_kind, side, position, name, kind,
+                                                text_limit, text_lines, must_be_given, created_by)
+                values (?::uuid, 'question', 'takes', 1, 'title', 'text', 40, ?, true, ?::uuid)
+                """).params(pinned, target, LibraryStore.SEEDER).update()
+        store.entry(workflow, GROUP, "workflow", "Demo Sample ${source} workflow" as String)
+        store.version(draft, workflow, 1, ANN)
+        store.content(draft, "workflow")
+        def address = "/api/groups/${GROUP}/workflows/${workflow}/versions/${draft}" as String
+        def text = [name: "title", label: null, help: null, kind: "text", longest: 40, lines: source,
+                    many: false, most: null, mustBeGiven: true]
+        def declaration = sending(put(address + "/takes").contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString([revision: 1, fields: [text]])))
+        assert declaration.response.status == 200
+        def body = [revision: 2, steps: [[name: "ask", runs: [kind: "question", version: pinned],
+                    producer: [kind: "person"], tries: 1, reviewer: null,
+                    bindings: [[target: "title", source: [input: "title"]]]]], outputs: []]
+
+        when:
+        def written = sending(put(address + "/steps").contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(body)))
+        def read = answerOf(written)
+        def before = store.contents()
+        def submitted = sending(put(address + "/submission"))
+
+        then:
+        written.response.status == 200
+        read.takes*.lines == [source]
+        read.steps[0].runs.takes*.lines == [target]
+        read.problems == (fits ? [] : [[code: "source_does_not_fit", part: "steps",
+                                       bindingId: read.steps[0].bindings[0].bindingId]])
+        submitted.response.status == (fits ? 200 : 409)
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.count("select count(*) from entry_version_submissions where entry_version_id = ?::uuid", draft) == (fits ? 1 : 0)
+        if (!fits) {
+            JSON.readTree(submitted.response.contentAsString).get("code").asString() == "VERSION_CONTENT_DOES_NOT_HOLD"
+            store.contents() == before
+        }
+
+        where:
+        source    | target    || fits
+        "several" | "one"     || false
+        "one"     | "several" || true
     }
 
     private static Map answerOf(MvcResult answered) {
@@ -383,7 +430,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         JSON.convertValue(JSON.readTree(answered.response.contentAsString), Map)
     }
 
-    /** Every place named beside the refusal, in the order the question reads, and the draft left a draft. */
+
     def "refuses to submit a question whose content does not hold, naming every place, and changes nothing"() {
         given:
         def question = "00000006-0000-4000-8000-000000000e89"
@@ -406,7 +453,7 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /** Neither refusal hides the other: the places and the pin retired since leave the server in one answer. */
+
     def "refuses to submit a question whose content does not hold and whose list is retired, naming both"() {
         given:
         def question = "00000006-0000-4000-8000-000000000e8c"
@@ -438,14 +485,12 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /**
-     * Another group's question version, a workflow's version, one nobody holds and an address that is no
-     * identifier: each read and each write of it answered exactly alike.
-     */
+
     def "every way of naming no question version in view is answered alike, reading it or writing it"() {
         given:
         def elsewhere = "00000007-0000-4000-8000-000000000e8a"
         def handling = "00000007-0000-4000-8000-000000000e8b"
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         if (store.count("select count(*) from entry_versions where entry_version_id = ?::uuid", elsewhere) == 0) {
             store.version(elsewhere, "00000006-0000-4000-8000-000000000e82", 1, ANN)
             store.content(elsewhere, "question")
@@ -479,12 +524,9 @@ class LibraryControllerStoreIntegrationSpec extends Specification {
         "PUT"  | "/instruction"
     }
 
-    /**
-     * The real baseline on a real server, and the library the endpoints read and change through it, under
-     * the transactions they would run under anywhere. Held as a configuration of this spec's own and not
-     * scanned, so no other context starts a server for it.
-     */
+    /** TestConfiguration keeps fixture components out of other test contexts. */
     @TestConfiguration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(FileDeployment)
     static class Store {
 
         @Bean(destroyMethod = "close")

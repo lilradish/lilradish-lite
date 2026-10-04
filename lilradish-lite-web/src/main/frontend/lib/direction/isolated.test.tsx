@@ -23,13 +23,13 @@ function textOf(...parts: (string | number)[]): string {
 
 describe("isolated", () => {
   it("puts words in an element of their own that takes its direction from them", () => {
-    const { container } = render(<p>{isolated("Ada Lovelace")}</p>);
+    const { container } = render(<p>{isolated("Avo Lumerace")}</p>);
 
     const [only] = container.firstElementChild!.children;
 
     expect(container.firstElementChild!.children).toHaveLength(1);
     expect(only!.tagName).toBe("BDI");
-    expect(only!.textContent).toBe("Ada Lovelace");
+    expect(only!.textContent).toBe("Avo Lumerace");
   });
 
   it("leaves a number as the bare text it is", () => {
@@ -43,11 +43,11 @@ describe("isolated", () => {
   });
 
   it("leaves a node exactly as the caller built it", () => {
-    const { container } = render(<p>{isolated(<b>Ada Lovelace</b>)}</p>);
+    const { container } = render(<p>{isolated(<b>Avo Lumerace</b>)}</p>);
 
     const paragraph = container.firstElementChild!;
 
-    expect(paragraph.innerHTML).toBe("<b>Ada Lovelace</b>");
+    expect(paragraph.innerHTML).toBe("<b>Avo Lumerace</b>");
     expect(paragraph.querySelector("bdi")).toBeNull();
   });
 });

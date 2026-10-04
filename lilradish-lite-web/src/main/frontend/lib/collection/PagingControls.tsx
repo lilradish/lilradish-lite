@@ -30,10 +30,10 @@ export function PagingControls({
   }
   return (
     <Stack direction="row" spacing={1.5} sx={{ my: 2 }}>
-      <Press unavailable={page.onFirstPage} onPress={page.first}>
+      <Press navigation unavailable={page.onFirstPage} onPress={page.first}>
         {say("paging.first")}
       </Press>
-      <Press unavailable={!page.hasNext} onPress={page.next}>
+      <Press navigation unavailable={!page.hasNext} onPress={page.next}>
         {say("paging.next")}
       </Press>
     </Stack>

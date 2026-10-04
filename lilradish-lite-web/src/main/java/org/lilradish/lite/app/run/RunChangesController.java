@@ -42,15 +42,17 @@ final class RunChangesController {
 
     private static final String CEILING_MEMBER = "ceiling";
 
+    private static final String RUN_MEMBER = "runId";
+
     /** Room for the longest name with every character escaped, a surrogate pair each, and its member. */
     private static final int LARGEST_NAME_BODY = 2048;
 
-    private static final int LARGEST_CEILING_BODY = 64;
+    private static final int LARGEST_CEILING_BODY = 128;
 
     private static final String NAME_REFUSED = "This takes a JSON object holding a run's name, and nothing else.";
 
     private static final String CEILING_REFUSED =
-            "This takes a JSON object holding a run's ceiling in digits, or null for none, and nothing else.";
+            "This takes a JSON object holding a run's ceiling in digits, or null for none, and optionally a runId.";
 
     private final RunChanges changes;
 
@@ -94,8 +96,8 @@ final class RunChangesController {
     RunsController.RunAnswer changeCeiling(@PathVariable String runId, HttpServletRequest request) throws IOException {
         Addressed addressed = addressed(runId, request);
         ChangeRequests.requireNoParameter(request);
-        @Nullable Ceiling asked = ceilingIn(request);
-        changes.changeCeiling(addressed.group(), addressed.run(), asked, addressed.caller());
+        CeilingRequest asked = ceilingIn(request, addressed.run());
+        changes.changeCeiling(addressed.group(), addressed.run(), asked.target(), asked.ceiling(), addressed.caller());
         return read(addressed);
     }
 
@@ -161,21 +163,28 @@ final class RunChangesController {
     }
 
     /** None where the body asks for none, which takes the ceiling away. */
-    private static @Nullable Ceiling ceilingIn(HttpServletRequest request) throws IOException {
+    private static CeilingRequest ceilingIn(HttpServletRequest request, RunId root) throws IOException {
         JsonNode body = JsonBody.read(request, LARGEST_CEILING_BODY, CEILING_REFUSED);
         JsonNode ceiling = body.path(CEILING_MEMBER);
-        if (!body.isObject() || body.size() != 1 || !(ceiling.isString() || ceiling.isNull())) {
+        JsonNode target = body.get(RUN_MEMBER);
+        if (!body.isObject()
+                || (target == null ? body.size() != 1 : body.size() != 2)
+                || !(ceiling.isString() || ceiling.isNull())
+                || (target != null && !target.isString())) {
             throw new ApiErrorException(RefusalCode.BODY_UNUSABLE, CEILING_REFUSED);
         }
+        RunId run = target == null ? root : RunsController.runAt(target.asString());
         if (ceiling.isNull()) {
-            return null;
+            return new CeilingRequest(run, null);
         }
         try {
-            return Ceiling.typed(ceiling.asString());
+            return new CeilingRequest(run, Ceiling.typed(ceiling.asString()));
         } catch (IllegalArgumentException refused) {
             throw RunRefusal.CEILING_UNUSABLE.raised(refused);
         }
     }
+
+    private record CeilingRequest(RunId target, @Nullable Ceiling ceiling) {}
 
     private record Addressed(GroupId group, RunId run, UserId caller) {}
 }

@@ -21,6 +21,7 @@ class KeptAnswerSpec extends Specification {
         then:
         kept.text().is(cameBack)
         !kept.altered()
+        !kept.truncated()
 
         where:
         cameBack << [
@@ -42,6 +43,7 @@ class KeptAnswerSpec extends Specification {
         then:
         asItCame
         !kept.altered()
+        !kept.truncated()
 
         where:
         piece << ["a", GRINNING]
@@ -54,6 +56,7 @@ class KeptAnswerSpec extends Specification {
         then:
         kept.text() == expected
         kept.altered()
+        !kept.truncated()
 
         where:
         cameBack                       || expected
@@ -77,6 +80,7 @@ class KeptAnswerSpec extends Specification {
         cutWhereExpected
         keptCharacters == MOST
         kept.altered()
+        kept.truncated()
 
         where:
         head | piece    | over | tail         || keptHead | keptOver | keptTail
@@ -95,5 +99,14 @@ class KeptAnswerSpec extends Specification {
         then:
         def refused = thrown(NullPointerException)
         refused.message == "KeptAnswer came back must not be null"
+    }
+
+    def "bounded byte capture keeps its truncation and malformed decoder flags"() {
+        expect:
+        KeptAnswer.captured("Demo Sample", false, true).text() == "Demo Sample"
+        KeptAnswer.captured("Demo Sample", false, true).altered()
+        KeptAnswer.captured("Demo Sample", false, true).truncated()
+        KeptAnswer.captured(REPLACED, true, false).altered()
+        !KeptAnswer.captured(REPLACED, true, false).truncated()
     }
 }

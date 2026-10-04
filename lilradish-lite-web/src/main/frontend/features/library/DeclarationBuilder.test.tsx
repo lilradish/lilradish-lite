@@ -1,5 +1,13 @@
+import { iconButtonClasses } from "@mui/material/IconButton";
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +20,9 @@ import type {
 import { RequestFailed } from "../../api/problem";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { NO_GROUND } from "../../testutil/grounds";
+import { noticesIn } from "../../testutil/notices";
 import { DeclarationBuilder } from "./DeclarationBuilder";
 import { draftOf, type Demands, type DraftField } from "./declarationDrafts";
 import QUESTION from "./questionDemands.json";
@@ -64,6 +75,17 @@ const SENDER: DeclaredField = {
   fields: [ADDRESSES],
 };
 
+const DOCUMENTS: DeclaredField = {
+  fieldId: "0000000b-0000-4000-8000-000000000c36",
+  name: "documents",
+  kind: "file",
+  types: ["application/pdf"],
+  maximumBytes: 1048576,
+  many: true,
+  most: 3,
+  mustBeGiven: true,
+};
+
 const RECEIVED: DeclaredField = {
   fieldId: "0000000b-0000-4000-8000-000000000c35",
   name: "received",
@@ -110,6 +132,9 @@ function declaredAs(sent: SentField, index: number): DeclaredField {
     ...(sent.help === null ? {} : { help: sent.help }),
     ...(sent.most === null ? {} : { most: sent.most }),
     ...(sent.longest == null ? {} : { longest: sent.longest }),
+    ...(sent.lines === undefined ? {} : { lines: sent.lines }),
+    ...(sent.types === undefined ? {} : { types: sent.types }),
+    ...(sent.maximumBytes == null ? {} : { maximumBytes: sent.maximumBytes }),
     ...(list === undefined
       ? {}
       : { list: { ...list, standing: "in_service" } }),
@@ -131,13 +156,24 @@ function building(
   ) => Promise<readonly DeclaredField[]> = (sent) =>
     Promise.resolve(sent.map(declaredAs)),
   closeOnRefusal = false,
-  host: { readonly waiting?: boolean; readonly focusOnArrival?: boolean } = {},
+  host: {
+    readonly waiting?: boolean;
+    readonly focusOnArrival?: boolean;
+    readonly openStored?: boolean;
+  } = {},
 ) {
   const saved = vi.fn(answer);
   const readAfresh = vi.fn<() => void>();
   const shown: { fields: readonly DeclaredField[] } = { fields };
+  let refresh: (
+    change?: (fields: readonly DeclaredField[]) => readonly DeclaredField[],
+  ) => void = () => undefined;
   function Host() {
     const [held, setHeld] = useState(fields);
+    refresh = (change) =>
+      setHeld((now) =>
+        change === undefined ? now.map((field) => ({ ...field })) : change(now),
+      );
     const [open, setOpen] = useState(editable);
     const saving = useAction<readonly DeclaredField[]>(
       (answered) => {
@@ -150,6 +186,7 @@ function building(
       <DeclarationBuilder
         title="What it takes"
         heading="h3"
+        depth={2}
         demands={demands}
         fields={held}
         lists={LISTS}
@@ -166,7 +203,22 @@ function building(
     );
   }
   render(<Host />, { wrapper: themed });
-  return { saved, shown, readAfresh };
+  if (!host.focusOnArrival && host.openStored !== false) {
+    openStoredRows();
+  }
+  return { saved, shown, readAfresh, refresh };
+}
+
+function openStoredRows(): void {
+  let closed = document.querySelector<HTMLElement>(
+    'fieldset button[aria-expanded="false"]',
+  );
+  while (closed !== null) {
+    fireEvent.click(closed);
+    closed = document.querySelector<HTMLElement>(
+      'fieldset button[aria-expanded="false"]',
+    );
+  }
 }
 
 function part(): HTMLElement {
@@ -178,7 +230,14 @@ function heading(): HTMLElement {
 }
 
 function row(name: string): HTMLElement {
-  return screen.getByRole("group", { name });
+  const group = screen.getByRole("group", { name });
+  const closed = group.querySelector<HTMLElement>(
+    'button[aria-expanded="false"]',
+  );
+  if (closed !== null) {
+    fireEvent.click(closed);
+  }
+  return group;
 }
 
 function legendOf(name: string): HTMLElement {
@@ -192,7 +251,7 @@ function save(): HTMLElement {
 function pressIn(name: string, button: string): Promise<void> {
   return userEvent.click(
     within(row(name)).getByRole("button", {
-      name: `${button} ${setApart(name)}`,
+      name: `${button}: ${setApart(name)}`,
     }),
   );
 }
@@ -200,12 +259,197 @@ function pressIn(name: string, button: string): Promise<void> {
 function moving(name: string, way: "up" | "down"): Promise<void> {
   return userEvent.click(
     within(row(name)).getByRole("button", {
-      name: `Move ${setApart(name)} ${way}`,
+      name: `Move ${way}: ${setApart(name)}`,
     }),
   );
 }
 
 describe("DeclarationBuilder", () => {
+  it("separates the default field name from its hint in saved folded rows and newly added legends", async () => {
+    building(
+      TAKES,
+      [{ ...COMPLAINT, name: "", label: undefined }],
+      true,
+      undefined,
+      false,
+      { openStored: false },
+    );
+    const folded = screen.getByRole("button", {
+      name: /^Field 1, not named yet ·/,
+    });
+    expect(folded).toHaveAttribute("aria-expanded", "false");
+    const named = within(folded).getByText("Field 1");
+    expect(named.tagName).toBe("BDI");
+    expect(getComputedStyle(named).fontStyle).not.toBe("italic");
+    expect(
+      getComputedStyle(within(folded).getByText("not named yet")).fontStyle,
+    ).toBe("italic");
+    folded.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      screen.queryByRole("button", { name: /^Field 1, not named yet ·/ }),
+    ).toBeNull();
+    expect(legendOf("Field 1, not named yet")).toHaveTextContent(
+      "Field 1, not named yet",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add a field" }));
+    const added = row("Field 2, not named yet");
+    expect(within(added).getByRole("textbox", { name: "Name" })).toHaveFocus();
+    const legend = legendOf("Field 2, not named yet");
+    expect(within(legend).getByText("Field 2").tagName).toBe("BDI");
+    expect(
+      getComputedStyle(within(legend).getByText("not named yet")).fontStyle,
+    ).toBe("italic");
+  });
+
+  it("keeps a real name matching the default sentence as data", () => {
+    building(TAKES, [{ ...COMPLAINT, name: "Field 1, not named yet" }], true);
+    const legend = legendOf("Field 1, not named yet");
+    const data = within(legend).getByText("Field 1, not named yet");
+    expect(data.tagName).toBe("BDI");
+    expect(getComputedStyle(data).fontStyle).not.toBe("italic");
+    expect(within(legend).queryByText("not named yet")).toBeNull();
+  });
+  it("reads older text as several lines, saves one line when chosen, and starts a new text field with one line", async () => {
+    const { saved } = building(TAKES, [COMPLAINT], true);
+    const lines = within(row("complaint")).getByRole("combobox", {
+      name: "Lines",
+    });
+    expect(lines).toHaveTextContent("Several lines");
+
+    await userEvent.click(lines);
+    screen.getByRole("option", { name: "One line" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(save());
+
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0]![0][0]).toMatchObject({
+      kind: "text",
+      lines: "one",
+    });
+    await waitFor(() =>
+      expect(
+        within(row("complaint")).getByRole("combobox", { name: "Lines" }),
+      ).toHaveTextContent("One line"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a field" }));
+    expect(
+      within(row("Field 2, not named yet")).getByRole("combobox", {
+        name: "Lines",
+      }),
+    ).toHaveTextContent("One line");
+  });
+
+  it("shows saved fields in one line including file limits, opens one with the keyboard, and leaves a new field open", async () => {
+    building(TAKES, [COMPLAINT, DOCUMENTS], true, undefined, false, {
+      openStored: false,
+    });
+    const complaint = screen.getByRole("group", { name: "complaint" });
+    const documents = screen.getByRole("group", { name: "documents" });
+    const summary = within(complaint).getByRole("button", {
+      name: /^complaint ·/,
+    });
+    expect(summary).toHaveTextContent(
+      "Text, Several lines, At most 4000 characters, Holds one, Must be given",
+    );
+    expect(
+      within(complaint).queryByRole("textbox", { name: "Name" }),
+    ).toBeNull();
+    expect(
+      within(documents).getByRole("button", { name: /^documents ·/ }),
+    ).toHaveTextContent(
+      `A file, ${setApart("application/pdf")}; at most 1 MB each`,
+    );
+    expect(
+      within(documents).getByRole("button", { name: /^documents ·/ }),
+    ).toHaveTextContent("Holds many, at most 3, Must be given");
+
+    summary.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      within(complaint).getByRole("textbox", { name: "Name" }),
+    ).toHaveFocus();
+    expect(
+      within(documents).queryByRole("textbox", { name: "Name" }),
+    ).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a field" }));
+    expect(
+      within(
+        screen.getByRole("group", { name: "Field 3, not named yet" }),
+      ).getByRole("textbox", { name: "Name" }),
+    ).toHaveFocus();
+  });
+
+  it("keeps a field open with its edit when the same saved declaration is read as a new object", async () => {
+    const { refresh } = building(TAKES, [COMPLAINT], true, undefined, false, {
+      openStored: false,
+    });
+    const field = screen.getByRole("group", { name: "complaint" });
+    await userEvent.click(
+      within(field).getByRole("button", { name: /^complaint ·/ }),
+    );
+    const name = within(field).getByRole("textbox", { name: "Name" });
+    await userEvent.type(name, "_local");
+    const help = within(field).getByRole("textbox", { name: "Help" });
+    help.focus();
+    expect(help).toHaveFocus();
+
+    act(refresh);
+
+    expect(help).toHaveFocus();
+    expect(within(field).getByRole("textbox", { name: "Name" })).toHaveValue(
+      "complaint_local",
+    );
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+  });
+
+  it("keeps an unsaved field and its open row when only its pin description changes", async () => {
+    const { refresh, saved } = building(TAKES, [CATEGORY], true);
+    const field = row("category");
+    await userEvent.type(
+      within(field).getByRole("textbox", { name: "Name" }),
+      "_local",
+    );
+    act(() =>
+      refresh((fields) =>
+        fields.map((held) => ({
+          ...held,
+          list: {
+            ...held.list!,
+            name: "Categories updated",
+            newer: undefined,
+          },
+        })),
+      ),
+    );
+
+    expect(within(field).getByRole("textbox", { name: "Name" })).toHaveValue(
+      "category_local",
+    );
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("marks only changed declarations unsaved and leads with Save until the answer is read", async () => {
+    const { saved } = building(TAKES, [COMPLAINT], true);
+    expect(within(part()).queryByText("Unsaved")).toBeNull();
+    expect(save()).not.toHaveClass("MuiButton-contained");
+
+    await userEvent.type(
+      within(row("complaint")).getByRole("textbox", { name: "Name" }),
+      "_text",
+    );
+    expect(within(part()).getByText("Unsaved")).toBeInTheDocument();
+    expect(save()).toHaveClass("MuiButton-contained");
+    await userEvent.click(save());
+    await waitFor(() =>
+      expect(within(part()).queryByText("Unsaved")).toBeNull(),
+    );
+    expect(save()).not.toHaveClass("MuiButton-contained");
+    expect(saved).toHaveBeenCalledTimes(1);
+  });
   it("reads each field where it may not be written, the fields another holds under it, and offers nothing to change", () => {
     building(TAKES, [COMPLAINT, SENDER], false);
 
@@ -217,17 +461,43 @@ describe("DeclarationBuilder", () => {
       "addresses addresses",
     ]);
     expect(rows[0]).toHaveTextContent(
-      "Text, At most 4000 characters, Holds one, Must be given",
+      "Text, Several lines, At most 4000 characters, Holds one, Must be given",
     );
     expect(rows[0]).toHaveTextContent("As written.");
     expect(rows[1]).toHaveTextContent(
       "Fields of its own, Holds one, May be left empty",
     );
     expect(within(rows[1]!).getByRole("list")).toContainElement(rows[2]!);
+    expect(drawnOf(within(rows[1]!).getByRole("list"))).toEqual(
+      drawnAtDepth(4),
+    );
+    expect(drawnOf(first)).not.toEqual(drawnAtDepth(4));
     expect(rows[2]).toHaveTextContent(
-      "Text, How long not said yet, Holds many, at most 3, Must be given",
+      "Text, Several lines, How long not said yet, Holds many, at most 3, Must be given",
     );
     expect(part().querySelectorAll("input, textarea, button")).toHaveLength(0);
+  });
+
+  it("shows a stored file field without offering controls in read-only mode", () => {
+    building(TAKES, [DOCUMENTS], false);
+
+    expect(within(part()).getByRole("listitem")).toHaveTextContent(
+      `A file, ${setApart("application/pdf")}; at most 1 MB each, Holds many, at most 3, Must be given`,
+    );
+    expect(part().querySelectorAll("input, textarea, button")).toHaveLength(0);
+  });
+
+  it.each([
+    [1025, "1025 bytes"],
+    [11 * 1024, "11 KB"],
+    [10 * 1024 * 1024, "10 MB"],
+    [2 * 1024 * 1024 * 1024, "2 GB"],
+  ])("shows %i bytes as %s in a stored file", (maximumBytes, size) => {
+    building(TAKES, [{ ...DOCUMENTS, maximumBytes }], false);
+
+    const file = within(part()).getByRole("listitem");
+    expect(file).toHaveTextContent(`at most ${size} each`);
+    expect(file).not.toHaveTextContent("Largest file");
   });
 
   it("reads a value given back that must be given by that, and by the confidence it stands above", () => {
@@ -246,7 +516,7 @@ describe("DeclarationBuilder", () => {
 
     const row = within(part()).getByRole("listitem");
     expect(row).toHaveTextContent(
-      "Text, How long not said yet, Holds one, May be left empty, What it takes to stand not said yet",
+      "Text, Several lines, How long not said yet, Holds one, May be left empty, What it takes to stand not said yet",
     );
     expect(row).not.toHaveTextContent("Must be given");
   });
@@ -288,10 +558,315 @@ describe("DeclarationBuilder", () => {
     ).toHaveValue("3");
     expect(
       within(row("sender")).getByRole("button", {
-        name: `Add a field inside ${setApart("sender")}`,
+        name: `Add a field inside: ${setApart("sender")}`,
       }),
     ).toBeInTheDocument();
     expect(save()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /** Words on every row would outweigh the fields; each icon's name still says which field it acts on. */
+  it("draws each row's moves, removal and adding inside as an icon alone, named with its field, and only a removal in the warning colour", () => {
+    building(TAKES, [COMPLAINT, SENDER], true);
+
+    const icons = {
+      up: "ArrowUpwardIcon",
+      down: "ArrowDownwardIcon",
+      remove: "DeleteOutlinedIcon",
+      inside: "AddIcon",
+    } as const;
+    const drawn = (
+      [
+        ["complaint", ["up", "down", "remove"]],
+        ["sender", ["up", "down", "remove", "inside"]],
+        ["addresses", ["up", "down", "remove"]],
+      ] as const
+    ).flatMap(([name, acts]) => {
+      const field = setApart(name);
+      const words = {
+        up: `Move up: ${field}`,
+        down: `Move down: ${field}`,
+        remove: `Remove: ${field}`,
+        inside: `Add a field inside: ${field}`,
+      };
+      return acts.map((act) => ({
+        act,
+        button: screen.getByRole("button", { name: words[act] }),
+      }));
+    });
+
+    expect(drawn.map(({ button }) => button.textContent)).toEqual(
+      drawn.map(() => ""),
+    );
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("data-testid"),
+      ),
+    ).toEqual(drawn.map(({ act }) => icons[act]));
+    expect(
+      drawn.map(({ button }) =>
+        button.querySelector("svg")?.getAttribute("aria-hidden"),
+      ),
+    ).toEqual(drawn.map(() => "true"));
+    expect(
+      drawn
+        .filter(({ button }) =>
+          button.classList.contains(iconButtonClasses.colorWarning),
+        )
+        .map(({ act }) => act),
+    ).toEqual(["remove", "remove", "remove"]);
+    expect(
+      screen.queryByRole("button", {
+        name: /^Add a field inside: .*complaint/,
+      }),
+    ).toBeNull();
+  });
+
+  /** The icon's name says which field it acts on; the tip beside it needs only say what it does. */
+  it.each([
+    [`Move up: ${setApart("complaint")}`, "Move up"],
+    [`Move down: ${setApart("complaint")}`, "Move down"],
+    [`Remove: ${setApart("complaint")}`, "Remove"],
+    [`Add a field inside: ${setApart("sender")}`, "Add a field inside"],
+  ])(
+    "says what %s does as a tip of its own words once pointed at",
+    async (name, tip) => {
+      building(TAKES, [COMPLAINT, SENDER], true);
+
+      const button = screen.getByRole("button", { name });
+      await userEvent.hover(button);
+
+      expect(button).toHaveAttribute("aria-label", name);
+      expect(name.startsWith(`${tip}: `)).toBe(true);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(tip);
+    },
+  );
+
+  it("says a row's act as a tip once its icon holds the keyboard", async () => {
+    building(TAKES, [COMPLAINT, RECEIVED], true);
+    within(row("complaint")).getByRole("textbox", { name: "Help" }).focus();
+
+    await userEvent.tab();
+
+    expect(
+      screen.getByRole("button", { name: `Move up: ${setApart("complaint")}` }),
+    ).toHaveFocus();
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Move up");
+  });
+
+  it("offers every declared kind, including file", async () => {
+    building(TAKES, [COMPLAINT], true);
+
+    await userEvent.click(
+      within(row("complaint")).getByRole("combobox", { name: "What it is" }),
+    );
+
+    expect(
+      within(screen.getByRole("listbox"))
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Text",
+      "A number",
+      "A date",
+      "A moment",
+      "Yes or no",
+      "A term",
+      "Fields of its own",
+      "A file",
+    ]);
+    expect(screen.getByRole("option", { name: "A file" })).toBeInTheDocument();
+  });
+
+  it("edits a stored file with its types and per-file size, then saves byte limits", async () => {
+    const { saved, shown } = building(TAKES, [DOCUMENTS], true);
+    const file = row("documents");
+    const types = within(file).getByRole("textbox", { name: "File types" });
+    const size = within(file).getByRole("textbox", { name: "Largest file" });
+
+    expect(types).toHaveValue("application/pdf");
+    expect(size).toHaveValue("1");
+    expect(
+      within(file).getByRole("combobox", {
+        name: "A KB here is 1,024 bytes, and each larger unit 1,024 of the one before.",
+      }),
+    ).toHaveTextContent("MB");
+    expect(within(file).getByRole("textbox", { name: "At most" })).toHaveValue(
+      "3",
+    );
+    expect(save()).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.clear(types);
+    await userEvent.type(types, "application/pdf{enter}image/png");
+    await userEvent.clear(size);
+    await userEvent.type(size, "2");
+    await userEvent.click(save());
+
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0]![0][0]).toMatchObject({
+      kind: "file",
+      types: ["application/pdf", "image/png"],
+      maximumBytes: 2097152,
+      most: 3,
+    });
+    await waitFor(() =>
+      expect(shown.fields[0]).toMatchObject({
+        types: ["application/pdf", "image/png"],
+        maximumBytes: 2097152,
+      }),
+    );
+  });
+
+  it("uses the selected unit when sending a new file field", async () => {
+    const { saved } = building(TAKES, [COMPLAINT], true);
+    await userEvent.click(
+      within(row("complaint")).getByRole("combobox", { name: "What it is" }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "A file" }));
+    const file = row("complaint");
+    await userEvent.type(
+      within(file).getByRole("textbox", { name: "File types" }),
+      "application/pdf",
+    );
+    await userEvent.type(
+      within(file).getByRole("textbox", { name: "Largest file" }),
+      "3",
+    );
+    await userEvent.click(
+      within(file).getByRole("combobox", {
+        name: "A KB here is 1,024 bytes, and each larger unit 1,024 of the one before.",
+      }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "KB" }));
+    await userEvent.click(save());
+
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0]![0][0]).toMatchObject({
+      kind: "file",
+      types: ["application/pdf"],
+      maximumBytes: 3072,
+    });
+    expect(saved.mock.calls[0]![0][0]).not.toHaveProperty("longest");
+  });
+
+  it("holds an invalid file in its row before saving", async () => {
+    const { saved } = building(TAKES, [COMPLAINT], true);
+    await userEvent.click(
+      within(row("complaint")).getByRole("combobox", { name: "What it is" }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "A file" }));
+
+    const file = row("complaint");
+    expect(
+      within(file).getByRole("textbox", { name: "File types" }),
+    ).toHaveValue("");
+    expect(
+      within(file).getByText(
+        "Give one or more distinct media types, one per line.",
+      ),
+    ).toBeInTheDocument();
+    expect(save()).toHaveAttribute("aria-disabled", "true");
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("stops at a sixty-fifth pasted type with a long tail, then sends sixty-four", async () => {
+    const { saved } = building(TAKES, [DOCUMENTS], true);
+    const types = within(row("documents")).getByRole("textbox", {
+      name: "File types",
+    });
+    const names = Array.from(
+      { length: 65 },
+      (_, index) => `application/x${index}`,
+    );
+    const tooMany = `${names.join("\n")}\n${"application/after\n".repeat(1024)}`;
+    const split = vi.spyOn(String.prototype, "split");
+    try {
+      fireEvent.change(types, { target: { value: tooMany } });
+
+      expect(
+        within(row("documents")).getByText(
+          "A field of files takes at most 64 types.",
+        ),
+      ).toBeInTheDocument();
+      expect(save()).toHaveAttribute("aria-disabled", "true");
+      expect(saved).not.toHaveBeenCalled();
+      expect(
+        split.mock.calls.some(
+          ([separator], index) =>
+            String(separator) === "\n" &&
+            String(split.mock.contexts[index]) === tooMany,
+        ),
+      ).toBe(false);
+    } finally {
+      split.mockRestore();
+    }
+
+    fireEvent.change(types, {
+      target: { value: names.slice(0, 64).join("\n") },
+    });
+    expect(
+      within(row("documents")).queryByText(
+        "A field of files takes at most 64 types.",
+      ),
+    ).toBeNull();
+    expect(save()).not.toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(save());
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+    expect(saved.mock.calls[0]![0][0]).toMatchObject({
+      kind: "file",
+      types: names.slice(0, 64),
+    });
+  });
+
+  it("shows the exact byte-bound refusal when the size typed is one past the safe number", () => {
+    const { saved } = building(
+      TAKES,
+      [{ ...DOCUMENTS, maximumBytes: Number.MAX_SAFE_INTEGER }],
+      true,
+    );
+    const file = row("documents");
+    const size = within(file).getByRole("textbox", { name: "Largest file" });
+    expect(size).toHaveValue(String(Number.MAX_SAFE_INTEGER));
+
+    fireEvent.change(size, {
+      target: { value: String(Number.MAX_SAFE_INTEGER + 1) },
+    });
+
+    expect(
+      within(file).getByText(
+        "A file field's maximum size is a whole number of bytes, at least 1 byte and less than 8,388,608 GB.",
+      ),
+    ).toBeInTheDocument();
+    expect(save()).toHaveAttribute("aria-disabled", "true");
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("saves a file draft while its byte limit is unchosen and refuses a typed zero", async () => {
+    const { saved } = building(
+      TAKES,
+      [{ ...DOCUMENTS, maximumBytes: undefined }],
+      true,
+    );
+    const file = row("documents");
+    const size = within(file).getByRole("textbox", { name: "Largest file" });
+    expect(size).toHaveValue("");
+    expect(size).not.toHaveAttribute("aria-invalid", "true");
+    await userEvent.type(size, "0");
+    expect(save()).toHaveAttribute("aria-disabled", "true");
+    expect(saved).not.toHaveBeenCalled();
+
+    await userEvent.clear(size);
+    await userEvent.type(
+      within(file).getByRole("textbox", { name: "Name" }),
+      "_draft",
+    );
+    await userEvent.click(save());
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+    expect(saved.mock.calls[0]![0][0]).toMatchObject({
+      name: "documents_draft",
+      kind: "file",
+      types: ["application/pdf"],
+      maximumBytes: null,
+    });
   });
 
   it("asks a value given back what it takes to stand, and a field it holds only whether it must be given", () => {
@@ -484,6 +1059,7 @@ describe("DeclarationBuilder", () => {
         many: false,
         most: null,
         longest: 4000,
+        lines: "several",
         mustBeGiven: true,
       },
     ]);
@@ -504,7 +1080,7 @@ describe("DeclarationBuilder", () => {
 
     await userEvent.click(
       within(row("sender")).getByRole("button", {
-        name: `Add a field inside ${setApart("sender")}`,
+        name: `Add a field inside: ${setApart("sender")}`,
       }),
     );
     expect(within(row("sender")).getAllByRole("group")).toHaveLength(2);
@@ -530,17 +1106,17 @@ describe("DeclarationBuilder", () => {
   it("draws both moves on every row, unavailable at either end, and moves nothing past one", async () => {
     const { saved } = building(TAKES, [COMPLAINT, RECEIVED], true);
     const up = within(row("complaint")).getByRole("button", {
-      name: `Move ${setApart("complaint")} up`,
+      name: `Move up: ${setApart("complaint")}`,
     });
     const down = within(row("received")).getByRole("button", {
-      name: `Move ${setApart("received")} down`,
+      name: `Move down: ${setApart("received")}`,
     });
 
     expect(up).toHaveAttribute("aria-disabled", "true");
     expect(down).toHaveAttribute("aria-disabled", "true");
     expect(
       within(row("complaint")).getByRole("button", {
-        name: `Move ${setApart("complaint")} down`,
+        name: `Move down: ${setApart("complaint")}`,
       }),
     ).not.toHaveAttribute("aria-disabled");
 
@@ -570,7 +1146,7 @@ describe("DeclarationBuilder", () => {
       expect(moved).toEqual(["received", "complaint"]);
       expect(
         within(row(name)).getByRole("button", {
-          name: `Move ${setApart(name)} ${way}`,
+          name: `Move ${way}: ${setApart(name)}`,
         }),
       ).toHaveFocus();
     },
@@ -585,6 +1161,36 @@ describe("DeclarationBuilder", () => {
     await pressIn("received", "Remove");
     expect(legendOf("complaint")).toHaveFocus();
 
+    await pressIn("complaint", "Remove");
+    expect(heading()).toHaveFocus();
+  });
+
+  it("focuses a folded neighbor after removal, then the other folded neighbor, then the heading", async () => {
+    building(TAKES, [COMPLAINT, SENDER, RECEIVED], true, undefined, false, {
+      openStored: false,
+    });
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "sender" })).getByRole(
+        "button",
+        { name: /^sender ·/ },
+      ),
+    );
+    await pressIn("sender", "Remove");
+    const received = screen.getByRole("group", { name: "received" });
+    const next = within(received).getByRole("button", {
+      name: /^received ·/,
+    });
+    expect(next).toHaveFocus();
+
+    await userEvent.click(next);
+    await pressIn("received", "Remove");
+    const complaint = screen.getByRole("group", { name: "complaint" });
+    const previous = within(complaint).getByRole("button", {
+      name: /^complaint ·/,
+    });
+    expect(previous).toHaveFocus();
+
+    await userEvent.click(previous);
     await pressIn("complaint", "Remove");
     expect(heading()).toHaveFocus();
   });
@@ -609,7 +1215,7 @@ describe("DeclarationBuilder", () => {
 
     await userEvent.click(
       within(row("sender")).getByRole("button", {
-        name: `Add a field inside ${setApart("sender")}`,
+        name: `Add a field inside: ${setApart("sender")}`,
       }),
     );
     const inside = within(row("sender")).getByRole("group", {
@@ -619,17 +1225,22 @@ describe("DeclarationBuilder", () => {
   });
 
   /** Unnamed rows are told apart by their place, and the one holding the save is marked as the one. */
-  it("names each unnamed row by its place, and marks the row holding the save with why", async () => {
+  it("names each unnamed row by its place, and marks the row holding the save with why, as a warning", async () => {
     building(TAKES, [COMPLAINT], true);
 
     await userEvent.click(screen.getByRole("button", { name: "Add a field" }));
     await userEvent.click(screen.getByRole("button", { name: "Add a field" }));
 
-    expect(row("Field 2, not named yet")).toHaveAccessibleDescription(
-      "This field keeps the half from being saved: A field's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
-    );
+    const why =
+      "This field keeps the half from being saved: A field's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.";
+    expect(row("Field 2, not named yet")).toHaveAccessibleDescription(why);
+    expect(noticesIn(row("Field 2, not named yet"))).toEqual([
+      { severity: "warning", words: why },
+    ]);
     expect(row("Field 3, not named yet")).not.toHaveAccessibleDescription();
+    expect(noticesIn(row("Field 3, not named yet"))).toEqual([]);
     expect(row("complaint")).not.toHaveAccessibleDescription();
+    expect(noticesIn(row("complaint"))).toEqual([]);
     expect(save()).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -667,7 +1278,7 @@ describe("DeclarationBuilder", () => {
     await userEvent.type(name, "_more");
     for (const button of [
       within(row("complaint_text")).getByRole("button", {
-        name: `Remove ${setApart("complaint_text")}`,
+        name: `Remove: ${setApart("complaint_text")}`,
       }),
       screen.getByRole("button", { name: "Add a field" }),
     ]) {
@@ -693,7 +1304,7 @@ describe("DeclarationBuilder", () => {
     expect(within(part()).getAllByRole("group")).toHaveLength(1);
     expect(
       within(row("complaint_text")).getByRole("button", {
-        name: `Remove ${setApart("complaint_text")}`,
+        name: `Remove: ${setApart("complaint_text")}`,
       }),
     ).toHaveAttribute("aria-disabled", "true");
     answer([COMPLAINT]);
@@ -737,10 +1348,12 @@ describe("DeclarationBuilder", () => {
       });
 
       await userEvent.clear(box);
-      await userEvent.type(box, typed);
+      // In one input: typed key by key, a long value's keys outlive a timed-out test and land in the next one's box.
+      await userEvent.paste(typed);
       save().focus();
       await userEvent.keyboard("{Enter}");
 
+      expect(box).toHaveValue(typed);
       expect(saved).not.toHaveBeenCalled();
       expect(save()).toHaveAttribute("aria-disabled", "true");
       expect(part()).toHaveTextContent(why);
@@ -859,6 +1472,7 @@ describe("DeclarationBuilder", () => {
         <DeclarationBuilder
           title="What it takes"
           heading="h3"
+          depth={2}
           demands={TAKES}
           fields={[COMPLAINT]}
           lists={LISTS}
@@ -900,6 +1514,7 @@ describe("DeclarationBuilder", () => {
       <DeclarationBuilder
         title="What it takes"
         heading="h5"
+        depth={3}
         demands={STOOD}
         fields={[SENDER]}
         lists={LISTS}
@@ -909,6 +1524,7 @@ describe("DeclarationBuilder", () => {
       { wrapper: themed },
     );
 
+    row("sender");
     await userEvent.click(
       within(row("addresses")).getByRole("checkbox", { name: "Must be given" }),
     );
@@ -930,6 +1546,7 @@ describe("DeclarationBuilder", () => {
         <DeclarationBuilder
           title="What it takes"
           heading={heading}
+          depth={2}
           demands={STOOD}
           fields={[SENDER]}
           lists={LISTS}
@@ -947,4 +1564,52 @@ describe("DeclarationBuilder", () => {
       ).toBeNull();
     },
   );
+
+  /** A block's first-level fields are each a group; a group's are held in it, as every field inside another is. */
+  it.each([
+    [2, "a block", 3],
+    [3, "a group", 4],
+  ] as const)(
+    "draws a half at depth %s as %s, its first-level fields at depth %s and a field held inside another at 4",
+    (depth, _drawn, firstRows) => {
+      render(
+        <DeclarationBuilder
+          title="What it takes"
+          heading="h3"
+          depth={depth}
+          demands={STOOD}
+          fields={[SENDER]}
+          lists={LISTS}
+          editable
+          controlled={{ drafts: [draftOf(SENDER)], change: vi.fn() }}
+        />,
+        { wrapper: themed },
+      );
+
+      expect(drawnOf(part())).toEqual(drawnAtDepth(depth));
+      expect(drawnOf(row("sender").parentElement!)).toEqual(
+        drawnAtDepth(firstRows),
+      );
+      expect(drawnOf(row("addresses").parentElement!)).toEqual(drawnAtDepth(4));
+    },
+  );
+
+  /** A legend sits in its fieldset's border, so the ground and rule are laid on the item around the fieldset. */
+  it("draws a field's depth on the item holding its fieldset, leaving the fieldset no frame or ground of its own", () => {
+    building(TAKES, [SENDER], true);
+
+    const fieldset = row("sender");
+
+    expect(fieldset.parentElement!.tagName).toBe("LI");
+    expect(fieldset.querySelector(":scope > legend")).toHaveTextContent(
+      "sender",
+    );
+    expect(drawnOf(fieldset.parentElement!)).toEqual(drawnAtDepth(3));
+    expect(drawnOf(fieldset)).toMatchObject({
+      topEdge: "0px",
+      leadingEdge: expect.stringMatching(/^0px /),
+      ground: NO_GROUND,
+      padding: "0px 0px",
+    });
+  });
 });

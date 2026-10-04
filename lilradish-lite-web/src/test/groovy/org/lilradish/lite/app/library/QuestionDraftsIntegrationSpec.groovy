@@ -132,6 +132,7 @@ class QuestionDraftsIntegrationSpec extends Specification {
         then:
         store.texts("select instruction || ' ' || updated_by from question_versions") == ["Say why.\n\tBriefly. ${ANN}" as String]
         store.count("select count(*) from question_versions where updated_at >= created_at") == 1
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select created_by::text from entry_version_writers") == [ANN]
 
         when: "saying nothing"
@@ -141,19 +142,43 @@ class QuestionDraftsIntegrationSpec extends Specification {
         store.count("select count(*) from question_versions where instruction is null") == 1
     }
 
+    def "writes and reads back an optional drawing as the caller's version change"() {
+        when:
+        def written = drafts.draw(groupId(GROUP), entryId(QUESTION), versionId(DRAFT), ANN_USER, 1,
+                "## Case\n{{complaint}}")
+
+        then:
+        written.revision() == 2
+        written.stored().drawing() == "## Case\n{{complaint}}"
+        store.texts("select drawing from question_versions") == ["## Case\n{{complaint}}"]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
+        store.texts("select updated_by::text from question_versions") == [ANN]
+
+        when:
+        def removed = drafts.draw(groupId(GROUP), entryId(QUESTION), versionId(DRAFT), ANN_USER, 2, null)
+
+        then:
+        removed.revision() == 3
+        removed.stored().drawing() == null
+        store.count("select count(*) from question_versions where drawing is null") == 1
+    }
+
     /** A write that waited on the draft began before the one it waited on was stamped, and never goes back past it. */
     def "an instruction written after a change stamped later than this one began keeps its time from going back"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; now().
         store.session.sql("""
                 update question_versions set updated_at = now() + interval '1 day', updated_by = ?::uuid
                  where entry_version_id = ?::uuid
                 """).params(FIRST_STEWARD, DRAFT).update()
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         def stamped = store.texts("select updated_at::text from question_versions")
 
         when:
         drafts.instruct(groupId(GROUP), entryId(QUESTION), versionId(DRAFT), ANN_USER, 1, new Instruction("Say."))
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select updated_at::text from question_versions") == stamped
         store.texts("select instruction || ' ' || updated_by from question_versions") == ["Say. ${ANN}" as String]
     }
@@ -171,6 +196,7 @@ class QuestionDraftsIntegrationSpec extends Specification {
                   left join declaration_fields parent on parent.declaration_field_id = field.parent_field_id
                  order by field.name
                 """) == ["2 addresses sender", "1 complaint -", "1 name sender", "2 sender -"]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select distinct created_by::text from declaration_fields") == [ANN]
 
         and: "the other half left holding nothing"
@@ -199,6 +225,7 @@ class QuestionDraftsIntegrationSpec extends Specification {
         declared.revision() == 3
         declared.stored().takes().declaration() == TAKEN
         declared.stored().takes().keys()*.id() ==
+                // DB-SPECIFIC: PostgreSQL :: casts to text.
                 store.texts("select declaration_field_id::text from declaration_fields where parent_field_id is null order by position")
                         .collect { UUID.fromString(it) }
         declared.stored().instruction() == new Instruction("Say why.")
@@ -237,6 +264,7 @@ class QuestionDraftsIntegrationSpec extends Specification {
 
         then:
         StoredQuestion.read(store.session, versionId(DRAFT)).get().gives().declaration() == gives
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select coalesce(term_list_version_id::text, '-') from declaration_fields order by position") ==
                 [LIST_IN_SERVICE, LIST_IN_SERVICE, "-"]
     }
@@ -280,8 +308,10 @@ class QuestionDraftsIntegrationSpec extends Specification {
 
         then:
         StoredQuestion.read(store.session, versionId(DRAFT)).get().gives().declaration() == gives
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select term_list_version_id::text from declaration_fields order by position") ==
                 [LIST_RETIRED, LIST_IN_SERVICE]
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.count("select count(*) from declaration_fields where declaration_field_id = ?::uuid", KEPT) == 0
     }
 
@@ -389,6 +419,7 @@ class QuestionDraftsIntegrationSpec extends Specification {
     }
 
     private void storedPin(String field, String version, String side, int position, String list) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, declaration_side.
         store.session.sql("""
                 insert into declaration_fields (declaration_field_id, entry_version_id, entry_kind, side, position,
                                                 name, kind, term_list_version_id, must_be_given, created_by)

@@ -43,16 +43,7 @@ const QUESTION = {
       stands: "always",
     },
   ],
-  added: [
-    {
-      name: "summary",
-      kind: "text",
-      longest: 1000,
-      many: false,
-      mustBeGiven: true,
-      confidence: false,
-    },
-  ],
+  added: 'Answer with one JSON object.\nJSON Schema:\n{"type":"object"}\n',
   lists: [{ name: "Categories", versionId: "v1", number: 1 }],
 };
 
@@ -74,6 +65,17 @@ const LIST = {
 };
 
 describe("readQuestion", () => {
+  it("keeps an optional Markdown drawing verbatim and refuses a malformed one", () => {
+    const drawing = "## Case\n{{complaint}} \\{{literal}}";
+    expect(questionFrom({ ...QUESTION, drawing })).toEqual({
+      ...QUESTION,
+      drawing,
+    });
+    expect(questionFrom(QUESTION)).toEqual(QUESTION);
+    expect(questionFrom({ ...QUESTION, drawing: null })).toBeNull();
+    expect(questionFrom({ ...QUESTION, drawing: 3 })).toBeNull();
+  });
+
   it("reads a question's version at the address the question kind's versions are at", async () => {
     const sent = serving({
       [`GET /api/groups/${GROUP}/questions/${ENTRY}/versions/${VERSION}`]: [
@@ -129,6 +131,18 @@ describe("writtenSinceRead", () => {
 });
 
 describe("questionFrom", () => {
+  it.each([[], [{ name: "summary" }], 12, true, {}])(
+    "rejects a nontext added value: %j",
+    (added) => {
+      expect(questionFrom({ ...QUESTION, added })).toBeNull();
+    },
+  );
+
+  it("retains all whitespace and escaping in what is added", () => {
+    const added = '  Demo Sample\n\t{"a":"\\n"}\n';
+    expect(questionFrom({ ...QUESTION, added })?.added).toBe(added);
+  });
+
   it("reads a version saying nothing yet, and nothing added, with neither member", () => {
     const { instruction: _said, added: _told, ...unsaid } = QUESTION;
 
@@ -250,7 +264,8 @@ const WORKFLOW = {
         gives: [QUESTION.gives[0]],
       },
     ],
-    models: [{ name: "general", modes: ["research"] }],
+    searchWays: [],
+    models: [{ name: "general", modes: ["research"], tools: [] }],
   },
   terms: { v1: ["urgent", "later"], v3: [] },
 };
@@ -280,7 +295,115 @@ describe("readWorkflow", () => {
   });
 });
 
+describe("workflow problem totals", () => {
+  it("reads the count beside the bounded list and refuses a count below its length", () => {
+    expect(workflowFrom({ ...WORKFLOW, problemTotal: 203 })?.problemTotal).toBe(
+      203,
+    );
+    expect(workflowFrom({ ...WORKFLOW, problemTotal: 0 })).toBeNull();
+    expect(workflowFrom({ ...WORKFLOW, problemTotal: -1 })).toBeNull();
+  });
+});
+
 describe("workflowFrom", () => {
+  it("reads an ordered searching question, its way, standings and offered tools", () => {
+    const search = {
+      stepId: "s4",
+      name: "find",
+      bindings: [],
+      runs: {
+        kind: "search",
+        searchWay: "web",
+        gives: [QUESTION.gives[0]],
+        question: [
+          { text: "Find " },
+          { partId: "p1", from: { input: "complaint" } },
+          { partId: "p2", from: { step: 0, path: "summary" } },
+        ],
+        standings: { title: "always", body: "never" },
+      },
+      producer: { kind: "model", model: "general" },
+      tries: 2,
+    };
+    const searchFields = (
+      ["title", "body", "references", "other"] as const
+    ).map((name, index) => ({
+      ...QUESTION.gives[0],
+      fieldId: `search-${index}`,
+      name,
+    }));
+    const offered = {
+      ...WORKFLOW.offered,
+      searchWays: [{ name: "web", tool: "web_search", gives: searchFields }],
+      models: [{ name: "general", modes: ["research"], tools: ["web_search"] }],
+    };
+
+    const read = workflowFrom({
+      ...WORKFLOW,
+      steps: [ASKING, search],
+      offered,
+    })!;
+
+    expect(read.steps[1]!.runs).toEqual(search.runs);
+    expect(read.offered.searchWays).toEqual(offered.searchWays);
+    expect(read.offered.models[0]!.tools).toEqual(["web_search"]);
+    expect(read.steps[1]!.runs?.question).toHaveLength(3);
+    expect(read.steps[1]!.bindings).toEqual([]);
+  });
+
+  it.each([
+    [
+      "both text and source in one part",
+      [{ text: "Find", partId: "p1", from: { input: "complaint" } }],
+      { title: "always" },
+    ],
+    [
+      "a constant as a part source",
+      [{ partId: "p1", from: { constant: '"a"' } }],
+      { title: "always" },
+    ],
+    [
+      "a read part without its key",
+      [{ from: { input: "complaint" } }],
+      { title: "always" },
+    ],
+    ["an unknown standing", [{ text: "Find" }], { title: "above_confidence" }],
+    [
+      "an unknown field",
+      [{ text: "Find" }],
+      { title: "always", extra: "never" },
+    ],
+  ])("reads nothing from %s", (_case, question, standings) => {
+    const step = {
+      stepId: "s4",
+      name: "find",
+      bindings: [],
+      runs: { kind: "search", question, standings },
+    };
+    expect(workflowFrom({ ...WORKFLOW, steps: [step] })).toBeNull();
+  });
+
+  it("refuses an offered model with no tools and a way with an unusable tool list", () => {
+    const noTools = {
+      ...WORKFLOW,
+      offered: {
+        ...WORKFLOW.offered,
+        models: [{ name: "general", modes: ["research"] }],
+      },
+    };
+    const badWay = {
+      ...WORKFLOW,
+      offered: {
+        ...WORKFLOW.offered,
+        searchWays: [{ name: "web", tool: 9, gives: [] }],
+      },
+    };
+
+    expect(workflowFrom(noTools)).toBeNull();
+    expect(workflowFrom(badWay)).toBeNull();
+    expect(workflowFrom(WORKFLOW)).not.toBeNull();
+  });
+
   it("reads every step's kind as it arrived, a constant as its JSON text to the digit", () => {
     expect(workflowFrom(WORKFLOW)).toEqual(READ);
   });
@@ -441,6 +564,19 @@ describe("workflowFrom", () => {
             bindingId: "b4",
             target: "summary",
             source: { input: "complaint", constant: 1 },
+          },
+        ],
+      },
+    ],
+    [
+      "a source naming a negative step",
+      {
+        ...WORKFLOW,
+        outputs: [
+          {
+            bindingId: "b4",
+            target: "summary",
+            source: { step: -1, path: "summary" },
           },
         ],
       },

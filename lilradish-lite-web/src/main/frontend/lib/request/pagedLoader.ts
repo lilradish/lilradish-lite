@@ -1,6 +1,6 @@
 import { isUnchecked, type Unchecked } from "./document";
 import { get } from "./http";
-import type { Page } from "./page";
+import { pageFrom, type Page } from "./page";
 
 /** How a reader asked for a list. An empty filter narrows nothing. */
 export interface ListQuery<O extends string> {
@@ -63,26 +63,4 @@ interface NoPagePart {
 
 function nothingBeside(): Record<never, never> {
   return {};
-}
-
-/**
- * Built row by row; a row that cannot be read, or a cursor that is not one,
- * fails the whole page, a list with a hole in it not being the list.
- */
-function pageFrom<T>(
-  body: unknown,
-  rowFrom: (row: unknown) => T | null,
-): Page<T> | null {
-  if (!isUnchecked(body) || !Array.isArray(body.items)) {
-    return null;
-  }
-  const items = body.items.map(rowFrom);
-  if (!items.every((item): item is T => item !== null)) {
-    return null;
-  }
-  if (!("nextCursor" in body)) {
-    return { items };
-  }
-  const { nextCursor } = body;
-  return typeof nextCursor === "string" ? { items, nextCursor } : null;
 }

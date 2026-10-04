@@ -21,13 +21,17 @@ import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.inference.Confidence
 import org.lilradish.lite.domain.model.ModelPrice
 import org.lilradish.lite.domain.run.DecisionRecord
+import org.lilradish.lite.domain.run.FailureRecord
 import org.lilradish.lite.domain.run.ReviewRecord
 import org.lilradish.lite.domain.run.RunId
+import org.lilradish.lite.domain.run.RunInTree
 import org.lilradish.lite.domain.run.RunSnapshot
 import org.lilradish.lite.domain.run.StepInputs
+import org.lilradish.lite.domain.run.StepPosition
 import org.lilradish.lite.domain.run.StepSnapshot
 import org.lilradish.lite.domain.run.TryRecord
 import org.lilradish.lite.domain.run.ValueRecord
+import org.lilradish.lite.domain.workflow.SearchQuestionPart
 import org.lilradish.lite.domain.workflow.StepId
 import spock.lang.Specification
 
@@ -56,11 +60,30 @@ class LoggingCoverageIntegrationSpec extends Specification {
 
     static final List<Class<?>> WOVEN = wovenClasses()
 
+    static final Set<Class<?>> HANDWRITTEN = [RunInTree, StepPosition.Beneath,
+            Class.forName('org.lilradish.lite.app.inference.BoundedResponseCapture')] as Set
+
+    def "every annotated field carrier is woven or has an explicitly verified safe rendering"() {
+        given:
+        def carriers = allClasses().findAll { !droppedComponents(it).isEmpty() } as Set
+
+        when:
+        def unwoven = carriers.findAll { !Loggable.isAssignableFrom(it) } as Set
+
+        then:
+        !carriers.isEmpty()
+        carriers.containsAll(HANDWRITTEN)
+        carriers.containsAll([Class.forName('org.lilradish.lite.app.run.StepReading$UnreadableRecord'),
+                              Class.forName('org.lilradish.lite.app.run.StepAnswers$UnreadableResponseRecord')])
+        unwoven == HANDWRITTEN
+        !HANDWRITTEN.any { Loggable.isAssignableFrom(it) }
+    }
+
     def "the walk finds the classes the rewrite wove, and none the rewrite refuses to weave"() {
         expect:
         WOVEN.containsAll([RunSnapshot, StepSnapshot, TryRecord, ValueRecord, ReviewRecord, DecisionRecord,
                            StepInputs.BindingRecord, Confidence, SubjectId, UserId, SystemPrincipal, RunId,
-                           StepId])
+                           StepId, SearchQuestionPart.LiteralPart])
 
         and: "while an interface the suffix list does name is absent, the rewrite refusing to weave one"
         !WOVEN.contains(Principal)
@@ -80,6 +103,8 @@ class LoggingCoverageIntegrationSpec extends Specification {
         ValueRecord              || ["ValueRecord#id", "ValueRecord#field", "ValueRecord#confidence", "ValueRecord#needsReview"]
         DecisionRecord           || ["DecisionRecord#value", "DecisionRecord#outcome"]
         SystemPrincipal          || ["SystemPrincipal#subject"]
+        FailureRecord            || ["FailureRecord#id", "FailureRecord#reason", "FailureRecord#onTry", "FailureRecord#purpose", "FailureRecord#at", "FailureRecord#answered", "FailureRecord#tool", "FailureRecord#source"]
+        SearchQuestionPart.LiteralPart || []
     }
 
     def "a value reached only through a collection is judged, which its erasure alone would hide"() {
@@ -117,11 +142,14 @@ class LoggingCoverageIntegrationSpec extends Specification {
     }
 
     private static List<Class<?>> wovenClasses() {
+        allClasses().findAll { Loggable.isAssignableFrom(it) }
+    }
+
+    private static List<Class<?>> allClasses() {
         Files.walk(CLASSES.resolve("org/lilradish/lite")).withCloseable { paths ->
             paths.filter { it.toString().endsWith(".class") }
                     .map { CLASSES.relativize(it) }
                     .map { load(it) }
-                    .filter { Loggable.isAssignableFrom(it) }
                     .toList()
                     .toSorted { it.name }
         }

@@ -14,12 +14,8 @@ import org.springframework.context.Lifecycle
 import spock.lang.Specification
 
 /**
- * A model is called in one place, on the run engine's own threads and outside any transaction, and that place
- * guards itself; nothing in the build keeps anything else from calling one, or from making a thread that passes
- * the guard. Both are asserted here, on javac's own output and the development stand-ins beside it.
- *
- * <p>Judged on the constant pool, as {@link DomainPurityIntegrationSpec} judges the domain: a call, a method
- * reference and a type named only in a descriptor all leave their mark there.
+ * A model must be called on the run engine's own threads and outside any transaction.
+ * Constant pools retain calls, method references and types named only in descriptors.
  */
 class ModelCallsCallerIntegrationSpec extends Specification {
 
@@ -33,6 +29,13 @@ class ModelCallsCallerIntegrationSpec extends Specification {
     static final String CALL_DESCRIPTOR = "(Lorg/lilradish/lite/domain/inference/CallRequest;" +
             "Lorg/lilradish/lite/domain/inference/CallProgress;)Lorg/lilradish/lite/domain/inference/CallOutcome;"
 
+    static final String TOOL_MODEL_CALLS = "org/lilradish/lite/app/inference/ToolModelCalls"
+
+    static final String TOOL_CALL_DESCRIPTOR = "(Lorg/lilradish/lite/app/inference/ToolCallRequest;" +
+            "Lorg/lilradish/lite/domain/inference/CallProgress;)Lorg/lilradish/lite/app/inference/ToolCallOutcome;"
+
+    static final String ENGINE_CALLS = "org.lilradish.lite.app.run.EngineCalls"
+
     static final String SHUTDOWN = "org/lilradish/lite/app/inference/ModelCallShutdown"
 
     static final String ENGINE_THREAD = "org/lilradish/lite/app/run/EngineThread"
@@ -45,7 +48,9 @@ class ModelCallsCallerIntegrationSpec extends Specification {
                                     "org.lilradish.lite.app.run.EngineExecutor",
                                     "org.lilradish.lite.app.run.EngineThread",
                                     "org.lilradish.lite.domain.inference.ModelCalls",
-                                    "org.lilradish.lite.app.inference.development.DevelopmentModelCalls"])
+                                    "org.lilradish.lite.app.inference.ToolModelCalls",
+                                    "org.lilradish.lite.app.inference.development.DevelopmentModelCalls",
+                                    "org.lilradish.lite.app.inference.development.DevelopmentToolModelCalls"])
 
         and: "each carrying what it referenced"
         POOLS.every { !it.value.isEmpty() }
@@ -53,7 +58,12 @@ class ModelCallsCallerIntegrationSpec extends Specification {
 
     def "a model is called only by the engine's calls, on whatever type, a method reference to the call counting as one"() {
         expect:
-        POOLS.findAll { it.value.any { calls(it) } }.keySet() == ["org.lilradish.lite.app.run.EngineCalls"] as Set
+        POOLS.findAll { it.value.any { calls(it, CALL_DESCRIPTOR) } }.keySet() == [ENGINE_CALLS] as Set
+    }
+
+    def "a model is called with tools by nothing but the engine's calls, on whatever type, a method reference to the call counting as one"() {
+        expect:
+        POOLS.findAll { it.value.any { calls(it, TOOL_CALL_DESCRIPTOR) } }.keySet() == [ENGINE_CALLS] as Set
     }
 
     def "only the engine's calls, the endpoint's wiring and the stand-in name where a model is called at all"() {
@@ -67,6 +77,16 @@ class ModelCallsCallerIntegrationSpec extends Specification {
                 "org.lilradish.lite.app.inference.development.DevelopmentModelCalls"] as Set
     }
 
+    def "only the engine's calls, the endpoint's wiring and the stand-in name where a model is called with tools at all"() {
+        expect:
+        POOLS.findAll { it.value.any { names(it, TOOL_MODEL_CALLS) } }.keySet() == [
+                "org.lilradish.lite.app.inference.ToolModelCalls",
+                ENGINE_CALLS,
+                "org.lilradish.lite.app.inference.ConfiguredToolModelCalls",
+                "org.lilradish.lite.app.inference.ModelCallsConfiguration",
+                "org.lilradish.lite.app.inference.development.DevelopmentToolModelCalls"] as Set
+    }
+
     def "only the engine's executor makes the thread a model may be called on"() {
         expect:
         POOLS.findAll { it.value.any { constructs(it, ENGINE_THREAD) } }.keySet() ==
@@ -74,8 +94,8 @@ class ModelCallsCallerIntegrationSpec extends Specification {
     }
 
     /**
-     * Took it either, its stop would be ordered before the signal that wakes the calls it drains; were it a
-     * lifecycle itself, its stop would wait on them. How long it drains is taken as a provider and a setting alone.
+     * Executor shutdown must follow the signal that wakes the calls it drains.
+     * A lifecycle dependency would reverse that order and wait on those calls.
      */
     def "the engine's executor takes the store and how long to drain, never the model calls or their shutdown signal, and is no lifecycle"() {
         given:
@@ -94,9 +114,9 @@ class ModelCallsCallerIntegrationSpec extends Specification {
     }
 
     /* On any owner: a call made on an implementation's own type names no interface at all. */
-    private static boolean calls(PoolEntry entry) {
+    private static boolean calls(PoolEntry entry, String descriptor) {
         entry instanceof MemberRefEntry && !(entry instanceof FieldRefEntry) && entry.name().equalsString("call") &&
-                entry.type().equalsString(CALL_DESCRIPTOR)
+                entry.type().equalsString(descriptor)
     }
 
     private static boolean namesModelCalls(PoolEntry entry) {

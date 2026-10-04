@@ -15,7 +15,8 @@ enum RunsKind {
     QUESTION("question"),
     WORKFLOW("workflow"),
     CODE_STEP("code_step"),
-    ROUTE("route");
+    ROUTE("route"),
+    SEARCH("search");
 
     private static final Map<String, RunsKind> BY_SPELLING =
             Arrays.stream(values()).collect(Collectors.toUnmodifiableMap(RunsKind::published, Function.identity()));

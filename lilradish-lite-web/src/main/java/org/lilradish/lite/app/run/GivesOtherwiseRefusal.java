@@ -17,6 +17,9 @@ final class GivesOtherwiseRefusal extends ApiErrorException {
 
     GivesOtherwiseRefusal(RefusalCode code, String sentence, CodeError.Fault fault) {
         super(code, sentence);
+        if (code != RefusalCode.CODE_STEP_GIVES_OTHERWISE) {
+            throw new IllegalArgumentException("GivesOtherwiseRefusal is only for CODE_STEP_GIVES_OTHERWISE");
+        }
         this.fault = requireNonNull(fault, "GivesOtherwiseRefusal fault must not be null");
     }
 

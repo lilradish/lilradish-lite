@@ -4,12 +4,7 @@ import spock.lang.Specification
 
 class LegibilitySpec extends Specification {
 
-    /**
-     * Every row is a way one string reaches a reader as another: a line of the caller's own, a
-     * value rendering exactly as a different one does, and a lone surrogate two of which are
-     * written down as the same bytes. The last is the whole of the tag block in miniature, a code
-     * point outside the basic plane refused by the same category rule.
-     */
+
     def "a value the reader cannot see for what it is is refused by position rather than echoed back"() {
         given:
         def value = "handbook" + Character.toString(codePoint) + ".pdf"
@@ -60,13 +55,7 @@ class LegibilitySpec extends Specification {
         valueType << ["UserId", "PersonName", "Correlation id", "GroupName"]
     }
 
-    /**
-     * What survives the categories is everything a value is legitimately written out of, the
-     * scripts a whitelist of letters and digits would have refused included. The last three are the
-     * ones no reader can see and this rule admits anyway: a letter and a mark that render as
-     * nothing, and an unassigned code point. None is a control, a format character or a surrogate,
-     * so the categories are the whole of what is claimed here.
-     */
+    /** Only the specified Unicode categories are refused; other invisible or unassigned characters remain allowed. */
     def "what a reader can see is carried through, this check being no charset"() {
         when:
         Legibility.requireVisibleAndWellFormed(value, "UserId")
@@ -75,18 +64,14 @@ class LegibilitySpec extends Specification {
         noExceptionThrown()
 
         where:
-        value << ["handbook/chapter-3.md", "https://intranet.example.com/policy", "REF-0000",
-                  "CN=Ada Lovelace,OU=Analytics", "会計", "😀",
+        value << ["handbook/chapter-3.md", "https://example.com/policy", "REF-0000",
+                  "CN=Ari Mockvale,OU=DemoGroup", "会計", "😀",
                   "han" + Character.toString(0x3164) + "dbook",
                   "han" + Character.toString(0x034F) + "dbook",
                   "han" + Character.toString(0x2065) + "dbook"]
     }
 
-    /**
-     * The split between the two checks stated as the thing that makes it real: a space separator
-     * survives this one whatever it is made of, so a caller wanting it refused has to ask for the
-     * rule below, and one that does not ask keeps whatever spacing its origin produced.
-     */
+
     def "a space separator is left to the rule about spaces, this check holding no opinion on one"() {
         when:
         Legibility.requireVisibleAndWellFormed(Character.toString(codePoint), "UserId")
@@ -98,10 +83,10 @@ class LegibilitySpec extends Specification {
         codePoint << [0x0020, 0x00A0, 0x3000]
     }
 
-    /** Everything the stricter rule refuses except format characters, refused alike and by position. */
+
     def "a value that is not one well-formed line is refused by position rather than echoed back"() {
         given:
-        def value = "Ada" + Character.toString(codePoint) + "Lovelace"
+        def value = "Ari" + Character.toString(codePoint) + "Mockvale"
 
         when:
         Legibility.requireOneWellFormedLine(value, "ListFilter")
@@ -127,14 +112,10 @@ class LegibilitySpec extends Specification {
         0xDFFF    || "DFFF"
     }
 
-    /**
-     * The whole of the difference from the stricter rule: a joiner, a non-joiner and a soft hyphen are
-     * how some names are written, and a bidirectional control is carried too, being compared and never
-     * shown.
-     */
+    /** The compared value allows format characters used in names, including bidirectional controls. */
     def "a format character is carried as one line of text, where the stricter rule refuses it"() {
         given:
-        def value = "Ada" + Character.toString(codePoint) + "Lovelace"
+        def value = "Ari" + Character.toString(codePoint) + "Mockvale"
 
         when:
         Legibility.requireOneWellFormedLine(value, "ListFilter")
@@ -152,7 +133,7 @@ class LegibilitySpec extends Specification {
         codePoint << [0x200C, 0x200D, 0x00AD, 0x202E, 0xFEFF, 0xE0041]
     }
 
-    /** A carriage return is refused with the rest: a line of prose ends in a line feed and in nothing else. */
+
     def "prose refusing what one line refuses, a tab and a line feed apart, is refused by position"() {
         given:
         def value = "Say\twhy.\n" + Character.toString(codePoint)
@@ -181,7 +162,7 @@ class LegibilitySpec extends Specification {
         0xD800    || "D800"
     }
 
-    /** The first two are what one line refuses and prose is written with; the joiners spell words. */
+
     def "prose carries a tab, a line feed, a joiner, a non-joiner and a soft hyphen"() {
         when:
         Legibility.requireWellFormedProse("Say" + Character.toString(codePoint) + "why.", "Instruction")
@@ -193,7 +174,7 @@ class LegibilitySpec extends Specification {
         codePoint << [0x0009, 0x000A, 0x200C, 0x200D, 0x00AD, 0x2065, 0x202F, 0xE0080]
     }
 
-    /** Each end of both ranges, which a bound written one narrower lets through. */
+
     def "prose holding a direction control or a tag character is refused, naming which, by position"() {
         when:
         Legibility.requireWellFormedProse("Say" + Character.toString(codePoint) + "why.", "Instruction")
@@ -229,7 +210,7 @@ class LegibilitySpec extends Specification {
         0xE007F   || "tag character"     | "E007F"
     }
 
-    /** Only the two the concealing rule names; every other format character is some other rule's to refuse. */
+
     def "a format character that conceals nothing passes the concealing rule"() {
         when:
         Legibility.requireNothingConcealed("Bill" + Character.toString(codePoint) + "ing", "Term")
@@ -303,17 +284,14 @@ class LegibilitySpec extends Specification {
         "Say" + Character.toString(0x2066) + Character.toString(0x0) || "direction control" | "2066"   | "0000"
     }
 
-    /**
-     * Every space, a format character and the tag block draw as nothing on one line; anything else
-     * shows, a mark or an emoji among it, and so do a tab and a line feed, which a line refuses outright.
-     */
+
     def "a value holds something that shows exactly where it holds anything but spaces, format and tag characters"() {
         expect:
         Legibility.holdsSomethingVisible(value) == shows
 
         where:
         value                                                             || shows
-        "Ada"                                                             || true
+        "Ari"                                                             || true
         Character.toString(0x200C) + "a"                                  || true
         Character.toString(0x0301)                                        || true
         Character.toString(0x1F600)                                       || true
@@ -392,11 +370,7 @@ class LegibilitySpec extends Specification {
         value << ["\n\tSay why.", Character.toString(0x0301), "\n" + Character.toString(0x3000) + "Say why."]
     }
 
-    /**
-     * Asked separately rather than folded into the rule about spaces, which is total on the empty
-     * value: a value holding nothing holds no space either, so only this check has anything to say
-     * about it.
-     */
+    /** An empty value contains no spaces; emptiness therefore needs its own check. */
     def "a value holding nothing at all is refused, whichever caller is asking"() {
         when:
         Legibility.requireNotEmpty("", valueType)
@@ -409,12 +383,7 @@ class LegibilitySpec extends Specification {
         valueType << ["UserId", "PersonName", "Correlation id", "GroupName"]
     }
 
-    /**
-     * Every space separator Unicode defines but U+0020, each one a way to spell a value that
-     * renders as an existing one and sits beside it in a unique index. Refused wherever it sits,
-     * the interior included — a rule guarding only the two ends leaves the middle open, which is
-     * precisely where a twin is cheapest to build.
-     */
+    /** Identifier spacing must not change how a reader identifies the value. */
     def "a space that is not U+0020 is refused wherever it sits, by position rather than echoed back"() {
         given:
         def value = "clerk" + Character.toString(codePoint) + "0021"
@@ -451,10 +420,7 @@ class LegibilitySpec extends Specification {
         0x3000    || "3000"
     }
 
-    /**
-     * The seventeenth, and the one the rule keeps: a value somebody typed is entitled to a space
-     * between its words, and refusing that would refuse the names this is asked of.
-     */
+
     def "a single U+0020 between words is carried, which is what makes the refusals ones of the spelling"() {
         when:
         Legibility.requireSpaceDecidesNothing(value, "UserId")
@@ -463,13 +429,10 @@ class LegibilitySpec extends Specification {
         noExceptionThrown()
 
         where:
-        value << ["Ada" + Character.toString(0x0020) + "Lovelace", "Risk and Controls", "004821"]
+        value << ["Ari" + Character.toString(0x0020) + "Mockvale", "Risk and Controls", "004821"]
     }
 
-    /**
-     * The two ends are where it decides nothing a reader can see and everything a unique index can:
-     * the row is a different string and renders as the same identifier.
-     */
+
     def "a value U+0020 sits at either end of is refused, and the end holding it is named"() {
         when:
         Legibility.requireSpaceDecidesNothing(value, "UserId")
@@ -487,11 +450,7 @@ class LegibilitySpec extends Specification {
         "   "      || "UserId must not begin with a space"
     }
 
-    /**
-     * A run renders as one wider gap that no reader counts, so a value carrying two spaces is a
-     * second spelling of the one carrying a single. It is the twin the two ends are guarded
-     * against, built between the words instead of at an edge.
-     */
+
     def "a value carrying two spaces in a row is refused, and the pair is named by position"() {
         when:
         Legibility.requireSpaceDecidesNothing(value, "UserId")
@@ -509,11 +468,7 @@ class LegibilitySpec extends Specification {
         "Risk and  Controls" || 8
     }
 
-    /**
-     * The interior rule is read across the whole value before either end is, so a value carrying
-     * both faults is reported by the one a reader could not have seen rather than by the one they
-     * could.
-     */
+
     def "a value with a hidden space and a trailing one is reported by the hidden one"() {
         when:
         Legibility.requireSpaceDecidesNothing("00" + Character.toString(0x00A0) + "4821 ", "UserId")
@@ -523,11 +478,7 @@ class LegibilitySpec extends Specification {
         refused.message == "UserId must not contain a space other than U+0020, but the one at index 2 is U+00A0"
     }
 
-    /**
-     * Holding no space at all, an empty value satisfies this rule rather than tripping it. That the
-     * two questions are asked separately is why nothing here reads a code point off a value that
-     * has none.
-     */
+    /** The spacing check accepts empty values without reading a nonexistent code point. */
     def "a value holding nothing at all holds no space either, so this rule has nothing to say about it"() {
         when:
         Legibility.requireSpaceDecidesNothing("", "UserId")
@@ -570,11 +521,7 @@ class LegibilitySpec extends Specification {
         noExceptionThrown()
     }
 
-    /**
-     * Code points rather than UTF-16 units, which is what a column's own bound counts. A value of
-     * 256 units and 128 characters is the one place the two ways of counting part company, and
-     * counting units would refuse a name the store would have accepted.
-     */
+    /** Count code points like the database column bound, rather than UTF-16 units. */
     def "the maximum counts what a column counts, and not what the string is stored as"() {
         when:
         Legibility.requireWithinMaximumLength(Character.toString(0x1F600).repeat(128), 128, "GroupName")

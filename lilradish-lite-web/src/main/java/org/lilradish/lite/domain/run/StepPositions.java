@@ -11,8 +11,8 @@ import org.lilradish.lite.domain.workflow.Producer;
 import org.lilradish.lite.domain.workflow.StepProducer;
 
 /**
- * Where each step of a run is, worked out from what the run holds and nothing else. Tries are judged newest by
- * their number and never by time, which ties within a transaction.
+ * Where each step of a run is, worked out from what the run holds. Numbered tries are ordered by number; an
+ * unnumbered open model production is newest. Time ties within a transaction.
  */
 public final class StepPositions {
 
@@ -60,6 +60,7 @@ public final class StepPositions {
             case StepPosition.NotStarted ignored -> null;
             case StepPosition.Running ignored -> null;
             case StepPosition.Done ignored -> null;
+            case StepPosition.Beneath beneath -> waitsOn(beneath.run(), beneath.where());
             case StepPosition.HeldBack ignored -> WaitsOn.STARTER;
             case StepPosition.Failed ignored -> WaitsOn.STARTER;
             case StepPosition.Owed ignored -> WaitsOn.ANSWER_STEP;
@@ -92,7 +93,9 @@ public final class StepPositions {
      * try it held reads as asked, since releasing it asks that try before anything else. */
     private static StepPosition letGo(StepSnapshot step, HoldRecord hold) {
         PlannedStep planned = step.planned();
-        if (!(planned.runs() instanceof StepRuns.Question || planned.runs() instanceof StepRuns.Code)
+        if (!(planned.runs() instanceof StepRuns.Question
+                        || planned.runs() instanceof StepRuns.Code
+                        || planned.runs() instanceof StepRuns.Search)
                 || !(planned.producer() instanceof Producer.Person)) {
             return new StepPosition.HeldBack(hold.reason(), hold.since(), null);
         }
@@ -105,11 +108,31 @@ public final class StepPositions {
     private static StepPosition unreleased(StepSnapshot step, StepPosition position) {
         StepPosition.Owed owed = position.nextTry();
         return owed != null && EngineActs.unreleased(step.planned())
-                ? new StepPosition.HeldBack(RunStepHoldReason.CODE_STEP_NOT_HELD, owed.since(), null)
+                ? new StepPosition.HeldBack(
+                        step.planned().runs() instanceof StepRuns.Search
+                                ? RunStepHoldReason.SEARCH_WAY_NOT_HELD
+                                : RunStepHoldReason.CODE_STEP_NOT_HELD,
+                        owed.since(),
+                        null)
                 : position;
     }
 
     private static StepPosition unheld(StepSnapshot step, boolean reached) {
+        StepSnapshot.Beneath beneath = step.beneath();
+        if (beneath != null) {
+            RunSnapshot child = beneath.run();
+            List<StepPosition> positions = of(child);
+            if (RunPositions.done(positions) == positions.size()) {
+                return new StepPosition.Done();
+            }
+            for (int index = 0; index < positions.size(); index++) {
+                StepPosition position = positions.get(index);
+                if (!(position instanceof StepPosition.Done)) {
+                    return new StepPosition.Beneath(child, child.steps().get(index), position);
+                }
+            }
+            throw new IllegalStateException("An unfinished run has a step not done");
+        }
         if (step.runStep() == null) {
             return unasked(step, reached);
         }
@@ -128,7 +151,11 @@ public final class StepPositions {
         if (newest.open()) {
             return switch (newest.producer()) {
                 case PERSON ->
-                    new StepPosition.Owed(newest.number(), true, newest.number() > declared, newest.askedAt());
+                    new StepPosition.Owed(
+                            requireNonNull(newest.number()),
+                            true,
+                            requireNonNull(newest.number()) > declared,
+                            newest.askedAt());
                 case CODE -> new StepPosition.Running(RunningOn.CODE);
                 // Running(CALL): a model's try with an attempt to produce it written; until then it is being made.
                 case MODEL -> new StepPosition.Running(newest.unsent() ? RunningOn.NEXT_TRY : RunningOn.CALL);
@@ -141,13 +168,15 @@ public final class StepPositions {
         return yielded(step, newest, declared);
     }
 
-    /* One reached that a model or code produces reads as its first try being made, which the system makes itself. */
     private static StepPosition unasked(StepSnapshot step, boolean reached) {
         if (!reached) {
             return new StepPosition.NotStarted();
         }
         Producer producer = step.planned().producer();
-        return producer instanceof Producer.Model || producer instanceof Producer.Code
+        return producer instanceof Producer.Model
+                        || producer instanceof Producer.Code
+                        || step.planned().runs() instanceof StepRuns.Workflow
+                        || step.planned().runs() instanceof StepRuns.Route
                 ? new StepPosition.Running(RunningOn.NEXT_TRY)
                 : new StepPosition.NotStarted();
     }
@@ -182,12 +211,13 @@ public final class StepPositions {
         if (newest.producer() == StepProducer.PERSON) {
             throw new IllegalStateException("Try " + newest.id().value() + " of a person was lost");
         }
-        if (newest.number() >= declared) {
-            return new StepPosition.Failed(new StepFailure.TriesSpent(newest.number(), declared), ended);
+        if (requireNonNull(newest.number()) >= declared) {
+            return new StepPosition.Failed(
+                    new StepFailure.TriesSpent(requireNonNull(newest.number()), declared), ended);
         }
         return newest.producer() == StepProducer.MODEL || mayRunAgain(step)
                 ? new StepPosition.Running(RunningOn.NEXT_TRY)
-                : new StepPosition.Owed(newest.number() + 1, false, false, ended);
+                : new StepPosition.Owed(requireNonNull(newest.number()) + 1, false, false, ended);
     }
 
     private static StepPosition yielded(StepSnapshot step, TryRecord newest, int declared) {
@@ -195,6 +225,10 @@ public final class StepPositions {
         ReviewRecord refusal = null;
         List<StepPosition.WaitingValue> waiting = new ArrayList<>();
         ReviewSending sending = step.planned().reviewer() == null ? null : ReviewSending.of(newest);
+        if (EngineActs.unreleased(step.planned())
+                && (sending == ReviewSending.UNSENT || sending == ReviewSending.TURNED_AWAY)) {
+            sending = ReviewSending.NO_LONGER_DECLARED;
+        }
         WaitsOn on = sending == null || sending.toPerson() ? WaitsOn.REVIEW_AT_GATE : WaitsOn.MODEL;
         for (ValueRecord value : newest.values()) {
             switch (ValueStanding.of(newest, value)) {
@@ -205,20 +239,21 @@ public final class StepPositions {
             }
         }
         if (refusal != null) {
-            if (newest.number() >= declared) {
-                return new StepPosition.Failed(new StepFailure.TriesSpent(newest.number(), declared), refusal.at());
+            if (requireNonNull(newest.number()) >= declared) {
+                return new StepPosition.Failed(
+                        new StepFailure.TriesSpent(requireNonNull(newest.number()), declared), refusal.at());
             }
             boolean byPerson = refusal.by() != null || refusal.forLength();
             boolean onceOnly = step.planned().producer() instanceof Producer.Code && !mayRunAgain(step);
             return byPerson || onceOnly
-                    ? new StepPosition.Owed(newest.number() + 1, false, false, refusal.at())
+                    ? new StepPosition.Owed(requireNonNull(newest.number()) + 1, false, false, refusal.at())
                     : new StepPosition.Running(RunningOn.NEXT_TRY);
         }
         if (waiting.isEmpty()) {
             return new StepPosition.Done();
         }
         return new StepPosition.AwaitingReview(
-                newest.number(),
+                requireNonNull(newest.number()),
                 waiting,
                 newest.producer() == StepProducer.PERSON ? newest.endedBy() : null,
                 ended,

@@ -8,15 +8,18 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withException
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withRawStatus
 
-import groovy.transform.CompileStatic
 import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
+import java.util.Objects
+import java.util.concurrent.atomic.AtomicLong
 import org.lilradish.lite.app.inference.ModelEndpoint.VendorMode
 import org.lilradish.lite.app.inference.ModelEndpoint.VendorModel
+import org.lilradish.lite.app.inference.fixture.OverlongBody
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.inference.CallProgress
 import org.lilradish.lite.domain.inference.CallRequest
+import org.lilradish.lite.domain.inference.DidNotFitReason
 import org.lilradish.lite.domain.inference.ModelCallPurpose
 import org.lilradish.lite.domain.inference.TurnAway
 import org.lilradish.lite.domain.model.DeployedModel
@@ -107,14 +110,14 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.Errored(detail)
+        outcome == new CallOutcome.Errored(detail, null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
 
         where:
         failure                                            || detail
-        new SocketTimeoutException("Read timed out")       || "No answer came back: java.net.SocketTimeoutException: Read timed out"
+        new SocketTimeoutException("Read timed out")       || "No answer came back: java.net.SocketTimeoutException"
         new ConnectException()                             || "No answer came back: java.net.ConnectException"
     }
 
@@ -129,7 +132,7 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
 
         then:
         outcome == new CallOutcome.Errored(
-                "No answer came back: org.springframework.web.client.ResourceAccessException: I/O error: nowhere to send")
+                "No answer came back: org.springframework.web.client.ResourceAccessException", null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
@@ -168,7 +171,7 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(mode), progress)
 
         then:
-        outcome == new CallOutcome.CameBack("ok", 9, 1, false, false)
+        outcome == new CallOutcome.CameBack("ok", 9, 1, false, false, null, null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
@@ -204,7 +207,7 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.CameBack(answer, sentCount, cameBackCount, countedByModel, cutOff)
+        outcome == new CallOutcome.CameBack(answer, sentCount, cameBackCount, countedByModel, cutOff, null, null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
@@ -230,7 +233,7 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         '"content":"kept","refusal":""'  | "stop"   | null                                                  || "kept"             | 9         | 2             | false          | false
     }
 
-    def "a refusal or content the filter withheld is never an answer, and comes back empty and not cut off"() {
+    def "a refusal or filtered completion retains its text and usage but cannot fit a declared answer"() {
         given:
         def modelCalls = modelCalls(0)
         server.expect(requestTo(COMPLETIONS)).andRespond(withRawStatus(200).body(completion(message, finish, usage)))
@@ -239,18 +242,24 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.CameBack("", sentCount, cameBackCount, countedByModel, false)
+        outcome == new CallOutcome.CameBack(answer, sentCount, cameBackCount, countedByModel, false,
+                DidNotFitReason.MODEL_DECLINED, declinedWords)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
 
         where:
-        message                                          | finish           | usage                                        || sentCount | cameBackCount | countedByModel
-        '"content":null,"refusal":"I cannot help"'       | "stop"           | null                                         || 9         | 0             | false
-        '"content":"partial","refusal":"I cannot help"'  | "stop"           | '{"prompt_tokens":12,"completion_tokens":4}' || 12        | 4             | true
-        '"content":"partial"'                            | "content_filter" | null                                         || 9         | 0             | false
-        '"content":"partial"'                            | "content_filter" | '{"prompt_tokens":12,"completion_tokens":4}' || 12        | 4             | true
-        '"content":null,"refusal":"no"'                  | "length"         | null                                         || 9         | 0             | false
+        message                                          | finish           | usage                                        || answer    | declinedWords   | sentCount | cameBackCount | countedByModel
+        '"content":null,"refusal":"I cannot help"'       | "stop"           | null                                         || ""        | "I cannot help" | 9         | 5             | false
+        '"content":"","refusal":"I cannot help"'         | "stop"           | null                                         || ""        | "I cannot help" | 9         | 5             | false
+        '"content":"","refusal":"I cannot help"'         | "stop"           | '{"prompt_tokens":12,"completion_tokens":4}' || ""        | "I cannot help" | 12        | 4             | true
+        '"content":"partial","refusal":"I cannot help"'  | "stop"           | '{"prompt_tokens":12,"completion_tokens":4}' || "partial" | "I cannot help" | 12        | 4             | true
+        '"content":"partial","refusal":"I cannot help"'  | "stop"           | null                                         || "partial" | "I cannot help" | 9         | 7             | false
+        '"content":"partial"'                            | "content_filter" | null                                         || "partial" | null            | 9         | 3             | false
+        '"content":"partial"'                            | "content_filter" | '{"prompt_tokens":12,"completion_tokens":4}' || "partial" | null            | 12        | 4             | true
+        '"content":null'                                 | "content_filter" | null                                         || ""        | null            | 9         | 0             | false
+        '"content":"","refusal":""'                    | "content_filter" | '{"prompt_tokens":12,"completion_tokens":4}' || ""        | ""              | 12        | 4             | true
+        '"content":null,"refusal":"no"'                  | "length"         | null                                         || ""        | "no"            | 9         | 1             | false
     }
 
     def "only the first choice is read"() {
@@ -264,13 +273,13 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.CameBack("first", 9, 2, false, false)
+        outcome == new CallOutcome.CameBack("first", 9, 2, false, false, null, null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
     }
 
-    def "a body that is not a readable chat completion is an error, and nothing of it is quoted"() {
+    def "an unreadable service envelope is an error with bounded service evidence"() {
         given:
         def modelCalls = modelCalls(0)
         server.expect(requestTo(COMPLETIONS)).andRespond(withRawStatus(status).body(body))
@@ -279,7 +288,10 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.Errored("HTTP $status came back without a readable chat completion".toString())
+        outcome instanceof CallOutcome.Errored
+        outcome.detail() == 'The model service returned a response this system could not read.'
+        outcome.unreadableResponse().text() == body
+        !outcome.unreadableResponse().truncated()
         1 * progress.aboutToSend()
         0 * _
         server.verify()
@@ -301,10 +313,165 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         201    | '{}'
     }
 
-    def "a body running past the longest completion the store could keep an answer of is not read to its end"() {
+    def "a supplementary model character survives one-byte transport reads"() {
         given:
         def modelCalls = modelCalls(0)
-        def body = new OverlongBody('{"choices":[', EndpointJson.LONGEST_READ + 1_048_576)
+        def bytes = completion('"content":"Demo Sample 😀"', 'stop', null).getBytes(UTF_8)
+        def stream = new FilterInputStream(new ByteArrayInputStream(bytes)) {
+            @Override
+            int read(byte[] into, int offset, int asked) {
+                super.read(into, offset, Math.min(asked, 1))
+            }
+        }
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ ignored -> new MockClientHttpResponse(stream, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.CameBack
+        outcome.answer() == 'Demo Sample 😀'
+        outcome.cameBackCount() == 5L
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+    }
+
+    def "invalid UTF-8 in an otherwise readable envelope is a service error with changed evidence"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def invalid = [(byte) 0xE0, (byte) 0x80, (byte) 0x80] as byte[]
+        def body = new SequenceInputStream(Collections.enumeration([
+                new ByteArrayInputStream('{"choices":[{"message":{"content":"Demo Sample","ignored":"'.getBytes(UTF_8)),
+                new ByteArrayInputStream(invalid),
+                new ByteArrayInputStream('"}}]}'.getBytes(UTF_8))
+        ]))
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ ignored -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.Errored
+        outcome.detail() == 'The model service returned a response this system could not read.'
+        outcome.unreadableResponse().text().contains('\uFFFD')
+        outcome.unreadableResponse().altered()
+        !outcome.unreadableResponse().truncated()
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+    }
+
+    @Timeout(120)
+    def "a malformed byte beyond the evidence bound still makes a parsed response an error"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def invalid = [(byte) 0xE0, (byte) 0x80, (byte) 0x80] as byte[]
+        def body = new SequenceInputStream(Collections.enumeration([
+                new ByteArrayInputStream('{"choices":[{"message":{"content":"'.getBytes(UTF_8)),
+                new RepeatedBytes('x'.getBytes(UTF_8), 8_388_609),
+                new ByteArrayInputStream('","ignored":"'.getBytes(UTF_8)),
+                new ByteArrayInputStream(invalid),
+                new ByteArrayInputStream('"}}]}'.getBytes(UTF_8))
+        ]))
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ ignored -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.Errored
+        outcome.detail() == 'The model service returned a response this system could not read.'
+        outcome.unreadableResponse().truncated()
+        outcome.unreadableResponse().text().codePointCount(0, outcome.unreadableResponse().text().length()) ==
+                8_388_608
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+    }
+
+    @Timeout(120)
+    def "an early parser failure drains only through the exact evidence code-point edge"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def body = new OverlongBody('?', 8_388_608 + extra)
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ ignored -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.Errored
+        outcome.unreadableResponse().text().codePointCount(0, outcome.unreadableResponse().text().length()) ==
+                8_388_608
+        outcome.unreadableResponse().truncated() == (extra == 1)
+        body.served == 8_388_608 + extra
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+
+        where:
+        extra << [0, 1]
+    }
+
+    @Timeout(120)
+    def "an early parser failure does not drain an endless service tail"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def served = new AtomicLong()
+        def body = new InputStream() {
+            @Override
+            int read() {
+                served.getAndIncrement() == 0 ? (int) ('?' as char) : (int) (' ' as char)
+            }
+
+            @Override
+            int read(byte[] into, int offset, int asked) {
+                Objects.checkFromIndexSize(offset, asked, into.length)
+                if (asked == 0) {
+                    return 0
+                }
+                Arrays.fill(into, offset, offset + asked, (byte) 32)
+                if (served.get() == 0) {
+                    into[offset] = (byte) ('?' as char)
+                }
+                served.addAndGet(asked)
+                asked
+            }
+        }
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ ignored -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.Errored
+        outcome.unreadableResponse().truncated()
+        served.get() >= 8_388_609
+        served.get() < 8_388_608 + 8192
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+    }
+
+    @Timeout(120)
+    def "two separately bounded completion texts reach the converter through a stream"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def most = 8_388_608
+        def escaped = '\\ud83d\\ude00'.getBytes(UTF_8)
+        def body = new SequenceInputStream(Collections.enumeration([
+                new ByteArrayInputStream('{"choices":[{"message":{"content":"'.getBytes(UTF_8)),
+                new RepeatedBytes(escaped, most),
+                new ByteArrayInputStream('","refusal":"'.getBytes(UTF_8)),
+                new RepeatedBytes(escaped, most),
+                new ByteArrayInputStream('"},"finish_reason":"stop"}]}'.getBytes(UTF_8))
+        ]))
         server.expect(requestTo(COMPLETIONS))
                 .andRespond({ request -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
 
@@ -312,12 +479,54 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.Errored("HTTP 200 came back without a readable chat completion")
-        body.served > EndpointJson.LONGEST_READ
-        body.served < EndpointJson.LONGEST_READ + 65_536
+        outcome instanceof CallOutcome.CameBack
+        outcome.didNotFitReason() == DidNotFitReason.MODEL_DECLINED
+        outcome.answer().codePointCount(0, outcome.answer().length()) == most
+        outcome.declinedWords().codePointCount(0, outcome.declinedWords().length()) == most
+        outcome.answer().startsWith("\uD83D\uDE00")
+        outcome.declinedWords().endsWith("\uD83D\uDE00")
+        !outcome.countedByModel()
         1 * progress.aboutToSend()
         0 * _
         server.verify()
+    }
+
+    def "a body running past the two-text completion bound is not read to its end"() {
+        given:
+        def modelCalls = modelCalls(0)
+        def body = new OverlongBody('{"choices":[', EndpointJson.LONGEST_COMPATIBLE_COMPLETION + 1_048_576)
+        server.expect(requestTo(COMPLETIONS))
+                .andRespond({ request -> new MockClientHttpResponse(body, 200) } as ResponseCreator)
+
+        when:
+        def outcome = modelCalls.call(request(null), progress)
+
+        then:
+        outcome instanceof CallOutcome.Errored
+        outcome.detail() == 'The model service returned a response this system could not read.'
+        outcome.unreadableResponse().truncated()
+        body.served > EndpointJson.LONGEST_COMPATIBLE_COMPLETION
+        body.served < EndpointJson.LONGEST_COMPATIBLE_COMPLETION + 65_536
+        1 * progress.aboutToSend()
+        0 * _
+        server.verify()
+    }
+
+    def "the parsed completion keeps its model content and the reader refuses repeated keys"() {
+        given:
+        def compatible = new OpenAiCompatibleCallConversion()
+
+        expect:
+        compatible.convert(EndpointJson.COMPATIBLE_COMPLETION_READER.readTree(
+                completion('"content":"Demo Sample answer"', "stop", null))) ==
+                new ConvertedCallAnswer("Demo Sample answer", null, null, false, [:], [], null, null, 0L)
+
+        when:
+        EndpointJson.COMPATIBLE_COMPLETION_READER.readTree(
+                '{"choices":[{"message":{"content":"Demo Sample answer"}}],"choices":[]}')
+
+        then:
+        thrown(tools.jackson.core.JacksonException)
     }
 
     def "a response neither an answer nor a turnaway is an error naming its status and what the endpoint said, bounded"() {
@@ -329,7 +538,7 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
         def outcome = modelCalls.call(request(null), progress)
 
         then:
-        outcome == new CallOutcome.Errored(detail)
+        outcome == new CallOutcome.Errored(detail, null)
         1 * progress.aboutToSend()
         0 * _
         server.verify()
@@ -352,7 +561,9 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
                 shutdown, InstantSource.fixed(Instant.parse("2026-09-26T10:00:00Z")))
         def builder = ModelCallsConfiguration.modelClient(ENDPOINT, "test-key", resend).mutate()
         server = MockRestServiceServer.bindTo(builder).build()
-        new OpenAiCompatibleModelCalls(builder.build(), ENDPOINT.completions(), ENDPOINT.pairedWith(new ModelCatalog([MODEL])))
+        def compatible = new OpenAiCompatibleCallConversion()
+        new OpenAiCompatibleModelCalls(new ModelCallTransport(builder.build(),
+                ENDPOINT.callWays(new ModelCatalog([MODEL])), new ModelCallConversions([compatible], [compatible])))
     }
 
     private static CallRequest request(ModelMode mode) {
@@ -365,22 +576,16 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
                 (usage == null ? '' : ',"usage":' + usage) + '}'
     }
 
-    /**
-     * Its opening, then spaces, which a parser skips without keeping, to the length given. It ends there
-     * rather than never, since a read that ignored the bound would spin where no timeout can stop it.
-     */
-    @CompileStatic
-    static final class OverlongBody extends InputStream {
+    /** A finite body without a second copy of either near-limit text in the test fixture. */
+    private static final class RepeatedBytes extends InputStream {
+        private final byte[] block
+        private final long length
+        private long served
 
-        final byte[] opening
-
-        final long length
-
-        long served
-
-        OverlongBody(String opening, long length) {
-            this.opening = opening.getBytes(UTF_8)
-            this.length = length
+        RepeatedBytes(byte[] unit, long copies) {
+            block = new byte[unit.length * 4096]
+            4096.times { index -> System.arraycopy(unit, 0, block, index * unit.length, unit.length) }
+            length = Math.multiplyExact(copies, unit.length)
         }
 
         @Override
@@ -388,25 +593,31 @@ class OpenAiCompatibleModelCallsSpec extends Specification {
             if (served >= length) {
                 return -1
             }
-            int next = served < opening.length ? opening[(int) served] : (int) (' ' as char)
+            int next = block[(int) (served % block.length)] & 0xff
             served++
             next
         }
 
         @Override
         int read(byte[] into, int offset, int asked) {
-            if (served < opening.length || served >= length) {
-                int next = read()
-                if (next < 0) {
-                    return -1
-                }
-                into[offset] = (byte) next
-                return 1
+            Objects.checkFromIndexSize(offset, asked, into.length)
+            if (asked == 0) {
+                return 0
+            }
+            if (served >= length) {
+                return -1
             }
             int given = (int) Math.min((long) asked, length - served)
-            Arrays.fill(into, offset, offset + given, (byte) 32)
-            served += given
+            int left = given
+            while (left > 0) {
+                int start = (int) (served % block.length)
+                int part = Math.min(left, block.length - start)
+                System.arraycopy(block, start, into, offset + given - left, part)
+                served += part
+                left -= part
+            }
             given
         }
     }
+
 }

@@ -13,10 +13,10 @@ const GROUP = "00000003-0000-4000-8000-000000000981";
 
 const SUBJECT = "00000002-0000-4000-8000-000000000981";
 
-const ADA = {
+const AVO = {
   subjectId: SUBJECT,
   userId: "000981",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
   roles: ["owner"],
   lastChangingRoles: ["owner"],
   removable: false,
@@ -48,7 +48,7 @@ describe("atMember", () => {
 
 describe("readMember", () => {
   it("asks the member's own address inside the group, and reads what the group holds of them", async () => {
-    const sent = answering([JSON.stringify(ADA), 200]);
+    const sent = answering([JSON.stringify(AVO), 200]);
 
     const member = await readMember(
       GROUP,
@@ -60,7 +60,7 @@ describe("readMember", () => {
       `/api/groups/${GROUP}/members/${SUBJECT}`,
     ]);
     expect(member).toEqual({
-      ...ADA,
+      ...AVO,
       roles: new Set(["owner"]),
       lastChangingRoles: new Set(["owner"]),
       removable: false,
@@ -98,7 +98,7 @@ describe("takeOut", () => {
   });
 
   it("refuses a removal answered with content, which no removal answers with", async () => {
-    answering([JSON.stringify(ADA), 200]);
+    answering([JSON.stringify(AVO), 200]);
 
     const failure = await refusalOf(
       takeOut(GROUP, SUBJECT, new AbortController().signal),

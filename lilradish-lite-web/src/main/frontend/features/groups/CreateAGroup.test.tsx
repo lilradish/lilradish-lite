@@ -12,13 +12,10 @@ import { noticesIn } from "../../testutil/notices";
 import type { Outcome } from "./changes";
 import { CreateAGroup } from "./CreateAGroup";
 
-/** How long typing has to pause before what was typed is sent. */
-const QUIET_MS = 300;
-
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-000000000130",
   userId: "000130",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
 };
 
 const NAMELESS = {
@@ -35,7 +32,7 @@ const PAYROLL = {
 };
 
 const FOUND: Reply = [
-  JSON.stringify({ items: [ADA, NAMELESS], more: false }),
+  JSON.stringify({ items: [AVO, NAMELESS], more: false }),
   200,
 ];
 
@@ -82,15 +79,11 @@ async function opened() {
   return screen.getByRole("dialog", { name: "Create a group" });
 }
 
-/** Typed into the pool's search, and the pause that hands it on waited out in real time. */
 async function searchedFor(text: string) {
   await userEvent.type(
     screen.getByRole("searchbox", { name: "User number or name" }),
     text,
   );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  });
 }
 
 function nameBox(): HTMLElement {
@@ -115,12 +108,12 @@ async function typedIn(name: string, key: string) {
   }
 }
 
-/** A name, a key, and Ada picked: everything the control holds out for. */
+/** A name, a key, and Avo picked: everything the control holds out for. */
 async function filledIn() {
   await typedIn("Payroll", "payroll");
   await searchedFor("a");
   await userEvent.click(
-    await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+    await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
   );
 }
 
@@ -147,7 +140,7 @@ describe("CreateAGroup", () => {
 
     const offered = await screen.findAllByRole("radio");
     expect(offered.map((each) => each.closest("label")?.textContent)).toEqual([
-      "000130 Ada Lovelace",
+      "000130 Avo Lumerace",
       "000150",
     ]);
     expect(requestsTo(sent)).toEqual(["GET /api/pool/search?search=a"]);
@@ -195,9 +188,12 @@ describe("CreateAGroup", () => {
       await typedIn(name, key);
 
       expect(create()).toHaveAttribute("aria-disabled", "true");
-      expect(noticesIn(create().parentElement!)).toEqual([
-        { severity: "info", words: missing },
-      ]);
+      expect(create()).toHaveAccessibleDescription(missing);
+      expect(create().parentElement).toHaveTextContent(missing);
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).parentElement,
+      ).not.toHaveTextContent(missing);
+      expect(noticesIn(create().parentElement!)).toEqual([]);
     },
   );
 
@@ -208,7 +204,7 @@ describe("CreateAGroup", () => {
     await filledIn();
 
     expect(create()).not.toHaveAttribute("aria-disabled");
-    expect(noticesIn(create().parentElement!)).toEqual([]);
+    expect(create()).not.toHaveAttribute("aria-describedby");
     expect(requestsTo(sent)).toEqual(["GET /api/pool/search?search=a"]);
   });
 
@@ -232,7 +228,7 @@ describe("CreateAGroup", () => {
     expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
       name: "Payroll",
       key: "payroll",
-      subjectId: ADA.subjectId,
+      subjectId: AVO.subjectId,
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -262,7 +258,7 @@ describe("CreateAGroup", () => {
       expect(nameBox()).toHaveValue("Payroll");
       expect(keyBox()).toHaveValue("payroll");
       expect(
-        screen.getByRole("radio", { name: "000130 Ada Lovelace" }),
+        screen.getByRole("radio", { name: "000130 Avo Lumerace" }),
       ).toBeChecked();
     },
   );

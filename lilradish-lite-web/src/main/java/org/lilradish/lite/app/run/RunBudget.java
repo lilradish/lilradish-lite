@@ -46,34 +46,42 @@ final class RunBudget {
             """.formatted(CEILING_IN_FORCE, IN_FORCE_ON_RUN);
 
     /*
-     * Every call but one turned away, one still out included, at what it sent and whatever came back. A call the
-     * model did not count, one that never came back among them, is counted at what this system measured.
+     * Every taken-up call, one still out included unless its latest turnaway is waiting to be resent, at what it
+     * sent and whatever came back. A call the model did not count is counted at what this system measured.
      */
     private static final String COUNTS = """
             coalesce(sum(call.sent_count), 0) as sent,
                    coalesce(sum(call.came_back_count), 0) as came_back,
                    count(*) filter (where call.came_back_count is null) > 0 as came_back_unknown,
-                   count(*) filter (where not call.counted_by_model) > 0 as measured_here""";
+                   count(*) filter (where not call.counted_by_model) as measured_here_calls,
+                   count(*) as total_calls""";
 
     private static final String COUNTED = """
             select %s
               from model_calls call
             """.formatted(COUNTS);
 
+    /** A call aliased {@code call} counts once taken up, except while its latest turnaway awaits a resend. */
+    static final String TAKEN_UP = """
+            call.outcome is distinct from 'turned_away'
+            and not exists (select 1 from model_call_turnaways latest
+                             where latest.model_call_turnaway_id = (%s) and latest.resent_at is null)
+            """.formatted(EngineWrites.newestTurnaway("call.model_call_id"));
+
     /* A call to produce or to review names the try it is about; one to help names none, and is the run's. */
     private static final String SPENT_BY_TRY = """
             select call.production_id, %s
               from model_calls call
              where call.run_id = :run and call.production_id is not null
-               and call.outcome is distinct from 'turned_away'
+               and %s
              group by call.production_id
-            """.formatted(COUNTS);
+            """.formatted(COUNTS, TAKEN_UP);
 
     /**
      * A call aliased {@code call} counted as spent by the tree whose root {@code :root} names: it carries its tree's
-     * root, so a whole tree is read by that alone, and one turned away every time was never taken up.
+     * root, so a whole tree is read by that alone.
      */
-    static final String SPENT_IN_TREE = "call.root_run_id = :root and call.outcome is distinct from 'turned_away'";
+    static final String SPENT_IN_TREE = "call.root_run_id = :root and " + TAKEN_UP;
 
     private static final String SPENT_BY_TREE = COUNTED + " where " + SPENT_IN_TREE;
 
@@ -85,8 +93,8 @@ final class RunBudget {
                     select beneath.run_id from runs beneath join tree on beneath.parent_run_id = tree.run_id
             )
             %s
-             where call.run_id in (select tree.run_id from tree) and call.outcome is distinct from 'turned_away'
-            """.formatted(COUNTED);
+             where call.run_id in (select tree.run_id from tree) and %s
+            """.formatted(COUNTED, TAKEN_UP);
 
     private RunBudget() {}
 
@@ -123,7 +131,8 @@ final class RunBudget {
                 result.getLong("sent"),
                 result.getLong("came_back"),
                 result.getBoolean("came_back_unknown"),
-                result.getBoolean("measured_here"));
+                result.getLong("measured_here_calls"),
+                result.getLong("total_calls"));
     }
 
     private static InForce inForceNow(JdbcClient database, RunId run) {
@@ -141,13 +150,42 @@ final class RunBudget {
     /** @param ceiling none where the run may spend without limit */
     record InForce(@Nullable Ceiling ceiling, boolean raiseNeedsApproval) {}
 
+    enum Measurement {
+        WHOLLY("wholly"),
+        PARTLY("partly");
+
+        private final String published;
+
+        Measurement(String published) {
+            this.published = published;
+        }
+
+        String published() {
+            return published;
+        }
+    }
+
     /**
      * @param cameBackUnknown whether a call counted has come back saying nothing, or has not come back yet
-     * @param measuredHere whether any of it is what this system measured, the model having counted none of that call
+     * @param measuredHereCalls how many counted calls this system measured, rather than their models
+     * @param totalCalls how many calls are counted, whether measured here or by their models
      */
-    record Spend(long sent, long cameBack, boolean cameBackUnknown, boolean measuredHere) {
+    record Spend(long sent, long cameBack, boolean cameBackUnknown, long measuredHereCalls, long totalCalls) {
 
-        static final Spend NOTHING = new Spend(0, 0, false, false);
+        static final Spend NOTHING = new Spend(0, 0, false, 0, 0);
+
+        Spend {
+            if (measuredHereCalls < 0 || totalCalls < measuredHereCalls) {
+                throw new IllegalArgumentException("Spend measured calls must be between none and all counted calls");
+            }
+        }
+
+        @Nullable
+        Measurement measuredHere() {
+            return measuredHereCalls == 0
+                    ? null
+                    : measuredHereCalls == totalCalls ? Measurement.WHOLLY : Measurement.PARTLY;
+        }
 
         long spent() {
             return Math.addExact(sent, cameBack);
@@ -158,7 +196,8 @@ final class RunBudget {
                     Math.addExact(sent, other.sent),
                     Math.addExact(cameBack, other.cameBack),
                     cameBackUnknown || other.cameBackUnknown,
-                    measuredHere || other.measuredHere);
+                    Math.addExact(measuredHereCalls, other.measuredHereCalls),
+                    Math.addExact(totalCalls, other.totalCalls));
         }
     }
 }

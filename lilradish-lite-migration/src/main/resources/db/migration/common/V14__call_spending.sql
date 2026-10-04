@@ -11,11 +11,11 @@ alter table model_call_turnaways
     add constraint model_call_turnaways_model_call_outcome_is_turned_away check (model_call_outcome = 'turned_away'),
     add constraint model_call_turnaways_resent_only_unspent check (not (spent_up and resent_at is not null));
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index model_call_turnaways_one_spent_up_per_call on model_call_turnaways (model_call_id) where spent_up;
 
 alter table model_calls
-    -- Set only where the model counted both. Unset, sent_count and any came_back_count are what this system measured:
-    -- sent_count's comment, that the model's count replaces it once back, fails for a call that came back uncounted.
+    -- True when both counts came from the model. Otherwise sent_count and any came_back_count are system-measured.
     add column counted_by_model boolean not null default false,
     add constraint model_calls_counted_by_model_only_for_came_back
         check (not counted_by_model or coalesce(outcome = 'came_back', false));

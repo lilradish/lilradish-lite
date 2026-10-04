@@ -67,7 +67,7 @@ class RunsControllerIntegrationSpec extends Specification {
 
     static final PersonRows.Person ADA = new PersonRows.Person(
             new SubjectId(UUID.fromString("00000002-0000-4000-8000-000000001201")), new UserId("001201"),
-            new PersonName("Ada Lovelace"))
+            new PersonName("Ari Mockvale"))
 
     static final PersonRows.Person GRACE = new PersonRows.Person(
             new SubjectId(UUID.fromString("00000002-0000-4000-8000-000000001202")), new UserId("001202"), null)
@@ -78,25 +78,24 @@ class RunsControllerIntegrationSpec extends Specification {
 
     static final String STARTED_WITH = """
             {"claim":"Lost bag","amount":"12.50","urgent":"true","noticed":null,"tags":["late","torn"],
-             "sender":{"name":"Ada","since":"2026-09-24T10:00:00+02:00"}}"""
+             "sender":{"name":"Ari","since":"2026-09-24T10:00:00+02:00"}}"""
 
-    /**
-     * Stopped by Grace, spent past what a double holds, part of it as this system measured it, at the highest ceiling a
-     * reader holds, a removal asked.
-     */
-    static final Runs.RunView STOPPED = new Runs.RunView(new RunId(RUN), 7, new RunName("Claim from Ada"), null, HANDLING,
-            ADA, STARTED, JSON.readTree(STARTED_WITH), RunState.STOPPED, null,
+    static final Runs.RunView STOPPED = new Runs.RunView(new RunId(RUN), 7, new RunName("Claim from Ari"), null, null, [],
+            HANDLING,
+            ADA, STARTED, JSON.readTree(STARTED_WITH), null, RunState.STOPPED, null,
             new Runs.Stop(STARTED.plusSeconds(60), new Runs.Stopper.ByPerson(GRACE)),
-            new RunBudget.Spend(9007199254740993L, 20, true, true),
+            new RunBudget.Spend(9007199254740993L, 20, true, 1, 1),
             new Runs.CeilingHeld.Own(new RunBudget.InForce(new Ceiling(Ceiling.LARGEST), true),
                     new CeilingRaises.Waiting(new CeilingChangeId(RAISE), null, ADA, STARTED.plusSeconds(120), true)),
-            EnumSet.of(RunAct.OPEN_AGAIN, RunAct.WITHDRAW_RAISE))
+            EnumSet.of(RunAct.OPEN_AGAIN, RunAct.WITHDRAW_RAISE), [])
 
     /** Beneath another, its ceiling reached, and held to the ceiling at the top, keeping none of its own. */
-    static final Runs.RunView BENEATH = new Runs.RunView(new RunId(RUN), 8, null, new RunId(ABOVE), HANDLING, null,
-            STARTED, null, RunState.STOPPED, null,
-            new Runs.Stop(STARTED.plusSeconds(60), new Runs.Stopper.ByCeiling(ABOVE_RUN)),
-            new RunBudget.Spend(0, 0, false, false), new Runs.CeilingHeld.AtTop(ABOVE_RUN), EnumSet.noneOf(RunAct))
+    static final Runs.RunView BENEATH = new Runs.RunView(new RunId(RUN), 8, null, new RunId(ABOVE),
+            new Runs.From(ABOVE_RUN, new WorkflowStepId(STEP), new StepId("route")),
+            [new Runs.RunAbove(new RunId(ABOVE), 7, new RunName("Claim from Greno"))], HANDLING, null,
+            STARTED, null, null, RunState.STOPPED, null,
+            new Runs.Stop(STARTED.plusSeconds(60), new Runs.Stopper.ByCeiling([ABOVE_RUN])),
+            new RunBudget.Spend(0, 0, false, 0, 0), new Runs.CeilingHeld.AtTop(ABOVE_RUN), EnumSet.noneOf(RunAct), [])
 
     @Autowired
     private MockMvc mockMvc
@@ -126,6 +125,35 @@ class RunsControllerIntegrationSpec extends Specification {
         mockMvc.perform(get(address)).andReturn()
     }
 
+    def "a run publishes measured calls as wholly or partly, and omits the marker when none were measured here"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def view = new Runs.RunView(BENEATH.runId(), BENEATH.number(), BENEATH.name(), BENEATH.above(), BENEATH.from(),
+                BENEATH.runsAbove(), BENEATH.workflow(), BENEATH.startedBy(), BENEATH.startedAt(), BENEATH.startedWith(), BENEATH.startedWithFrom(), BENEATH.state(),
+                BENEATH.at(), BENEATH.stop(), new RunBudget.Spend(0, 0, false, measured, total), BENEATH.ceiling(),
+                BENEATH.acts(), BENEATH.conversationEvents())
+        given(runs.run(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(view)
+
+        when:
+        def answered = reading(ADDRESS)
+        def spend = JSON.readTree(answered.response.contentAsString).get("spend")
+
+        then:
+        answered.response.status == 200
+        spend.get("measuredHere")?.asString() == published
+        spend.has("measuredHere") == (published != null)
+        spend.get("sent").asString() == "0"
+        spend.get("spent").asString() == "0"
+        readOnce()
+
+        where:
+        measured | total || published
+        0        | 0     || null
+        0        | 2     || null
+        2        | 2     || "wholly"
+        1        | 2     || "partly"
+    }
+
     def "answers a run as it is read, every count in digits so none arrives rounded"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
@@ -137,18 +165,19 @@ class RunsControllerIntegrationSpec extends Specification {
         then:
         answered.response.status == 200
         JSON.readTree(answered.response.contentAsString) == JSON.readTree("""
-                {"runId":"${RUN}","number":7,"name":"Claim from Ada",
+                {"runId":"${RUN}","number":7,"name":"Claim from Ari",
                  "workflow":{"entryId":"${WORKFLOW}","name":"Handle a claim","version":3},
-                 "startedBy":{"userId":"001201","displayName":"Ada Lovelace"},"startedAt":"2026-09-25T08:00:00Z",
+                 "runsAbove":[],
+                 "startedBy":{"userId":"001201","displayName":"Ari Mockvale"},"startedAt":"2026-09-25T08:00:00Z",
                  "startedWith":${STARTED_WITH},
                  "state":"stopped","stopped":{"at":"2026-09-25T08:01:00Z","by":{"userId":"001202"}},
                  "spend":{"sent":"9007199254740993","cameBack":"20","spent":"9007199254741013","cameBackUnknown":true,
-                          "measuredHere":true},
+                          "measuredHere":"wholly"},
                  "ceiling":{"inForce":"9007199254740991","raiseNeedsApproval":true,
                             "waiting":{"changeId":"${RAISE}",
-                                       "askedBy":{"userId":"001201","displayName":"Ada Lovelace"},
+                                       "askedBy":{"userId":"001201","displayName":"Ari Mockvale"},
                                        "askedAt":"2026-09-25T08:02:00Z"}},
-                 "acts":["open_again","withdraw_raise"]}
+                 "acts":["open_again","withdraw_raise"],"conversationEvents":[]}
                 """ as String)
         def startedWith = JSON.readTree(answered.response.contentAsString).get("startedWith")
         startedWith.propertyNames().toList() == ["claim", "amount", "urgent", "noticed", "tags", "sender"]
@@ -177,11 +206,84 @@ class RunsControllerIntegrationSpec extends Specification {
         then:
         JSON.readTree(answered.response.contentAsString) == JSON.readTree("""
                 {"runId":"${RUN}","number":8,"above":"${ABOVE}",
+                 "from":{"runId":"${ABOVE}","number":7,"stepId":"${STEP}","stepName":"route"},
+                 "runsAbove":[{"runId":"${ABOVE}","number":7,"name":"Claim from Greno"}],
                  "workflow":{"entryId":"${WORKFLOW}","name":"Handle a claim","version":3},
                  "startedAt":"2026-09-25T08:00:00Z","state":"stopped",
-                 "stopped":{"at":"2026-09-25T08:01:00Z","ceilingOf":{"runId":"${ABOVE}","number":7}},
+                 "stopped":{"at":"2026-09-25T08:01:00Z","ceilingOf":{"runId":"${ABOVE}","number":7},
+                            "ceilings":[{"runId":"${ABOVE}","number":7}]},
                  "spend":{"sent":"0","cameBack":"0","spent":"0","cameBackUnknown":false},
-                 "ceiling":{"heldBy":{"runId":"${ABOVE}","number":7}},"acts":[]}
+                 "ceiling":{"heldBy":{"runId":"${ABOVE}","number":7}},"acts":[],"conversationEvents":[]}
+                """ as String)
+    }
+
+    /** A name is held only at the top, so a run between says its number alone, never a null name. */
+    def "answers every run above one two levels beneath from the top down, a name only where the top holds one"() {
+        given:
+        holding(EnumSet.of(GroupRole.OVERSEER))
+        def top = UUID.fromString("00000008-0000-4000-8000-000000001203")
+        def view = new Runs.RunView(BENEATH.runId(), BENEATH.number(), BENEATH.name(), BENEATH.above(), BENEATH.from(),
+                [new Runs.RunAbove(new RunId(top), 6, new RunName("Claim from Greno")),
+                 new Runs.RunAbove(new RunId(ABOVE), 7, null)],
+                BENEATH.workflow(), BENEATH.startedBy(), BENEATH.startedAt(), BENEATH.startedWith(), BENEATH.startedWithFrom(), BENEATH.state(),
+                BENEATH.at(), BENEATH.stop(), BENEATH.spend(), BENEATH.ceiling(), BENEATH.acts(), BENEATH.conversationEvents())
+
+        given(runs.run(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(view)
+
+        when:
+        def answered = JSON.readTree(reading(ADDRESS).response.contentAsString)
+
+        then:
+        answered.get("runsAbove") == JSON.readTree("""
+                [{"runId":"${top}","number":6,"name":"Claim from Greno"},{"runId":"${ABOVE}","number":7}]
+                """ as String)
+        !answered.get("runsAbove").get(1).has("name")
+        !answered.has("name")
+        readOnce()
+    }
+
+    def "answers a stop by ceilings reached at once with every one from the top down, the first also as the one it names"() {
+        given:
+        holding(EnumSet.of(GroupRole.OVERSEER))
+        def both = new Runs.RunView(new RunId(RUN), 8, null, new RunId(ABOVE),
+                new Runs.From(ABOVE_RUN, new WorkflowStepId(STEP), new StepId("route")), BENEATH.runsAbove(), HANDLING,
+                null,
+                STARTED, null, null, RunState.STOPPED, null,
+                new Runs.Stop(STARTED.plusSeconds(60),
+                        new Runs.Stopper.ByCeiling([ABOVE_RUN, new Runs.NumberedRun(new RunId(RUN), 8)])),
+                new RunBudget.Spend(0, 0, false, 0, 0), new Runs.CeilingHeld.AtTop(ABOVE_RUN), EnumSet.noneOf(RunAct), [])
+        given(runs.run(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(both)
+
+        when:
+        def answered = reading(ADDRESS)
+
+        then:
+        JSON.readTree(answered.response.contentAsString).path("stopped") == JSON.readTree("""
+                {"at":"2026-09-25T08:01:00Z","ceilingOf":{"runId":"${ABOVE}","number":7},
+                 "ceilings":[{"runId":"${ABOVE}","number":7},{"runId":"${RUN}","number":8}]}
+                """ as String)
+    }
+
+    def "a child start publishes each bound value with its actual source"() {
+        given:
+        holding(EnumSet.of(GroupRole.OVERSEER))
+        def origin = new StepAnswers.FromAnswer("run_input", "ticket", null, null, null, null, ABOVE, 7, null)
+        def source = new Runs.StartedSource("item", origin, null)
+        def view = new Runs.RunView(BENEATH.runId(), BENEATH.number(), BENEATH.name(), BENEATH.above(),
+                BENEATH.from(), BENEATH.runsAbove(), BENEATH.workflow(), BENEATH.startedBy(), BENEATH.startedAt(),
+                JSON.readTree('{"item":"Demo Sample ticket"}'), [source], BENEATH.state(), BENEATH.at(),
+                BENEATH.stop(), BENEATH.spend(), BENEATH.ceiling(), BENEATH.acts(),
+                BENEATH.conversationEvents())
+        given(runs.run(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(view)
+
+        when:
+        def response = JSON.readTree(reading(ADDRESS).response.contentAsString)
+
+        then:
+        response.get("startedWith") == JSON.readTree('{"item":"Demo Sample ticket"}')
+        response.get("startedWithFrom") == JSON.readTree("""
+                [{"input":"item","from":{"kind":"run_input","path":"ticket",
+                "runId":"${ABOVE}","runNumber":7}}]
                 """ as String)
     }
 
@@ -189,9 +291,10 @@ class RunsControllerIntegrationSpec extends Specification {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
         given(runs.run(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(new Runs.RunView(new RunId(RUN), 7,
-                new RunName("Claim from Ada"), null, HANDLING, ADA, STARTED, JSON.createObjectNode(), state, at, null,
-                new RunBudget.Spend(0, 0, false, false), new Runs.CeilingHeld.Own(new RunBudget.InForce(null, false), null),
-                EnumSet.of(RunAct.RENAME)))
+                new RunName("Claim from Ari"), null, null, [], HANDLING, ADA, STARTED, JSON.createObjectNode(), null, state, at,
+                null,
+                new RunBudget.Spend(0, 0, false, 0, 0), new Runs.CeilingHeld.Own(new RunBudget.InForce(null, false), null),
+                EnumSet.of(RunAct.RENAME), []))
 
         when:
         def answered = JSON.readTree(reading(ADDRESS).response.contentAsString)

@@ -4,7 +4,7 @@ import { personFrom } from "./person";
 
 describe("personFrom", () => {
   it.each([
-    ["with a name", { userId: "000c01", displayName: "Ada" }],
+    ["with a name", { userId: "000c01", displayName: "Avo" }],
     ["with none", { userId: "000c01" }],
   ])("reads somebody %s, adding nothing in its place", (_case, body) => {
     expect(personFrom(body)).toEqual(body);
@@ -12,7 +12,7 @@ describe("personFrom", () => {
 
   it.each([
     ["no object at all", "000c01"],
-    ["no user number", { displayName: "Ada" }],
+    ["no user number", { displayName: "Avo" }],
     ["a user number that is no text", { userId: 7 }],
     ["a name that is no text", { userId: "000c01", displayName: 7 }],
     ["a name sent as null", { userId: "000c01", displayName: null }],

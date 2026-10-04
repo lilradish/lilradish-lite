@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.libprunus.core.error.ApiErrorException
 import org.lilradish.lite.app.group.GroupRoles
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.domain.registry.EntryKind
@@ -24,10 +25,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Writing a draft's content through the one way in, on a real server running the real baseline: a
- * reference list's note and terms stand in for whatever a kind writes.
- */
+
 class DraftsIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000801"
@@ -50,6 +48,7 @@ class DraftsIntegrationSpec extends Specification {
 
     static final String OTHER_VERSION = "00000007-0000-4000-8000-000000000802"
 
+    // DB-SPECIFIC: PostgreSQL :: casts to uuid.
     static final String NOTE = "update reference_list_versions set note = 'Pick one.' where entry_version_id = ?::uuid"
 
     @Shared
@@ -85,7 +84,7 @@ class DraftsIntegrationSpec extends Specification {
         store.content(VERSION, "reference_list")
     }
 
-    /** A stopped entry is written alike: stopping is about running and not about writing. */
+
     def "writes a draft through its kind's content in the same change, the caller one who wrote it from then on"() {
         given:
         if (stopped) {
@@ -102,6 +101,7 @@ class DraftsIntegrationSpec extends Specification {
         written == EntryKind.REFERENCE_LIST
         store.texts("select note from reference_list_versions") == ["Pick one."]
         store.texts("select created_by || ' ' || created_by_kind from entry_version_writers") == ["${ANN} person" as String]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select revision::text from entry_versions") == ["2"]
 
         where:
@@ -116,6 +116,7 @@ class DraftsIntegrationSpec extends Specification {
         write(VERSION, ANN_USER) { draft -> null }
 
         then:
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select created_by::text from entry_version_writers") == [ANN]
     }
 
@@ -134,7 +135,7 @@ class DraftsIntegrationSpec extends Specification {
         store.count("select count(*) from entry_version_writers") == 0
     }
 
-    /** A submitted version's content stops changing the moment it is submitted, and never changes again. */
+
     def "a version that is not a draft is written by nobody, and what its kind would write is never asked"() {
         given:
         store.submitted(VERSION, ANN)
@@ -184,9 +185,10 @@ class DraftsIntegrationSpec extends Specification {
         EntryKind.REFERENCE_LIST | ENTRY       | VERSION       | DAN_USER || RefusalCode.GROUP_NOT_IN_VIEW
     }
 
-    /** Behind is a reading somebody wrote over since; ahead is one no reading of this draft ever gave. */
+
     def "a write naming a revision the draft is not at is refused before its kind is asked, and nothing lands"() {
         given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.session.sql("update entry_versions set revision = 3 where entry_version_id = ?::uuid").param(VERSION).update()
         def before = store.contents()
         def asked = false
@@ -223,10 +225,7 @@ class DraftsIntegrationSpec extends Specification {
         seen << [0, -1, Integer.MIN_VALUE]
     }
 
-    /**
-     * Two saves made from one reading: the second waits on the draft the first holds, and once the first has
-     * landed it finds the revision moved on and is refused, so the first is never silently written over.
-     */
+    /** A second saver must not overwrite changes made since the draft was read. */
     def "a second write from the same reading, waiting on the first, is refused once the first has landed"() {
         given:
         def writing = new CountDownLatch(1)
@@ -253,6 +252,7 @@ class DraftsIntegrationSpec extends Specification {
         outcome.errorCode() == RefusalCode.DRAFT_WRITTEN_SINCE_READ
         !askedSecond
         store.texts("select note from reference_list_versions") == ["Pick one."]
+        // DB-SPECIFIC: PostgreSQL :: casts to text.
         store.texts("select revision::text from entry_versions") == ["2"]
     }
 
@@ -273,10 +273,7 @@ class DraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /**
-     * Two terms given one position collide only when the change ends. Brought forward, the store refuses them
-     * at a statement inside the change: the change never reaches the moment before it commits.
-     */
+    /** Deferred uniqueness must be checked before the transaction commits. */
     def "a uniqueness checked only at commit refuses inside the change, before it would commit, and nothing lands"() {
         given:
         def before = store.contents()
@@ -291,6 +288,7 @@ class DraftsIntegrationSpec extends Specification {
                 }
             })
             ["Billing", "Delivery"].each { term ->
+                // DB-SPECIFIC: PostgreSQL :: casts to uuid.
                 store.session.sql("""
                         insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                         values (?::uuid, 1, ?, 'A meaning.', ?::uuid)
@@ -304,24 +302,21 @@ class DraftsIntegrationSpec extends Specification {
         store.contents() == before
     }
 
-    /**
-     * The write holds the draft while its content is written. A submission of that draft waits on it, and
-     * what it submits is the draft as the write left it, never a draft half written: without the term the
-     * write adds, the submission would be refused.
-     */
+    /** Submitting must wait for the whole draft to finish changing. */
     def "a submission arriving while a draft is being written waits until the writing has landed"() {
         given:
         def writing = new CountDownLatch(1)
         def release = new CountDownLatch(1)
         def submissions = new VersionChanges(store.session, store.transactions(), new GroupRoles(store.session),
-                new ContentChecks(store.session, [new QuestionContentCheck(store.session), new WorkflowContentCheck(store.session, LibraryStore.MODELS,
-                                   new ReleasedCodeSteps(LibraryStore.CODE_STEPS)),
+                new ContentChecks(store.session, [new QuestionContentCheck(store.session, LibraryStore.FILES), new WorkflowContentCheck(store.session, LibraryStore.MODELS,
+                                   new ReleasedCodeSteps(LibraryStore.CODE_STEPS), LibraryStore.FILES, new SearchWays([])),
                                    new ReferenceListContentCheck(store.session)]))
 
         when:
         def written = attempting(racing) {
             write(VERSION, ANN_USER) { draft ->
                 store.session.sql(NOTE).param(draft.version().value()).update()
+                // DB-SPECIFIC: PostgreSQL :: casts to uuid.
                 store.session.sql("""
                         insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                         values (?::uuid, 1, 'Billing', 'A charge is disputed.', ?::uuid)
@@ -346,10 +341,7 @@ class DraftsIntegrationSpec extends Specification {
         store.texts("select note from reference_list_versions") == ["Pick one."]
     }
 
-    /**
-     * The roles are taken by a change holding the group, which the write waits on; once it lands, what the
-     * caller holds is read again, and the write is refused before its kind is ever asked.
-     */
+    /** Authorization must be read again after waiting for the group lock. */
     def "a write whose caller loses their roles while it waits on the group is refused, its kind never asked"() {
         given:
         store.repeatableReadByDefault()
@@ -371,7 +363,7 @@ class DraftsIntegrationSpec extends Specification {
         store.contents("group_members") == before
     }
 
-    /** Every draft here is read at its first revision unless a case says otherwise. */
+
     private <T> T write(String version, UserId caller, DraftContent<T> content) {
         write(version, caller, 1, content)
     }

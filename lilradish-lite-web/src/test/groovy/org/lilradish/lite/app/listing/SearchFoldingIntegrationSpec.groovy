@@ -41,6 +41,7 @@ class SearchFoldingIntegrationSpec extends Specification {
     def "a generated column is a stored fold exactly where its name says so, by the function a search folds what was typed with"() {
         when:
         def session = JdbcClient.create(database)
+        // DB-SPECIFIC: PostgreSQL :: casts to regnamespace; pg_attribute/pg_class/pg_attrdef; pg_get_expr().
         def generated = session.sql("""
                 select table_of.relname || '.' || folded.attname as stored,
                        pg_get_expr(generation.adbin, generation.adrelid) as expression
@@ -51,6 +52,7 @@ class SearchFoldingIntegrationSpec extends Specification {
                  where table_of.relnamespace = 'app'::regnamespace and folded.attgenerated <> ''
                 """).query { row, number -> [row.getString("stored"), row.getString("expression")] }.list()
                 .collectEntries()
+        // DB-SPECIFIC: PostgreSQL :: casts to regnamespace; pg_attribute/pg_class.
         def notStored = session.sql("""
                 select table_of.relname || '.' || folded.attname
                   from pg_attribute folded
@@ -89,10 +91,10 @@ class SearchFoldingIntegrationSpec extends Specification {
 
         where:
         stored                                   | typed
-        "E" + COMBINING_ACUTE + "mile Zola"       | "émile zola"
-        "Émile Zola"                              | "E" + COMBINING_ACUTE + "MILE"
+        "E" + COMBINING_ACUTE + "vren Mack"       | "évren mack"
+        "Évren Mack"                              | "E" + COMBINING_ACUTE + "VREN"
         "Straße"                                  | "STRASSE"
-        "grace hopper"                            | "GRACE HOPPER"
+        "greno nockal"                            | "GRENO NOCKAL"
         "山田　太郎"                                  | "田　太"
     }
 
@@ -108,9 +110,9 @@ class SearchFoldingIntegrationSpec extends Specification {
         where:
         stored       | typed
         "René"       | "Rene"
-        "Ａda"        | "Ada"
+        "Ａri"        | "Ari"
         "İpek"       | "ipek"
-        "Émile Zola" | "Emile"
+        "Évren Mack" | "Evren"
     }
 
     private boolean finds(String stored, String typed) {

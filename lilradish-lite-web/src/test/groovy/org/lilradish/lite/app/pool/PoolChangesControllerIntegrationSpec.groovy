@@ -57,7 +57,7 @@ class PoolChangesControllerIntegrationSpec extends Specification {
     static final UUID PERSON = UUID.fromString("00000002-0000-4000-8000-000000000501")
 
     static final PoolPeople.PoolPersonPanel PANEL = new PoolPeople.PoolPersonPanel(new SubjectId(PERSON),
-            new UserId("000501"), new PersonName("Ada Lovelace"), EnumSet.of(EstateRole.WATCHER), EnumSet.noneOf(EstateRole),
+            new UserId("000501"), new PersonName("Ari Mockvale"), EnumSet.of(EstateRole.WATCHER), EnumSet.noneOf(EstateRole),
             [new GroupName("Payroll")], false)
 
     static final String NAMING = '{"userId":"000501"}'
@@ -134,7 +134,7 @@ class PoolChangesControllerIntegrationSpec extends Specification {
                 ["subjectId", "userId", "displayName", "estateRoles", "lastGrantingRoles", "groups", "seeded"]
         assert document.get("subjectId").asString() == PERSON.toString()
         assert document.get("userId").asString() == "000501"
-        assert document.get("displayName").asString() == "Ada Lovelace"
+        assert document.get("displayName").asString() == "Ari Mockvale"
         assert document.get("estateRoles").collect { it.asString() } == ["watcher"]
         assert document.get("lastGrantingRoles").isEmpty()
         assert document.get("groups").collect { it.asString() } == ["Payroll"]

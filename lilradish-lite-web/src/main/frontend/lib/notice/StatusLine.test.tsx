@@ -10,12 +10,12 @@ import { StatusLine, type Line } from "./StatusLine";
 
 const OUT: Line = {
   severity: "info",
-  words: "Grace Hopper is out of the pool.",
+  words: "Glinn Havven is out of the pool.",
 };
 
 const REFUSED: Line = {
   severity: "error",
-  words: "Ada Lovelace is still in the pool: that was refused.",
+  words: "Avo Lumerace is still in the pool: that was refused.",
 };
 
 function themed({ children }: { readonly children: ReactNode }) {

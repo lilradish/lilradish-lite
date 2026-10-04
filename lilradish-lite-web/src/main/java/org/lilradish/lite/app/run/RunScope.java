@@ -13,7 +13,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /** What a run is found within, written once: its group, and only a run the caller may read there. */
 public final class RunScope {
 
-    /** A run aliased {@code run}, bound as {@code :run}, {@code :group}, {@code :caller}, {@code :every}, {@code :own}. */
+    /** A run in the group that the caller may read. */
     static final String RUN_IN_VIEW = """
             run.run_id = :run and run.group_id = :group
             and (:every or (:own and exists (select 1

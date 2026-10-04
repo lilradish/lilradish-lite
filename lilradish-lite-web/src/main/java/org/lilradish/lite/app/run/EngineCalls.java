@@ -5,7 +5,11 @@ import static java.util.Objects.requireNonNull;
 import java.util.ArrayList;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
+import org.lilradish.lite.app.files.RunFiles;
 import org.lilradish.lite.app.inference.AnswerReader;
+import org.lilradish.lite.app.inference.ToolCallOutcome;
+import org.lilradish.lite.app.inference.ToolCallRequest;
+import org.lilradish.lite.app.inference.ToolModelCalls;
 import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.inference.CallOutcome;
 import org.lilradish.lite.domain.inference.CallProgress;
@@ -25,6 +29,7 @@ import org.lilradish.lite.domain.run.ReviewOutcome;
 import org.lilradish.lite.domain.run.RunStepHoldReason;
 import org.lilradish.lite.domain.run.RunStepSendAttemptId;
 import org.lilradish.lite.domain.run.TryLostReason;
+import org.lilradish.lite.domain.search.SearchAnswer;
 import org.lilradish.lite.domain.wire.JsonValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +50,8 @@ final class EngineCalls {
 
     private final ModelCalls modelCalls;
 
+    private final ToolModelCalls toolModelCalls;
+
     private final TransactionOperations transactions;
 
     private final RunTree tree;
@@ -53,17 +60,27 @@ final class EngineCalls {
 
     private final CeilingReach ceilings;
 
+    private final RunSnapshots snapshots;
+
+    private final RunFiles files;
+
     EngineCalls(
+            ToolModelCalls toolModelCalls,
             ModelCalls modelCalls,
             TransactionOperations transactions,
             RunTree tree,
             EngineWrites writes,
-            CeilingReach ceilings) {
+            CeilingReach ceilings,
+            RunSnapshots snapshots,
+            RunFiles files) {
         this.modelCalls = modelCalls;
+        this.toolModelCalls = requireNonNull(toolModelCalls);
         this.transactions = transactions;
         this.tree = tree;
         this.writes = writes;
         this.ceilings = ceilings;
+        this.snapshots = snapshots;
+        this.files = files;
     }
 
     /**
@@ -81,8 +98,15 @@ final class EngineCalls {
                     "Call " + pending.call().value() + " was to be made inside a transaction it would hold open");
         }
         CallOutcome outcome;
+        ToolCallOutcome reports = null;
         try {
-            outcome = modelCalls.call(pending.request(), new Progress(pending));
+            if (pending.reading() instanceof PendingCall.Searching searching) {
+                reports = toolModelCalls.call(
+                        new ToolCallRequest(pending.request(), List.of(searching.tool())), new Progress(pending));
+                outcome = reports.outcome();
+            } else {
+                outcome = modelCalls.call(pending.request(), new Progress(pending));
+            }
         } catch (ProgressFailed failed) {
             logger.warn(
                     "Call {} of try {} of run {} is not sent again: writing what happened to it failed with {}",
@@ -97,12 +121,12 @@ final class EngineCalls {
         Landed landed = null;
         if (outcome instanceof CallOutcome.CameBack cameBack) {
             try {
-                landed = landed(pending, cameBack);
+                landed = landed(pending, cameBack, reports);
             } catch (RuntimeException failed) {
                 outcome = failedHere(pending, failed);
             }
         }
-        ended(pending, outcome, landed);
+        ended(pending, outcome, landed, reports);
     }
 
     /* What failed may say what was sent or what came back, so only its kind is kept, and logged beside the keys. */
@@ -114,16 +138,18 @@ final class EngineCalls {
                 pending.aTry().value(),
                 pending.run().value(),
                 kind);
-        return new CallOutcome.Errored("The call failed on this side with " + kind + ".");
+        return new CallOutcome.Errored("The call failed on this side with " + kind + ".", null);
     }
 
-    private void ended(PendingCall pending, CallOutcome outcome, @Nullable Landed landed) {
+    private void ended(
+            PendingCall pending, CallOutcome outcome, @Nullable Landed landed, @Nullable ToolCallOutcome reports) {
         transactions.executeWithoutResult(status -> {
             LockedTree held = locked(pending);
             boolean reviewing = pending.reading() instanceof PendingCall.Reviewing;
             boolean ended =
                     switch (outcome) {
-                        case CallOutcome.CameBack cameBack -> cameBack(held, pending, cameBack, requireNonNull(landed));
+                        case CallOutcome.CameBack cameBack ->
+                            cameBack(held, pending, cameBack, requireNonNull(landed), reports);
                         case CallOutcome.Errored errored -> errored(held, pending, errored);
                         case CallOutcome.TurnedAway turnedAway ->
                             reviewing
@@ -140,47 +166,106 @@ final class EngineCalls {
                         pending.call().value(),
                         pending.aTry().value(),
                         pending.run().value());
+            } else if (landed != null && landed.misfit() == null) {
+                List<String> standing = landed.produced() != null
+                        ? landed.produced().values().keySet().stream()
+                                .map(FieldName::value)
+                                .toList()
+                        : landed.reviewed() != null
+                                ? landed.reviewed().decisions().entrySet().stream()
+                                        .filter(decision -> decision.getValue() instanceof ReviewAnswer.Assured)
+                                        .map(decision -> decision.getKey().value())
+                                        .toList()
+                                : List.of();
+                List<String> affected = writes.fileOutputsAffected(held, pending.run(), pending.aTry(), standing);
+                if (!affected.isEmpty()) {
+                    RunEngine.holdBeneathOutputs(snapshots.inTreeLocked(held, pending.run()), affected, files);
+                }
             }
         });
     }
 
     /*
      * Read once as it arrived, from what came back rather than from what is kept of it; an answer not kept as it
-     * came does not fit, even where its values or decisions do, and is cut off first of all.
+     * came does not fit, even where its values or decisions do. A provider decline remains a decline even
+     * when the provider also marks the answer cut off.
      */
-    private static Landed landed(PendingCall pending, CallOutcome.CameBack cameBack) {
+    private static Landed landed(
+            PendingCall pending, CallOutcome.CameBack cameBack, @Nullable ToolCallOutcome reports) {
         KeptAnswer kept = KeptAnswer.of(cameBack.answer());
+        KeptAnswer declinedWords = cameBack.declinedWords() == null ? null : KeptAnswer.of(cameBack.declinedWords());
+        if (cameBack.didNotFitReason() == DidNotFitReason.MODEL_DECLINED) {
+            return new Landed(kept, declinedWords, DidNotFitReason.MODEL_DECLINED, null, null);
+        }
         if (cameBack.cutOff()) {
-            return new Landed(kept, DidNotFitReason.CUT_OFF, null, null);
+            return new Landed(kept, declinedWords, DidNotFitReason.CUT_OFF, null, null);
+        }
+        if (cameBack.didNotFitReason() != null) {
+            return new Landed(kept, declinedWords, cameBack.didNotFitReason(), null, null);
         }
         JsonValue read = AnswerReader.read(cameBack.answer());
         return switch (pending.reading()) {
             case PendingCall.Producing producing ->
                 switch (Unwrapping.production(producing.gives(), read)) {
-                    case DoesNotFit misfit -> new Landed(kept, misfit.reason(), null, null);
+                    case DoesNotFit misfit -> new Landed(kept, declinedWords, misfit.reason(), null, null);
                     case ProductionAnswer.Produced produced ->
                         kept.altered()
-                                ? new Landed(kept, DidNotFitReason.NOT_KEPT_AS_IT_CAME, null, null)
-                                : new Landed(kept, null, produced, null);
+                                ? new Landed(kept, declinedWords, DidNotFitReason.NOT_KEPT_AS_IT_CAME, null, null)
+                                : new Landed(kept, declinedWords, null, produced, null);
+                };
+            case PendingCall.Searching searching ->
+                switch (SearchAnswer.read(searching.gives(), read)) {
+                    case DoesNotFit misfit -> new Landed(kept, declinedWords, misfit.reason(), null, null);
+                    case ProductionAnswer.Produced produced ->
+                        kept.altered()
+                                ? new Landed(kept, declinedWords, DidNotFitReason.NOT_KEPT_AS_IT_CAME, null, null)
+                                : new Landed(kept, declinedWords, null, produced, null);
                 };
             case PendingCall.Reviewing reviewing ->
                 switch (Unwrapping.review(reviewing.deciding(), read)) {
-                    case DoesNotFit misfit -> new Landed(kept, misfit.reason(), null, null);
+                    case DoesNotFit misfit -> new Landed(kept, declinedWords, misfit.reason(), null, null);
                     case ReviewAnswer.Reviewed reviewed ->
                         kept.altered()
-                                ? new Landed(kept, DidNotFitReason.NOT_KEPT_AS_IT_CAME, null, null)
-                                : new Landed(kept, null, null, reviewed);
+                                ? new Landed(kept, declinedWords, DidNotFitReason.NOT_KEPT_AS_IT_CAME, null, null)
+                                : new Landed(kept, declinedWords, null, null, reviewed);
                 };
         };
     }
 
-    private boolean cameBack(LockedTree held, PendingCall pending, CallOutcome.CameBack cameBack, Landed landed) {
-        if (!writes.cameBack(held, pending.call(), cameBack, landed.kept())) {
+    private boolean cameBack(
+            LockedTree held,
+            PendingCall pending,
+            CallOutcome.CameBack cameBack,
+            Landed landed,
+            @Nullable ToolCallOutcome reports) {
+        if (!writes.cameBack(held, pending.call(), cameBack, landed.kept(), landed.declinedWords())) {
             return false;
         }
         DidNotFitReason misfit = landed.misfit();
         TryLostReason lost = misfit == null ? null : TryLostReason.DID_NOT_FIT;
         switch (pending.reading()) {
+            case PendingCall.Searching searching -> {
+                writes.searchCameBack(held, pending.call(), requireNonNull(reports));
+                writes.modelTryEnded(
+                        held,
+                        pending.aTry(),
+                        pending.call(),
+                        ModelCallOutcome.CAME_BACK,
+                        landed.kept().altered(),
+                        lost,
+                        misfit);
+                ProductionAnswer.Produced produced = landed.produced();
+                if (produced != null) {
+                    for (var given : produced.values().entrySet()) {
+                        writes.searchValue(
+                                held,
+                                pending.aTry(),
+                                given.getKey(),
+                                requireNonNull(searching.standings().get(given.getKey())),
+                                given.getValue());
+                    }
+                }
+            }
             case PendingCall.Producing producing -> {
                 writes.modelTryEnded(
                         held,
@@ -241,10 +326,20 @@ final class EngineCalls {
     }
 
     private boolean errored(LockedTree held, PendingCall pending, CallOutcome.Errored errored) {
-        if (!writes.errored(held, pending.call(), ForeignProse.errorDetail(errored.detail()))) {
+        if (!writes.errored(
+                held, pending.call(), ForeignProse.errorDetail(errored.detail()), errored.unreadableResponse())) {
             return false;
         }
         switch (pending.reading()) {
+            case PendingCall.Searching ignored ->
+                writes.modelTryEnded(
+                        held,
+                        pending.aTry(),
+                        pending.call(),
+                        ModelCallOutcome.ERRORED,
+                        false,
+                        TryLostReason.ERRORED,
+                        null);
             case PendingCall.Producing ignored ->
                 writes.modelTryEnded(
                         held,
@@ -384,7 +479,8 @@ final class EngineCalls {
             try {
                 return Boolean.TRUE.equals(transactions.execute(status -> {
                     LockedTree held = locked(pending);
-                    if (writes.stoppedWhileOut(held, pending.call()) || ceilings.stopsAt(held, pending.call())) {
+                    if (writes.stoppedWhileOut(held, pending.call())
+                            || ceilings.stopsAt(held, pending.run(), pending.call())) {
                         return false;
                     }
                     writes.resent(held, pending.call());
@@ -413,6 +509,7 @@ final class EngineCalls {
      */
     private record Landed(
             KeptAnswer kept,
+            @Nullable KeptAnswer declinedWords,
             @Nullable DidNotFitReason misfit,
             ProductionAnswer.@Nullable Produced produced,
             ReviewAnswer.@Nullable Reviewed reviewed) {}

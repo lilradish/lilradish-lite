@@ -21,11 +21,16 @@ class LargeBodyTurnSpec extends Specification {
     /** A waiter blocked on the turn, counted among those waiting, and what its take answered once it ends. */
     private static CompletableFuture<Boolean> waitingOn(LargeBodyTurn turn, List<Thread> started) {
         def waited = new CompletableFuture<Boolean>()
-        started << Thread.start { waited.complete(turn.take()) }
-        new PollingConditions(timeout: 5).eventually {
+        started << Thread.ofPlatform().daemon(true).start { waited.complete(turn.take()) }
+        new PollingConditions(timeout: 1).eventually {
             assert turn.turn.hasQueuedThreads()
         }
         waited
+    }
+
+    private static void stopWaiting(List<Thread> started) {
+        started*.interrupt()
+        started.each { thread -> thread.join(500) }
     }
 
     def "a free turn is taken at once"() {
@@ -102,8 +107,7 @@ class LargeBodyTurnSpec extends Specification {
         turn.waiting.get() == 1
 
         cleanup:
-        turn.give()
-        started*.join()
+        stopWaiting(started)
     }
 
     def "a turn given back lets in one already waiting for it, well before its wait runs out"() {
@@ -117,13 +121,13 @@ class LargeBodyTurnSpec extends Specification {
         turn.give()
 
         then:
-        waited.get(5, TimeUnit.SECONDS)
+        waited.get(1, TimeUnit.SECONDS)
 
         and: "held by the one let in, so the turn is not free twice, and nobody left counted as waiting"
         turn.turn.availablePermits() == 0
         turn.waiting.get() == 0
 
         cleanup:
-        started*.join()
+        stopWaiting(started)
     }
 }

@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { theme } from "../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../testutil/depths";
 import { Landing } from "./Landing";
 
 describe("Landing", () => {
@@ -16,7 +17,21 @@ describe("Landing", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "lilradish" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("You are signed in.")).toBeInTheDocument();
+    expect(screen.getByText("You are at the start.")).toBeInTheDocument();
+  });
+
+  it("is one part of the page, named by its heading and framed as a page's part", () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <Landing />
+      </ThemeProvider>,
+    );
+
+    const part = screen.getByRole("region", { name: "lilradish" });
+
+    expect(part).toContainElement(screen.getByText("You are at the start."));
+    expect(drawnOf(part)).toEqual(drawnAtDepth(1));
+    expect(screen.getAllByRole("region")).toEqual([part]);
   });
 
   /**

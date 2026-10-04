@@ -11,19 +11,17 @@ class LibrarySortColumnSpec extends Specification {
         LibrarySortColumn.values().collectEntries { [(it): it.published()] } == [
                 (LibrarySortColumn.NAME)      : "name",
                 (LibrarySortColumn.IN_SERVICE): "inService",
-                (LibrarySortColumn.SUBMITTED) : "submitted",
-                (LibrarySortColumn.STOPPED)   : "stopped",
+                (LibrarySortColumn.STATUS)    : "status",
         ]
     }
 
-    /** Every entry has a name, and whether one of its versions is in service, waiting or stopped holds or not. */
+    /** Every entry has a name, in-service presence, and one of three status groups. */
     def "each sortable column holds the kind of value the store sorts it by, none of them ever empty"() {
         expect:
         LibrarySortColumn.values().collectEntries { [(it): it.kind()] } == [
                 (LibrarySortColumn.NAME)      : ListValueKind.TEXT,
                 (LibrarySortColumn.IN_SERVICE): ListValueKind.BOOLEAN,
-                (LibrarySortColumn.SUBMITTED) : ListValueKind.BOOLEAN,
-                (LibrarySortColumn.STOPPED)   : ListValueKind.BOOLEAN,
+                (LibrarySortColumn.STATUS)    : ListValueKind.LONG,
         ]
     }
 }

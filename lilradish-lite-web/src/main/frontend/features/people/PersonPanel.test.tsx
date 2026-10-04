@@ -1,3 +1,4 @@
+import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -9,6 +10,7 @@ import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { deferred } from "../../testutil/deferred";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
 import { noticesIn } from "../../testutil/notices";
 import type { Asked, Outcome } from "./changes";
 import { PersonPanel } from "./PersonPanel";
@@ -17,17 +19,17 @@ const SUBJECT = "00000002-0000-4000-8000-000000000140";
 
 const PERSON = `/api/pool/people/${SUBJECT}`;
 
-const GRACE: PoolPersonPanel = {
+const GLINN: PoolPersonPanel = {
   subjectId: SUBJECT,
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   estateRoles: new Set(["steward"]),
   lastGrantingRoles: new Set(),
   groups: [],
   seeded: false,
 };
 
-const HOLDING_NOTHING: PoolPersonPanel = { ...GRACE, estateRoles: new Set() };
+const HOLDING_NOTHING: PoolPersonPanel = { ...GLINN, estateRoles: new Set() };
 
 /** As the server writes a person, which is not the shape this side holds one in. */
 function documentOf(person: PoolPersonPanel): string {
@@ -61,7 +63,7 @@ interface Reading {
  * Only the server is stood in for.
  */
 function reading({
-  person = GRACE,
+  person = GLINN,
   mayChangeRoles = true,
   waiting = false,
   routes = {},
@@ -129,6 +131,14 @@ function remove(): HTMLElement {
   return screen.getByRole("button", { name: "Remove from the pool" });
 }
 
+async function confirmRemove() {
+  await userEvent.click(remove());
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "Bringing them in again later keeps them the same person, with their past acts.",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+}
+
 describe("PersonPanel", () => {
   it("heads its parts who they are, their estate roles and their groups, in that order", () => {
     reading();
@@ -140,8 +150,21 @@ describe("PersonPanel", () => {
     ).toEqual(["Who they are", "Estate roles", "Groups"]);
   });
 
-  /** Nothing here writes to the directory, so nothing here looks as though it could. */
-  it("says who they are as a read, and why none of it can be changed here", () => {
+  it("sets each part apart as a region on a ground of its own, holding what it heads and leaving Remove from the pool outside", () => {
+    reading();
+
+    const parts = ["Who they are", "Estate roles", "Groups"].map((name) =>
+      screen.getByRole("region", { name }),
+    );
+
+    expect(screen.getAllByRole("region")).toEqual(parts);
+    expect(parts.map(drawnOf)).toEqual(parts.map(() => drawnAtDepth(3)));
+    expect(parts[0]).toContainElement(screen.getByText("User number"));
+    expect(parts[1]).toContainElement(screen.getAllByRole("list")[0]!);
+    expect(parts.some((each) => each.contains(remove()))).toBe(false);
+  });
+
+  it("says who they are as a read without editing controls", () => {
     reading();
 
     const facts = screen.getByText("User number").parentElement!;
@@ -150,18 +173,8 @@ describe("PersonPanel", () => {
       "User number",
       "000140",
       "Name",
-      "Grace Hopper",
+      "Glinn Havven",
     ]);
-    expect(noticesIn(document.body)).toContainEqual({
-      severity: "info",
-      words:
-        "Taken from the directory when they were brought in; nothing here can change it.",
-    });
-    expect(
-      part("Who they are").compareDocumentPosition(
-        screen.getByText(/Taken from the directory/),
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
     expect(screen.queryAllByRole("textbox")).toEqual([]);
   });
 
@@ -178,7 +191,7 @@ describe("PersonPanel", () => {
   });
 
   it("says so where no name is held for them, rather than leaving it blank", () => {
-    const { displayName: _, ...nameless } = GRACE;
+    const { displayName: _, ...nameless } = GLINN;
     reading({ person: nameless });
 
     const facts = screen.getByText("Name").parentElement!;
@@ -193,7 +206,7 @@ describe("PersonPanel", () => {
   it("isolates the name and the number from the words around them", () => {
     reading();
 
-    expect(screen.getByText("Grace Hopper").tagName).toBe("BDI");
+    expect(screen.getByText("Glinn Havven").tagName).toBe("BDI");
     expect(screen.getByText("000140").tagName).toBe("BDI");
   });
 
@@ -208,7 +221,7 @@ describe("PersonPanel", () => {
 
   /** Some engines stop reading a list as one once its markers are taken away. */
   it("names each of its lists a list outright, their markers being taken away", () => {
-    reading({ person: { ...GRACE, groups: ["Payroll"] } });
+    reading({ person: { ...GLINN, groups: ["Payroll"] } });
 
     const lists = screen.getAllByRole("list");
 
@@ -224,7 +237,7 @@ describe("PersonPanel", () => {
 
   /** Left out, it would make somebody holding it read as holding less than they do. */
   it("lists a role this build has no words for where it is held, offering no control over it", () => {
-    reading({ person: { ...GRACE, estateRoles: new Set(["auditor"]) } });
+    reading({ person: { ...GLINN, estateRoles: new Set(["auditor"]) } });
 
     expect(roleRows()).toEqual([
       ["Steward", "Not held"],
@@ -245,10 +258,25 @@ describe("PersonPanel", () => {
     ).toEqual(["Withdraw Steward", "Grant Watcher", "Remove from the pool"]);
   });
 
+  /** Withdrawing a role and taking somebody out warn; granting one undoes nothing and is drawn as any other. */
+  it("draws withdrawing a role and Remove from the pool in the warning colour, and granting a role in none", () => {
+    reading();
+
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((each) => each.classList.contains(buttonClasses.colorWarning))
+        .map((each) => each.textContent),
+    ).toEqual(["Withdraw Steward", "Remove from the pool"]);
+    expect(screen.getByRole("button", { name: "Grant Watcher" })).toHaveClass(
+      buttonClasses.colorPrimary,
+    );
+  });
+
   it("offers no withdrawal of a role nobody else in the pool could grant without, and still offers the rest", () => {
     reading({
       person: {
-        ...GRACE,
+        ...GLINN,
         estateRoles: new Set(["steward", "watcher"]),
         lastGrantingRoles: new Set(["steward"]),
       },
@@ -282,7 +310,7 @@ describe("PersonPanel", () => {
     "asks for %s at the person's own address, and settles as the person the answer holds",
     async (control, method, role) => {
       const answer: PoolPersonPanel = {
-        ...GRACE,
+        ...GLINN,
         estateRoles: new Set(["steward", "watcher"]),
       };
       const { sent, settled, told } = reading({
@@ -300,7 +328,7 @@ describe("PersonPanel", () => {
       );
       expect(told).toHaveBeenCalledExactlyOnceWith({
         place: "roles",
-        of: GRACE,
+        of: GLINN,
       });
       expect(requestsTo(sent)).toEqual([
         `${method} ${PERSON}/estate-roles/${role}`,
@@ -397,7 +425,7 @@ describe("PersonPanel", () => {
   });
 
   it("names every group they are in, isolated, and nothing of what they hold in one", () => {
-    reading({ person: { ...GRACE, groups: ["Payroll", "finance"] } });
+    reading({ person: { ...GLINN, groups: ["Payroll", "finance"] } });
 
     const [, groups] = screen.getAllByRole("list");
     const named = within(groups!).getAllByRole("listitem");
@@ -419,38 +447,27 @@ describe("PersonPanel", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("says a migration put a seeded row in the pool, and names nobody", () => {
-    reading({ person: { ...GRACE, seeded: true } });
+  it.each([true, false])(
+    "keeps a row's facts and removal control without an arrival notice when seeded is %s",
+    (seeded) => {
+      reading({ person: { ...HOLDING_NOTHING, seeded } });
 
-    expect(noticesIn(document.body)).toContainEqual({
-      severity: "info",
-      words: "A migration put them in the pool. Nobody here did.",
-    });
-  });
+      expect(screen.getByText("000140")).toBeVisible();
+      expect(remove()).toBeVisible();
+      expect(noticesIn(document.body)).toEqual([]);
+    },
+  );
 
-  /** Touching, the notice and the control would read as one thing. */
-  it("stands the note that a migration put them in above Remove from the pool, with room between them", () => {
-    reading({ person: { ...HOLDING_NOTHING, seeded: true } });
-
-    const seeded = screen
-      .getByText("A migration put them in the pool. Nobody here did.")
-      .closest<HTMLElement>('[role="none"]')!;
-    const row = getComputedStyle(seeded.parentElement!);
-
-    expect(seeded.parentElement!.contains(remove())).toBe(true);
-    expect(
-      seeded.compareDocumentPosition(remove()) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
-    expect(row.display).toBe("flex");
-    expect(row.flexDirection).toBe("column");
-    expect(row.gap).toBe("8px");
-  });
-
-  it("says nothing of a migration for a row somebody brought in", () => {
-    reading();
-
-    expect(screen.queryByText(/migration/)).toBeNull();
+  it("cancels removing somebody without sending a request", async () => {
+    const { sent } = reading({ person: HOLDING_NOTHING });
+    await userEvent.click(remove());
+    expect(screen.getByRole("dialog")).toHaveAccessibleName(
+      /Remove.*Glinn Havven.*from the pool\?/,
+    );
+    expect(requestsTo(sent)).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(requestsTo(sent)).toEqual([]);
   });
 
   it("takes somebody holding nothing out of the pool at their own address, and settles as who went", async () => {
@@ -459,7 +476,7 @@ describe("PersonPanel", () => {
       routes: { [`DELETE ${PERSON}`]: [["", 204]] },
     });
 
-    await userEvent.click(remove());
+    await confirmRemove();
 
     await waitFor(() =>
       expect(settled).toHaveBeenCalledExactlyOnceWith({
@@ -470,6 +487,7 @@ describe("PersonPanel", () => {
       place: "removal",
       of: HOLDING_NOTHING,
     });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(unavailable(remove())).toBe(false);
     expect(requestsTo(sent)).toEqual([`DELETE ${PERSON}`]);
   });
@@ -481,7 +499,7 @@ describe("PersonPanel", () => {
   it("holds Remove from the pool for somebody still holding roles and groups, naming each", async () => {
     const { sent } = reading({
       person: {
-        ...GRACE,
+        ...GLINN,
         estateRoles: new Set(["watcher", "steward"]),
         groups: ["Payroll", "finance"],
       },
@@ -513,7 +531,7 @@ describe("PersonPanel", () => {
       `They have to leave this group first: ${setApart("Payroll")}.`,
     ],
   ])("says only what still holds them, for %s", (_what, holding, reason) => {
-    reading({ person: { ...GRACE, ...holding } });
+    reading({ person: { ...GLINN, ...holding } });
 
     expect(remove()).toHaveAccessibleDescription(reason);
   });
@@ -535,7 +553,7 @@ describe("PersonPanel", () => {
         routes: { [`DELETE ${PERSON}`]: [[JSON.stringify({ code }), 409]] },
       });
 
-      await userEvent.click(remove());
+      await confirmRemove();
 
       const refusal = await screen.findByRole("alert");
       expect(refusal).toHaveTextContent(sentence);
@@ -556,7 +574,7 @@ describe("PersonPanel", () => {
         [`DELETE ${PERSON}`]: [['{"code":"PERSON_IN_GROUPS"}', 400]],
       },
     });
-    await userEvent.click(remove());
+    await confirmRemove();
     await screen.findByRole("alert");
 
     await readAgainAs({ ...HOLDING_NOTHING });
@@ -572,7 +590,7 @@ describe("PersonPanel", () => {
       },
     });
 
-    await userEvent.click(remove());
+    await confirmRemove();
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The pool is seen and changed only by a role that may keep it.",
@@ -586,7 +604,7 @@ describe("PersonPanel", () => {
         [`DELETE ${PERSON}`]: [['{"code":"PERSON_IN_GROUPS"}', 409]],
       },
     });
-    await userEvent.click(remove());
+    await confirmRemove();
     await screen.findByRole("alert");
 
     await readAgainAs({ ...HOLDING_NOTHING, groups: ["Payroll"] });
@@ -607,7 +625,7 @@ describe("PersonPanel", () => {
         [`DELETE ${PERSON}`]: [['{"code":"PERSON_IN_GROUPS"}', 409]],
       },
     });
-    await userEvent.click(remove());
+    await confirmRemove();
     await screen.findByRole("alert");
 
     await readAgainAs({ ...HOLDING_NOTHING });

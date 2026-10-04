@@ -58,19 +58,25 @@ final class Library {
     // DB-SPECIFIC: exists(…) selected as a boolean, a correlated max(…), a common table expression, enum
     // casts and every collation named below are PostgreSQL's.
     private static final String ENTRIES = """
-            select library.entry_id, library.name, library.in_service, library.submitted, library.stopped
-              from (select entry.entry_id,
-                           entry.name,
-                           entry.name_folded,
-                           (select max(version.number)
-                              from entry_versions version
-                             where version.entry_id = entry.entry_id and %s) as in_service,
-                           exists (select 1
-                                     from entry_versions version
-                                    where version.entry_id = entry.entry_id and %s) as submitted,
-                           %s as stopped
-                      from entries entry
-                     where entry.group_id = cast(%s as uuid) and entry.kind = cast(:kind as entry_kind)) library
+            select library.entry_id, library.name, library.purpose, library.in_service,
+                   library.submitted, library.stopped, library.status_rank
+              from (select facts.*,
+                           cast(case when facts.submitted then 0 when facts.stopped then 1 else 2 end as bigint)
+                                   as status_rank
+                      from (select entry.entry_id,
+                                   entry.name,
+                                   entry.purpose,
+                                   entry.name_folded,
+                                   (select max(version.number)
+                                      from entry_versions version
+                                     where version.entry_id = entry.entry_id and %s) as in_service,
+                                   exists (select 1
+                                             from entry_versions version
+                                            where version.entry_id = entry.entry_id and %s) as submitted,
+                                   %s as stopped
+                              from entries entry
+                             where entry.group_id = cast(%s as uuid)
+                               and entry.kind = cast(:kind as entry_kind)) facts) library
              where true
             """.formatted(
                     VersionMarks.inService("version"),
@@ -260,8 +266,7 @@ final class Library {
                                     new SortExpression<>(LibrarySortColumn.NAME, "library.name", "\"unicode\""),
                                     new SortExpression<>(
                                             LibrarySortColumn.IN_SERVICE, "(library.in_service is not null)", null),
-                                    new SortExpression<>(LibrarySortColumn.SUBMITTED, "library.submitted", null),
-                                    new SortExpression<>(LibrarySortColumn.STOPPED, "library.stopped", null)),
+                                    new SortExpression<>(LibrarySortColumn.STATUS, "library.status_rank", null)),
                             Map.of("kind", label)));
         }
         return Collections.unmodifiableMap(declared);
@@ -274,22 +279,19 @@ final class Library {
         return new LibraryRow(
                 entry,
                 nameOf(result.getString("name"), entry),
+                purposeOf(result.getString("purpose"), entry),
                 inService,
                 result.getBoolean("submitted"),
-                result.getBoolean("stopped"));
+                result.getBoolean("stopped"),
+                result.getLong("status_rank"));
     }
 
     private static Header header(ResultSet result, EntryId entry) throws SQLException {
         EntryName name = nameOf(result.getString("name"), entry);
-        String purpose = result.getString("purpose");
+        EntryPurpose purpose = purposeOf(result.getString("purpose"), entry);
         OffsetDateTime stoppedAt = result.getObject("stopped_at", OffsetDateTime.class);
         Stop stop = stoppedAt == null ? null : new Stop(PersonRows.person(result), stoppedAt.toInstant());
-        try {
-            return new Header(name, purpose == null ? null : new EntryPurpose(purpose), stop);
-        } catch (IllegalArgumentException refused) {
-            throw new IllegalStateException(
-                    "Entry " + entry.value() + " holds a purpose this system will not show", refused);
-        }
+        return new Header(name, purpose, stop);
     }
 
     private static VersionView version(
@@ -334,6 +336,18 @@ final class Library {
                 result.getInt("holder_number"));
     }
 
+    private static @Nullable EntryPurpose purposeOf(@Nullable String stored, EntryId entry) {
+        if (stored == null) {
+            return null;
+        }
+        try {
+            return new EntryPurpose(stored);
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalStateException(
+                    "Entry " + entry.value() + " holds a purpose this system will not show", refused);
+        }
+    }
+
     private static EntryName nameOf(String stored, EntryId entry) {
         try {
             return new EntryName(stored);
@@ -345,7 +359,13 @@ final class Library {
 
     /** @param inService the number of the newest version in service, or none where none is */
     record LibraryRow(
-            EntryId entryId, EntryName name, @Nullable Integer inService, boolean submitted, boolean stopped)
+            EntryId entryId,
+            EntryName name,
+            @Nullable EntryPurpose purpose,
+            @Nullable Integer inService,
+            boolean submitted,
+            boolean stopped,
+            long statusRank)
             implements ListRow<LibrarySortColumn> {
 
         @Override
@@ -353,8 +373,7 @@ final class Library {
             return switch (column) {
                 case NAME -> name.value();
                 case IN_SERVICE -> inService != null;
-                case SUBMITTED -> submitted;
-                case STOPPED -> stopped;
+                case STATUS -> statusRank;
             };
         }
     }

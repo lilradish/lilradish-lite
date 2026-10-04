@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Link from "@mui/material/Link";
+import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 import {
   useId,
@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { Link as RouterLink, useLocation, useParams } from "react-router";
 
@@ -33,31 +34,50 @@ import {
   stopRun,
 } from "../../api/groups/{groupId}/runs/{runId}/stop";
 import { Async } from "../../app/Async";
+import { groupPage, WORK_ITEM } from "../../app/destinations";
 import { ProblemView } from "../../app/ProblemView";
 import type { Rule } from "../../app/standing/actRules";
 import { useActedOn } from "../../app/useActedOn";
 import { say, type MessageId } from "../../i18n/app";
+import { visible } from "../../i18n/visible";
 import { ActButton } from "../../lib/action/ActButton";
 import { Press } from "../../lib/action/Press";
+import { useKeptChoice } from "../../lib/device/useKeptChoice";
 import { isolatedInText } from "../../lib/direction/isolated";
-import { Field, Fields } from "../../lib/form/Fields";
+import { Field } from "../../lib/form/Fields";
 import { PageHeading } from "../../lib/heading/PageHeading";
-import { ACTS_SX, HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { LEAST_TABLE_WIDTH } from "../../lib/collection/RowPanel";
+import { ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { TwoColumns } from "../../lib/layout/TwoColumns";
+
+import { Breadcrumbs, type Crumb } from "../../lib/navigation/Breadcrumbs";
 import type { Action } from "../../lib/request/useAction";
 import type { Resource } from "../../lib/request/useResource";
 import { nameOrNumber } from "../../lib/text/names";
-import { whenText } from "../../lib/time/When";
+import { SystemHint } from "../../lib/text/HiddenShownIn";
+import { useCalendarNow, whenText } from "../../lib/time/When";
 import { entryHref } from "../library/entryAddress";
 import { LIBRARY_KINDS } from "../library/libraryKinds";
+import { AboutIt } from "./AboutIt";
 import { RUN_ACT_RULES } from "./actRules";
+import { CurrentFileRunContext } from "./fill/CurrentFileRun";
 import { ChangeCeiling } from "./ChangeCeiling";
 import { RenameRun } from "./RenameRun";
-import { listQuery, runHref, useArrivedWithinTheRun } from "./runAddress";
+import { RunReadAccess, useRunReadAccess } from "./RunReadAccess";
+import { RunStateBadge } from "./RunStateBadge";
+import {
+  historyQuery,
+  listQuery,
+  runHref,
+  stepHref,
+  WITHIN_THE_RUN,
+} from "./runAddress";
 import { runWhereSaid, stateWorded } from "./runStates";
 import { countSaid, Spent } from "./spend";
-import { RunConversation } from "./steps/RunConversation";
-import { RunInDetail } from "./steps/RunInDetail";
-import { RunMore } from "./steps/RunMore";
+import { messageNamed, RunConversation } from "./steps/RunConversation";
+import { RunInFullDetail } from "./steps/RunInFullDetail";
+import { StepsSoFar } from "./steps/StepsSoFar";
+
 import { StateNews, type Stated } from "./steps/StateNews";
 import { stepStateWorded } from "./steps/stepStates";
 import { spokenName, stepTitle } from "./steps/stepTitle";
@@ -81,32 +101,40 @@ const DECISIONS = [
   ["withdraw_raise", "withdrawal"],
 ] as const satisfies readonly (readonly [RunAct, RaiseDecision])[];
 
-/** In detail, or as a conversation, which offers the way to the detail from within it. */
-type Drawn =
-  | { readonly drawing: "detail" }
-  | { readonly drawing: "conversation"; readonly onDetail: () => void };
+const KEPT_DRAWING_AS = "lilradish.run.drawing";
 
-/** The header a conversation draws in place of the detail's, and what it draws it from. */
-interface Conversing {
-  readonly steps: RunSteps | null;
-  readonly onDetail: () => void;
+/** Conversation first, as a run is drawn on a device that has kept no way of drawing one. */
+const RUN_DRAWINGS = ["conversation", "fullDetail"] as const;
+
+type RunDrawing = (typeof RUN_DRAWINGS)[number];
+
+/** Each drawing's way to the other, and the words it is drawn with. */
+const OTHER_DRAWING = {
+  conversation: ["fullDetail", "step.showFullDetail"],
+  fullDetail: ["conversation", "step.showAsConversation"],
+} as const satisfies Record<RunDrawing, readonly [RunDrawing, MessageId]>;
+
+export function RunPage() {
+  const { groupId = "", runId = "" } = useParams();
+  return (
+    <RunReadAccess key={`${groupId}/${runId}`}>
+      <RunPageWithin groupId={groupId} runId={runId} />
+    </RunReadAccess>
+  );
 }
 
-/**
- * One run with its steps, drawn as Work is: in detail, or as a conversation. The run and its steps are read
- * together, and both read again once an act on the run, or on one of its steps, has answered; `onActed` is told.
- */
-export function RunPage({
-  focusOnArrival,
-  onActed,
-  ...drawn
-}: Drawn & {
-  /** Where it was begun by an act whose control is gone: the keyboard starts again at its name. */
-  readonly focusOnArrival?: boolean;
-  readonly onActed: () => void;
+function RunPageWithin({
+  groupId,
+  runId,
+}: {
+  readonly groupId: string;
+  readonly runId: string;
 }) {
-  const { groupId = "", runId = "" } = useParams();
-  const arrived = useArrivedWithinTheRun();
+  const { hash } = useLocation();
+  const access = useRunReadAccess();
+  const [drawing, setDrawing] = useKeptChoice(KEPT_DRAWING_AS, RUN_DRAWINGS);
+  // Only a conversation draws a step's message to take the keyboard; the run's name takes it wherever none is drawn.
+  const [aimedAt] = useState(drawing === "conversation" ? hash : "");
   const reading = useRunRead(groupId, runId);
   const [acted, setActed] = useState<Acted | null>(null);
   // Kept while neither changes: `StateNews` takes a new object for a new read, and empties what it was saying.
@@ -114,34 +142,43 @@ export function RunPage({
     () => shownWith(reading.value, acted),
     [reading.value, acted],
   );
-  const answered = () => {
-    reading.quietly();
-    onActed();
-  };
   const stepShown = (answer: StepAnswer) => {
     setActed({ over: reading.value, answer });
-    answered();
+    reading.quietly();
   };
+  if (access.problem !== null) {
+    return (
+      <>
+        <RunPath run={null} />
+        <ProblemView problem={access.problem} />
+      </>
+    );
+  }
   return (
-    <>
+    <CurrentFileRunContext.Provider
+      value={read === null ? null : { groupId, runId: read.run.runId }}
+    >
+      <RunPath run={read?.run ?? null} />
       <StateNews
         reading={read}
         statesOf={
-          drawn.drawing === "detail" ? STATES_IN_DETAIL : STATES_IN_CONVERSATION
+          drawing === "fullDetail"
+            ? STATES_IN_FULL_DETAIL
+            : STATES_IN_CONVERSATION
         }
       />
-      <RunHeader
+      <RunDrawn
         read={{ ...reading, value: read?.run ?? null }}
-        focusOnArrival={focusOnArrival === true || arrived}
-        onAnswered={answered}
-        conversation={
-          drawn.drawing === "detail"
-            ? undefined
-            : { steps: read?.steps ?? null, onDetail: drawn.onDetail }
+        steps={read?.steps ?? null}
+        focusOnArrival={
+          read === null || messageNamed(read.steps.steps, aimedAt) === undefined
         }
+        onAnswered={reading.quietly}
+        drawing={drawing}
+        onDrawing={setDrawing}
       >
-        {read === null ? null : drawn.drawing === "detail" ? (
-          <RunInDetail groupId={groupId} reading={read} />
+        {read === null ? null : drawing === "fullDetail" ? (
+          <RunInFullDetail groupId={groupId} reading={read} />
         ) : (
           <RunConversation
             groupId={groupId}
@@ -149,9 +186,60 @@ export function RunPage({
             onShown={stepShown}
           />
         )}
-      </RunHeader>
-    </>
+      </RunDrawn>
+    </CurrentFileRunContext.Provider>
   );
+}
+
+/**
+ * The way from a run, or one of its steps, back through every run above it to History as it was filtered and sorted,
+ * and to Work. Work and History are drawn before the run is read, and all a refused run is drawn with.
+ */
+export function RunPath({
+  run,
+  step,
+}: {
+  readonly run: Run | null;
+  /** What the step is called on a step's page, none while it is read; absent on the run's own page. */
+  readonly step?: string | null;
+}) {
+  const { groupId = "" } = useParams();
+  const search = listQuery(useLocation().search);
+  const work = groupPage(groupId, WORK_ITEM.segment);
+  const trail: Crumb[] = [
+    { label: say(WORK_ITEM.label), path: work, search: "" },
+    { label: say("work.history"), path: work, search: historyQuery(search) },
+  ];
+  if (run === null) {
+    return <Breadcrumbs trail={trail} />;
+  }
+  const runs = [
+    ...run.runsAbove.map((above) => ({
+      runId: above.runId,
+      title: runTitle(above.name, above.number),
+    })),
+    { runId: run.runId, title: runTitle(run.name, run.number) },
+  ];
+  const crumbs = runs.map(({ runId, title }) => ({
+    label: title,
+    path: runHref(groupId, runId),
+    search,
+  }));
+  return step === undefined ? (
+    <Breadcrumbs
+      trail={[...trail, ...crumbs.slice(0, -1)]}
+      current={crumbs.at(-1)!.label}
+    />
+  ) : (
+    <Breadcrumbs trail={[...trail, ...crumbs]} current={step ?? undefined} />
+  );
+}
+
+/** A run by its name, or by its number where it has none, as a run beneath has. */
+function runTitle(name: string | undefined, number: number): string {
+  return name === undefined
+    ? say("run.title", { number })
+    : isolatedInText(name);
 }
 
 /** A step as an act on it answered, over the read it was answered on. */
@@ -191,10 +279,7 @@ function statesOfRun(
   return ({ run, steps }) => [
     {
       key: run.runId,
-      name:
-        run.name === undefined
-          ? say("run.title", { number: run.number })
-          : isolatedInText(run.name),
+      name: runTitle(run.name, run.number),
       state: stateWorded(run.state),
     },
     ...steps.steps.map((step) => ({
@@ -205,234 +290,290 @@ function statesOfRun(
   ];
 }
 
-const STATES_IN_DETAIL = statesOfRun((step) => spokenName(step.name));
+/** Each step by the name a drawing gives it: as The steps names it, or as its message is titled. */
+const STEP_NAMED = {
+  conversation: stepTitle,
+  fullDetail: (step: StepRow) => spokenName(step.name),
+} as const satisfies Record<RunDrawing, (step: StepRow) => string>;
 
-const STATES_IN_CONVERSATION = statesOfRun(stepTitle);
+const STATES_IN_FULL_DETAIL = statesOfRun(STEP_NAMED.fullDetail);
+
+const STATES_IN_CONVERSATION = statesOfRun(STEP_NAMED.conversation);
 
 /**
- * One run's header: every control drawn from the acts the server offers, every act shown as the run it answers
- * with, and a refusal saying the reader or the run moved reading again whichever did. As a conversation it says
- * where the run is and how far it has got, and keeps the rest behind More.
+ * One run under its name, what the drawing holds wide on the leading side, and About it narrow on the trailing side,
+ * the same in either drawing: every control drawn from the acts the server offers, every act shown as the run it
+ * answers with, and a refusal saying the reader or the run moved reading again whichever did.
+
  */
-function RunHeader({
+function RunDrawn({
   read,
+  steps,
   focusOnArrival,
   onAnswered,
-  conversation,
+  drawing,
+  onDrawing,
+
   children,
 }: {
   readonly read: Resource<Run | null>;
+  /** None while they are read. */
+  readonly steps: RunSteps | null;
   readonly focusOnArrival: boolean;
-  readonly onAnswered?: () => void;
-  readonly conversation?: Conversing;
-  /** What is drawn under the header, while the run is. */
+  readonly onAnswered: () => void;
+  readonly drawing: RunDrawing;
+  readonly onDrawing: (next: RunDrawing) => void;
+  /** What the drawing holds, while the run is drawn. */
+
   readonly children?: ReactNode;
 }) {
   const { groupId = "" } = useParams();
   const search = listQuery(useLocation().search);
+  const now = useCalendarNow();
   const ceilingId = useId();
-  const moreId = useId();
   const ceilingPart = useRef<HTMLDivElement>(null);
-  const moreControl = useRef<HTMLButtonElement>(null);
+
   const answeredLast = useRef(false);
-  const { shown, changing } = useActedOn(read, refusedForWhatMoved, {
-    answered: () => {
-      answeredLast.current = true;
-      onAnswered?.();
+  const { shown, showingAnswerWhileReading, changing } = useActedOn(
+    read,
+    refusedForWhatMoved,
+    {
+      answered: () => {
+        answeredLast.current = true;
+        if (!read.loading) {
+          onAnswered();
+        }
+      },
     },
-  });
+  );
   const [asked, setAsked] = useState<RunAct | null>(null);
   const [opened, setOpened] = useState<{
     readonly dialog: "rename" | "ceiling";
     readonly count: number;
+    readonly targetRunId?: string;
   } | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
 
-  // An act's answer may take its control with it, so the keyboard starts again at the ceiling, or at More where
-  // that keeps the ceiling shut; only once, as a read again later is no act of the reader's.
+  // An act's answer may take its control with it, so the keyboard starts again at the ceiling; only once, as a
+  // read again later is no act of the reader's.
   useLayoutEffect(() => {
     if (!answeredLast.current) {
       return;
     }
     answeredLast.current = false;
     if (document.activeElement === document.body) {
-      (ceilingPart.current ?? moreControl.current)?.focus();
+      ceilingPart.current?.focus();
     }
   }, [shown]);
 
-  const refusedAt = (acts: readonly RunAct[], rule?: Rule) =>
+  const refusedAt = (acts: readonly RunAct[], rule: Rule) =>
     asked !== null && acts.includes(asked) && changing.problem !== null ? (
       <ProblemView problem={changing.problem} rule={rule} />
     ) : null;
 
-  const opening = (dialog: "rename" | "ceiling", act: RunAct) => {
+  const opening = (
+    dialog: "rename" | "ceiling",
+    act: RunAct,
+    targetRunId?: string,
+  ) => {
     setAsked(act);
-    setOpened((last) => ({ dialog, count: (last?.count ?? 0) + 1 }));
+    setOpened((last) => ({
+      dialog,
+      count: (last?.count ?? 0) + 1,
+      targetRunId,
+    }));
     setDialogOpen(true);
   };
 
   return (
-    <Async read={{ ...read, value: shown }} empty={() => null}>
+    <Async
+      read={{
+        ...read,
+        value: shown,
+        loading: read.loading && !showingAnswerWhileReading,
+      }}
+      empty={() => null}
+    >
       {(run) => {
         if (run === null) {
           return null;
         }
         const switchedBy = offers(run, "stop") ? "stop" : "open_again";
         const own = "heldBy" in run.ceiling ? null : run.ceiling;
-        const renaming = offers(run, "rename") ? (
-          <Press
-            unavailable={changing.running}
-            onPress={() => opening("rename", "rename")}
-          >
-            {say(RUN_ACTS.rename)}
-          </Press>
-        ) : null;
-        const ceilingLabel = <span id={ceilingId}>{say("run.ceiling")}</span>;
-        const ceiling = (
-          <Box
-            ref={ceilingPart}
-            role="group"
-            aria-labelledby={ceilingId}
-            tabIndex={-1}
-          >
-            {own === null && "heldBy" in run.ceiling
-              ? runLink(
-                  groupId,
-                  run.ceiling.heldBy.runId,
-                  search,
-                  say("run.heldBy", {
-                    number: run.ceiling.heldBy.number,
-                  }),
-                )
-              : null}
-            {own === null ? null : (
-              <OwnCeilingPart
-                run={run}
-                own={own}
-                changing={changing}
-                onAsked={setAsked}
-                onChange={() => opening("ceiling", "change_ceiling")}
-                groupId={groupId}
-              />
-            )}
-            {refusedAt(["approve_raise", "refuse_raise"], {
-              inGroup: RUN_ACT_RULES.approve_raise,
-            })}
-            {refusedAt(["withdraw_raise"], {
-              inGroup: RUN_ACT_RULES.withdraw_raise,
-            })}
-          </Box>
+        const editingChild = run.ceilingsBeneath?.find(
+          ({ run: child }) => child.runId === opened?.targetRunId,
         );
+        const editingCeiling =
+          opened?.targetRunId === undefined ? own : editingChild?.ceiling;
+        const [otherDrawing, otherWords] = OTHER_DRAWING[drawing];
+        const progress =
+          steps === null
+            ? null
+            : say("step.progress", {
+                done: steps.run.progress.done,
+                of: steps.run.progress.of,
+              });
         return (
           <>
             <PageHeading
-              level={2}
               focusOnArrival={focusOnArrival}
-              title={
-                run.name === undefined
-                  ? say("run.title", { number: run.number })
-                  : isolatedInText(run.name)
-              }
-              actions={
-                <Box sx={HEADER_ACTS_SX}>
-                  {offers(run, "stop") || offers(run, "open_again") ? (
-                    <ActButton
-                      action={changing}
-                      act={(signal) => {
-                        setAsked(switchedBy);
-                        return (switchedBy === "stop" ? stopRun : openRunAgain)(
-                          groupId,
-                          run.runId,
-                          signal,
-                        );
-                      }}
-                    >
-                      {say(RUN_ACTS[switchedBy])}
-                    </ActButton>
-                  ) : null}
-                  {conversation === undefined ? (
-                    renaming
-                  ) : (
-                    <Button
-                      ref={moreControl}
-                      aria-expanded={moreOpen}
-                      aria-controls={moreId}
-                      onClick={() => setMoreOpen((was) => !was)}
-                    >
-                      {say("step.more")}
-                    </Button>
-                  )}
+              title={runTitle(run.name, run.number)}
+            />
+            <TwoColumns
+              wideAtLeast={LEAST_TABLE_WIDTH}
+              stickyNarrow={drawing === "conversation"}
+              wide={children}
+              narrow={
+                <Box
+                  sx={
+                    drawing === "conversation"
+                      ? { height: "100%", "& > section": { minHeight: "100%" } }
+                      : undefined
+                  }
+                >
+                  <AboutIt
+                    status={<RunStateBadge state={run.state} />}
+                    facts={
+                      <>
+                        <Field label={say("run.number")}>{run.number}</Field>
+                        <Field label={say("run.workflow")}>
+                          <Link
+                            component={RouterLink}
+                            to={entryHref(
+                              groupId,
+                              LIBRARY_KINDS.workflow,
+                              run.workflow.entryId,
+                            )}
+                          >
+                            {say("run.workflowVersion", {
+                              name: isolatedInText(run.workflow.name),
+                              version: run.workflow.version,
+                            })}
+                          </Link>
+                        </Field>
+                        <Field label={say("run.started")}>
+                          {run.above === undefined
+                            ? run.startedBy === undefined
+                              ? whenText(run.startedAt, now)
+                              : say("run.startedBy", {
+                                  name: isolatedInText(
+                                    nameOrNumber(run.startedBy),
+                                  ),
+                                  when: whenText(run.startedAt, now),
+                                })
+                            : say("run.startedAbove", {
+                                step: isolatedInText(
+                                  spokenName(run.from!.stepName),
+                                ),
+                                number: run.from!.number,
+                                when: whenText(run.startedAt, now),
+                              })}
+                        </Field>
+                        {run.above === undefined ? null : (
+                          <Field label={say("run.above")}>
+                            {runLink(
+                              groupId,
+                              run.above,
+                              search,
+                              say("run.openAbove", {
+                                number: run.from!.number,
+                              }),
+                            )}{" "}
+                            <Link
+                              component={RouterLink}
+                              to={`${stepHref(groupId, run.from!.runId, run.from!.stepId)}${search}`}
+                              state={WITHIN_THE_RUN}
+                            >
+                              {say("run.openStartingStep")}
+                            </Link>
+                          </Field>
+                        )}
+                        <Field label={say("run.where")}>
+                          {whereNowDrawn(run, steps, STEP_NAMED[drawing], now)}
+                          {steps === null ? null : (
+                            <>
+                              <LinearProgress
+                                variant="determinate"
+                                value={
+                                  steps.run.progress.of === 0
+                                    ? 0
+                                    : (100 * steps.run.progress.done) /
+                                      steps.run.progress.of
+                                }
+                                aria-label={progress ?? undefined}
+                              />
+                              <Typography variant="body2" sx={QUIET_SX}>
+                                {progress}
+                              </Typography>
+                            </>
+                          )}
+                        </Field>
+                        <Field label={say("run.cost")}>
+                          <Spent spend={run.spend} />
+                        </Field>
+                        <Field
+                          label={
+                            <span id={ceilingId}>{say("run.ceiling")}</span>
+                          }
+                        >
+                          <CeilingPart
+                            ref={ceilingPart}
+                            labelledBy={ceilingId}
+                            groupId={groupId}
+                            run={run}
+                            search={search}
+                            changing={changing}
+                            refusedAt={refusedAt}
+                            onAsked={setAsked}
+                            onChange={(targetRunId) =>
+                              opening("ceiling", "change_ceiling", targetRunId)
+                            }
+                          />
+                        </Field>
+                      </>
+                    }
+                  >
+                    <Box sx={ACTS_SX}>
+                      {offers(run, "stop") || offers(run, "open_again") ? (
+                        <ActButton
+                          action={changing}
+                          warns={switchedBy === "stop"}
+                          act={(signal) => {
+                            setAsked(switchedBy);
+                            return (
+                              switchedBy === "stop" ? stopRun : openRunAgain
+                            )(groupId, run.runId, signal);
+                          }}
+                        >
+                          {say(RUN_ACTS[switchedBy])}
+                        </ActButton>
+                      ) : null}
+                      {offers(run, "rename") ? (
+                        <Press
+                          unavailable={changing.running}
+                          onPress={() => opening("rename", "rename")}
+                        >
+                          {say(RUN_ACTS.rename)}
+                        </Press>
+                      ) : null}
+                    </Box>
+                    {refusedAt(["stop", "open_again"], {
+                      inGroup: RUN_ACT_RULES[switchedBy],
+                    })}
+                    {drawing === "conversation" && steps !== null ? (
+                      <StepsSoFar
+                        steps={steps.steps}
+                        wideAtLeast={LEAST_TABLE_WIDTH}
+                      />
+                    ) : null}
+                    <Press navigation onPress={() => onDrawing(otherDrawing)}>
+                      {say(otherWords)}
+                    </Press>
+                  </AboutIt>
                 </Box>
               }
             />
-            {refusedAt(["stop", "open_again"], {
-              inGroup: RUN_ACT_RULES[switchedBy],
-            })}
-            {conversation === undefined ? (
-              <Fields>
-                <Field label={say("run.number")}>{run.number}</Field>
-                <Field label={say("run.workflow")}>
-                  <Link
-                    component={RouterLink}
-                    to={entryHref(
-                      groupId,
-                      LIBRARY_KINDS.workflow,
-                      run.workflow.entryId,
-                    )}
-                  >
-                    {say("run.workflowVersion", {
-                      name: isolatedInText(run.workflow.name),
-                      version: run.workflow.version,
-                    })}
-                  </Link>
-                </Field>
-                <Field label={say("run.started")}>
-                  {run.startedBy === undefined
-                    ? say("run.startedAbove", {
-                        when: whenText(run.startedAt),
-                      })
-                    : say("run.startedBy", {
-                        name: isolatedInText(nameOrNumber(run.startedBy)),
-                        when: whenText(run.startedAt),
-                      })}
-                </Field>
-                {run.above === undefined ? null : (
-                  <Field label={say("run.above")}>
-                    {runLink(groupId, run.above, search, say("run.openAbove"))}
-                  </Field>
-                )}
-                <Field label={say("run.where")}>{runWhereSaid(run)}</Field>
-                <Field label={say("run.cost")}>
-                  <Spent spend={run.spend} />
-                </Field>
-                <Field label={ceilingLabel}>{ceiling}</Field>
-              </Fields>
-            ) : (
-              <>
-                <Typography variant="body1">
-                  {whereNowSaid(run, conversation.steps)}
-                </Typography>
-                {conversation.steps === null ? null : (
-                  <Typography variant="body2" sx={QUIET_SX}>
-                    {say("step.progress", {
-                      done: conversation.steps.run.progress.done,
-                      of: conversation.steps.run.progress.of,
-                    })}
-                  </Typography>
-                )}
-                <RunMore
-                  id={moreId}
-                  open={moreOpen}
-                  spend={run.spend}
-                  ceilingLabel={ceilingLabel}
-                  ceiling={ceiling}
-                  renaming={renaming}
-                  onDetail={conversation.onDetail}
-                />
-              </>
-            )}
-            {children}
+
             {opened?.dialog === "rename" ? (
               <RenameRun
                 key={opened.count}
@@ -443,12 +584,14 @@ function RunHeader({
                 onShut={() => setDialogOpen(false)}
               />
             ) : null}
-            {opened?.dialog === "ceiling" && own !== null ? (
+            {opened?.dialog === "ceiling" && editingCeiling != null ? (
               <ChangeCeiling
                 key={opened.count}
                 groupId={groupId}
                 runId={run.runId}
-                ceiling={own}
+                targetRunId={opened.targetRunId}
+                targetRunNumber={editingChild?.run.number}
+                ceiling={editingCeiling}
                 open={dialogOpen}
                 changing={changing}
                 onShut={() => setDialogOpen(false)}
@@ -461,23 +604,117 @@ function RunHeader({
   );
 }
 
+/**
+ * The ceiling a run is held to: the one above it at the top, or its own, and for a run at the top each run beneath it
+ * that holds one of its own, with what may be done to each and why an act on a raise was refused.
+ */
+function CeilingPart({
+  ref,
+  labelledBy,
+  groupId,
+  run,
+  search,
+  changing,
+  refusedAt,
+  onAsked,
+  onChange,
+}: {
+  /** Where the keyboard starts again once an act's answer takes its control away. */
+  readonly ref: RefObject<HTMLDivElement | null>;
+  readonly labelledBy: string;
+  readonly groupId: string;
+  readonly run: Run;
+  readonly search: string;
+  readonly changing: Action<Run | null>;
+  readonly refusedAt: (acts: readonly RunAct[], rule: Rule) => ReactNode;
+  readonly onAsked: (act: RunAct) => void;
+  /** Asked with the run beneath whose ceiling is to change, and with none for the run's own. */
+  readonly onChange: (targetRunId?: string) => void;
+}) {
+  const own = "heldBy" in run.ceiling ? null : run.ceiling;
+  return (
+    <Box ref={ref} role="group" aria-labelledby={labelledBy} tabIndex={-1}>
+      {own === null && "heldBy" in run.ceiling
+        ? runLink(
+            groupId,
+            run.ceiling.heldBy.runId,
+            search,
+            say("run.heldBy", { number: run.ceiling.heldBy.number }),
+          )
+        : null}
+      {own === null ? null : (
+        <OwnCeilingPart
+          groupId={groupId}
+          runId={run.runId}
+          acts={run.above === undefined ? run.acts : new Set()}
+          own={own}
+          changing={changing}
+          onAsked={onAsked}
+          onChange={() => onChange()}
+        />
+      )}
+      {run.above === undefined
+        ? run.ceilingsBeneath?.map((beneath) => (
+            <Box
+              key={beneath.run.runId}
+              role="group"
+              aria-label={say("run.ceilingOf", { number: beneath.run.number })}
+            >
+              <Typography variant="body2">
+                {runLink(
+                  groupId,
+                  beneath.run.runId,
+                  search,
+                  say("run.ceilingOf", { number: beneath.run.number }),
+                )}
+              </Typography>
+              <OwnCeilingPart
+                groupId={groupId}
+                runId={run.runId}
+                acts={beneath.acts}
+                changeLabel={say("run.changeCeilingOf", {
+                  number: beneath.run.number,
+                })}
+                own={beneath.ceiling}
+                changing={changing}
+                onAsked={onAsked}
+                onChange={() => onChange(beneath.run.runId)}
+              />
+            </Box>
+          ))
+        : null}
+      {refusedAt(["approve_raise", "refuse_raise"], {
+        inGroup: RUN_ACT_RULES.approve_raise,
+      })}
+      {refusedAt(["withdraw_raise"], {
+        inGroup: RUN_ACT_RULES.withdraw_raise,
+      })}
+    </Box>
+  );
+}
+
 /** The ceiling the run holds of its own, any raise waiting on it, and what may be done to either. */
 function OwnCeilingPart({
   groupId,
-  run,
+  runId,
+  acts,
+  changeLabel,
   own,
   changing,
   onAsked,
   onChange,
 }: {
   readonly groupId: string;
-  readonly run: Run;
+  readonly runId: string;
+  readonly acts: ReadonlySet<string>;
+  readonly changeLabel?: string;
   readonly own: OwnCeiling;
   readonly changing: Action<Run | null>;
   readonly onAsked: (act: RunAct) => void;
   readonly onChange: () => void;
 }) {
   const waiting = own.waiting;
+  const now = useCalendarNow();
   return (
     <>
       <Typography variant="body1">
@@ -490,24 +727,24 @@ function OwnCeilingPart({
           {waiting.to === undefined
             ? say("raise.away", {
                 name: isolatedInText(nameOrNumber(waiting.askedBy)),
-                when: whenText(waiting.askedAt),
+                when: whenText(waiting.askedAt, now),
               })
             : say("raise.to", {
                 name: isolatedInText(nameOrNumber(waiting.askedBy)),
-                when: whenText(waiting.askedAt),
+                when: whenText(waiting.askedAt, now),
                 to: countSaid(waiting.to),
               })}
         </Typography>
       )}
       <Box sx={ACTS_SX}>
-        {offers(run, "change_ceiling") ? (
+        {acts.has("change_ceiling") ? (
           <Press unavailable={changing.running} onPress={onChange}>
-            {say(RUN_ACTS.change_ceiling)}
+            {changeLabel ?? say(RUN_ACTS.change_ceiling)}
           </Press>
         ) : null}
         {waiting === undefined
           ? null
-          : DECISIONS.filter(([act]) => offers(run, act)).map(
+          : DECISIONS.filter(([act]) => acts.has(act)).map(
               ([act, decision]) => (
                 <ActButton
                   key={act}
@@ -516,7 +753,7 @@ function OwnCeilingPart({
                     onAsked(act);
                     return decideRaise(
                       groupId,
-                      run.runId,
+                      runId,
                       waiting.changeId,
                       decision,
                       signal,
@@ -546,20 +783,43 @@ function runLink(
   );
 }
 
-/** Where it is; while it runs, on which step, by the title that step's message has. */
-function whereNowSaid(run: Run, steps: RunSteps | null): string {
+/** Where it is; while it runs, on which step, by the name the drawing gives that step. */
+function whereNowSaid(
+  run: Run,
+  steps: RunSteps | null,
+  stepNamed: (step: StepRow) => string,
+  now: Date,
+): string {
   const at = run.at;
-  if (
-    at === undefined ||
-    run.stopped !== undefined ||
-    run.state !== "running"
-  ) {
-    return runWhereSaid(run);
+  if (at === undefined || run.state !== "running") {
+    return runWhereSaid(run, now);
   }
-  const row = steps?.steps.find((each) => each.stepId === at.stepId);
   return say("runState.runningAt", {
-    step: isolatedInText(
-      row === undefined ? spokenName(at.name) : stepTitle(row),
-    ),
+    step: isolatedInText(stepNowNamed(at, steps, stepNamed)),
+  });
+}
+
+function stepNowNamed(
+  at: NonNullable<Run["at"]>,
+  steps: RunSteps | null,
+  stepNamed: (step: StepRow) => string,
+): string {
+  const row = steps?.steps.find((each) => each.stepId === at.stepId);
+  return row === undefined ? spokenName(at.name) : stepNamed(row);
+}
+
+function whereNowDrawn(
+  run: Run,
+  steps: RunSteps | null,
+  stepNamed: (step: StepRow) => string,
+  now: Date,
+): ReactNode {
+  const at = run.at;
+  if (at === undefined || run.state !== "running") {
+    return whereNowSaid(run, steps, stepNamed, now);
+  }
+  return visible("runState.runningAtVisible", {
+    hint: <SystemHint>{say("runState.runningAtHint")}</SystemHint>,
+    step: <bdi>{isolatedInText(stepNowNamed(at, steps, stepNamed))}</bdi>,
   });
 }

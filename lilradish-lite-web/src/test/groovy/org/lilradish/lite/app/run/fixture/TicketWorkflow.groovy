@@ -3,32 +3,22 @@ package org.lilradish.lite.app.run.fixture
 import org.lilradish.lite.domain.identity.UserId
 import org.lilradish.lite.testutil.library.LibraryStore
 
-/**
- * One group, its people, and a workflow of two steps a person answers: {@code summarise} takes the ticket the
- * run was started with and gives back a summary that stands only once reviewed; {@code confirm} takes that
- * summary and gives back whether it is right, and a note, both standing as given. The workflow gives the
- * summary back.
- */
 final class TicketWorkflow {
 
     static final String GROUP = "00000003-0000-4000-8000-000000000e01"
 
-    /** An overseer: reads every run, answers a step, reviews at a gate. */
     static final String ANN = "00000002-0000-4000-8000-000000000e01"
 
     static final UserId ANN_USER = new UserId("000e01")
 
-    /** An overseer as well, so there is a second reviewer. */
     static final String BEN = "00000002-0000-4000-8000-000000000e02"
 
     static final UserId BEN_USER = new UserId("000e02")
 
-    /** An operator: starts runs, reads their own, answers a step, and reviews nothing. */
     static final String CAT = "00000002-0000-4000-8000-000000000e03"
 
     static final UserId CAT_USER = new UserId("000e03")
 
-    /** In no role in the group. */
     static final String DAN = "00000002-0000-4000-8000-000000000e04"
 
     static final UserId DAN_USER = new UserId("000e04")
@@ -71,7 +61,6 @@ final class TicketWorkflow {
 
     private TicketWorkflow() {}
 
-    /** The group, its people, both questions and the workflow, with {@code summariseTries} tries on summarise. */
     static void seed(LibraryStore store, int summariseTries = 2) {
         store.person(ANN, "000e01", "Ann")
         store.person(BEN, "000e02", "Ben")
@@ -105,7 +94,6 @@ final class TicketWorkflow {
         StepRows.binding(store, RESULT_OUT, VERSION, null, "result", SUMMARISE, "summary")
     }
 
-    /** Cat's run of the workflow, started with a ticket and nothing written about any step. */
     static void run(LibraryStore store, String run = RUN, int number = 1) {
         StepRows.run(store, run, GROUP, number, WORKFLOW, VERSION, CAT, STARTED_WITH)
     }

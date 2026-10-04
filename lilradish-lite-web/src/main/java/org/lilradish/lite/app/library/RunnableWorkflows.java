@@ -12,8 +12,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.lilradish.lite.app.codestep.CodeSteps;
+import org.lilradish.lite.app.search.SearchWays;
 import org.lilradish.lite.domain.codestep.CodeStepDeclaration;
 import org.lilradish.lite.domain.codestep.ReleasedCodeStep;
+import org.lilradish.lite.domain.declaration.Declaration;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.registry.EntryId;
@@ -25,6 +27,7 @@ import org.lilradish.lite.domain.run.PlannedStep;
 import org.lilradish.lite.domain.run.RunnableWorkflow;
 import org.lilradish.lite.domain.run.StepRuns;
 import org.lilradish.lite.domain.run.WorkflowStepId;
+import org.lilradish.lite.domain.workflow.RouteCase;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -42,6 +45,14 @@ public final class RunnableWorkflows {
              where version.entry_version_id = any(cast(:versions as uuid[])) and entry.group_id = :group
             """;
 
+    private static final String CODE_LISTS = """
+            select version.entry_version_id
+              from entry_versions version
+              join entries entry on entry.entry_id = version.entry_id
+             where version.entry_version_id = any(cast(:versions as uuid[])) and entry.group_id = :group
+               and entry.kind = 'reference_list' and version.approved_at is not null
+            """;
+
     private RunnableWorkflows() {}
 
     /**
@@ -49,13 +60,19 @@ public final class RunnableWorkflows {
      * and whatever their steps pin. A version holding what submitting would refuse, or pinning what its group does
      * not hold, is a store gone wrong and fails. A code step is read as {@code release} declares it now, beside the
      * terms of each list that pins that the group holds; one it pins that the group does not is left out, not failed.
+     * A search is read with the way {@code ways} holds of its name now, or none where they hold none.
      */
     public static Map<EntryVersionId, RunnableWorkflow> read(
-            JdbcClient database, GroupId group, Collection<EntryVersionId> versions, CodeSteps release) {
+            JdbcClient database,
+            GroupId group,
+            Collection<EntryVersionId> versions,
+            CodeSteps release,
+            SearchWays ways) {
         requireNonNull(database, "RunnableWorkflows database must not be null");
         requireNonNull(group, "RunnableWorkflows group must not be null");
         requireNonNull(versions, "RunnableWorkflows versions must not be null");
         requireNonNull(release, "RunnableWorkflows release must not be null");
+        requireNonNull(ways, "RunnableWorkflows ways must not be null");
         Set<EntryVersionId> asked = new LinkedHashSet<>(versions);
         Map<EntryVersionId, StoredWorkflow> stored = StoredWorkflow.readAll(database, asked);
         Map<EntryVersionId, StoredWorkflow> workflows = LinkedHashMap.newLinkedHashMap(asked.size());
@@ -68,6 +85,7 @@ public final class RunnableWorkflows {
         }
         Set<EntryVersionId> pinnedVersions = new LinkedHashSet<>();
         Map<EntryVersionId, EntryKind> questionsPinned = new HashMap<>();
+        Map<EntryVersionId, EntryKind> workflowsPinned = new HashMap<>();
         Map<String, CodeStepDeclaration> released = new HashMap<>();
         for (StoredWorkflow workflow : workflows.values()) {
             pinnedVersions.addAll(workflow.pinned());
@@ -75,26 +93,53 @@ public final class RunnableWorkflows {
                 if (step.runs() instanceof StoredWorkflow.Runs.Pinned held && held.kind() == EntryKind.QUESTION) {
                     questionsPinned.put(held.version(), EntryKind.QUESTION);
                 }
+                if (step.runs() instanceof StoredWorkflow.Runs.Pinned held && held.kind() == EntryKind.WORKFLOW) {
+                    workflowsPinned.put(held.version(), EntryKind.WORKFLOW);
+                }
                 if (step.runs() instanceof StoredWorkflow.Runs.Code code && code.codeStep() != null) {
                     release.declaration(code.codeStep()).ifPresent(declared -> released.put(code.codeStep(), declared));
                 }
             }
         }
         Map<EntryVersionId, PinnedEntry> pinned = pinned(database, group, pinnedVersions);
+        for (EntryVersionId version : workflowsPinned.keySet()) {
+            if (!pinned.containsKey(version)) {
+                throw new IllegalStateException("Version " + version.value() + " is not held by the workflow's group");
+            }
+        }
+        Map<EntryVersionId, Declaration> workflowGives = new HashMap<>();
+        Map<EntryVersionId, EntryKind> workflowsUnread = new HashMap<>();
+        for (EntryVersionId version : workflowsPinned.keySet()) {
+            StoredWorkflow loaded = workflows.get(version);
+            if (loaded == null) {
+                workflowsUnread.put(version, EntryKind.WORKFLOW);
+            } else {
+                workflowGives.put(version, loaded.gives().declaration());
+            }
+        }
+        if (!workflowsUnread.isEmpty()) {
+            StoredDeclarations.ofVersions(database, workflowsUnread)
+                    .forEach((version, halves) ->
+                            workflowGives.put(version, halves.gives().declaration()));
+        }
         Map<EntryVersionId, StoredQuestion> questions = questionsPinned.isEmpty()
                 ? Map.of()
                 : StoredQuestion.readAll(database, StoredDeclarations.ofVersions(database, questionsPinned));
         Set<EntryVersionId> lists = new LinkedHashSet<>();
         workflows.values().forEach(workflow -> lists.addAll(workflow.listsPinned()));
         questions.values().forEach(question -> lists.addAll(question.pinned()));
-        released.values().forEach(declared -> lists.addAll(declared.lists()));
+        Set<EntryVersionId> codeLists = new LinkedHashSet<>();
+        released.values().forEach(declared -> codeLists.addAll(declared.lists()));
+        lists.addAll(codeLists);
         Map<EntryVersionId, OfferedTerms> offered = StoredQuestion.offered(database, group, lists);
+        Set<EntryVersionId> approvedCodeLists = approvedCodeLists(database, group, codeLists);
         Map<String, ReleasedCodeStep> codeSteps = HashMap.newHashMap(released.size());
-        released.forEach(
-                (name, declared) -> codeSteps.put(name, new ReleasedCodeStep(declared, held(offered, declared))));
+        released.forEach((name, declared) ->
+                codeSteps.put(name, new ReleasedCodeStep(declared, held(offered, declared, approvedCodeLists))));
         Map<EntryVersionId, RunnableWorkflow> read = LinkedHashMap.newLinkedHashMap(workflows.size());
-        workflows.forEach((version, workflow) ->
-                read.put(version, runnable(version, workflow, new Pinned(pinned, questions, codeSteps, offered))));
+        workflows.forEach((version, workflow) -> read.put(
+                version,
+                runnable(version, workflow, new Pinned(pinned, questions, workflowGives, codeSteps, offered, ways))));
         return read;
     }
 
@@ -112,8 +157,7 @@ public final class RunnableWorkflows {
                         step.reviewer(),
                         step.bindings()));
             }
-            Set<EntryVersionId> own = new LinkedHashSet<>();
-            new StoredDeclarations.Halves(workflow.takes(), workflow.gives()).listsPinnedInto(own);
+            Set<EntryVersionId> own = workflow.listsPinned();
             return new RunnableWorkflow(
                     workflow.takes().declaration(),
                     workflow.gives().declaration(),
@@ -134,7 +178,32 @@ public final class RunnableWorkflows {
                 String name = requireNonNull(code.codeStep());
                 yield new StepRuns.Code(name, pinned.codeSteps().get(name));
             }
-            case StoredWorkflow.Runs.Route ignored -> new StepRuns.Route();
+            case StoredWorkflow.Runs.Route route -> {
+                if (route.discriminator() == null) {
+                    throw new IllegalArgumentException("Step " + step.id() + " has no route discriminator");
+                }
+                List<StepRuns.Route.Case> cases = new ArrayList<>(route.cases().size());
+                for (RouteCase routed : route.cases()) {
+                    if (routed.target() == null) {
+                        throw new IllegalArgumentException("Case " + routed.id() + " pins no workflow");
+                    }
+                    PinnedEntry target = pinned.entries().get(routed.target());
+                    if (target == null) {
+                        throw new IllegalArgumentException(
+                                "Case " + routed.id() + " pins a version its group does not hold");
+                    }
+                    cases.add(new StepRuns.Route.Case(routed.id(), routed.term(), target, routed.bindings()));
+                }
+                yield new StepRuns.Route(route.discriminator(), route.gives().declaration(), cases);
+            }
+            case StoredWorkflow.Runs.Search search -> {
+                String way = search.way();
+                if (way == null) {
+                    throw new IllegalArgumentException("Step " + step.id() + " runs no way to search chosen");
+                }
+                yield new StepRuns.Search(
+                        way, pinned.ways().find(way).orElse(null), search.question(), search.standings());
+            }
             case StoredWorkflow.Runs.Pinned held -> {
                 PinnedEntry entry = pinned.entries().get(held.version());
                 if (entry == null) {
@@ -142,7 +211,9 @@ public final class RunnableWorkflows {
                 }
                 yield switch (held.kind()) {
                     case QUESTION -> question(entry, pinned.questions(), pinned.offered());
-                    case WORKFLOW -> new StepRuns.Workflow(entry);
+                    case WORKFLOW ->
+                        new StepRuns.Workflow(
+                                entry, requireNonNull(pinned.workflowGives().get(held.version())));
                     case REFERENCE_LIST ->
                         throw new IllegalArgumentException("Step " + step.id() + " pins a reference list");
                 };
@@ -170,17 +241,33 @@ public final class RunnableWorkflows {
                 within(offered, question.pinned()));
     }
 
-    /* A list the code pins that the group does not hold is left out, since the release, not the store, holds it. */
+    /* Retirement leaves an approved list readable by code that still pins it. */
     private static Map<EntryVersionId, OfferedTerms> held(
-            Map<EntryVersionId, OfferedTerms> offered, CodeStepDeclaration declared) {
+            Map<EntryVersionId, OfferedTerms> offered,
+            CodeStepDeclaration declared,
+            Set<EntryVersionId> approvedCodeLists) {
         Map<EntryVersionId, OfferedTerms> held = new HashMap<>();
         for (EntryVersionId list : declared.lists()) {
             OfferedTerms terms = offered.get(list);
-            if (terms != null) {
+            if (terms != null && approvedCodeLists.contains(list)) {
                 held.put(list, terms);
             }
         }
         return held;
+    }
+
+    private static Set<EntryVersionId> approvedCodeLists(
+            JdbcClient database, GroupId group, Set<EntryVersionId> versions) {
+        Set<EntryVersionId> approved = new LinkedHashSet<>();
+        if (!versions.isEmpty()) {
+            database.sql(CODE_LISTS)
+                    .param("versions", PinnedVersions.spelled(versions))
+                    .param("group", group.value())
+                    .query(result -> {
+                        approved.add(new EntryVersionId(result.getObject("entry_version_id", UUID.class)));
+                    });
+        }
+        return approved;
     }
 
     /** What each of {@code lists} offers; one the group does not hold fails as a store gone wrong. */
@@ -223,6 +310,8 @@ public final class RunnableWorkflows {
     private record Pinned(
             Map<EntryVersionId, PinnedEntry> entries,
             Map<EntryVersionId, StoredQuestion> questions,
+            Map<EntryVersionId, Declaration> workflowGives,
             Map<String, ReleasedCodeStep> codeSteps,
-            Map<EntryVersionId, OfferedTerms> offered) {}
+            Map<EntryVersionId, OfferedTerms> offered,
+            SearchWays ways) {}
 }

@@ -10,10 +10,14 @@ import { Link as RouterLink, useLocation } from "react-router";
 
 import type { RunSteps } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import { say } from "../../../i18n/app";
-import { QUIET_SX } from "../../../lib/layout/parts";
+import { QUIET_SX, TITLE_LINE_SX } from "../../../lib/layout/parts";
+import { useCalendarNow } from "../../../lib/time/When";
+import { StepKindTag } from "../../library/StepKindTag";
 import { listQuery, stepHref, WITHIN_THE_RUN } from "../runAddress";
 import { CostDrawn } from "../spend";
+import { BeneathLinks } from "./BeneathLinks";
 import { declaredFor, takenSaid, type Declaring } from "./declared";
+import { StepStateBadge } from "./StepStateBadge";
 import { whereSaid } from "./stepStates";
 import { spokenName } from "./stepTitle";
 
@@ -30,10 +34,13 @@ export function StepsTable({
   readonly labelledBy: string;
 }) {
   const { search } = useLocation();
+  const now = useCalendarNow();
   const { declarations, steps } = reading;
   const declaring: Declaring = {
+    runId: reading.run.runId,
     declarations,
     runVersionId: reading.run.versionId,
+    steps,
   };
   return (
     <Table size="small" aria-labelledby={labelledBy}>
@@ -48,21 +55,26 @@ export function StepsTable({
       </TableHead>
       <TableBody>
         {steps.map((step) => {
-          const [state, ...why] = whereSaid(
+          const [, ...why] = whereSaid(
             step,
             declaredFor(step, declarations)?.gives,
+            undefined,
+            now,
           );
           return (
             <TableRow key={step.stepId}>
               <TableCell>{step.order}</TableCell>
               <TableCell component="th" scope="row">
-                <Link
-                  component={RouterLink}
-                  to={`${stepHref(groupId, reading.run.runId, step.stepId)}${listQuery(search)}`}
-                  state={WITHIN_THE_RUN}
-                >
-                  <bdi>{spokenName(step.name)}</bdi>
-                </Link>
+                <Box sx={TITLE_LINE_SX}>
+                  <Link
+                    component={RouterLink}
+                    to={`${stepHref(groupId, reading.run.runId, step.stepId)}${listQuery(search)}`}
+                    state={WITHIN_THE_RUN}
+                  >
+                    <bdi>{spokenName(step.name)}</bdi>
+                  </Link>
+                  <StepKindTag kind={step.runs.kind} />
+                </Box>
               </TableCell>
               <TableCell>
                 {step.takesFrom.length === 0 ? (
@@ -70,7 +82,7 @@ export function StepsTable({
                 ) : (
                   <Box component="ul" sx={TAKEN_SX}>
                     {step.takesFrom.map((taken) => (
-                      <li key={taken.input}>
+                      <li key={taken.sourcePartId ?? taken.input}>
                         {takenSaid(taken, step, declaring)}
                       </li>
                     ))}
@@ -78,12 +90,17 @@ export function StepsTable({
                 )}
               </TableCell>
               <TableCell>
-                {state}
+                <StepStateBadge state={step.state} />
                 {why.map((line, at) => (
                   <Typography key={at} variant="body2" sx={QUIET_SX}>
                     {line}
                   </Typography>
                 ))}
+                {step.beneath === undefined ? null : (
+                  <Typography variant="body2">
+                    <BeneathLinks groupId={groupId} beneath={step.beneath} />
+                  </Typography>
+                )}
               </TableCell>
               <TableCell>
                 <CostDrawn cost={step.cost} />

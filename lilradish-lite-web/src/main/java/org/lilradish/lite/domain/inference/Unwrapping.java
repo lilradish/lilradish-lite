@@ -10,6 +10,7 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.declaration.AskedField;
 import org.lilradish.lite.domain.declaration.Declaration;
+import org.lilradish.lite.domain.declaration.FieldKind;
 import org.lilradish.lite.domain.declaration.FieldName;
 import org.lilradish.lite.domain.declaration.OfferedTerms;
 import org.lilradish.lite.domain.text.Legibility;
@@ -23,11 +24,13 @@ import org.lilradish.lite.domain.wire.JsonValue.JsonObject;
 import org.lilradish.lite.domain.wire.JsonValue.JsonString;
 
 /**
- * An answer read against what the {@link Envelope} of the same version asked for, once, as it arrives: every
- * field there and none other, what may be absent being the value and never the field, nor the value of one that
+ * An answer read against its declaration, once, as it arrives: every non-file field there and none other,
+ * what may be absent being the value and never the field, nor the value of one that
  * must be given. What a code step gives back is read by the same rules, save that a field it leaves out is one it
- * gave none. Nothing is cleaned or cut; what the store could not keep as it came does not fit. An answer that
- * could not be read arrives as none, and is not the shape.
+ * gave none. Nothing is cleaned or cut; what the store could not keep as it came does not fit. A model's value
+ * written as text that shows nothing, of any kind, or holding fields every one of which is nothing, is nothing
+ * given: kept as none where the field need not be given, and otherwise, or as one of many, not fitting. An answer
+ * that could not be read arrives as none, and is not the shape.
  */
 public final class Unwrapping {
 
@@ -64,7 +67,7 @@ public final class Unwrapping {
             return new DoesNotFit(DidNotFitReason.NOT_THE_SHAPE);
         }
         Map<FieldName, JsonValue> kept = new HashMap<>();
-        DidNotFitReason wrong = level(gives, values, kept, null);
+        DidNotFitReason wrong = level(gives, values, kept, new Reading(false));
         if (wrong != null) {
             return new DoesNotFit(wrong);
         }
@@ -74,15 +77,46 @@ public final class Unwrapping {
     }
 
     /**
+     * What a search answered, read as a model's values are, in the same order: the answer is the values themselves,
+     * and nothing is asked how sure it is.
+     *
+     * @throws IllegalArgumentException where a field asks how sure its maker was
+     */
+    public static ProductionAnswer searched(List<AskedField> gives, @Nullable JsonValue answer) {
+        requireNonNull(gives, "Unwrapping gives must not be null");
+        for (AskedField field : gives) {
+            if (field.kind() != FieldKind.FILE && field.confidenceAsked()) {
+                throw new IllegalArgumentException("Unwrapping reads no confidence of a search, yet "
+                        + field.name().value() + " asks one");
+            }
+        }
+        if (!(answer instanceof JsonObject values)) {
+            return new DoesNotFit(DidNotFitReason.NOT_THE_SHAPE);
+        }
+        Map<FieldName, JsonValue> kept = new HashMap<>();
+        DidNotFitReason wrong = level(gives, values, kept, new Reading(false));
+        return wrong == null ? new ProductionAnswer.Produced(kept, Map.of()) : new DoesNotFit(wrong);
+    }
+
+    /**
      * Read as a model's values are, in the same order, but a member absent for a field that need not be given is
      * that field given nothing, and kept holding none at every depth. One absent for a field that must be given
      * does not fit as {@code NOTHING_GIVEN}.
      */
     public static GivenBack given(List<AskedField> gives, JsonObject gaveBack) {
+        return given(gives, gaveBack, false);
+    }
+
+    /** Read only after FileFillings replaced every file position with verified metadata. */
+    public static GivenBack givenAfterFileFillings(List<AskedField> gives, JsonObject gaveBack) {
+        return given(gives, gaveBack, true);
+    }
+
+    private static GivenBack given(List<AskedField> gives, JsonObject gaveBack, boolean verifiedFiles) {
         requireNonNull(gives, "Unwrapping gives must not be null");
         requireNonNull(gaveBack, "Unwrapping gaveBack must not be null");
         Map<FieldName, JsonValue> kept = new HashMap<>();
-        CodeReading code = new CodeReading();
+        Reading code = new Reading(true, verifiedFiles);
         DidNotFitReason wrong = level(gives, gaveBack, kept, code);
         return wrong == null ? new GivenBack.Fits(kept) : new GivenBack.Misfit(wrong, code.path(), code.undeclared);
     }
@@ -126,80 +160,130 @@ public final class Unwrapping {
 
     /**
      * Where {@code kept} is given, the level is what is given back, each of whose values the store keeps whole.
-     * Where {@code code} is given, a code step gave it back; a model's reading passes none.
+     * Below it, a model's level every one of whose fields is nothing is itself nothing given, and left as none.
      */
     private static @Nullable DidNotFitReason level(
-            List<AskedField> fields,
-            JsonObject given,
-            @Nullable Map<FieldName, JsonValue> kept,
-            @Nullable CodeReading code) {
-        for (JsonMember member : given.members()) {
-            if (declared(fields, member.name()) == null) {
-                if (code != null) {
-                    code.undeclared = member.name();
+            List<AskedField> fields, JsonObject given, @Nullable Map<FieldName, JsonValue> kept, Reading reading) {
+        List<JsonMember> arrived = given.members();
+        for (JsonMember member : arrived) {
+            AskedField field = declared(fields, member.name());
+            if (field == null || (!reading.code && field.kind() == FieldKind.FILE)) {
+                if (reading.code) {
+                    reading.undeclared = member.name();
                 }
                 return DidNotFitReason.FIELD_UNKNOWN;
             }
         }
-        boolean whole = given.members().size() == fields.size();
+        boolean mayBeNothing = kept == null && !reading.code;
+        boolean holdsSomething = false;
+        boolean gap = false;
         List<JsonMember> rebuilt = null;
-        for (int index = 0; index < fields.size(); index++) {
-            AskedField field = fields.get(index);
-            JsonValue value = member(given, field.name().value());
-            if (value == null) {
-                if (code == null) {
-                    return DidNotFitReason.FIELD_MISSING;
-                }
-                value = NOTHING;
+        for (AskedField field : fields) {
+            if (!reading.code && field.kind() == FieldKind.FILE) {
+                continue;
             }
-            DidNotFitReason wrong = field(field, value, code);
-            JsonValue filled = code == null ? null : code.takeRebuilt();
+            String name = field.name().value();
+            int position = position(arrived, name);
+            JsonValue value;
+            if (position >= 0) {
+                value = arrived.get(position).value();
+            } else if (reading.code) {
+                value = NOTHING;
+            } else {
+                return gap ? DidNotFitReason.NOTHING_GIVEN : DidNotFitReason.FIELD_MISSING;
+            }
+            DidNotFitReason wrong = field(field, value, reading);
+            JsonValue filled = reading.takeRebuilt();
             if (filled != null) {
                 value = filled;
             }
             if (wrong == null && kept != null && CanonicalJson.storedLength(value) > Declaration.MOST_STORED) {
                 wrong = DidNotFitReason.TOO_LONG_TO_KEEP;
             }
+            boolean nothing = mayBeNothing && nothing(value);
             if (wrong != null) {
-                if (code != null) {
-                    code.under(field.name());
+                if (!nothing || wrong != DidNotFitReason.NOTHING_GIVEN) {
+                    if (reading.code) {
+                        reading.under(field.name());
+                    }
+                    return gap ? DidNotFitReason.NOTHING_GIVEN : wrong;
                 }
-                return wrong;
+                if (holdsSomething) {
+                    return DidNotFitReason.NOTHING_GIVEN;
+                }
+                gap = true;
+                continue;
+            }
+            if (!nothing) {
+                if (gap) {
+                    return DidNotFitReason.NOTHING_GIVEN;
+                }
+                holdsSomething = true;
             }
             if (kept != null) {
                 kept.put(field.name(), value);
-            } else if (code != null) {
-                if (rebuilt == null && (!whole || filled != null)) {
-                    rebuilt = membersBefore(fields, index, given);
+            } else if (filled != null || position < 0) {
+                if (rebuilt == null) {
+                    rebuilt = asArrived(arrived, fields.size());
                 }
-                if (rebuilt != null) {
-                    rebuilt.add(new JsonMember(field.name().value(), value));
+                JsonMember member = new JsonMember(name, value);
+                if (position < 0) {
+                    rebuilt.add(member);
+                } else {
+                    rebuilt.set(position, member);
                 }
             }
         }
-        if (rebuilt != null) {
-            requireNonNull(code).leave(new JsonObject(rebuilt));
+        if (mayBeNothing && !holdsSomething) {
+            reading.leave(NOTHING);
+        } else if (rebuilt != null) {
+            reading.leave(new JsonObject(rebuilt));
         }
         return null;
     }
 
-    /* Reached only while every member before index is present and kept as it came. */
-    private static List<JsonMember> membersBefore(List<AskedField> fields, int index, JsonObject given) {
-        List<JsonMember> members = new ArrayList<>(fields.size());
-        for (AskedField field : fields.subList(0, index)) {
-            String name = field.name().value();
-            members.add(new JsonMember(name, requireNonNull(member(given, name))));
+    private static int position(List<JsonMember> members, String name) {
+        for (int index = 0; index < members.size(); index++) {
+            if (members.get(index).name().equals(name)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static List<JsonMember> asArrived(List<JsonMember> arrived, int room) {
+        List<JsonMember> members = new ArrayList<>(room);
+        for (JsonMember member : arrived) {
+            members.add(member);
         }
         return members;
     }
 
-    private static @Nullable DidNotFitReason field(AskedField field, JsonValue value, @Nullable CodeReading code) {
+    /* By ruling, a list holding nothing is nothing, as none is. */
+    private static boolean nothing(JsonValue value) {
+        return value instanceof JsonNull
+                || (value instanceof JsonArray many && many.items().isEmpty());
+    }
+
+    private static @Nullable DidNotFitReason field(AskedField field, JsonValue value, Reading reading) {
         if (value instanceof JsonNull) {
+            return field.mustBeGiven() ? DidNotFitReason.NOTHING_GIVEN : null;
+        }
+        if (!reading.code
+                && field.most() != null
+                && value instanceof JsonString said
+                && (field.kind() != FieldKind.TEXT
+                        || requireNonNull(field.lines()).accepts(said.value()))
+                && !Legibility.holdsSomethingVisibleInProse(said.value())) {
+            reading.leave(NOTHING);
             return field.mustBeGiven() ? DidNotFitReason.NOTHING_GIVEN : null;
         }
         Integer most = field.most();
         if (most == null) {
-            return one(field, value, code);
+            DidNotFitReason wrong = one(field, value, reading);
+            return wrong == null && field.mustBeGiven() && reading.rebuilt instanceof JsonNull
+                    ? DidNotFitReason.NOTHING_GIVEN
+                    : wrong;
         }
         if (!(value instanceof JsonArray many)) {
             return DidNotFitReason.NOT_ITS_KIND;
@@ -214,11 +298,15 @@ public final class Unwrapping {
         List<JsonValue> rebuilt = null;
         for (int index = 0; index < items.size(); index++) {
             JsonValue item = items.get(index);
-            DidNotFitReason wrong = item instanceof JsonNull ? DidNotFitReason.NOT_ITS_KIND : one(field, item, code);
-            JsonValue filled = code == null ? null : code.takeRebuilt();
+            DidNotFitReason wrong = item instanceof JsonNull ? DidNotFitReason.NOT_ITS_KIND : one(field, item, reading);
+            JsonValue filled = reading.takeRebuilt();
+            /* By ruling, one of many is always one that must be given. */
+            if (filled instanceof JsonNull) {
+                wrong = DidNotFitReason.NOTHING_GIVEN;
+            }
             if (wrong != null) {
-                if (code != null) {
-                    code.stopAtTheMany();
+                if (reading.code) {
+                    reading.stopAtTheMany();
                 }
                 return wrong;
             }
@@ -230,20 +318,34 @@ public final class Unwrapping {
             }
         }
         if (rebuilt != null) {
-            requireNonNull(code).leave(new JsonArray(rebuilt));
+            reading.leave(new JsonArray(rebuilt));
         }
         return null;
     }
 
-    private static @Nullable DidNotFitReason one(AskedField field, JsonValue value, @Nullable CodeReading code) {
+    /* By ruling, a model's value of any kind written as text that shows nothing is nothing given, left as
+     * none before its kind is asked; a code step's is read as it came. */
+    private static @Nullable DidNotFitReason one(AskedField field, JsonValue value, Reading reading) {
+        if (field.kind() == FieldKind.TEXT
+                && value instanceof JsonString said
+                && !requireNonNull(field.lines()).accepts(said.value())) {
+            return DidNotFitReason.LINE_BREAK;
+        }
+        if (!reading.code
+                && value instanceof JsonString said
+                && !Legibility.holdsSomethingVisibleInProse(said.value())) {
+            reading.leave(NOTHING);
+            return null;
+        }
         if (!field.kind().writes(value)) {
             return DidNotFitReason.NOT_ITS_KIND;
         }
         return switch (field.kind()) {
             case TEXT -> text(((JsonString) value).value(), requireNonNull(field.longest()));
             case TERM -> term(((JsonString) value).value(), requireNonNull(field.terms()));
-            case FIELDS -> level(field.fields(), (JsonObject) value, null, code);
+            case FIELDS -> level(field.fields(), (JsonObject) value, null, reading);
             case NUMBER, DATE, MOMENT, YES_NO -> null;
+            case FILE -> reading.verifiedFiles ? null : DidNotFitReason.NOT_ITS_KIND;
         };
     }
 
@@ -265,7 +367,7 @@ public final class Unwrapping {
             List<AskedField> gives, JsonObject given, Map<FieldName, Confidence> sure) {
         for (JsonMember member : given.members()) {
             AskedField field = declared(gives, member.name());
-            if (field == null || !field.confidenceAsked()) {
+            if (field == null || field.kind() == FieldKind.FILE || !field.confidenceAsked()) {
                 return DidNotFitReason.CONFIDENCE_UNASKED;
             }
             if (!(member.value() instanceof JsonNumber number) || !percent(number.value())) {
@@ -274,7 +376,7 @@ public final class Unwrapping {
             sure.put(field.name(), new Confidence(number.value().intValueExact()));
         }
         for (AskedField field : gives) {
-            if (field.confidenceAsked() && !sure.containsKey(field.name())) {
+            if (field.kind() != FieldKind.FILE && field.confidenceAsked() && !sure.containsKey(field.name())) {
                 return DidNotFitReason.CONFIDENCE_MISSING;
             }
         }
@@ -342,16 +444,33 @@ public final class Unwrapping {
         return true;
     }
 
-    /** What only a code step's reading carries: where it did not fit, and a value rebuilt below to hold every member. */
-    private static final class CodeReading {
+    /**
+     * A value rebuilt below, to hold every member a code step left out or none where a model gave nothing; and,
+     * only of a code step's reading, where it did not fit. A level rebuilt holds its members in the order they
+     * came, then those left out in declared order.
+     */
+    private static final class Reading {
+
+        private final boolean code;
+
+        private final boolean verifiedFiles;
 
         /* Innermost first, gathered only while unwinding from what does not fit. */
         private @Nullable List<FieldName> outwards;
 
-        /* Left by a level or a many for the one caller that reads it next, which takes it at once. */
+        /* Left by a level, a many or one value for the one caller that reads it next, which takes it at once. */
         private @Nullable JsonValue rebuilt;
 
         private @Nullable String undeclared;
+
+        private Reading(boolean code) {
+            this(code, false);
+        }
+
+        private Reading(boolean code, boolean verifiedFiles) {
+            this.code = code;
+            this.verifiedFiles = verifiedFiles;
+        }
 
         private void under(FieldName name) {
             if (outwards == null) {

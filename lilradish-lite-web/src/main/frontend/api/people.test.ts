@@ -8,11 +8,11 @@ function addressAsked(sent: ReturnType<typeof answering>): URL {
   return new URL(String(sent.mock.calls[0]![0]), "http://reader.test");
 }
 
-const ADA = { userId: "000130", displayName: "Ada Lovelace" };
+const AVO = { userId: "000130", displayName: "Avo Lumerace" };
 
-const GRACE = {
+const GLINN = {
   userId: "000140",
-  displayName: "Grace Hopper",
+  displayName: "Glinn Havven",
   subjectId: "00000002-0000-4000-8000-000000000140",
 };
 
@@ -33,24 +33,24 @@ describe("searchDirectory", () => {
   });
 
   it("reads each match, and who of them is already in the pool", async () => {
-    answering([JSON.stringify({ items: [ADA, GRACE], more: true }), 200]);
+    answering([JSON.stringify({ items: [AVO, GLINN], more: true }), 200]);
 
     const found = await searchDirectory("a", new AbortController().signal);
 
-    expect(found).toEqual({ items: [ADA, GRACE], more: true });
+    expect(found).toEqual({ items: [AVO, GLINN], more: true });
     expect("subjectId" in found.items[0]!).toBe(false);
   });
 
   it("carries no member of a match it was not built to read", async () => {
     answering([
       JSON.stringify({
-        items: [{ ...ADA, department: "Analytical Engines" }],
+        items: [{ ...AVO, department: "Analytical Engines" }],
         more: false,
       }),
       200,
     ]);
 
-    const found = await searchDirectory("ada", new AbortController().signal);
+    const found = await searchDirectory("avo", new AbortController().signal);
 
     expect(Object.keys(found.items[0]!).sort()).toEqual([
       "displayName",
@@ -78,24 +78,24 @@ describe("searchDirectory", () => {
   });
 
   it.each([
-    ["no word on whether there are more", { items: [ADA] }],
-    ["more that is not a yes or a no", { items: [ADA], more: "yes" }],
+    ["no word on whether there are more", { items: [AVO] }],
+    ["more that is not a yes or a no", { items: [AVO], more: "yes" }],
     ["no list of matches", { more: false }],
     [
       "a match with no user number",
-      { items: [{ displayName: "Ada" }], more: false },
+      { items: [{ displayName: "Avo" }], more: false },
     ],
     [
       "a name that is not text",
-      { items: [{ ...ADA, displayName: null }], more: false },
+      { items: [{ ...AVO, displayName: null }], more: false },
     ],
     [
       "a name that is empty",
-      { items: [{ ...ADA, displayName: "" }], more: false },
+      { items: [{ ...AVO, displayName: "" }], more: false },
     ],
     [
       "a pool address that is not text",
-      { items: [{ ...GRACE, subjectId: null }], more: false },
+      { items: [{ ...GLINN, subjectId: null }], more: false },
     ],
     ["a match that is no document", { items: ["000130"], more: false }],
   ])("refuses an answer carrying %s", async (_, body) => {

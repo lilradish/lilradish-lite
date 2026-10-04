@@ -13,7 +13,7 @@ public final class SearchFolding {
 
     private SearchFolding() {}
 
-    // DB-SPECIFIC: strpos is PostgreSQL's; search_fold is defined in V1 with PostgreSQL-only attributes.
+    // DB-SPECIFIC: PostgreSQL strpos and this store's search_fold implement literal folded matching.
     public static String holds(String foldedColumn, String typedParameter) {
         return "strpos(" + foldedColumn + ", (select search_fold(" + typedParameter + "))) > 0";
     }

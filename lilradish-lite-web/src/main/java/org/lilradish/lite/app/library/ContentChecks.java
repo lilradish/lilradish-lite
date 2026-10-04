@@ -6,7 +6,6 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import org.lilradish.lite.domain.identity.GroupId;
-import org.lilradish.lite.domain.registry.ContentProblem;
 import org.lilradish.lite.domain.registry.EntryKind;
 import org.lilradish.lite.domain.registry.EntryVersionId;
 import org.lilradish.lite.domain.wire.StoreLabels;
@@ -52,7 +51,7 @@ public final class ContentChecks {
      * A stored version of the group's held again to what submitting held it to; only inside a transaction
      * reading one moment, and a version the group does not hold is a store gone wrong.
      */
-    public List<ContentProblem> recheck(GroupId group, EntryVersionId version) {
+    public ContentProblemReport.Result recheck(GroupId group, EntryVersionId version) {
         requireNonNull(group, "ContentChecks group must not be null");
         requireNonNull(version, "ContentChecks version must not be null");
         if (!Snapshots.inForceReadsOneMoment()) {
@@ -71,7 +70,7 @@ public final class ContentChecks {
     }
 
     /** Inside the caller's transaction, of a version of that kind the group is known to hold. */
-    List<ContentProblem> problemsIn(EntryKind kind, GroupId group, EntryVersionId version) {
+    ContentProblemReport.Result problemsIn(EntryKind kind, GroupId group, EntryVersionId version) {
         return requireNonNull(byKind.get(kind)).problemsIn(group, version);
     }
 }

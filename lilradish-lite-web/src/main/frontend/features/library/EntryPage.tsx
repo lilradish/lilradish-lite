@@ -1,7 +1,9 @@
 import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import {
+  Children,
   useCallback,
   useId,
   useLayoutEffect,
@@ -26,7 +28,7 @@ import type {
 import {
   readEntry,
   refusedForWhatMoved,
-  renameEntry,
+  editEntry,
 } from "../../api/groups/{groupId}/{kind}/{entryId}";
 import {
   letEntryGo,
@@ -34,8 +36,9 @@ import {
 } from "../../api/groups/{groupId}/{kind}/{entryId}/stop";
 import {
   contentProblemsIn,
+  contentProblemTotalIn,
   retiredPinsIn,
-  startDraft,
+  makeDraft,
   type RetiredPin,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import { approve } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/approval";
@@ -49,38 +52,25 @@ import { Async } from "../../app/Async";
 import { ProblemView } from "../../app/ProblemView";
 import { useActedOn } from "../../app/useActedOn";
 import { say, type MessageId } from "../../i18n/app";
+import { visible } from "../../i18n/visible";
 import { ActButton } from "../../lib/action/ActButton";
+import { ActDialog } from "../../lib/action/ActDialog";
 import { Press } from "../../lib/action/Press";
-import { NavigableList } from "../../lib/collection/RowList";
 import { isolatedInText } from "../../lib/direction/isolated";
-import { Field, Fields } from "../../lib/form/Fields";
 import { PageHeading } from "../../lib/heading/PageHeading";
-import { ACTS_SX, HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { Part } from "../../lib/layout/Part";
+import { HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
 import { useResource } from "../../lib/request/useResource";
-import { nameOrNumber } from "../../lib/text/names";
-import { whenText } from "../../lib/time/When";
-import { joinedInSentence } from "../people/wordLists";
+import { useCalendarNow, whenText } from "../../lib/time/When";
 import { ENTRY_ACT_RULES, VERSION_ACT_RULES } from "./actRules";
 import { ContentProblems, type ReadContent } from "./ContentProblems";
 import { DescribeEntry } from "./DescribeEntry";
-import { entryHref, justStarted, OPEN_VERSION } from "./entryAddress";
-import {
-  kindSaid,
-  pageOf,
-  standingSaid,
-  type LibraryKind,
-} from "./libraryKinds";
+import { entryHref, justMade, OPEN_VERSION } from "./entryAddress";
+import { kindSaid, pageOf, type LibraryKind } from "./libraryKinds";
 import { VersionContent } from "./VersionContent";
-
-// Narrow beside the version on a wide viewport, and above it on a narrow one.
-const BODY_SX = {
-  display: "grid",
-  gridTemplateColumns: { xs: "1fr", md: "16rem 1fr" },
-  gap: 3,
-  alignItems: "start",
-};
-
-const PART_SX = { mb: 1 };
+import { Versions } from "./Versions";
+import { WorkflowSubmissionRefusal } from "./WorkflowContent";
+import { DraftStatusContext, useDraftStatus } from "./useDraftStatus";
 
 // Its markers taken away, so it is named a list outright.
 const LIST_SX = { listStyleType: "none", m: 0, mb: 2, p: 0 };
@@ -88,7 +78,7 @@ const LIST_SX = { listStyleType: "none", m: 0, mb: 2, p: 0 };
 /** The words each act on the entry is drawn with, closed over the acts in both directions. */
 const ENTRY_ACTS = {
   start_draft: "versions.newDraft",
-  rename: "entry.rename",
+  rename: "entry.edit",
   stop: "entry.stop",
   let_go: "entry.letGo",
 } as const satisfies Record<EntryAct, MessageId>;
@@ -96,18 +86,43 @@ const ENTRY_ACTS = {
 type VersionChange = typeof submit;
 
 /**
- * Each act on a version drawn under What can be done, in order, with its words
- * and its change. Writing is the version's editor's, and not drawn here.
+ * Each act on a version drawn beside its title, in order: whether it moves the version forward, and whether
+ * it takes it out of use. Writing is the version's editor's, and not drawn here.
  */
 const VERSION_ACTS = {
   write: null,
-  submit: { words: "version.submit", change: submit },
-  withdraw: { words: "version.withdraw", change: withdraw },
-  approve: { words: "version.approve", change: approve },
-  retire: { words: "version.retire", change: retire },
+  submit: {
+    words: "version.submit",
+    change: submit,
+    leads: true,
+    warns: false,
+  },
+  withdraw: {
+    words: "version.withdraw",
+    change: withdraw,
+    leads: false,
+    warns: false,
+  },
+  approve: {
+    words: "version.approve",
+    change: approve,
+    leads: true,
+    warns: false,
+  },
+  retire: {
+    words: "version.retire",
+    change: retire,
+    leads: false,
+    warns: true,
+  },
 } as const satisfies Record<
   VersionAct,
-  { readonly words: MessageId; readonly change: VersionChange } | null
+  {
+    readonly words: MessageId;
+    readonly change: VersionChange;
+    readonly leads: boolean;
+    readonly warns: boolean;
+  } | null
 >;
 
 const DRAWN_VERSION_ACTS = (
@@ -127,33 +142,23 @@ type Asked =
     };
 
 /**
- * One entry, on a page of its own: its name, what it is for, its kind and
- * whether it is stopped; its versions, newest first; what can be done to the
- * version open; and that version, which the address names, the newest where
- * it names none or one the entry does not have.
- *
- * Every control is drawn from what the server says the reader may do now,
- * the entry's acts and the open version's; none is worked out here. Every
- * change runs under one action the page owns and answers with the entry as
- * it then stands, which is what the page shows until it reads it again. A
- * draft started opens, being the newest.
- *
- * A refusal saying the reader's standing moved reads it again, and the entry
- * too. One saying the entry moved under the page reads the entry again, so
- * no control is left offering what was just refused. One naming pins retired
- * since names each beside What can be done, and what would replace it.
+ * Entry and version acts come from the server, never inferred here; refusals
+ * trigger a reread so outdated controls can disappear.
  */
 export function EntryPage({ of }: { readonly of: LibraryKind }) {
+  const { groupId = "", entryId = "" } = useParams();
+  return <EntryForIdentity key={`${groupId}:${of.kind}:${entryId}`} of={of} />;
+}
+
+function EntryForIdentity({ of }: { readonly of: LibraryKind }) {
+  const now = useCalendarNow();
   const { groupId = "", entryId = "" } = useParams();
   const [parameters] = useSearchParams();
   const { state } = useLocation();
   const navigate = useNavigate();
-  const versionsId = useId();
-  const actsId = useId();
-  const openId = useId();
   const pinnedById = useId();
   const versionsHeading = useRef<HTMLHeadingElement>(null);
-  const actsHeading = useRef<HTMLHeadingElement>(null);
+  const versionHeading = useRef<HTMLHeadingElement>(null);
 
   const load = useCallback(
     (signal: AbortSignal): Promise<Entry | null> =>
@@ -162,27 +167,52 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
   );
   const read = useResource<Entry | null>(load, null);
   const [asked, setAsked] = useState<Asked | null>(null);
-  const [renaming, setRenaming] = useState<number | null>(null);
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [retiring, setRetiring] = useState<{
+    versionId: string;
+    entryId: string;
+    selection: string | null;
+    seenProblem: Problem | null;
+  } | null>(null);
   const [readCount, setReadCount] = useState(0);
   const [content, setContent] = useState<ReadContent | null>(null);
-  const { shown, changing, refused } = useActedOn(read, refusedForWhatMoved, {
-    answered: () => {
-      if (asked?.place === "entry" && asked.act === "start_draft") {
-        // Replaced: the entry before its draft is not somewhere to go back to.
-        navigate(entryHref(groupId, of, entryId), { replace: true });
-      }
+  const { shown, showingAnswerWhileReading, changing, refused } = useActedOn(
+    read,
+    refusedForWhatMoved,
+    {
+      answered: () => {
+        if (asked?.place === "version" && asked.act === "retire") {
+          setRetiring(null);
+        }
+        if (asked?.place === "entry" && asked.act === "start_draft") {
+          // Replaced: the entry before its draft is not somewhere to go back to.
+          navigate(entryHref(groupId, of, entryId), { replace: true });
+        }
+      },
+      readAgain: () => setReadCount((count) => count + 1),
     },
-    readAgain: () => setReadCount((count) => count + 1),
-  });
+  );
+
+  const selectedVersion = parameters.get(OPEN_VERSION);
+  const selected =
+    shown?.versions.find((version) => version.versionId === selectedVersion) ??
+    shown?.versions[0];
+  const { report, blocked: draftBlocked } = useDraftStatus(
+    selected?.versionId ?? null,
+    of.kind === "workflow" ? 6 : of.kind === "question" ? 5 : 3,
+  );
 
   // Re-run for every entry shown, which is when a pressed control can have gone with the act it offered.
   useLayoutEffect(() => {
     if (document.activeElement !== document.body || asked === null) {
       return;
     }
-    const heading = asked.place === "version" ? actsHeading : versionsHeading;
-    heading.current?.focus();
+    const heading =
+      asked.place === "version"
+        ? versionHeading.current
+        : versionsHeading.current;
+    heading?.focus();
   }, [shown, asked]);
 
   // What a refusal named and who wrote the version are both as they were before the write.
@@ -197,14 +227,21 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
       : null;
 
   return (
-    <Async read={{ ...read, value: shown }} empty={() => null}>
+    <Async
+      read={{
+        ...read,
+        value: shown,
+        loading: read.loading && !showingAnswerWhileReading,
+      }}
+      empty={() => null}
+    >
       {(entry) => {
         if (entry === null) {
           return null;
         }
         const open =
           entry.versions.find(
-            (version) => version.versionId === parameters.get(OPEN_VERSION),
+            (version) => version.versionId === selectedVersion,
           ) ?? entry.versions[0];
         const switchedBy = entry.acts.has("stop") ? "stop" : "let_go";
         const switchRefused = refusedAt(["stop", "let_go"]);
@@ -213,16 +250,27 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
           asked?.place === "version" && asked.versionId === open?.versionId
             ? changing.problem
             : null;
+        const versionActs = DRAWN_VERSION_ACTS.filter(
+          ({ act }) => open?.acts.has(act) === true,
+        );
         return (
           <>
             <PageHeading
               title={isolatedInText(entry.name)}
-              focusOnArrival={justStarted(state)}
+              besideTitle={
+                <Chip
+                  label={kindSaid(entry.kind)}
+                  size="small"
+                  variant="outlined"
+                />
+              }
+              focusOnArrival={justMade(state)}
               actions={
                 <Box sx={HEADER_ACTS_SX}>
                   {entry.acts.has("stop") || entry.acts.has("let_go") ? (
                     <ActButton
                       action={changing}
+                      warns={switchedBy === "stop"}
                       act={(signal) => {
                         setAsked({ place: "entry", act: switchedBy });
                         return (switchedBy === "stop" ? stopEntry : letEntryGo)(
@@ -241,8 +289,8 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
                       unavailable={changing.running}
                       onPress={() => {
                         setAsked({ place: "entry", act: "rename" });
-                        setRenaming((last) => (last ?? 0) + 1);
-                        setRenameOpen(true);
+                        setEditing((last) => (last ?? 0) + 1);
+                        setEditOpen(true);
                       }}
                     >
                       {say(ENTRY_ACTS.rename)}
@@ -257,176 +305,60 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
                 rule={{ inGroup: ENTRY_ACT_RULES[switchedBy] }}
               />
             )}
-            <Fields>
-              <Field label={say("entry.purpose")}>
-                {entry.purpose === undefined ? (
-                  say("entry.saysNothing")
-                ) : (
-                  <bdi>{entry.purpose}</bdi>
-                )}
-              </Field>
-              <Field label={say("entry.kind")}>{kindSaid(entry.kind)}</Field>
-              <Field label={say("entry.stopped")}>
-                {entry.stopped === undefined
-                  ? say("entry.runs")
+            <Typography variant="body2" sx={QUIET_SX}>
+              {entry.purpose === undefined ? (
+                say("entry.saysNothing")
+              ) : (
+                <bdi>{entry.purpose}</bdi>
+              )}
+            </Typography>
+            {entry.stopped === undefined ? null : (
+              <Typography variant="body2" sx={{ color: "warning.main", mb: 2 }}>
+                {entry.stopped.by.displayName === undefined
+                  ? say("entry.stoppedByGone", {
+                      when: whenText(entry.stopped.at, now),
+                    })
                   : say("entry.stoppedBy", {
-                      name: isolatedInText(nameOrNumber(entry.stopped.by)),
-                      when: whenText(entry.stopped.at),
+                      name: isolatedInText(entry.stopped.by.displayName),
+                      when: whenText(entry.stopped.at, now),
                     })}
-              </Field>
-            </Fields>
-            <Box sx={BODY_SX}>
-              <section aria-labelledby={versionsId}>
-                <Typography
-                  ref={versionsHeading}
-                  id={versionsId}
-                  tabIndex={-1}
-                  variant="h6"
-                  component="h2"
-                  sx={PART_SX}
-                >
-                  {say("versions.label")}
-                </Typography>
-                {entry.acts.has("start_draft") ? (
+              </Typography>
+            )}
+            <Versions
+              key={`${of.kind}:${entry.entryId}`}
+              versions={entry.versions}
+              open={open}
+              hrefOf={(version) =>
+                entryHref(groupId, of, entry.entryId, version.versionId)
+              }
+              headingRef={versionsHeading}
+              actions={
+                entry.acts.has("start_draft") ? (
                   <ActButton
                     action={changing}
                     act={(signal) => {
                       setAsked({ place: "entry", act: "start_draft" });
-                      return startDraft(
-                        groupId,
-                        of.kind,
-                        entry.entryId,
-                        signal,
-                      );
+                      return makeDraft(groupId, of.kind, entry.entryId, signal);
                     }}
                   >
                     {say(ENTRY_ACTS.start_draft)}
                   </ActButton>
-                ) : null}
-                {draftRefused === null ? null : (
-                  <ProblemView
-                    problem={draftRefused}
-                    rule={{ inGroup: ENTRY_ACT_RULES.start_draft }}
-                  />
-                )}
-                <NavigableList
-                  items={entry.versions}
-                  keyOf={versionIdOf}
-                  pathOf={(version) =>
-                    entryHref(groupId, of, entry.entryId, version.versionId)
-                  }
-                  isCurrent={(version) => version === open}
-                  labelledBy={versionsId}
-                  title={(version) =>
-                    say("version.number", { number: version.number })
-                  }
-                  detail={versionSaid}
+                ) : null
+              }
+            >
+              {draftRefused === null ? null : (
+                <ProblemView
+                  problem={draftRefused}
+                  rule={{ inGroup: ENTRY_ACT_RULES.start_draft }}
                 />
-              </section>
-              {open === undefined ? null : (
-                <div>
-                  <section aria-labelledby={actsId}>
-                    <Typography
-                      ref={actsHeading}
-                      id={actsId}
-                      tabIndex={-1}
-                      variant="h6"
-                      component="h2"
-                      sx={PART_SX}
-                    >
-                      {say("version.acts")}
-                    </Typography>
-                    <Box sx={ACTS_SX}>
-                      {DRAWN_VERSION_ACTS.filter(({ act }) =>
-                        open.acts.has(act),
-                      ).map(({ act, words, change }) => (
-                        <ActButton
-                          key={act}
-                          action={changing}
-                          act={(signal) => {
-                            setAsked({
-                              place: "version",
-                              act,
-                              versionId: open.versionId,
-                            });
-                            return change(
-                              groupId,
-                              of.kind,
-                              entry.entryId,
-                              open.versionId,
-                              signal,
-                            );
-                          }}
-                        >
-                          {say(words)}
-                        </ActButton>
-                      ))}
-                    </Box>
-                    {versionRefused === null ||
-                    asked?.place !== "version" ? null : (
-                      <>
-                        <ProblemView
-                          problem={versionRefused}
-                          rule={{ inGroup: VERSION_ACT_RULES[asked.act] }}
-                        />
-                        <RetiredPins
-                          groupId={groupId}
-                          pins={retiredPinsIn(versionRefused)}
-                          open={open}
-                        />
-                        {/* A workflow's content lists what submitting refuses already, beside where it is. */}
-                        {content?.kind === "workflow" ? null : (
-                          <ContentProblems
-                            problems={contentProblemsIn(versionRefused)}
-                            content={content}
-                          />
-                        )}
-                      </>
-                    )}
-                  </section>
-                  <section aria-labelledby={openId}>
-                    <Typography
-                      id={openId}
-                      variant="h6"
-                      component="h2"
-                      sx={PART_SX}
-                    >
-                      {say("version.number", { number: open.number })}
-                    </Typography>
-                    {open.standing === "submitted" ? (
-                      <Typography variant="body2" sx={QUIET_SX}>
-                        {say("version.waiting")}
-                      </Typography>
-                    ) : null}
-                    <Typography id={pinnedById} variant="body2" sx={QUIET_SX}>
-                      {say("version.pinCount", {
-                        count: open.pinnedBy.length,
-                      })}
-                    </Typography>
-                    {open.pinnedBy.length === 0 ? null : (
-                      <Box
-                        component="ul"
-                        role="list"
-                        aria-labelledby={pinnedById}
-                        sx={LIST_SX}
-                      >
-                        {open.pinnedBy.map((pin) => (
-                          <li key={pin.versionId}>
-                            {linkedTo(
-                              groupId,
-                              pin.kind,
-                              pin.entryId,
-                              pin.versionId,
-                              say("version.pinnedBy", {
-                                name: isolatedInText(pin.name),
-                                kind: kindSaid(pin.kind),
-                                number: pin.number,
-                              }),
-                            )}
-                          </li>
-                        ))}
-                      </Box>
-                    )}
+              )}
+            </Versions>
+            {open === undefined ? null : (
+              <>
+                <WorkflowSubmissionRefusal.Provider
+                  value={of.kind === "workflow" ? versionRefused : null}
+                >
+                  <DraftStatusContext.Provider value={report}>
                     <VersionContent
                       kind={of.kind}
                       groupId={groupId}
@@ -436,37 +368,234 @@ export function EntryPage({ of }: { readonly of: LibraryKind }) {
                       onRefused={refused}
                       onWritten={written}
                       onShown={setContent}
+                      wrapDocument={(document) => (
+                        <Part
+                          title={say("version.number", { number: open.number })}
+                          level="h2"
+                          depth={1}
+                          headingRef={versionHeading}
+                          actions={
+                            versionActs.length === 0 ? undefined : (
+                              <Box sx={HEADER_ACTS_SX}>
+                                {versionActs.map(
+                                  ({ act, words, change, leads, warns }) =>
+                                    act === "retire" ? (
+                                      <Press
+                                        key={act}
+                                        warns
+                                        unavailable={changing.running}
+                                        onPress={() =>
+                                          setRetiring({
+                                            versionId: open.versionId,
+                                            entryId,
+                                            selection: selectedVersion,
+                                            seenProblem: changing.problem,
+                                          })
+                                        }
+                                      >
+                                        {say(words)}
+                                      </Press>
+                                    ) : (
+                                      <ActButton
+                                        key={act}
+                                        action={changing}
+                                        variant={
+                                          leads ? "contained" : undefined
+                                        }
+                                        warns={warns}
+                                        waiting={
+                                          act === "submit" && draftBlocked
+                                        }
+                                        reason={
+                                          act === "submit" && draftBlocked
+                                            ? {
+                                                severity: "info",
+                                                words: say(
+                                                  "version.finishEditing",
+                                                ),
+                                              }
+                                            : undefined
+                                        }
+                                        act={(signal) => {
+                                          setAsked({
+                                            place: "version",
+                                            act,
+                                            versionId: open.versionId,
+                                          });
+                                          return change(
+                                            groupId,
+                                            of.kind,
+                                            entry.entryId,
+                                            open.versionId,
+                                            signal,
+                                          );
+                                        }}
+                                      >
+                                        {say(words)}
+                                      </ActButton>
+                                    ),
+                                )}
+                              </Box>
+                            )
+                          }
+                        >
+                          {versionRefused === null ||
+                          asked?.place !== "version" ? null : (
+                            <>
+                              <ProblemView
+                                problem={versionRefused}
+                                rule={{ inGroup: VERSION_ACT_RULES[asked.act] }}
+                              />
+                              <RetiredPins
+                                groupId={groupId}
+                                pins={retiredPinsIn(versionRefused)}
+                                open={open}
+                              />
+                              {content?.kind === "workflow" ? null : (
+                                <ContentProblems
+                                  problems={contentProblemsIn(versionRefused)}
+                                  problemTotal={contentProblemTotalIn(
+                                    versionRefused,
+                                  )}
+                                  content={content}
+                                />
+                              )}
+                            </>
+                          )}
+                          {open.standing === "submitted" ? (
+                            <Typography
+                              variant="body2"
+                              sx={{ ...QUIET_SX, typography: "systemHint" }}
+                            >
+                              {say("version.waiting")}
+                            </Typography>
+                          ) : null}
+                          <Typography
+                            id={pinnedById}
+                            variant="body2"
+                            sx={{ ...QUIET_SX, typography: "systemHint" }}
+                          >
+                            {say("version.pinCount", {
+                              count: open.pinnedBy.length,
+                            })}
+                          </Typography>
+                          {open.pinnedBy.length === 0 ? null : (
+                            <Box
+                              component="ul"
+                              role="list"
+                              aria-labelledby={pinnedById}
+                              sx={LIST_SX}
+                            >
+                              {open.pinnedBy.map((pin) => (
+                                <li key={pin.versionId}>
+                                  {linkedTo(
+                                    groupId,
+                                    pin.kind,
+                                    pin.entryId,
+                                    pin.versionId,
+                                    say("version.pinnedBy", {
+                                      name: isolatedInText(pin.name),
+                                      kind: kindSaid(pin.kind),
+                                      number: pin.number,
+                                    }),
+                                    pinHint(
+                                      visible("version.pinnedBy", {
+                                        name: <bdi>{pin.name}</bdi>,
+                                        kind: <span>{kindSaid(pin.kind)}</span>,
+                                        number: <span>{pin.number}</span>,
+                                      }),
+                                    ),
+                                  )}
+                                </li>
+                              ))}
+                            </Box>
+                          )}
+
+                          {document}
+                        </Part>
+                      )}
                     />
-                  </section>
-                </div>
-              )}
-            </Box>
-            {renaming === null ? null : (
+                  </DraftStatusContext.Provider>
+                </WorkflowSubmissionRefusal.Provider>
+                <ActDialog
+                  open={
+                    retiring !== null &&
+                    retiring.versionId === open.versionId &&
+                    retiring.entryId === entryId &&
+                    retiring.selection === selectedVersion &&
+                    retiring.seenProblem === changing.problem
+                  }
+                  title={say("version.retireConfirm", { number: open.number })}
+                  onShut={() => setRetiring(null)}
+                  onExited={() => {
+                    setRetiring(null);
+                    if (asked?.place === "version" && asked.act === "retire") {
+                      versionHeading.current?.focus();
+                    }
+                  }}
+                  action={changing}
+                  act={(signal) => {
+                    setRetiring({
+                      versionId: open.versionId,
+                      entryId,
+                      selection: selectedVersion,
+                      seenProblem: null,
+                    });
+                    setAsked({
+                      place: "version",
+                      act: "retire",
+                      versionId: open.versionId,
+                    });
+                    return retire(
+                      groupId,
+                      of.kind,
+                      entry.entryId,
+                      open.versionId,
+                      signal,
+                    );
+                  }}
+                  actLabel={say("version.retire")}
+                  warns
+                  abandonLabel={say("confirm.cancel")}
+                  underway={say("version.retireUnderway")}
+                  refusal={null}
+                >
+                  {say("version.retireConfirmBody")}
+                </ActDialog>
+              </>
+            )}
+            {editing === null ? null : (
               <DescribeEntry
-                key={renaming}
-                open={renameOpen}
-                title={say("entry.renameTitle")}
-                actLabel={say("entry.rename")}
-                underway="entry.renameUnderway"
+                key={editing}
+                open={editOpen}
+                title={say("entry.editTitle")}
+                actLabel={say("entry.save")}
+                underway="entry.editUnderway"
                 rule={ENTRY_ACT_RULES.rename}
                 described={entry}
                 send={(described, signal) =>
-                  renameEntry(
-                    groupId,
-                    of.kind,
-                    entry.entryId,
-                    described,
-                    signal,
-                  )
+                  editEntry(groupId, of.kind, entry.entryId, described, signal)
                 }
                 action={changing}
-                onShut={() => setRenameOpen(false)}
+                onShut={() => setEditOpen(false)}
               />
             )}
           </>
         );
       }}
     </Async>
+  );
+}
+
+function pinHint(words: ReactNode): ReactNode {
+  return Children.map(words, (part) =>
+    typeof part === "string" ? (
+      <Box component="span" sx={{ typography: "systemHint" }}>
+        {part}
+      </Box>
+    ) : (
+      part
+    ),
   );
 }
 
@@ -489,24 +618,29 @@ function RetiredPins({
   }
   return (
     <>
-      <Typography id={labelId} variant="subtitle2" component="p">
+      <Typography id={labelId} variant="subtitle2">
         {say("pins.label")}
       </Typography>
       <Box component="ul" role="list" aria-labelledby={labelId} sx={LIST_SX}>
         {pins.map((pin) => {
-          const named = {
-            name: isolatedInText(pin.name),
-            kind: kindSaid(pin.kind),
-            pinned: pin.pinned.number,
+          const visibleNamed = {
+            name: <bdi>{pin.name}</bdi>,
+            kind: <span>{kindSaid(pin.kind)}</span>,
+            pinned: <span>{pin.pinned.number}</span>,
           };
           const newest = pin.newestInService;
           return (
             <li key={pin.pinned.versionId}>
               {newest === undefined ? (
-                say("pins.unreplaceable", named)
+                pinHint(visible("pins.unreplaceable", visibleNamed))
               ) : (
                 <>
-                  {say("pins.replaceable", { ...named, newest: newest.number })}{" "}
+                  {pinHint(
+                    visible("pins.replaceable", {
+                      ...visibleNamed,
+                      newest: <span>{newest.number}</span>,
+                    }),
+                  )}{" "}
                   {linkedTo(
                     groupId,
                     pin.kind,
@@ -516,6 +650,12 @@ function RetiredPins({
                       name: isolatedInText(pin.name),
                       number: newest.number,
                     }),
+                    <>
+                      {visible("pins.openNewest", {
+                        name: <bdi>{pin.name}</bdi>,
+                        number: newest.number,
+                      })}
+                    </>,
                   )}
                 </>
               )}
@@ -524,7 +664,10 @@ function RetiredPins({
         })}
       </Box>
       {open.standing === "draft" || open.standing === "submitted" ? (
-        <Typography variant="body2" sx={QUIET_SX}>
+        <Typography
+          variant="body2"
+          sx={{ ...QUIET_SX, typography: "systemHint" }}
+        >
           {say(open.standing === "draft" ? "pins.onDraft" : "pins.onSubmitted")}
         </Typography>
       ) : null}
@@ -539,45 +682,18 @@ function linkedTo(
   entryId: string,
   versionId: string,
   words: string,
+  visibleWords?: ReactNode,
 ): ReactNode {
   const page = pageOf(kind);
   return page === undefined ? (
-    words
+    (visibleWords ?? words)
   ) : (
     <Link
       component={RouterLink}
       to={entryHref(groupId, page, entryId, versionId)}
+      aria-label={visibleWords === undefined ? undefined : words}
     >
-      {words}
+      {visibleWords ?? words}
     </Link>
   );
-}
-
-function versionIdOf(version: Version): string {
-  return version.versionId;
-}
-
-/** Its standing, everyone who wrote it and, where it has one, who approved it. */
-function versionSaid(version: Version): string {
-  const written =
-    version.writtenByMigration && version.writers.length === 0
-      ? say("version.writtenByNobody")
-      : say("version.writtenBy", {
-          names: joinedInSentence(version.writers.map(nameOrNumber)),
-        });
-  const standing = standingSaid(version.standing);
-  const approval = version.approval;
-  if (approval === undefined) {
-    return say("version.detail", { standing, written });
-  }
-  return say("version.detailApproved", {
-    standing,
-    written,
-    approved:
-      approval.approver === undefined
-        ? say("version.approvedByNobody")
-        : say("version.approvedBy", {
-            name: isolatedInText(nameOrNumber(approval.approver)),
-          }),
-  });
 }

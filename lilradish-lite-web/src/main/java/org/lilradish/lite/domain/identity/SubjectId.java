@@ -14,11 +14,6 @@ import java.util.UUID;
  * what keeps three different absences of a person three different answers rather than one empty
  * column. No value here stands for "nobody": a record with no author is a record that cannot say
  * which of the three it was.
- *
- * <p>A delegation's label is carried in this type as well, and nothing yet accommodates it: the
- * kinds a subject may be are those three, so a label names a row that cannot exist. Whichever
- * migration brings in the delegation table settles it — either that kind is added, or a label
- * stops being a subject and gains a type of its own.
  */
 public record SubjectId(UUID value) {
 

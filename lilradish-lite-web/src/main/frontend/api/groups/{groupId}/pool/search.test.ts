@@ -6,10 +6,10 @@ import { searchPoolOutside } from "./search";
 
 const GROUP = "00000003-0000-4000-8000-0000000009a1";
 
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-0000000009a1",
   userId: "0009a1",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
 };
 
 describe("searchPoolOutside", () => {
@@ -25,22 +25,22 @@ describe("searchPoolOutside", () => {
   });
 
   it("reads the matches as the pool's own search reads them", async () => {
-    answering([JSON.stringify({ items: [ADA], more: true }), 200]);
+    answering([JSON.stringify({ items: [AVO], more: true }), 200]);
 
     const found = await searchPoolOutside(
       GROUP,
-      "ada",
+      "avo",
       new AbortController().signal,
     );
 
-    expect(found).toEqual({ items: [ADA], more: true });
+    expect(found).toEqual({ items: [AVO], more: true });
   });
 
   it("refuses an answer the pool's own search would refuse", async () => {
-    answering([JSON.stringify({ items: [ADA] }), 200]);
+    answering([JSON.stringify({ items: [AVO] }), 200]);
 
     const failure = await refusalOf(
-      searchPoolOutside(GROUP, "ada", new AbortController().signal),
+      searchPoolOutside(GROUP, "avo", new AbortController().signal),
     );
 
     expect(failure.problem).toEqual({
@@ -53,7 +53,7 @@ describe("searchPoolOutside", () => {
     const sent = answering(['{"items":[],"more":false}', 200]);
 
     const failure = await refusalOf(
-      searchPoolOutside("..", "ada", new AbortController().signal),
+      searchPoolOutside("..", "avo", new AbortController().signal),
     );
 
     expect(failure.problem).toEqual({ code: NOT_AN_ADDRESS });

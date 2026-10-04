@@ -6,7 +6,7 @@ import {
   atEntry,
   readEntry,
   refusedForWhatMoved,
-  renameEntry,
+  editEntry,
 } from "./{entryId}";
 
 const GROUP = "00000003-0000-4000-8000-000000000a81";
@@ -62,25 +62,29 @@ describe("readEntry", () => {
   });
 });
 
-describe("renameEntry", () => {
+describe("editEntry", () => {
   it("sends the name and what it is for as one change, and nothing else", async () => {
     const sent = answering([JSON.stringify(READ), 200]);
 
-    await renameEntry(
+    const signal = new AbortController().signal;
+    const read = await editEntry(
       GROUP,
       "workflow",
       ENTRY,
       { name: "Handle", purpose: "Handles a claim." },
-      new AbortController().signal,
+      signal,
     );
 
+    expect(sent.mock.calls).toHaveLength(1);
     const [address, init] = sent.mock.calls[0]!;
     expect(address).toBe(`/api/groups/${GROUP}/workflows/${ENTRY}`);
     expect(init?.method).toBe("PATCH");
+    expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
       name: "Handle",
       purpose: "Handles a claim.",
     });
+    expect(read).toEqual({ ...READ, acts: new Set() });
   });
 });
 

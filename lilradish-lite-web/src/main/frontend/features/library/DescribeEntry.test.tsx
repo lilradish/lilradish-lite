@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Entry } from "../../api/groups/{groupId}/{kind}";
-import { renameEntry } from "../../api/groups/{groupId}/{kind}/{entryId}";
+import { editEntry } from "../../api/groups/{groupId}/{kind}/{entryId}";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
@@ -35,8 +35,8 @@ function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-/** The dialog as renaming opens it, over the real action it is handed, shut as a page shuts it. */
-function renaming(
+/** The dialog as editing opens it, over the real action it is handed, shut as a page shuts it. */
+function editing(
   entry: Entry,
   routes: Readonly<Record<string, readonly Reply[]>> = {},
 ) {
@@ -48,13 +48,13 @@ function renaming(
     return (
       <DescribeEntry
         open={open}
-        title="Rename this entry"
-        actLabel="Rename"
-        underway="entry.renameUnderway"
+        title="Edit this entry"
+        actLabel="Save"
+        underway="entry.editUnderway"
         rule="approve_entry"
         described={entry}
         send={(described, signal) =>
-          renameEntry(GROUP, "question", entry.entryId, described, signal)
+          editEntry(GROUP, "question", entry.entryId, described, signal)
         }
         action={changing}
         onShut={() => setOpen(false)}
@@ -73,33 +73,40 @@ function purposeBox(): HTMLElement {
   return screen.getByRole("textbox", { name: "What it is for" });
 }
 
-function rename(): HTMLElement {
-  return screen.getByRole("button", { name: "Rename" });
+function save(): HTMLElement {
+  return screen.getByRole("button", { name: "Save" });
 }
 
 async function pressedHeld() {
-  rename().focus();
+  save().focus();
   await userEvent.keyboard("{Enter}");
 }
 
 describe("DescribeEntry", () => {
   it("opens holding the name and what it is for as they stand, and holds sending both as they stand", async () => {
-    const { sent } = renaming(TRIAGE);
+    const { sent } = editing(TRIAGE);
 
     await pressedHeld();
 
     expect(nameBox()).toHaveValue("Triage");
     expect(purposeBox()).toHaveValue("Sorts claims.");
     expect(document.activeElement).not.toBe(document.body);
-    expect(noticesIn(rename().parentElement!)).toEqual([
-      { severity: "info", words: "Change the name or what it is for first." },
-    ]);
+    expect(save()).toHaveAccessibleDescription(
+      "Change the name or what it is for first.",
+    );
+    expect(save().parentElement).toHaveTextContent(
+      "Change the name or what it is for first.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Cancel" }).parentElement,
+    ).not.toHaveTextContent("Change the name or what it is for first.");
+    expect(noticesIn(save().parentElement!)).toEqual([]);
     expect(requestsTo(sent)).toEqual([]);
   });
 
   it("opens an entry saying nothing of what it is for with that box empty", () => {
     const { purpose: _said, ...unsaid } = TRIAGE;
-    renaming(unsaid);
+    editing(unsaid);
 
     expect(purposeBox()).toHaveValue("");
   });
@@ -120,7 +127,7 @@ describe("DescribeEntry", () => {
   ])(
     "holds sending while %s, saying so under the control and sending nothing",
     async (_case, name, purpose, reason) => {
-      const { sent } = renaming(TRIAGE);
+      const { sent } = editing(TRIAGE);
 
       await userEvent.clear(nameBox());
       await userEvent.type(nameBox(), name);
@@ -128,16 +135,19 @@ describe("DescribeEntry", () => {
       await userEvent.type(purposeBox(), purpose);
       await pressedHeld();
 
-      expect(noticesIn(rename().parentElement!)).toEqual([
-        { severity: "info", words: reason },
-      ]);
+      expect(save()).toHaveAccessibleDescription(reason);
+      expect(save().parentElement).toHaveTextContent(reason);
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).parentElement,
+      ).not.toHaveTextContent(reason);
+      expect(noticesIn(save().parentElement!)).toEqual([]);
       expect(requestsTo(sent)).toEqual([]);
     },
   );
 
   /** Emptying what it is for is a change: from then on it says nothing of it. */
   it("sends the name and what it is for as one change, an emptied purpose as none, and shuts once it lands", async () => {
-    const { sent, settled } = renaming(TRIAGE, {
+    const { sent, settled } = editing(TRIAGE, {
       [`PATCH ${ADDRESS}`]: [
         [JSON.stringify({ ...TRIAGE, name: "Intake", acts: ["rename"] }), 200],
       ],
@@ -146,7 +156,7 @@ describe("DescribeEntry", () => {
     await userEvent.clear(nameBox());
     await userEvent.type(nameBox(), "Intake");
     await userEvent.clear(purposeBox());
-    await userEvent.click(rename());
+    await userEvent.click(save());
 
     await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
     expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
@@ -173,13 +183,13 @@ describe("DescribeEntry", () => {
   ])(
     "says a refusal of %s in the dialog, which stays open",
     async (_case, code, status, said) => {
-      const { settled } = renaming(TRIAGE, {
+      const { settled } = editing(TRIAGE, {
         [`PATCH ${ADDRESS}`]: [[JSON.stringify({ code }), status]],
       });
 
       await userEvent.clear(nameBox());
       await userEvent.type(nameBox(), "Intake");
-      await userEvent.click(rename());
+      await userEvent.click(save());
 
       expect(await screen.findByRole("alert")).toHaveTextContent(said);
       expect(screen.getByRole("dialog")).toBeInTheDocument();

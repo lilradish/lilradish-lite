@@ -106,6 +106,13 @@ public enum RefusalCode implements ErrorCode {
     /** A field's label or its help, which are one rule at two bounds. */
     FIELD_WORDS_UNUSABLE(INVALID_ARGUMENT),
 
+    FILE_NAME_UNUSABLE(INVALID_ARGUMENT),
+    FILE_SIZE_LIMIT_UNUSABLE(INVALID_ARGUMENT),
+    FILE_TYPES_TOO_MANY(INVALID_ARGUMENT),
+    FILE_TYPE_UNUSABLE(INVALID_ARGUMENT),
+    FILE_TOO_LARGE(INVALID_ARGUMENT),
+    FILES_TOO_MANY(INVALID_ARGUMENT),
+
     /** Held by another group whatever case either was typed in, keys being held in capitals. */
     GROUP_KEY_TAKEN(CONFLICT),
     GROUP_KEY_UNUSABLE(INVALID_ARGUMENT),
@@ -120,6 +127,8 @@ public enum RefusalCode implements ErrorCode {
     GROUP_NOT_IN_VIEW(NOT_FOUND),
 
     INSTRUCTION_UNUSABLE(INVALID_ARGUMENT),
+    DRAWING_UNUSABLE(INVALID_ARGUMENT),
+    DRAWING_TOO_DEEP(INVALID_ARGUMENT),
 
     /**
      * Nothing inside this system grants the first estate role, so nothing may withdraw the last one that
@@ -233,6 +242,10 @@ public enum RefusalCode implements ErrorCode {
 
     /** A stopped run takes no answer, review or try until it is opened again. */
     RUN_STOPPED(CONFLICT),
+
+    /** More parts than a searching step's question holds. */
+    SEARCH_QUESTION_PARTS_TOO_MANY(INVALID_ARGUMENT),
+    SEARCH_TEXT_UNUSABLE(INVALID_ARGUMENT),
 
     /**
      * Another large body is being read or handled: nothing was read or changed, and the same request may be

@@ -6,6 +6,7 @@ import static org.lilradish.lite.domain.inference.DidNotFitReason.CONFIDENCE_UNA
 import static org.lilradish.lite.domain.inference.DidNotFitReason.CUT_OFF
 import static org.lilradish.lite.domain.inference.DidNotFitReason.FIELD_MISSING
 import static org.lilradish.lite.domain.inference.DidNotFitReason.FIELD_UNKNOWN
+import static org.lilradish.lite.domain.inference.DidNotFitReason.MODEL_DECLINED
 import static org.lilradish.lite.domain.inference.DidNotFitReason.NOTHING_GIVEN
 import static org.lilradish.lite.domain.inference.DidNotFitReason.NOT_A_TERM
 import static org.lilradish.lite.domain.inference.DidNotFitReason.NOT_ITS_KIND
@@ -32,6 +33,7 @@ class DidNotFitReasonSpec extends Specification {
                 [FIELD_UNKNOWN, "field_unknown"],
                 [NOTHING_GIVEN, "nothing_given"],
                 [NOT_ITS_KIND, "not_its_kind"],
+                [DidNotFitReason.LINE_BREAK, "line_break"],
                 [TOO_LONG, "too_long"],
                 [TOO_MANY, "too_many"],
                 [NOT_A_TERM, "not_a_term"],
@@ -46,6 +48,7 @@ class DidNotFitReasonSpec extends Specification {
                 [WORDS_UNKEEPABLE, "words_unkeepable"],
                 [CUT_OFF, "cut_off"],
                 [NOT_KEPT_AS_IT_CAME, "not_kept_as_it_came"],
+                [MODEL_DECLINED, "model_declined"],
         ]
     }
 }

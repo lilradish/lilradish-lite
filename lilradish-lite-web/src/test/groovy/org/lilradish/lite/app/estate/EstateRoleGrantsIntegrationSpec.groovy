@@ -12,18 +12,10 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Who holds what across the estate, asked of a real server running the real baseline. What decides
- * this is a join and a partial index, and neither exists anywhere but in a database: a stub standing
- * in for the store would be asserting the answers this file was written to discover.
- *
- * <p>The engine is pinned to production's, because a rule proved on another engine has been proved
- * about another engine. Testcontainers would be the usual way and needs a container runtime, which
- * this machine has none of.
- */
+/** Tests use the database engine version pinned for deployment. */
 class EstateRoleGrantsIntegrationSpec extends Specification {
 
-    /** Seeded by the baseline, holding the estate's first role. Nothing in this system granted it. */
+
     static final UserId FIRST_STEWARD = new UserId("000001")
 
     static final UserId NOBODY = new UserId("there-is-no-such-user")
@@ -42,11 +34,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
 
     static final UserId ONCE_A_STEWARD = new UserId("000004")
 
-    /**
-     * Demanded rather than defaulted, for the reason every spec reading it gives: interpolated
-     * absent, {@code filesystem:null} makes Flyway create an empty schema and apply nothing, and
-     * every feature below then reports an empty estate rather than a missing input.
-     */
+    /** The baseline location must be explicit so an empty Flyway migration set cannot pass. */
     static final String MIGRATIONS = Objects.requireNonNull(System.getProperty("baseline.location"),
             "baseline.location was not set; the build names it to test and to pitest")
 
@@ -86,6 +74,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
                         ('${WATCHER_SUBJECT}', 'watcher', '${SEEDER}'),
                         ('${WATCHER_SUBJECT}', 'steward', '${SEEDER}')
                     """)
+                // DB-SPECIFIC: PostgreSQL now().
                 statement.execute("""
                     insert into estate_role_grants
                             (subject_id, role, created_by, removed_at, removed_by) values
@@ -97,11 +86,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
         grants = new EstateRoleGrants(session)
     }
 
-    /**
-     * The deployment's first authority, and the only one no act of this system produced. It is read
-     * here exactly as any other holding is, which is the point: what arrives from outside becomes an
-     * ordinary row and is answered by the ordinary query.
-     */
+
     def "the user the baseline seeds holds the estate's first role when they sign in"() {
         expect:
         grants.heldBy(FIRST_STEWARD) == [EstateRole.STEWARD] as Set
@@ -115,12 +100,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
         grants.heldBy(WATCHER) == EstateRole.values() as Set
     }
 
-    /**
-     * The row this endpoint is most easily got wrong on, and the reason it is a row at all. An
-     * user number that names nobody here is not an error and not a missing resource: it holds
-     * nothing, which is the same answer as somebody known holding nothing, and the two are answered
-     * alike so that neither can be told from the other by changing what is sent.
-     */
+    /** Unknown identities and known identities holding no role must receive indistinguishable answers. */
     def "a user number naming nobody answers as one naming somebody who holds nothing"() {
         expect:
         grants.heldBy(NOBODY).isEmpty()
@@ -132,11 +112,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
         !grants.heldBy(FIRST_STEWARD).isEmpty()
     }
 
-    /**
-     * Nothing caches this, so the only thing between a withdrawal and its effect is the predicate.
-     * A grant that was withdrawn is a row that is still there — the table keeps the history — and a
-     * query that forgot the predicate would go on answering with it.
-     */
+
     def "a withdrawn grant is held no longer, though the row recording it remains"() {
         expect:
         grants.heldBy(ONCE_A_STEWARD).isEmpty()
@@ -160,6 +136,7 @@ class EstateRoleGrantsIntegrationSpec extends Specification {
     }
 
     private int rowsRecordedFor(String subject) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("select count(*) from estate_role_grants where subject_id = ?::uuid")
                 .param(subject)
                 .query(Integer.class)

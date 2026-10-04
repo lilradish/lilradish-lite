@@ -75,7 +75,7 @@ class ListParametersSpec extends Specification {
         [sort: ["key,name"] as String[]]                                || RefusalCode.LIST_SORT_UNUSABLE   | SORT_REFUSED   | true
         [sort: [""] as String[]]                                        || RefusalCode.LIST_SORT_UNUSABLE   | SORT_REFUSED   | true
         [sort: ["key", "key"] as String[]]                              || RefusalCode.LIST_SORT_UNUSABLE   | SORT_REFUSED   | false
-        [filter: ["Ada" + Character.toString(0x2028)] as String[]]      || RefusalCode.LIST_FILTER_UNUSABLE | FILTER_REFUSED | true
+        [filter: ["Ari" + Character.toString(0x2028)] as String[]]      || RefusalCode.LIST_FILTER_UNUSABLE | FILTER_REFUSED | true
         [filter: ["a" * 257] as String[]]                               || RefusalCode.LIST_FILTER_UNUSABLE | FILTER_REFUSED | true
         [filter: ["a", "b"] as String[]]                                || RefusalCode.LIST_FILTER_UNUSABLE | FILTER_REFUSED | false
         [sort: ["roles"] as String[], filter: ["a", "b"] as String[]]   || RefusalCode.LIST_SORT_UNUSABLE   | SORT_REFUSED   | true

@@ -6,13 +6,13 @@ import { personTitle } from "./personTitle";
 describe("personTitle", () => {
   it("says somebody by user number and then name, each set apart", () => {
     const { container } = render(
-      <p>{personTitle({ userId: "000130", displayName: "Ada Lovelace" })}</p>,
+      <p>{personTitle({ userId: "000130", displayName: "Avo Lumerace" })}</p>,
     );
 
     expect(
       [...container.querySelectorAll("bdi")].map((each) => each.textContent),
-    ).toEqual(["000130", "Ada Lovelace"]);
-    expect(container.textContent).toBe("000130 Ada Lovelace");
+    ).toEqual(["000130", "Avo Lumerace"]);
+    expect(container.textContent).toBe("000130 Avo Lumerace");
   });
 
   it("says somebody no name is held for by user number alone, inventing nothing", () => {

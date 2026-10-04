@@ -6,12 +6,14 @@ import org.lilradish.lite.domain.declaration.Demand
 import org.lilradish.lite.domain.declaration.Field
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
+import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
 import org.lilradish.lite.domain.failure.RefusalCode
 import org.lilradish.lite.domain.model.ModelMode
 import org.lilradish.lite.domain.model.ModelName
 import org.lilradish.lite.domain.registry.EntryKind
 import org.lilradish.lite.domain.registry.EntryVersionId
+import org.lilradish.lite.domain.search.SearchWay
 import org.lilradish.lite.domain.workflow.ModelChoice
 import org.lilradish.lite.domain.workflow.Pointer
 import org.lilradish.lite.domain.workflow.Producer
@@ -55,6 +57,15 @@ class FlowBodySpec extends Specification {
                                 bindings: [[target: "complaint", source: [constant: '"Kind regards"']]]]
 
     static final Map UNCHOSEN = [name: "later", runs: null, bindings: []]
+
+    static final Map SEARCHING = [name: "find_context",
+                                  runs: [kind: "search", searchWay: "web_search",
+                                         question: [[text: "Find "], [from: [input: "complaint"]], [text: " "],
+                                                    [from: [step: 0, path: "summary"]]],
+                                         standings: [title: "always", body: "never", references: null,
+                                                     other: "always"]],
+                                  producer: [kind: "model", model: "general", mode: null, toldWhatHappened: false],
+                                  tries: 2, reviewer: [model: "small", mode: null], bindings: []]
 
     def "every step is read in the order sent, each by the key it was read under, and what fills what it gives back"() {
         when:
@@ -240,6 +251,148 @@ class FlowBodySpec extends Specification {
         then:
         def refused = thrown(ApiErrorException)
         refused.errorCode() == RefusalCode.CASE_TERM_REPEATED
+    }
+
+    def "a search's step says who produces, how many tries and who reviews, its way, its question in order and each field's standing"() {
+        when:
+        def searching = FlowBody.read(body([ASKING, SEARCHING], [])).steps()[1]
+
+        then:
+        searching.runs() == new FlowBody.SentRuns.Search("web_search", [
+                new FlowBody.SentPart.Text("Find "),
+                new FlowBody.SentPart.Read(new FlowBody.SentSource.Input(Pointer.parse("complaint"))),
+                new FlowBody.SentPart.Text(" "),
+                new FlowBody.SentPart.Read(new FlowBody.SentSource.Step(0, Pointer.parse("summary")))],
+                [(SearchWay.TITLE): FieldStanding.ALWAYS, (SearchWay.BODY): FieldStanding.NEVER,
+                 (SearchWay.OTHER): FieldStanding.ALWAYS])
+        searching.producer() == new Producer.Model(new ModelChoice(new ModelName("general"), null), false)
+        searching.tries() == 2
+        searching.reviewer() == new ModelChoice(new ModelName("small"), null)
+        searching.bindings() == []
+    }
+
+    def "a search with nothing chosen yet is read as choosing nothing, and a person may produce its values"() {
+        when:
+        def searching = FlowBody.read(body([SEARCHING + [
+                runs: [kind: "search", searchWay: null, question: [],
+                       standings: [title: null, body: null, references: null, other: null]],
+                producer: [kind: "person"], tries: null, reviewer: null]], [])).steps()[0]
+
+        then:
+        searching.runs() == new FlowBody.SentRuns.Search(null, [], [:])
+        searching.producer() == new Producer.Person()
+        searching.tries() == null
+        searching.reviewer() == null
+    }
+
+    def "a searching step's question of as many parts as one holds is read"() {
+        when:
+        def search = FlowBody.read(body([SEARCHING + [runs: SEARCHING.runs + [question: parts(FlowBody.MOST_QUESTION_PARTS)]]],
+                [])).steps()[0].runs() as FlowBody.SentRuns.Search
+
+        then:
+        search.question().size() == FlowBody.MOST_QUESTION_PARTS
+        search.question().first() == new FlowBody.SentPart.Text("part 1")
+        search.question().last() == new FlowBody.SentPart.Text("part " + FlowBody.MOST_QUESTION_PARTS)
+    }
+
+    /** Its first part is one no question may hold, so the count is judged before any part is read. */
+    def "a searching step's question of one part more than one holds is refused under its own code"() {
+        when:
+        FlowBody.read(body([SEARCHING + [runs: SEARCHING.runs + [
+                question: [[text: ""]] + parts(FlowBody.MOST_QUESTION_PARTS)]]], []))
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == RefusalCode.SEARCH_QUESTION_PARTS_TOO_MANY
+        refused.message == "A searching step's question holds at most 256 parts."
+    }
+
+    /** Text is kept as written but never empty; a part reads what a binding may, and never a constant nor itself. */
+    def "a search's way, question or standings that is not one a search may hold, or not whole, is refused whole"() {
+        when:
+        FlowBody.read(body([ASKING, SEARCHING + [runs: SEARCHING.runs + runs]], []))
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == RefusalCode.BODY_UNUSABLE
+
+        where:
+        runs << [
+                [searchWay: "Web"],
+                [searchWay: 3],
+                [question: [[text: 3]]],
+                [question: [[text: "a", from: [input: "complaint"]]]],
+                [question: [[from: [constant: '"Demo Sample"']]]],
+                [question: [[from: [constant: '"a' + Character.toString(0x202E) + 'b"']]]],
+                [question: [[from: [constant: "1" * 39]]]],
+                [question: [[from: [step: 1, path: "summary"]]]],
+                [question: [[from: [step: 2, path: "summary"]]]],
+                [question: [[:]]],
+                [question: ["Find "]],
+                [question: [text: "Find "]],
+                [standings: [title: "above_confidence", body: null, references: null, other: null]],
+                [standings: [title: "Always", body: null, references: null, other: null]],
+                [standings: [title: null, body: null, references: null]],
+                [standings: [title: null, body: null, references: null, other: null, summary: null]],
+                [standings: null],
+        ]
+    }
+
+    /** A model is sent it, so it is refused where it arrives as an instruction is, under the code naming why. */
+    def "written text in a searching step's question that an instruction may not hold is refused, under the code naming why where there is one"() {
+        when:
+        FlowBody.read(body([ASKING, SEARCHING + [runs: SEARCHING.runs + [question: [[text: text]]]]], []))
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == code
+        refused.message == message
+
+        where:
+        text                                                         || code                                 | message
+        "Find " + Character.toString(0x202E) + "it"                  || RefusalCode.PROSE_DIRECTION_CONTROL  | LibraryRefusal.PROSE_DIRECTION_CONTROL.sentence()
+        "Find " + Character.toString(0xE0041)                        || RefusalCode.PROSE_TAG_CHARACTER      | LibraryRefusal.PROSE_TAG_CHARACTER.sentence()
+        "Find" + Character.toString(13) + Character.toString(10)     || RefusalCode.PROSE_LINE_BREAK_CRLF    | LibraryRefusal.PROSE_LINE_BREAK_CRLF.sentence()
+        ""                                                           || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "a" + Character.toString(0) + "b"                          || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "a" + Character.toString(0xD800)                            || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "Find" + Character.toString(13) + "it"                       || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "Find" + Character.toString(7) + "it"                        || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "Find" + Character.toString(0x85) + "it"                     || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "Find" + Character.toString(0x2028) + "it"                   || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+        "a" * 8193                                                  || RefusalCode.SEARCH_TEXT_UNUSABLE    | LibraryRefusal.SEARCH_TEXT_UNUSABLE.sentence()
+    }
+
+    /** What an instruction keeps is kept, and so is text showing nothing, an instruction's one difference. */
+    def "written text in a searching step's question is kept as written, a tab, a line feed or a joiner in it"() {
+        when:
+        def search = FlowBody.read(body([ASKING, SEARCHING + [runs: SEARCHING.runs + [question: [[text: text]]]]], []))
+                .steps()[1].runs() as FlowBody.SentRuns.Search
+
+        then:
+        search.question() == [new FlowBody.SentPart.Text(text)]
+
+        where:
+        text << [" ", "a" * 8192, Character.toString(9), "Find" + Character.toString(10) + "it",
+                 "Find" + Character.toString(0x200D) + "it", "Find" + Character.toString(0x200B) + "it"]
+    }
+
+    def "a search's step without what a step producing values says, or produced by code, is refused whole"() {
+        when:
+        FlowBody.read(body([ASKING, step], []))
+
+        then:
+        def refused = thrown(ApiErrorException)
+        refused.errorCode() == RefusalCode.BODY_UNUSABLE
+
+        where:
+        step << [
+                SEARCHING.findAll { it.key != "producer" },
+                SEARCHING + [producer: [kind: "code"]],
+                SEARCHING + [runs: SEARCHING.runs.findAll { it.key != "question" }],
+                SEARCHING + [runs: SEARCHING.runs + [extra: 1]],
+        ]
     }
 
     /** A step is bound from by its place among those sent; none is its own source, and none is past the end. */
@@ -468,5 +621,9 @@ class FlowBodySpec extends Specification {
 
     private static List<Map> unchosen(int count) {
         (1..count).collect { UNCHOSEN + [name: "step_" + it] }
+    }
+
+    private static List<Map> parts(int count) {
+        (1..count).collect { [text: "part " + it] }
     }
 }

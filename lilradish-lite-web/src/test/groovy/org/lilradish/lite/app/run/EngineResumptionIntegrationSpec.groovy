@@ -13,6 +13,7 @@ import org.lilradish.lite.app.codestep.CodeSteps
 import org.lilradish.lite.app.run.fixture.CodeWorkflow
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.run.fixture.TreeWorkflows
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.inference.ModelCalls
 import org.lilradish.lite.domain.run.RunId
@@ -30,11 +31,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * Every run at the top not stopped goes on by itself once a started system serves, on a real server running the real
- * baseline: whatever a stopping engine left to be made, whatever a stop let go left held, whatever a release now holds
- * again, and a run nothing was ever planned for. A run stopped, waiting on a person, or done is left as it is.
- */
 class EngineResumptionIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -70,7 +66,6 @@ class EngineResumptionIntegrationSpec extends Specification {
         wiring
     }
 
-    /** An engine that was stopping as it planned: nothing going out is made, and the process then ended. */
     private EngineWiring stopping(ModelCalls modelCalls, CodeSteps release = CodeStepsHeld.NONE) {
         def wiring = wired(modelCalls, release)
         wiring.closing()
@@ -79,6 +74,7 @@ class EngineResumptionIntegrationSpec extends Specification {
 
     private void modelSeeded() {
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(TicketWorkflow.SUMMARISE).update()
@@ -107,7 +103,7 @@ class EngineResumptionIntegrationSpec extends Specification {
     }
 
     private static CallOutcome.CameBack cameBack(String answer) {
-        new CallOutcome.CameBack(answer, 321, 12, true, false)
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
     }
 
     private static void until(String what, Closure<Boolean> reached) {
@@ -119,6 +115,7 @@ class EngineResumptionIntegrationSpec extends Specification {
     }
 
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
                 select try.try_number || ' ' || try.producer || ' ' || try.created_by_kind || ' '
                        || case when try.ended_at is null then 'open'
@@ -129,15 +126,11 @@ class EngineResumptionIntegrationSpec extends Specification {
     }
 
     private List<String> holds() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select reason || ' ' || created_by || ' ' || coalesce(released_by::text, '-')
                   from run_step_holds order by created_at, run_step_hold_id
                 """)
-    }
-
-    private List<String> runRows() {
-        ["run_steps", "productions", "production_inputs", "production_values", "run_step_holds",
-         "run_step_send_attempts", "model_calls", "run_step_failures"].collect { store.digestOf(it) }
     }
 
     private StepPosition position(EngineWiring wiring, String group, RunId run, String step) {
@@ -205,10 +198,10 @@ class EngineResumptionIntegrationSpec extends Specification {
         triesOf(TicketWorkflow.CONFIRM) == []
     }
 
-    /** The summary made to stand as given, so that the step after it is due once it is answered. */
     def "the step after one whose values stood, never asked, is asked once runs go on"() {
         given:
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update declaration_fields set standing = 'always' where declaration_field_id = ?::uuid")
                 .params(TicketWorkflow.SUMMARY).update()
         ticketStarted(wired(new ScriptedModelCalls()))
@@ -230,6 +223,7 @@ class EngineResumptionIntegrationSpec extends Specification {
         TicketWorkflow.seed(store)
         store.stopped(TicketWorkflow.SUMMARISE_QUESTION, FIRST_STEWARD)
         ticketStarted(wired(new ScriptedModelCalls()))
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid where entry_id = ?::uuid")
                 .params(FIRST_STEWARD, TicketWorkflow.SUMMARISE_QUESTION).update()
         def heldBefore = holds()
@@ -273,7 +267,7 @@ class EngineResumptionIntegrationSpec extends Specification {
         codeStarted(wired(new ScriptedModelCalls(), CodeStepsHeld.of(scripted(false, { receipt() }))))
         until("check was asked") { triesOf(CodeWorkflow.CHECK).size() == 1 }
         wirings.each { it.drained() }
-        def before = runRows()
+        def before = store.contents()
         def fresh = wired(new ScriptedModelCalls(), CodeStepsHeld.of(scripted(false, { receipt() })))
 
         when:
@@ -281,7 +275,8 @@ class EngineResumptionIntegrationSpec extends Specification {
         fresh.drained()
 
         then:
-        runRows() == before
+        store.contents() == before
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.count("select count(*) from run_steps where run_id = ?::uuid", TicketWorkflow.RUN) == 0
     }
 
@@ -294,7 +289,7 @@ class EngineResumptionIntegrationSpec extends Specification {
             store.count("select count(*) from productions where ended_at is not null") == 2
         }
         wirings.each { it.drained() }
-        def before = runRows()
+        def before = store.contents()
         def again = scripted(false, { receipt() })
         def fresh = wired(new ScriptedModelCalls(), CodeStepsHeld.of(again))
 
@@ -303,7 +298,7 @@ class EngineResumptionIntegrationSpec extends Specification {
         fresh.drained()
 
         then:
-        runRows() == before
+        store.contents() == before
         again.runs.get() == 0
     }
 
@@ -325,6 +320,7 @@ class EngineResumptionIntegrationSpec extends Specification {
         fresh.drained()
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select run_id::text from productions order by run_id") == runs.toSorted()
         store.count("select count(distinct run_id) from productions") == 201
     }
@@ -344,7 +340,7 @@ class EngineResumptionIntegrationSpec extends Specification {
         store.count("select count(*) from run_steps") == 0
     }
 
-    /** Stopped as a lifecycle, on a refresh cancelled or a context stopped, and not closing: the walk ends there too. */
+    // Lifecycle stopping must also end the walk when closing has not begun.
     def "a walk once stopped as a lifecycle drives none of the runs, though the engine is not stopping"() {
         given:
         TicketWorkflow.seed(store)
@@ -361,7 +357,6 @@ class EngineResumptionIntegrationSpec extends Specification {
         !fresh.executor.stopping()
     }
 
-    /** Renamed away by the spec, which the store never does, so the batch read fails where nothing else is read. */
     def "a batch of runs that cannot be read ends the walk, logging the last run reached and the failure's kind alone"() {
         given:
         TicketWorkflow.seed(store)
@@ -389,5 +384,100 @@ class EngineResumptionIntegrationSpec extends Specification {
 
         cleanup:
         restartLogger.detachAppender(logged)
+    }
+
+    def "a run whose first step runs a workflow, with nothing beneath it yet, has that run started once runs go on, once"() {
+        given:
+        TreeWorkflows.seed(store)
+        TreeWorkflows.run(store, TreeWorkflows.ESCALATE, TreeWorkflows.ESCALATE_VERSION, '{"ticket":"A fire."}')
+        def fresh = wired(new ScriptedModelCalls())
+
+        when:
+        fresh.started()
+        fresh.drained()
+
+        then:
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        store.texts("select entry_version_id::text from runs where parent_run_id = ?::uuid", TreeWorkflows.ROOT) ==
+                [TreeWorkflows.NOTE_VERSION]
+        triesOf(TreeWorkflows.WRITE_NOTE) == ["1 person system open"]
+
+        and:
+        triesOf(TreeWorkflows.CHECK) == []
+    }
+
+    // Hand over the next child only after commit; a stopping engine must not hand it over.
+    def "a run beneath left unstarted by an engine that was stopping is started once runs go on"() {
+        given:
+        TreeWorkflows.seed(store)
+        def planner = deep(3)
+        planner.closing()
+        store.transactions().executeWithoutResult {
+            TreeWorkflows.run(store, TreeWorkflows.LOOP, TreeWorkflows.LOOP_VERSION, '{}')
+            planner.engine.planStarted(planner.tree.lock(groupId(TreeWorkflows.GROUP),
+                    new RunId(UUID.fromString(TreeWorkflows.ROOT))).orElseThrow())
+        }
+        // Drain first so any unexpected handover would finish before the assertion.
+        planner.drained()
+        def leftByPlanner = runsOf(TreeWorkflows.ROOT)
+        def fresh = deep(3)
+
+        when:
+        fresh.started()
+        fresh.drained()
+
+        then:
+        leftByPlanner == ["1 0", "2 1"]
+        runsOf(TreeWorkflows.ROOT) == ["1 0", "2 1", "3 2"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select reason::text from run_step_failures") == ["too_deep"]
+    }
+
+    def "a model's try in a run beneath, left unsent by an engine that was stopping, is sent once runs go on and the run above goes on"() {
+        given:
+        TreeWorkflows.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
+                 where workflow_step_id = ?::uuid""").params(TreeWorkflows.WRITE_NOTE).update()
+        def planner = stopping(new ScriptedModelCalls())
+        store.transactions().executeWithoutResult {
+            TreeWorkflows.run(store, TreeWorkflows.ESCALATE, TreeWorkflows.ESCALATE_VERSION, '{"ticket":"A fire."}')
+            planner.engine.planStarted(planner.tree.lock(groupId(TreeWorkflows.GROUP),
+                    new RunId(UUID.fromString(TreeWorkflows.ROOT))).orElseThrow())
+        }
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def leftByPlanner = store.texts("""
+                select coalesce(try.try_number::text, 'unnumbered') || ' ' || try.producer || ' '
+                       || (try.ended_at is null) || ' ' || (try.run_id = try.root_run_id)
+                  from productions try
+                """)
+        def model = new ScriptedModelCalls().answering(cameBack('{"values":{"note":"A note."},"confidences":{}}'))
+        def fresh = wired(model)
+
+        when:
+        fresh.started()
+        until("the run above asked its next step") { triesOf(TreeWorkflows.CHECK).size() == 1 }
+        fresh.drained()
+
+        then:
+        leftByPlanner == ["unnumbered model true false"]
+        triesOf(TreeWorkflows.WRITE_NOTE) == ["1 model system yielded"]
+        triesOf(TreeWorkflows.CHECK) == ["1 person system open"]
+
+        and:
+        model.requests.size() == 1
+        store.count("select count(*) from model_calls") == 1
+    }
+
+    private EngineWiring deep(int maximumDepth) {
+        def wiring = TreeWorkflows.wired(store, maximumDepth)
+        wirings << wiring
+        wiring
+    }
+
+    private List<String> runsOf(String root) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.texts("select number || ' ' || depth from runs where root_run_id = ?::uuid order by number", root)
     }
 }

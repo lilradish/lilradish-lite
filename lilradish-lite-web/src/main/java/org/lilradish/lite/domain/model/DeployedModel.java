@@ -25,11 +25,22 @@ public record DeployedModel(
         long sentPerCallLimit,
         BigDecimal charactersPerUnit,
         long cameBackPerCallLimit,
-        List<ModelPrice> pricesPerMillion) {
+        List<ModelPrice> pricesPerMillion,
+        List<DeployedTool> tools) {
 
     private static final int CHARACTERS_PER_UNIT_SCALE = 4;
 
     private static final BigDecimal MOST_COUNTED = BigDecimal.valueOf(Long.MAX_VALUE);
+
+    public DeployedModel(
+            ModelName name,
+            List<ModelMode> modes,
+            long sentPerCallLimit,
+            BigDecimal charactersPerUnit,
+            long cameBackPerCallLimit,
+            List<ModelPrice> pricesPerMillion) {
+        this(name, modes, sentPerCallLimit, charactersPerUnit, cameBackPerCallLimit, pricesPerMillion, List.of());
+    }
 
     public DeployedModel {
         if (name == null) {
@@ -78,6 +89,18 @@ public record DeployedModel(
             }
         }
         pricesPerMillion = List.copyOf(listed);
+        List<DeployedTool> offeredTools = tools == null ? List.of() : tools;
+        Set<ModelToolName> toolNames = HashSet.newHashSet(offeredTools.size());
+        for (DeployedTool tool : offeredTools) {
+            if (tool == null) {
+                throw new NullPointerException("DeployedModel " + name.value() + " holds a null tool");
+            }
+            if (!toolNames.add(tool.name())) {
+                throw new IllegalArgumentException("DeployedModel " + name.value() + " offers "
+                        + tool.name().value() + " more than once");
+            }
+        }
+        tools = List.copyOf(offeredTools);
     }
 
     /**

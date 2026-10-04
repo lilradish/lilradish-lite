@@ -1,3 +1,4 @@
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table pool_members (
     -- Time-ordered, so an append-only table does not fragment the index on its key.
     pool_member_id  uuid         not null default uuidv7(),
@@ -25,5 +26,6 @@ create table pool_members (
         check (removed_at is null or removed_at >= created_at)
 );
 
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index pool_members_one_current_stay
     on pool_members (subject_id) where removed_at is null;

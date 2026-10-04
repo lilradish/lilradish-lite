@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +8,11 @@ import {
   RequestFailed,
 } from "../../../api/problem";
 import { useKeptUp } from "./useRunRead";
+import { RunReadAccess } from "../RunReadAccess";
+
+const wrapper = ({ children }: { readonly children: ReactNode }) => (
+  <RunReadAccess>{children}</RunReadAccess>
+);
 
 /** One read in flight, which the spec settles or refuses when it chooses, and the signal it was handed. */
 interface Asked {
@@ -48,7 +54,9 @@ afterEach(() => {
 describe("useKeptUp", () => {
   it("replaces what is drawn with a read asked for quietly, never saying it is reading", async () => {
     const { asked, load } = reads();
-    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN));
+    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
     await settling(asked[0], "first");
 
     act(() => result.current.quietly());
@@ -62,7 +70,9 @@ describe("useKeptUp", () => {
 
   it("lets a quiet read go once another is asked, drawing only the later, and saying nothing of the one let go", async () => {
     const { asked, load } = reads();
-    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN));
+    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
     await settling(asked[0], "first");
 
     act(() => result.current.quietly());
@@ -80,26 +90,66 @@ describe("useKeptUp", () => {
     expect(load).toHaveBeenCalledTimes(4);
   });
 
-  it("says a refusal a quiet read met as a read asked again says it, and draws nothing read before it", async () => {
+  it("abandons a quiet read immediately when an ordinary re-read is asked for", async () => {
     const { asked, load } = reads();
-    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN));
+    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
     await settling(asked[0], "first");
     act(() => result.current.quietly());
 
-    await refusing(asked[1], REFUSED);
+    act(() => {
+      result.current.reload();
+      expect(asked[1]!.signal.aborted).toBe(true);
+    });
+    await settling(asked[1], "old quiet answer");
 
+    expect(result.current.value).toBe("first");
+    expect(result.current.problem).toBeNull();
     expect(load).toHaveBeenCalledTimes(3);
-    expect(result.current.loading).toBe(true);
-    await refusing(asked[2], REFUSED);
-    expect(result.current.problem?.code).toBe("RUN_STOPPED");
-    expect(result.current.value).toBeNull();
+
+    await settling(asked[2], "fresh answer");
+    expect(result.current.value).toBe("fresh answer");
+    expect(result.current.problem).toBeNull();
+    expect(load).toHaveBeenCalledTimes(3);
   });
+
+  it.each([
+    ["a served refusal", REFUSED, "RUN_STOPPED"],
+    [
+      "a server failure",
+      new RequestFailed({ status: 503, code: "SERVICE_UNAVAILABLE" }),
+      "SERVICE_UNAVAILABLE",
+    ],
+  ])(
+    "says %s met while keeping up, removing the old run without another GET",
+    async (_case, failure, code) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { asked, load } = reads();
+      const { result } = renderHook(() => useKeptUp(load, EVERY_SECOND), {
+        wrapper,
+      });
+      await settling(asked[0], "first");
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+
+      await refusing(asked[1], failure);
+
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(result.current.loading).toBe(false);
+      expect(result.current.problem?.code).toBe(code);
+      expect(result.current.value).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
 
   /** Timeouts are faked; nothing here waits the way Testing Library does. */
   it("keeps what is drawn where a quiet read reached no server, saying nothing of it, and tries again at the next wait", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { asked, load } = reads();
-    const { result } = renderHook(() => useKeptUp(load, EVERY_SECOND));
+    const { result } = renderHook(() => useKeptUp(load, EVERY_SECOND), {
+      wrapper,
+    });
     await settling(asked[0], "first");
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(load).toHaveBeenCalledTimes(2);
@@ -115,24 +165,48 @@ describe("useKeptUp", () => {
     expect(asked[2]!.signal.aborted).toBe(false);
   });
 
-  it("says a quiet read refused here without reaching the server as a read asked again says it, not as one that reached nothing", async () => {
+  it("says a quiet read refused here without reaching the server at once, not as one that reached nothing", async () => {
     const { asked, load } = reads();
-    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN));
+    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
     await settling(asked[0], "first");
     act(() => result.current.quietly());
 
     await refusing(asked[1], new RequestFailed({ code: NOT_AN_ADDRESS }));
 
-    expect(load).toHaveBeenCalledTimes(3);
-    expect(result.current.loading).toBe(true);
-    await refusing(asked[2], new RequestFailed({ code: NOT_AN_ADDRESS }));
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(false);
     expect(result.current.problem).toEqual({ code: NOT_AN_ADDRESS });
     expect(result.current.value).toBeNull();
   });
 
+  it("keeps an old answer hidden while explicitly reading again after a quiet refusal", async () => {
+    const { asked, load } = reads();
+    const { result } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
+    await settling(asked[0], "first");
+    act(() => result.current.quietly());
+    await refusing(asked[1], REFUSED);
+
+    act(() => result.current.reload());
+    expect(result.current.loading).toBe(true);
+    expect(result.current.problem).toBeNull();
+    expect(result.current.value).toBeNull();
+    expect(load).toHaveBeenCalledTimes(3);
+
+    await settling(asked[2], "first");
+    expect(result.current.loading).toBe(false);
+    expect(result.current.problem).toBeNull();
+    expect(result.current.value).toBe("first");
+  });
+
   it("abandons a quiet read still in flight when it goes, drawing nothing it answers", async () => {
     const { asked, load } = reads();
-    const { result, unmount } = renderHook(() => useKeptUp(load, NEVER_AGAIN));
+    const { result, unmount } = renderHook(() => useKeptUp(load, NEVER_AGAIN), {
+      wrapper,
+    });
     await settling(asked[0], "first");
     act(() => result.current.quietly());
 
@@ -148,7 +222,7 @@ describe("useKeptUp", () => {
     const after = reads();
     const { result, rerender } = renderHook(
       ({ load }) => useKeptUp(load, NEVER_AGAIN),
-      { initialProps: { load: before.load } },
+      { initialProps: { load: before.load }, wrapper },
     );
     await settling(before.asked[0], "first");
     act(() => result.current.quietly());
@@ -161,5 +235,26 @@ describe("useKeptUp", () => {
     await settling(after.asked[0], "second");
     expect(after.asked[0]!.signal.aborted).toBe(false);
     expect(result.current.value).toBe("second");
+  });
+
+  it("does not draw a quiet answer from an earlier source while both ordinary reads are pending", async () => {
+    const before = reads();
+    const after = reads();
+    const { result, rerender } = renderHook(
+      ({ load }) => useKeptUp(load, NEVER_AGAIN),
+      { initialProps: { load: before.load }, wrapper },
+    );
+    act(() => result.current.quietly());
+    await settling(before.asked[1], "old quiet answer");
+    expect(result.current.value).toBe("old quiet answer");
+
+    rerender({ load: after.load });
+    expect(before.asked[0]!.signal.aborted).toBe(true);
+    expect(result.current.value).toBeNull();
+    expect(result.current.loading).toBe(true);
+    await settling(before.asked[0], "old ordinary answer");
+    expect(result.current.value).toBeNull();
+    await settling(after.asked[0], "new answer");
+    expect(result.current.value).toBe("new answer");
   });
 });

@@ -49,9 +49,55 @@ export const LIB_EN = {
   /** A search found more than it shows; narrowing it is the way to the rest. */
   "search.more":
     "More were found than the {count} shown. Type more to narrow them down.",
+  /** Drawn in place of `count` of a character in a row that would show nothing, never drawn itself; `code` is its hex. */
+  "text.showsNothing":
+    "{count, plural, one {A character that shows nothing is here} other {# characters that show nothing are here, one after another}}: U+{code}.",
+  /** Drawn in place of `count` of a character in a row that would reorder the text around it; `code` is its hex. */
+  "text.turnsOrder":
+    "{count, plural, one {A character that would turn the order text is shown in is here, drawn instead of obeyed} other {# characters that would turn the order text is shown in are here, one after another, drawn instead of obeyed}}: U+{code}.",
+  /** What is seen in place of `count` of one such character in a row. */
+  "text.marker":
+    "{count, plural, =1 {U+{code}} other {U+{code} ×{count, number}}}",
+  /** Above a value holding too many such characters to mark; `count` is every one of them, left out. */
+  "text.leftOut":
+    "{count, plural, one {# character} other {# characters}} that show nothing or would turn the order text is shown in {count, plural, one {is} other {are}} left out of what is drawn here: too many to mark where each stands.",
 };
 
 export const APP_EN = {
+  "step.heldSearchWayNotHeld":
+    "This system, as it runs now, does not include the way to search this step runs; it goes on by itself once a release holds it again.",
+  "step.failedToolNotOffered":
+    "It names {model} to search, which does not offer {tool}, the tool this way to search needs.",
+  "step.searchQuestion": "The question it searched with",
+  "step.searchedFor": "What it searched for",
+  "step.searchFound": "What it found",
+  "step.searchRecordUnsaid":
+    "The answer did not say what it searched for or found.",
+  "step.searchRecordCut":
+    "What it searched for and found is longer than may be kept, so it is cut short here.",
+  "step.searchRecordNotAsItCame":
+    "What it searched for and found held something that could not be kept exactly as it came.",
+  "step.searchRecordMore":
+    "{count, plural, one {One more thing it searched for or found was not kept.} other {# more things it searched for or found were not kept.}}",
+  "step.searchWithheld":
+    "The question it searched with, and what it searched for and found, are withheld from you.",
+  "step.searches": "Searches",
+  "step.searchesSaid":
+    "{count, plural, one {# search} other {# searches}}, as the answer said",
+  "step.searchesAtMost":
+    "{count, plural, one {# search} other {# searches}}: the most one call may make, counted as nothing said how many",
+  "step.searchPrice": "Price of one search, as it stood then",
+  "step.searchFee": "Search fee",
+  "step.searchFeeNotInCurrency":
+    "Searching had no price in {currency}, so no fee is shown.",
+  "step.searchFeeManyCurrencies":
+    "Searching was priced in more than one currency, and this group has chosen none, so no fee is shown.",
+  "step.searchFeeNoPrice": "Searching had no price, so no fee is shown.",
+  "hand.searchQuestion": "The question it searches with",
+  "step.runsSearch": "Search: {way}",
+  "step.heldSearchQuestionUnsent": "The question it would have searched with",
+  "step.heldSearchQuestionTurnedAway":
+    "The question it searched with, which the model would not take",
   /**
    * Names the landmark holding every destination; never drawn. Not "Site
    * navigation", which a screen reader reads out as "Site navigation
@@ -62,6 +108,11 @@ export const APP_EN = {
   "navigation.skip": "Skip to content",
   /** The control that brings the destinations out on a narrow viewport. */
   "navigation.open": "Open navigation",
+  /**
+   * The control that puts the docked destinations away or brings them back on
+   * a wide viewport. Whether they are out is said beside the name, never in it.
+   */
+  "navigation.sidebar": "Sidebar",
 
   /**
    * The places a person can go. Which group each belongs to and what order they
@@ -94,7 +145,7 @@ export const APP_EN = {
    * of, which the navigation is careful not to tell them. Its heading is the
    * product's name, which is not a sentence and is held outside this catalogue.
    */
-  "landing.detail": "You are signed in.",
+  "landing.detail": "You are at the start.",
   /** A screen that exists and has nothing on it yet, said in its own words. */
   "page.notBuilt": "Nothing is built here yet.",
 
@@ -118,18 +169,20 @@ export const APP_EN = {
   "person.estateRoles": "Estate roles",
   "person.groups": "Groups",
   "person.who": "Who they are",
-  /** Where the facts come from, said only because it is why none can be corrected here. */
-  "person.whereHeld":
-    "Taken from the directory when they were brought in; nothing here can change it.",
   "person.nameless": "No name is held for them.",
   "person.holds": "Held",
   "person.holdsNot": "Not held",
   "person.grant": "Grant {role}",
   "person.withdraw": "Withdraw {role}",
   "person.inNoGroup": "In no group.",
-  /** Names nobody: a row a migration made was made by nobody here. */
-  "person.seeded": "A migration put them in the pool. Nobody here did.",
+  "confirm.remove": "Remove",
+  "confirm.cancel": "Cancel",
   "person.remove": "Remove from the pool",
+  "person.removeConfirm": "Remove {name} from the pool?",
+  "person.removeConfirmBody":
+    "Bringing them in again later keeps them the same person, with their past acts.",
+  "person.removeUnderway":
+    "They are being removed from the pool, and that can no longer be called back.",
   "person.out": "{name} is out of the pool.",
   "person.in": "{name} is in the pool.",
   /** A change to somebody already in the pool, refused once the reader had moved on from them; each says in words what was not done. */
@@ -227,9 +280,12 @@ export const APP_EN = {
   /** One member, as the panel beside the list shows them. */
   "member.heading": "Member",
   "member.roles": "Roles",
-  "member.give": "Give {role}",
-  "member.take": "Take {role} away",
   "member.remove": "Remove from the group",
+  "member.removeConfirm": "Remove {name} from the group?",
+  "member.removeConfirmBody":
+    "They will hold no role here. Bringing them back means taking them on again.",
+  "member.removeUnderway":
+    "They are being removed from the group, and that can no longer be called back.",
   /** Said where a role giving is how they come back, nobody having to be searched for. */
   "member.noLonger":
     "No longer a member of this group. Giving a role here makes them one again.",
@@ -248,6 +304,7 @@ export const APP_EN = {
   "currency.named": "{code} — {name}",
   "currency.noneChosen": "None chosen",
   "currency.read": "Currency: {currency}",
+  "currency.change": "Change",
   "currency.notPriced": "No model is priced in it any longer.",
   "currency.chosen": "This group's costs are read in {currency} now.",
 
@@ -261,10 +318,11 @@ export const APP_EN = {
   "library.noWorkflows": "This group has no workflows yet.",
   "library.noQuestions": "This group has no questions yet.",
   "library.noReferenceLists": "This group has no reference lists yet.",
-  "library.startWorkflow": "Start a workflow",
-  "library.startQuestion": "Start a question",
-  "library.startReferenceList": "Start a reference list",
+  "library.newWorkflow": "New workflow",
+  "library.newQuestion": "New question",
+  "library.newReferenceList": "New reference list",
   "library.filter": "Part of a name",
+  "library.status": "Status",
   "library.noMatch": "No entry's name here holds that.",
 
   /** What kind of thing an entry is, wherever one is named. */
@@ -272,25 +330,28 @@ export const APP_EN = {
   "entryKind.question": "Question",
   "entryKind.reference_list": "Reference list",
 
+  /** What kind of thing a step runs, wherever a step is set apart by it. */
+  "stepKind.question": "Question",
+  "stepKind.workflow": "Workflow",
+  "stepKind.code_step": "Code step",
+  "stepKind.route": "Route",
+  "stepKind.search": "Search",
+
   /** One entry, as its row and its own page show it. */
   "entry.name": "Name",
   "entry.purpose": "What it is for",
   "entry.kind": "Kind",
   "entry.inService": "In service",
-  "entry.submitted": "Submitted",
   "entry.stopped": "Stopped",
+  "entry.statusWaiting": "Waiting for approval",
   /** Which version is in service, or that none is. */
   "entry.inServiceVersion": "Version {number}",
   "entry.noneInService": "None",
-  "entry.waiting": "Waiting",
-  "entry.notWaiting": "No",
-  "entry.isStopped": "Stopped",
-  "entry.notStopped": "No",
   "entry.saysNothing": "It says nothing of what it is for.",
-  /** Whether it is stopped from running, and where it is, who stopped it and when. */
-  "entry.runs": "No. It may be run.",
-  "entry.stoppedBy":
-    "Yes, by {name}, {when}. Nothing runs it until it is let go.",
+  /** Who stopped it and when, if it is stopped. */
+  "entry.stoppedBy": "Stopped by {name} · {when}",
+  "entry.stoppedByGone":
+    "Stopped by somebody who can no longer be found · {when}",
   "entry.stop": "Stop it being used",
   "entry.letGo": "Let it be used again",
   "entry.nameLimit":
@@ -299,34 +360,38 @@ export const APP_EN = {
     "What it is for is at most 512 characters on one line, with something in it that shows.",
   "entry.purposeHint":
     "One line saying what it does, for whoever picks it. It may be left empty.",
-  "entry.start": "Start",
+  "entry.create": "Create",
   "entry.abandon": "Cancel",
-  "entry.startUnderway":
-    "It is being started, and that can no longer be called back.",
-  "entry.rename": "Rename",
-  "entry.renameTitle": "Rename this entry",
-  "entry.renameUnderway":
-    "It is being renamed, and that can no longer be called back.",
+  "entry.createUnderway":
+    "It is being made, and that can no longer be called back.",
+  "entry.edit": "Edit",
+  "entry.editTitle": "Edit this entry",
+  "entry.save": "Save",
+  "entry.editUnderway":
+    "It is being saved, and that can no longer be called back.",
   "entry.unchanged": "Change the name or what it is for first.",
 
-  /** The versions of one entry, newest first, and the one open. */
+  /** The versions of one entry, a table that may be shut, and the one open. */
   "versions.label": "Versions",
   "versions.newDraft": "New draft",
+  "versions.version": "Version",
+  "versions.standing": "Standing",
+  "versions.writtenBy": "Written by",
+  "versions.approvedBy": "Approved by",
+  "versions.none": "It has no version yet.",
+  /** Said in place of the table while it is shut: the version open, and its standing. */
+  "versions.shut": "Version {number} · {standing}",
   "version.number": "Version {number}",
   "version.draft": "Draft",
   "version.submitted": "Submitted",
   "version.in_service": "In service",
   "version.retired": "Retired",
-  /** A version's row: its standing, who wrote it and, where it has one, who approved it. */
-  "version.detail": "{standing} · {written}",
-  "version.detailApproved": "{standing} · {written} · {approved}",
-  "version.writtenBy": "Written by {names}",
-  /** Names nobody: a version a migration wrote was written by nobody here. */
-  "version.writtenByNobody": "A migration wrote it. Nobody here did.",
-  "version.approvedBy": "Approved by {name}",
+  /** Names nobody when a version was created without a recorded writer. */
+  "version.writtenByNobody":
+    "Made when this system was set up; nobody wrote it.",
   /** Never said as though somebody had approved it. */
   "version.approvedByNobody":
-    "A migration put it into service. Nobody approved it.",
+    "Put into service when this system was set up; nobody approved it.",
   "version.pinCount":
     "{count, plural, =0 {Nothing in service pins it.} one {One version in service pins it.} other {# versions in service pin it.}}",
   "version.pinnedBy": "{name} ({kind}), version {number}",
@@ -343,11 +408,17 @@ export const APP_EN = {
     "Taking the version in service in place of each retired one is a change to this draft.",
   "pins.onSubmitted":
     "A submitted version cannot be changed: withdraw it first, then take the version in service in place of each retired one.",
-  "version.acts": "What can be done",
   "version.submit": "Submit",
+  "version.finishEditing":
+    "Save every part first; Submit can be pressed once nothing is unsaved or still saving.",
   "version.withdraw": "Withdraw",
   "version.approve": "Approve",
   "version.retire": "Retire",
+  "version.retireConfirm": "Retire version {number}?",
+  "version.retireConfirmBody":
+    "Nothing new will be offered it, and whatever already names it goes on as it is. It cannot be put back in service.",
+  "version.retireUnderway":
+    "It is being retired, and that can no longer be called back.",
 
   /** A step that could send a model more than it takes: said beside what does not hold, and refusing nothing. */
   "sendsPast.label": "What could be too long to send",
@@ -365,12 +436,16 @@ export const APP_EN = {
 
   /** A submission refused for what the version holds, each place named where it is. */
   "contentProblems.label": "What does not hold yet",
+  "contentProblems.more":
+    "{count, plural, one {# more thing does not hold and is not listed.} other {# more things do not hold and are not listed.}}",
   "contentProblems.at": "{part}: {problem}",
+  "contentProblems.atDrawing": "{part}, how it is drawn: {problem}",
   "contentProblems.atField": "{part}, {field}: {problem}",
   "contentProblems.atTerm": "{part}, term {position}, {term}: {problem}",
   /** One level of the way down to a field, where its name alone would not say which. */
   "contentProblems.sameNamed": "{name} (field {position} there)",
   "contentPart.instruction": "The instruction",
+  "contentPart.drawing": "The question",
   "contentPart.takes": "What it takes",
   "contentPart.gives": "The declared answer",
   /** What a workflow gives back, which is not an answer to anything. */
@@ -380,6 +455,8 @@ export const APP_EN = {
   /** Where in the steps a problem is, each level said by what a reader reads it by. */
   "contentProblems.atStep": "{part}, {step}: {problem}",
   "contentProblems.atCase": "{part}, {step}, {case}: {problem}",
+  "contentProblems.atCaseField":
+    "{part}, {step}, {case}, what it gives back as {field}: {problem}",
   "contentProblems.atInput": "{part}, {step}, input {field}: {problem}",
   "contentProblems.atCaseInput":
     "{part}, {step}, {case}, input {field}: {problem}",
@@ -392,6 +469,8 @@ export const APP_EN = {
   "contentProblems.chosenBy": "what {step} chooses by",
   "contentPart.terms": "The terms",
   "contentPart.asking": "One asking of it",
+  "contentProblem.drawing_names_unknown":
+    "It names {name}, which this question does not take.",
   "contentProblem.instruction_missing":
     "It tells whoever answers it nothing yet.",
   "contentProblem.nothing_given_back":
@@ -399,10 +478,20 @@ export const APP_EN = {
   "contentProblem.name_repeated": "A field beside it already has this name.",
   "contentProblem.longest_missing":
     "A field of text says how long its value may be, and this one does not yet.",
+  "contentProblem.file_size_missing":
+    "A field of files says how large one file may be, and this one does not yet.",
+  "contentProblem.question_takes_file":
+    "It is a file, and a question takes none: a model is sent text alone.",
   "contentProblem.list_missing":
     "A field of terms names the list they come from, and this one does not yet.",
   "contentProblem.most_missing":
     "A field holding many says how many it may hold, and this one does not yet.",
+  /** {size} is the deployment's largest single file and {count} the most files it takes in one field, both carried on the problem by the server. */
+  "contentProblem.file_limit_past_deployment":
+    "It allows a larger file, or more files, than this deployment takes: files of up to {size} each, and at most {count, number} in one field.",
+  /** {total} is this deployment's file limit for one handover, carried on the problem by the server. */
+  "contentProblem.file_total_past_deployment":
+    "At their limits, its files together could come to more than the {total} this deployment takes at once.",
   "contentProblem.limit_past_largest":
     "At its limits, one value of it could be written out longer than one value may be.",
   /** {most} is the longest one value may be written out, the figure the server holds each value to. */
@@ -443,6 +532,10 @@ export const APP_EN = {
     "What it produces is reviewed by a model this deployment does not hold.",
   "contentProblem.reviewer_mode_not_offered":
     "What it produces is reviewed in a mode its model does not offer.",
+  "contentProblem.step_file_made_by_model":
+    "It gives back a file, which no model can make; a person may answer it.",
+  "contentProblem.step_file_reviewed_by_model":
+    "It takes or gives back a file, which no model can review; a person may review it, by downloading it.",
   "contentProblem.model_gives_nothing":
     "A model is asked by it and it gives nothing back, so nothing listens to the model.",
   "contentProblem.discriminator_missing":
@@ -455,8 +548,14 @@ export const APP_EN = {
   "contentProblem.case_not_offered":
     "Its term is not one the list it chooses by offers.",
   "contentProblem.case_repeated": "An earlier case is on the same term.",
-  "contentProblem.case_gives_otherwise":
-    "The workflow it leads to gives back other than what the route declares.",
+  "contentProblem.case_gives_undeclared":
+    "The route declares nothing by this name.",
+  "contentProblem.case_gives_other_kind":
+    "The route declares it as another kind.",
+  "contentProblem.case_gives_past_limit":
+    "It could be longer, or hold more, than the route allows.",
+  "contentProblem.case_may_give_nothing":
+    "The route says it must be given, and the workflow it leads to need not give it.",
   "contentProblem.input_unbound": "Nothing fills it yet.",
   "contentProblem.target_unknown":
     "It fills an input that what it binds into never declared.",
@@ -509,16 +608,36 @@ export const APP_EN = {
   /** {most} is the longest one value may be written out, the figure the server holds all a workflow takes to. */
   "contentProblem.takesPastLargestOf":
     "All it takes, together at their limits, could be written out in more than {most, number} characters, the longest one value may be, and a run keeps what it was started with as one.",
+  "contentProblem.search_review_past_largest":
+    "A model reviewing what it finds could be sent {excess, plural, one {# character} other {# characters}} more than {most, number}, the most one asking may send, before what it searched for and found is counted.",
+  "contentProblem.searchReviewPastLargestUncounted":
+    "A model reviewing what it finds could be sent more than {max, plural, one {# character} other {# characters}} past {most, number}, the most one asking may send, before what it searched for and found is counted.",
   /** Said at the step: a model reviewing what the step's code step gives back; {most} as for asking_past_largest. */
   "contentProblem.code_step_review_past_largest":
     "A model reviewing what its code step gives back could be sent {excess, plural, one {# character} other {# characters}} more than {most, number}, the most one asking may send.",
   "contentProblem.codeStepReviewPastLargestUncounted":
     "A model reviewing what its code step gives back could be sent more than {max, plural, one {# character} other {# characters}} past {most, number}, the most one asking may send.",
+  "contentProblem.search_tool_not_offered":
+    "It searches with a model that does not offer the tool this way to search needs.",
+  "contentProblem.search_way_not_held":
+    "It runs a way to search this release does not offer.",
+  "contentProblem.search_question_may_be_empty":
+    "It searches with a question that could hold nothing: write something into it, or put in a value that must be given.",
+  /** Said at the step: {fields} are the fields its way gives back none is chosen for yet, joined; {count} how many. */
+  "contentProblem.search_standing_missing":
+    "It does not yet say whether {fields} {count, plural, one {stands always or waits} other {stand always or wait}} on a review.",
   /** A problem this build has no words for, still named where it is. */
   "contentProblem.unknown": "Something here does not hold.",
 
-  /** A question's content: what it tells whoever answers it, what it takes, and what it gives back. */
+  /** A question's instruction, drawing, inputs and declared answer. */
   "question.instruction": "The instruction",
+  "question.drawing": "How it is drawn",
+  "question.drawingHint":
+    "Written as Markdown. Put '{{name}}' where a value it takes should appear; write \\'{{' for two braces as they are. A value is only ever drawn as text: never as where a link goes, and never as an image.",
+  "question.drawingMissing":
+    "It has no drawing, so a person answering it is shown what it takes field by field.",
+  "question.saveDrawing": "Save how it is drawn",
+  "question.drawingUnchanged": "Change how it is drawn first.",
   "question.instructionHint":
     "What whoever answers it is told to do. What it takes is given beside this, never inside it.",
   "question.saysNothing": "It tells nobody anything yet.",
@@ -531,8 +650,10 @@ export const APP_EN = {
   "question.underway":
     "It is being saved, and that can no longer be called back.",
   "question.added": "What is added when it runs",
+  "question.addedSummary":
+    "The instructions and answer schema, exactly as sent to the model.",
   "question.addedHint":
-    "What a model is asked for on top of the instruction, in the shape the declared answer gives. Nobody edits it; a person answering fills the declared answer instead.",
+    "What is sent to the model on top of the instruction, including the JSON Schema of the whole answer. Nobody edits it; a person answering fills the declared answer instead.",
   "question.addedNotYet":
     "It is shown once every field of the declared answer says all it has to.",
   /** A workflow's content: its halves, its steps and what fills them, what a run may spend and who may help. */
@@ -560,13 +681,33 @@ export const APP_EN = {
   "workflow.givesBack": "Gives back",
   "workflow.unnamed": "Step {position}, not named yet",
   "workflow.open": "Open {name}",
-  "workflow.up": "Move {name} up",
-  "workflow.down": "Move {name} down",
-  "workflow.remove": "Take {name} out",
+  "workflow.up": "Move up: {name}",
+  "workflow.down": "Move down: {name}",
+  "workflow.remove": "Take out: {name}",
+
+  "workflow.upTip": "Move up",
+  "workflow.downTip": "Move down",
+  "search.partUp": "Move up: {part}",
+  "search.partDown": "Move down: {part}",
+  "search.partRemove": "Take out: {part}",
+  "search.partOf": "{field} of {source}",
+  "search.wayNeeds": "Needs a model offering {tool}",
+  "workflow.searchWay": "Way to search",
+  "workflow.searchWayNone": "No way chosen yet",
+  "workflow.searchQuestion": "Question to search on",
+  "workflow.searchAddText": "Add written text",
+  "workflow.searchAddValue": "Add a value",
+  "workflow.searchText": "Written text",
+  "workflow.searchPart": "Part {position}",
+  "workflow.searchPartsFull":
+    "A question holds at most {most} parts. Remove one to add another.",
+  "workflow.searchStanding": "{field} stands",
+  "workflow.searchStandingNone": "Not chosen yet",
+  "workflow.searchStandingAlways": "Always",
+  "workflow.searchStandingReview": "Waits on a review",
+  "workflow.removeTip": "Take out",
   "workflow.runsNothing": "Nothing chosen yet",
   "workflow.runsVersion": "{name}, version {number}",
-  "workflow.runsCode": "Code step {name}",
-  "workflow.runsRoute": "A route",
   "workflow.newerInService":
     "Version {number} of what it runs is in service and newer.",
   "workflow.pinRetired":
@@ -589,7 +730,8 @@ export const APP_EN = {
   "workflow.runsQuestion": "A question",
   "workflow.runsWorkflow": "A workflow",
   "workflow.runsCodeStep": "A code step",
-  "workflow.runsRouteOption": "A route",
+  "workflow.runsSearch": "A way to search",
+  "workflow.runsRoute": "A route",
   "workflow.version": "Version",
   "workflow.versionNone": "None chosen yet",
   "workflow.codeStep": "Code step",
@@ -633,6 +775,7 @@ export const APP_EN = {
     "The constant, written out: text in double quotes, many in square brackets, fields in braces",
   "workflow.yes": "Yes",
   "workflow.no": "No",
+  "workflow.constantNothing": "Nothing",
   "workflow.constantSaid": "A constant: {typed}",
   "workflow.readAt": "{place}, {path}",
   "workflow.constantUnreadable":
@@ -671,6 +814,13 @@ export const APP_EN = {
   "workflow.outputsNone": "It gives nothing back, so nothing is filled.",
   "workflow.outputUnbound": "Nothing fills it yet, which submitting refuses.",
   "workflow.ceilingPart": "What a run may spend",
+  "workflow.runSettings": "Run settings",
+  "workflow.runSettingsSummary": "{ceiling} · {help}",
+  "workflow.ceilingShort": "At most {ceiling} sent and came back in all",
+  "workflow.ceilingNoneShort": "No ceiling",
+  "workflow.notHelpedShort": "May not be helped",
+  "workflow.helpedByShort": "May be helped by {model}",
+  "workflow.helperUnchosenShort": "May be helped by a model not chosen yet",
   "workflow.ceiling": "Ceiling",
   "workflow.ceilingHint":
     "What is sent and what comes back, added together. Leave it empty for no ceiling.",
@@ -689,9 +839,6 @@ export const APP_EN = {
   "workflow.helperUnchosen": "Runs may be helped, by a model not chosen yet.",
   "workflow.unchanged": "Change something first.",
   "workflow.problemsHere": "What does not hold here yet",
-  "added.confidence": "Asked how sure it is.",
-  "added.note": "On choosing among them: {note}",
-  "added.term": "{term}: {meaning}",
 
   /** A reference list's content: a note on choosing among its terms, and the terms, each with what it means. */
   "referenceList.note": "The note",
@@ -730,6 +877,8 @@ export const APP_EN = {
   "referenceList.underway":
     "It is being saved, and that can no longer be called back.",
 
+  "draft.unsaved": "Unsaved",
+
   /** A write refused for the draft having been written since the page read it. */
   "draft.readAfresh": "Reload",
   "draft.readAfreshHint":
@@ -738,10 +887,15 @@ export const APP_EN = {
   /** One half of a declaration, a field at a time, as a builder draws and edits it. */
   "declaration.none": "Nothing is declared.",
   "declaration.add": "Add a field",
-  "declaration.addInside": "Add a field inside {name}",
-  "declaration.remove": "Remove {name}",
-  "declaration.up": "Move {name} up",
-  "declaration.down": "Move {name} down",
+  "declaration.addInside": "Add a field inside: {name}",
+  "declaration.remove": "Remove: {name}",
+  "declaration.up": "Move up: {name}",
+  "declaration.down": "Move down: {name}",
+
+  "declaration.addInsideTip": "Add a field inside",
+  "declaration.removeTip": "Remove",
+  "declaration.upTip": "Move up",
+  "declaration.downTip": "Move down",
   "declaration.unchanged": "Change something first.",
   "declaration.unnamed": "Field {position}, not named yet",
   "declaration.held": "This field keeps the half from being saved: {why}",
@@ -753,7 +907,23 @@ export const APP_EN = {
   "declaration.helpLimit":
     "Help is at most 512 characters on one line, with something in it that shows.",
   "declaration.kind": "What it is",
+  "declaration.lines": "Lines",
+  "declaration.oneLine": "One line",
+  "declaration.severalLines": "Several lines",
   "declaration.longest": "How long, in characters",
+  "declaration.fileTypes": "File types",
+  "declaration.fileTypesHint":
+    "One media type per line, such as application/pdf.",
+  "declaration.fileTypesInvalid":
+    "Give one or more distinct media types, one per line.",
+  "declaration.maximumSize": "Largest file",
+  "declaration.sizeUnitsHint":
+    "A KB here is 1,024 bytes, and each larger unit 1,024 of the one before.",
+  "declaration.sizeUnit.bytes": "bytes",
+  "declaration.sizeUnit.KB": "KB",
+  "declaration.sizeUnit.MB": "MB",
+  "declaration.sizeUnit.GB": "GB",
+  "declaration.fileShown": "{types}; at most {size} each",
   "declaration.many": "Holds many",
   "declaration.most": "At most",
   "declaration.limit": "A limit is a whole number from 1 to 2147483647.",
@@ -792,6 +962,7 @@ export const APP_EN = {
   "fieldKind.yes_no": "Yes or no",
   "fieldKind.term": "A term",
   "fieldKind.fields": "Fields of its own",
+  "fieldKind.file": "A file",
   "fieldStanding.always": "Always stands; nobody is asked",
   "fieldStanding.never": "Somebody is always asked",
   "fieldStanding.above_confidence": "Stands above a stated confidence",
@@ -809,19 +980,26 @@ export const APP_EN = {
 
   /** One run, on the page it is watched on. */
   "run.title": "Run {number}",
+  /** Heads the narrow column of a run's page, or of a step's: what is about it, beside what it holds. */
+  "run.aboutIt": "About it",
   "run.number": "Number",
   "run.workflow": "Workflow",
   "run.workflowVersion": "{name}, version {version}",
   "run.started": "Started",
   "run.startedBy": "By {name}, {when}",
-  "run.startedAbove": "By the run above it, {when}",
+  "run.startedAbove": "By {step} in run {number}, {when}",
   "run.above": "Beneath",
-  "run.openAbove": "The run above it",
+  "run.openAbove": "Open run {number}",
+  "run.openStartingStep": "Open the step that started it",
   "run.where": "Where it is",
   "run.stoppedBy": "Stopped by {name}, {when}",
   /** A ceiling reached names nobody as having stopped the run. */
   "run.stoppedByOwnCeiling": "Stopped by its ceiling, {when}",
   "run.stoppedByCeilingOf": "Stopped by the ceiling of run {number}, {when}",
+  "run.stoppedByOtherCeilings":
+    "Stopped by the ceilings of runs {numbers}, {when}",
+  "run.stoppedByOwnAndOtherCeilings":
+    "Stopped by its ceiling and the {count, plural, one {ceiling of run} other {ceilings of runs}} {numbers}, {when}",
   /** Where a run is, by the state the server works out. */
   "runState.running": "Running",
   "runState.runningAt": "Running, on {step}",
@@ -835,20 +1013,54 @@ export const APP_EN = {
   "run.cost": "What it has cost",
   "run.spent": "{spent} in all: {sent} sent, {cameBack} came back",
   /** Who counted it, where a model did not, of any figure: a try's may add up a call to produce and one to review. */
+  "run.allMeasuredHere":
+    "All of it is as this system measured it, as no model said what it counted.",
   "run.someMeasuredHere":
-    "Some or all of it is as this system measured it, where a model did not say what it counted.",
+    "Part of it is as this system measured it, where a model did not say what it counted.",
   "run.cameBackUnknown":
     "What came back is not known for every call yet, and is counted here as nothing.",
   "run.ceiling": "Ceiling",
+  "run.ceilingOf": "Ceiling of run {number}",
   "run.noCeiling": "None. It may spend without limit.",
   "run.heldBy": "Held to the ceiling of run {number}, at the top",
   "run.changeCeiling": "Change the ceiling",
+  "run.changeCeilingOf": "Change the ceiling of run {number}",
   "run.abandon": "Cancel",
-  /** A run in detail under its header, and one step of it on a page of its own. */
+  "act.answeredByHand": "Answered by hand",
+  "act.saidDone": "Said it was done",
+  "act.try": "Try {number}",
+  "act.reviewed": "Reviewed this try",
+  "act.assured": "Assured {field}",
+  "act.refused": "Refused {field}: {reason}",
+  "act.refusedForLength": "Refused for its length",
+  "act.lengthDetail":
+    "{field}: what {step} in run {number} would send was too long.",
+  "act.openHeldStep": "Open {step}",
+  "act.changedCeiling": "Changed the ceiling",
+  "act.changedCeilingOf": "Changed the ceiling of run {number}",
+  "act.askedCeiling": "Asked to change the ceiling",
+  "act.askedCeilingOf": "Asked to change the ceiling of run {number}",
+  "act.withdrewCeiling": "Withdrew the ceiling change",
+  "act.withdrewCeilingOf": "Withdrew the ceiling change of run {number}",
+  "act.approvedCeiling": "Approved the ceiling change",
+  "act.approvedCeilingOf": "Approved the ceiling change of run {number}",
+  "act.refusedCeiling": "Refused the ceiling change",
+  "act.refusedCeilingOf": "Refused the ceiling change of run {number}",
+  "act.ceilingFromTo": "From {from} to {to}",
+  "act.noCeiling": "No ceiling",
+  "act.supersededCeiling": "The change asked for was withdrawn by a later one.",
+  "act.stopped": "Stopped this run",
+  "act.openedAgain": "Opened this run again",
+
+  /** A run in Full detail under its header, and one step of it on a page of its own. */
   "step.startedWith": "What it was started with",
   "step.startedWithNothing":
     "Its workflow takes nothing, so it was started with nothing.",
-  "step.startedAboveWith": "The run above it started it, with {workflow}.",
+  "step.startedAboveWith":
+    "{step} in run {number} started it, running the workflow {workflow}.",
+  "step.startedByWith": "{name} started it, running the workflow {workflow}.",
+  "step.startedByGoneWith":
+    "Somebody who can no longer be found started it, running the workflow {workflow}.",
   "step.gaveBack": "What it gave back",
   "step.givesNothing":
     "Its workflow gives nothing back: it acts rather than answers.",
@@ -860,8 +1072,11 @@ export const APP_EN = {
   "step.cost": "Cost",
   "step.takesNothing": "It takes nothing.",
   "step.takes": "{input}: {from}",
+  "step.putTogetherFromThese": "It was put together from these:",
   "step.fromRunInput": "{field}, which the run was started with",
+  "step.fromRunInputOf": "{field}, which run {number} was started with",
   "step.fromStep": "{field}, which {step} gave back",
+  "step.fromStepOfRun": "{field}, which {step} in run {number} gave back",
   "step.fromConstant": "a value written into the workflow",
   "step.notStarted": "Not started",
   "step.running": "Running",
@@ -870,6 +1085,9 @@ export const APP_EN = {
   "step.failed": "Failed",
   "step.done": "Done",
   "step.unknown": "Not something this page can say yet.",
+  "step.downloadFile": "Download",
+  "step.fileType": "Type: {type}.",
+  "step.fileSize": "Size: {size, number} bytes.",
   "step.heldEntryStopped":
     "What it runs was stopped, so nothing is produced until that is undone.",
   "step.heldStopLetGo":
@@ -877,7 +1095,13 @@ export const APP_EN = {
   "step.heldWorkflowStopped":
     "The workflow this run runs was stopped, so nothing is produced until that is undone.",
   "step.heldCodeStepNotHeld":
-    "This system, as it runs now, does not include the code this step runs, so the step waits, and goes on once the system includes that code again. Later runs can use a new version of the workflow.",
+    "This system, as it runs now, does not include the code this step runs; it goes on by itself once a release holds that code step again.",
+  "step.heldSourceCodeStepNotHeld":
+    "A value it reads came from {step}, whose code this system, as it runs now, does not include, so it cannot be sent; it goes on by itself once a release holds that code step again.",
+  "step.failedSourceNoLongerMatches":
+    "What {step} gave back as {field} no longer matches what this step reads from it, as that code step is declared now, so nothing was sent.",
+  "step.failedSourceListNotHere":
+    "The terms of {field}, which {step} gave back, come from a reference list version this group does not hold in service, so nothing was sent.",
   "step.heldTooLong":
     "What it would send is longer than the model it names takes, so it was not sent, and nothing was spent on it.",
   "step.heldTurnedAway": "The model it names would not take it.",
@@ -891,6 +1115,12 @@ export const APP_EN = {
   "step.owedUnasked": "Try {number} is not asked for yet.",
   "step.failedTriesSpent":
     "Every try it allows has been made, and none of them stands.",
+  "step.failedUnclaimed":
+    "No branch of this route takes “{term}”, and it has no fallback. The way on is a new version of this workflow, and a new run.",
+  "step.failedUnclaimedEmpty":
+    "This route had no value to choose by, and it has no fallback. The way on is a new version of this workflow, and a new run.",
+  "step.failedUnclaimedWithheld":
+    "No branch of this route takes the value it chose by, which a model produced and which is withheld from you, and it has no fallback. The way on is a new version of this workflow, and a new run.",
   "step.failedUncuttable":
     "What cannot be cut from what it would send is already longer than the model it names takes, so no cutting could mend it.",
   "step.failedModelNotHeld":
@@ -900,6 +1130,8 @@ export const APP_EN = {
     "It names {model} to produce it, which this deployment does not offer.",
   "step.failedReviewerNotHeld":
     "It names {model} to review it, which this deployment does not offer.",
+  "step.failedTooDeep":
+    "Runs may go at most {most, plural, one {# run} other {# runs}} deep, counting the run at the top, and this step would have started one deeper than that. The way on is a new version of this workflow, and a new run.",
   "step.runningCode": "Its code is running.",
   "step.runningCall": "A call to the model it names is out.",
   "step.runningNextTry":
@@ -914,14 +1146,17 @@ export const APP_EN = {
   "step.letGo": "Somebody who may revoke an entry can let what was stopped go.",
   "step.letGoThenTrySending":
     "Somebody who may revoke an entry can let what was stopped go, and then somebody who may start a run can try sending it.",
-  "step.nobodyWhileStopped": "Nobody can act on it while the run is stopped.",
+  "step.tryAgainBy": "Somebody who may answer a step can give it another try.",
+  "step.letGoThenTryAgain":
+    "Somebody who may revoke an entry can let what was stopped go, and then somebody who may answer a step can give it another try.",
+  "step.nobodyWhileStopped":
+    "Nothing can be done about it until the run is opened again.",
   /** Said once, where a re-read finds a run or a step in another state; {state} is a run's or a step's state as drawn. */
   "step.nowIn": "{name}: now {state}.",
   "step.nowUnknown": "{name}: now somewhere this page cannot say yet.",
   "step.noCost": "Nothing: it calls no model.",
   "step.aPerson": "A person",
   "step.code": "Code",
-  "step.back": "Back to the run",
   "step.orderOf": "{order} of {of}",
   "step.runs": "What it runs",
   "step.runsCode": "Code: {name}",
@@ -958,12 +1193,23 @@ export const APP_EN = {
   /** Which way a model's answer, or a model's review, did not fit, as it was worked out when it arrived. */
   "step.misfitNotTheShape":
     "The answer could not be read as what it was asked for.",
+  "step.misfitModelDeclined":
+    "The model declined to answer, so its answer was not taken, and this try is spent.",
+  "step.declinedWords": "What the model said in declining",
+  "step.declinedContent": "What the model gave back",
+  "step.unreadableResponse": "What the model service sent back",
+  "step.declinedAltered":
+    "It held something that could not be kept exactly as it came, so that is replaced here.",
+  "step.declinedTruncated":
+    "It is longer than may be kept, so it is cut short here.",
   "step.misfitFieldMissing": "The answer left out a value it was asked for.",
   "step.misfitFieldUnknown": "The answer gave a value nothing asked for.",
   "step.misfitNothingGiven":
     "The answer gave nothing for a value that must be given.",
   "step.misfitNotItsKind":
     "The answer gave a value of the wrong kind for its field.",
+  "step.misfitLineBreak":
+    "The answer gave text holding a line break for a field of one line.",
   "step.misfitTooLong": "The answer gave a value longer than its field allows.",
   "step.misfitTooMany":
     "The answer gave more of a value than its field allows.",
@@ -1001,6 +1247,28 @@ export const APP_EN = {
     "None of these is a try, and none of them cost anything.",
   "step.notReviewedYet": "Nobody has reviewed it yet.",
   "step.noReviewAsked": "Nobody was asked to review it.",
+  "step.reviewUnsent":
+    "It waits on a model's review, which this system sends by itself.",
+  "step.reviewOut":
+    "It waits on a model's review; the call asking for it is out.",
+  "step.reviewTurnedAway":
+    "It waits on a model's review, which could not be sent: the model would not take it.",
+  "step.reviewSpentUp":
+    "It waits on a model's review, which could not be sent: what may be spent with that model is used up, so it is not sent again by itself.",
+  "step.reviewTooLong":
+    "What its review would send is longer than the model that reviews it takes, so it was not sent, and somebody who may review it does so instead.",
+  "step.reviewDidNotFit":
+    "The model's review did not fit what it was asked for, so it was not taken, and this try is spent.",
+  "step.reviewNothingCameBack":
+    "The model's review was sent and nothing came back, so this try is spent.",
+  "step.reviewTakesNoLongerDeclared":
+    "This could not be put to the model that reviews it: the release no longer declares what this step takes, so a person reviews it instead.",
+  "step.reviewHoldsAFile":
+    "This could not be put to the model that reviews it: a file went into it or came back from it, and a model is never sent one, so a person reviews it instead.",
+  "step.reviewNoLongerDeclared":
+    "This could not be put to the model that reviews it: the release no longer declares what this step gave back, so a person reviews it instead.",
+  "step.reviewListNotHere":
+    "This could not be put to the model that reviews it: a reference list it names is not here, so a person reviews it instead.",
   "step.reviewWentWrong": "{who}, whose review went wrong",
   "step.askedBy": "Asked for by",
   "step.askedByRun": "The run itself",
@@ -1014,6 +1282,61 @@ export const APP_EN = {
   "step.wentWrong": "What went wrong",
   "step.wentWrongCut": "{detail} (cut short here)",
   "step.returned": "What its code gave back",
+  "step.erroredForGaveNothing": "Its code gave nothing back at all.",
+  "step.erroredForNotDeclared":
+    "Its code gave back {member}, which nothing declares.",
+  "step.erroredForNotDeclaredWithin":
+    "Its code gave back {member} within {field}, which nothing declares there.",
+  "step.erroredForMember": "a member named {name}",
+  "step.erroredForMemberCut": "a member named {name} (its name cut short here)",
+  "step.erroredForUnnamedMember": "a member with no name that can be shown",
+  "step.erroredForNothingGiven":
+    "Its code gave nothing for {field}, which must be given.",
+  "step.erroredForNotItsKind":
+    "Its code gave a value of the wrong kind for {field}.",
+  "step.erroredForLineBreak":
+    "Its code gave text for {field} holding a line break, which that field, of one line, does not take.",
+  "step.erroredForTooLong":
+    "Its code gave a value for {field} longer than that field allows.",
+  "step.erroredForTooMany":
+    "Its code gave more for {field} than that field allows.",
+  "step.erroredForNotATerm":
+    "Its code gave a value for {field} that is none of that field's terms.",
+  "step.erroredForUnkeepable":
+    "Its code gave text for {field} holding a character that cannot be kept.",
+  "step.erroredForTooLongToKeep":
+    "Its code gave a value for {field} that fits the field but is longer than any one value may be kept.",
+  "step.erroredForFileTypeUnusable":
+    "Its code gave a file for {field} of a type that field does not take, so no file it gave back was kept.",
+  "step.erroredForFileNameUnusable":
+    "Its code gave a file for {field} whose name is not one to 255 characters on one line, with something in it that shows, so no file it gave back was kept.",
+  "step.erroredForFileTooLarge":
+    "Its code gave a file for {field} larger than that field allows, so no file it gave back was kept.",
+  "step.erroredForFileTotalTooLarge":
+    "Its code gave back files that together came to more than this deployment takes at once, so no file it gave back was kept.",
+  "step.erroredForTakesAListNotHere":
+    "The terms of {field}, which its code takes, came from a reference list this group did not hold.",
+  "step.erroredForGivesAListNotHere":
+    "The terms of {field}, which its code gives back, came from a reference list this group did not hold.",
+  "step.erroredForTakesOtherwise":
+    "What this workflow gives its code as {field} no longer matched what the code takes.",
+  "step.erroredForGivesOtherwise":
+    "What its code gave back as {field} no longer matched what {step} was to read from it.",
+  "step.erroredForGivesOtherwiseOutput":
+    "What its code gave back as {field} no longer matched what this workflow was to give back as {output}.",
+  "step.erroredForFailedOnThisSide":
+    "Running its code went wrong on this system's side, whatever the code itself did.",
+  "step.erroredForSaidNothing": "Its code went wrong without saying why.",
+  "step.erroredForLaterStep": "a later step",
+  /** Said where what its code gave back is not shown, as it could not be kept. */
+  "step.erroredForNotKept": "It could not be kept, so it cannot be shown.",
+  /** Said beside a refusal to answer a code step here, of what it gives back as it is declared now. */
+  "step.erroredForNowGivesAListNotHere":
+    "The terms of {field}, which its code gives back, come from a reference list this group does not hold.",
+  "step.erroredForNowGivesOtherwise":
+    "What its code gives back as {field} no longer matches what {step} reads from it.",
+  "step.erroredForNowGivesOtherwiseOutput":
+    "What its code gives back as {field} no longer matches what this workflow gives back as {output}.",
   "step.howSure": "How sure",
   /** {percent} is written as the reader writes a percentage. */
   "step.sureOf": "{field}: {percent}",
@@ -1027,27 +1350,26 @@ export const APP_EN = {
   "step.unreadable": "Written in a way this page cannot read.",
   /** Said beside a value kept in a shape its field no longer has, or of a field no longer declared. */
   "step.earlierShape":
-    "Given in the shape this step had before; shown as it was kept.",
+    "Kept as it was given; it no longer matches what is declared now.",
   "step.term": "{term}: {meaning}",
   /** {offset} is the one it was given in, written as +02:00 is. */
   "step.momentOwn": "{when}, UTC{offset}",
   "step.momentLocal": "{when} on your own clock",
-  /** A run drawn as a conversation: one message for what it was started with, one per step reached, and how it ended. */
+  /** How far a run has got, said About it in either drawing. */
   "step.progress": "{done} of {of, plural, one {# step} other {# steps}} done",
-  "step.more": "More",
-  "step.showInDetail": "Show in detail",
+  /** A run drawn in Conversation: one message for what it was started with, one per step reached, and how it ended. */
+  "step.showFullDetail": "Show in full detail",
+  "step.showAsConversation": "Show as a conversation",
   "step.theConversation": "The conversation",
-  "step.startedByOn":
-    "{name} started it, {when}, with {workflow}, version {version}.",
-  "step.startedAboveOn":
-    "The run above it started it, {when}, with {workflow}, version {version}.",
+  "step.startedRunBeneath": "It started run {number} beneath this one.",
+  "step.openRunBeneath": "Open run {number}",
   "step.inFull": "{field}, in full",
   "step.since": "Since {when}",
   "step.details": "Details",
   "step.earlierTry": "Earlier try",
   "step.laterTry": "Later try",
   "step.openStep": "Open this step's page",
-  "step.comesNext": "Not reached yet: {steps}",
+  "step.stepsSoFar": "The steps so far",
   "step.stoodByThen": "What stood by then",
   "step.failedAt": "It failed at {step}.",
   /** Why an act is not offered to the reader, where the reason is theirs rather than the step's. */
@@ -1083,27 +1405,20 @@ export const APP_EN = {
   "step.lastWithheld": "What try {number} gave here is withheld from you.",
   "step.lastEarlierShape":
     "What try {number} gave here was in the shape this step had before, so it starts empty.",
+  "step.prefillLeftOut":
+    "What is filled in here leaves out {count, plural, one {# character} other {# characters}} of the earlier answer that showed nothing or would have turned the order text is shown in.",
   "step.whyAnswer": "Why you are answering this way",
   "step.send": "Send this answer",
   "step.askedAlready": "Asked for already, by {name}.",
   "step.answeredAlready": "Answered already, by {name}.",
 
-  /** What a group has running, on one page drawn two ways; the reader picks the way, and this device keeps it. */
+  /** What a group has running, on one page with two tabs: one starts a run and one finds one; this device keeps the tab. */
   "work.heading": "Work of {group}",
-  "work.drawn": "How this page is drawn",
-  "work.asConversation": "As a conversation",
-  "work.inDetail": "In detail",
   "work.newRun": "New run",
+  "work.history": "History",
   "work.filter": "Part of a run's name, or its workflow's",
-  "work.theRuns": "The runs",
-  "work.today": "Today",
-  "work.yesterday": "Yesterday",
-  "work.earlier": "Earlier",
-  "work.line": "{workflow} · {where}",
-  "work.aNewRun": "A new run",
   "work.nothingOffered":
     "No workflow of this group can be started: none has a version in service that is not stopped.",
-  "work.openOne": "Open a run from the list to read it here.",
   "work.whatIsRunning": "What is running",
   "work.run": "Run",
   "work.runKey": "{key}-{number}",
@@ -1117,7 +1432,6 @@ export const APP_EN = {
   "work.noOwnRuns": "You have started no run here yet.",
   "work.noOwnMatch": "No run you started matches that.",
   /** Starting a run: a name, the workflow and its version, and what that version takes. */
-  "work.startARun": "Start a run",
   "work.start": "Start",
   "work.abandon": "Cancel",
   "work.startUnderway":
@@ -1125,7 +1439,6 @@ export const APP_EN = {
   "work.nameThisRun": "Name of this run",
   /** A name suggested where nothing typed gives one; {time} is when the form was drawn, in the reader's own way. */
   "work.nameSuggested": "{workflow} {time}",
-  "work.pickWorkflow": "Choose a workflow first.",
   "work.version": "Version",
   "work.versionNumbered": "Version {number}",
   "work.nothingTaken": "It takes nothing, so it may be started as it is.",
@@ -1139,6 +1452,7 @@ export const APP_EN = {
   /** Filling in what a workflow takes, one control to a field; each reason is one the server names a value by. */
   "fill.missing": "This must be given.",
   "fill.malformed": "This is not written as this field takes it.",
+  "fill.line_break": "This field takes one line, and this holds a line break.",
   "fill.too_long": "This is longer than this field takes.",
   "fill.too_many": "This holds more than this field takes.",
   "fill.not_a_term": "This is none of the terms this field offers.",
@@ -1165,8 +1479,28 @@ export const APP_EN = {
   "fill.no": "No",
   "fill.date": "Date",
   "fill.time": "Time",
+  "fill.timeHow":
+    "Give the time to the second, with up to six digits after the point.",
   "fill.offset": "Offset",
   "fill.chooseVersion": "Choose another version",
+  "fill.fileTypes": "Accepted file types: {types}.",
+  "fill.fileMaximum": "Each file may be at most {bytes, number} bytes.",
+  "fill.filePending": "{name} is selected and awaits upload.",
+  "fill.fileKept": "{name} was previously given.",
+  "fill.fileName": "{name} has no usable one-line name.",
+  "fill.fileTypeMissing": "{name} has no file type.",
+  "fill.fileTypeMalformed": "{name} has an invalid file type.",
+  "fill.fileTypeNotTaken": "{name} is not a type this field takes.",
+  "fill.fileTooLarge": "{name} is larger than this field allows.",
+  "fill.fileTooMany":
+    "{name} would exceed the number of files this field takes.",
+  "fill.fileDismiss": "Dismiss rejected files",
+  "fill.fileShowMore":
+    "Show {count, number} more rejected files ({remaining, number} remain).",
+  "fill.fileShowPrevious": "Show previous rejected files.",
+  "fill.fileAllShown": "All rejected files have been shown.",
+  "fill.fileBatchRejected": "No files from this selection were added.",
+  "fill.fileChooseMany": "Choose files for {label}",
   /** A raise asked for, which is not in force until it is approved. */
   "raise.to":
     "{name} asked, {when}, for it to be raised to {to}. That waits on approval.",
@@ -1177,6 +1511,7 @@ export const APP_EN = {
   "raise.withdraw": "Withdraw the raise",
   /** Changing a run's ceiling, where nothing typed means none. */
   "ceiling.title": "Change the ceiling",
+  "ceiling.titleOf": "Change the ceiling of run {number}",
   "ceiling.label": "Ceiling",
   "ceiling.hint": "Left empty, the run has no ceiling.",
   "ceiling.limit":
@@ -1228,6 +1563,8 @@ export const APP_EN = {
   "failure.notAnAddress": "That address does not name anybody here.",
   "failure.unreadable":
     "The server refused this, in a way this side cannot read.",
+  "failure.unreadableAnswer":
+    "The server answered, but this page could not read the answer. Check what happened before trying again.",
   /** Stands in for a served code that arrived with no sentence here. */
   "failure.unworded": "The server refused this request.",
   /** Names the developer half without putting it in front of the reader. */
@@ -1263,13 +1600,13 @@ export const APP_EN = {
   "inGroup.change_membership":
     "A group's membership is changed only by a role in it that may change it.",
   "inGroup.author_entry":
-    "A group's entries are started, written and submitted only by a role in it that may write one.",
+    "A group's entries are made, written and submitted only by a role in it that may write one.",
   "inGroup.approve_entry":
     "A group's entries are put into service, and a run's raised ceiling approved or refused, only by a role in it that may approve an entry.",
   "inGroup.revoke_entry":
     "A group's entries are retired, stopped and let go only by a role in it that may revoke one.",
   "inGroup.start_run":
-    "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, only by a role in it that may start one.",
+    "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.",
   "inGroup.answer_step":
     "A group's steps are answered, and asked for again, only by a role in it that may answer one.",
   "inGroup.review_at_gate":
@@ -1389,6 +1726,10 @@ export const APP_EN = {
   "refusal.STEP_NAME_UNUSABLE":
     "A step's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
   "refusal.STEPS_TOO_MANY": "A workflow version holds at most 256 steps.",
+  "refusal.SEARCH_QUESTION_PARTS_TOO_MANY":
+    "A searching step's question holds at most 256 parts.",
+  "refusal.SEARCH_TEXT_UNUSABLE":
+    "A piece of written text is one to 8192 characters, and may be spaces alone. Lines may be broken, and indented with tabs.",
   "refusal.BINDINGS_PAST_INPUTS":
     "What fills a step, a case or what the workflow gives back is at most one binding for each field it declares.",
   "refusal.CASE_TERM_REPEATED":
@@ -1401,6 +1742,10 @@ export const APP_EN = {
     "Some of what this version holds does not hold yet. Each place is named.",
   "refusal.INSTRUCTION_UNUSABLE":
     "An instruction is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+  "refusal.DRAWING_UNUSABLE":
+    "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+  "refusal.DRAWING_TOO_DEEP":
+    "A drawing holds lists and quotes at most 32 deep, counting on each line every marker it opens with and every two spaces of indent before and between them, a tab as four; and emphasis at most 32 deep, counting every two asterisks or underscores between blank lines, an underscore inside a word aside.",
   "refusal.FIELD_NAME_UNUSABLE":
     "A field's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.",
   "refusal.FIELD_WORDS_UNUSABLE":
@@ -1441,6 +1786,15 @@ export const APP_EN = {
     "A run's name is one to 128 characters on one line, with something in it that shows.",
   "refusal.WORKFLOW_NOT_OFFERED":
     "Only a version in service of a workflow of this group's, not stopped, may be started.",
+  "refusal.FILE_SIZE_LIMIT_UNUSABLE":
+    "A file field's maximum size is a whole number of bytes, at least 1 byte and less than 8,388,608 GB.",
+  "refusal.FILE_TYPES_TOO_MANY": "A field of files takes at most 64 types.",
+
+  "refusal.FILE_NAME_UNUSABLE":
+    "That file needs a visible name of one to 255 characters on one line.",
+  "refusal.FILE_TYPE_UNUSABLE": "That file is not a type this field takes.",
+  "refusal.FILE_TOO_LARGE": "That file is larger than this field takes.",
+  "refusal.FILES_TOO_MANY": "This field has too many files.",
   "refusal.VALUE_DOES_NOT_FIT": "Each value is written as its field takes it.",
   "refusal.CEILING_UNUSABLE":
     "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
@@ -1471,4 +1825,40 @@ export const APP_EN = {
   "refusal.REASON_MISSING": "A refusal, and an answer, say why.",
   "refusal.REASON_UNUSABLE":
     "A reason is prose of one to 2048 characters, with something in it that shows.",
+
+  /** Heard after a link's own words, never seen. */
+  "link.newTab": "opens in a new tab",
+  "question.whatElseWentIn": "What else went in",
+  /** {label} is the field's label, where it is named again and its value is too long to draw twice. */
+  "question.shownAbove": "{label}, shown above",
+  /** {value} is drawn within a line: a heading, or a link's words. */
+  "question.labelledValue": "{label}: {value}",
+  "question.drawingNotLaidOut":
+    "How this question is drawn could not be laid out here, so what it takes is listed field by field.",
+  "workflow.defaultName": "Step {position}",
+  "workflow.unnamedVisible": "{name}, {hint}",
+  "declaration.defaultName": "Field {position}",
+  "declaration.unnamedVisible": "{name}, {hint}",
+  "name.notNamed": "not named yet",
+  "newRun.loadMore": "Load more workflows",
+  "newRun.noMatch": "No workflow on offer here has a name holding that.",
+  "read.retry": "Try loading again",
+  "runState.runningAtVisible": "{hint} {step}",
+  "runState.runningAtHint": "Running, on",
+  "step.tryBeyondVisible": "Try {number}, {past} {allowed} {allows}",
+  "step.tryBeyondPast": "past the",
+  "step.tryBeyondAllows": "it allows",
+  "step.reviewWentWrongVisible": "{who}, {hint}",
+  "step.reviewWentWrongHint": "whose review went wrong",
+  "step.erroredForMemberCutVisible": "{member} {hint}",
+  "step.erroredForMemberCutHint": "(its name cut short here)",
+  "fill.fileStatusVisible": "{name} {hint}",
+  "fill.filePendingHint": "is selected and awaits upload.",
+  "fill.fileKeptHint": "was previously given.",
+  "fill.fileNameHint": "has no usable one-line name.",
+  "fill.fileTypeMissingHint": "has no file type.",
+  "fill.fileTypeMalformedHint": "has an invalid file type.",
+  "fill.fileTypeNotTakenHint": "is not a type this field takes.",
+  "fill.fileTooLargeHint": "is larger than this field allows.",
+  "fill.fileTooManyHint": "would exceed the number of files this field takes.",
 };

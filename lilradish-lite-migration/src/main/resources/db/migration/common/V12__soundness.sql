@@ -1,9 +1,11 @@
+-- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type soundness_check_outcome as enum ('finished', 'cut_short');
 
 -- ---------------------------------------------------------------- checks
 
 -- Inserted running, and ended only by an update guarded on outcome is null, run under read committed; once
 -- ended, nothing updates it again.
+-- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table soundness_checks (
     soundness_check_id uuid                    not null default uuidv7(),
     -- An end whose guarded update meets no row finds the check already cut short, and writes none of its counts.
@@ -20,8 +22,7 @@ create table soundness_checks (
     constraint soundness_checks_outcome_unique unique (soundness_check_id, outcome)
 );
 
--- A process, on starting and before it serves, cuts short any check left running; so only for a single instance. A
--- failed worker cuts its own short in a finally, retried until it lands, and times out, or no check starts again.
+-- DB-SPECIFIC: nulls not distinct and where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index soundness_checks_one_running
     -- Nulls not distinct, or every running check would differ from every other and all of them be admitted.
     on soundness_checks (outcome) nulls not distinct where outcome is null;
@@ -30,6 +31,7 @@ create unique index soundness_checks_one_running
 
 -- A row for every group there is when the check runs, 0 and 0 for one owning no workflow: a group with no
 -- row in a check was not yet there to be checked, which is never a count of none.
+-- DB-SPECIFIC: uuid uses PostgreSQL's syntax and semantics.
 create table soundness_counts (
     soundness_check_id uuid                    not null,
     -- Always 'finished', only to match soundness_checks.outcome through soundness_counts_check_fk.

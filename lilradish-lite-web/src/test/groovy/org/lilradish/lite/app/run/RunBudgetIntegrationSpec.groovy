@@ -17,10 +17,6 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * What a run's calls spent, read by the try each is about, on a real server running the real baseline: a call
- * turned away every time counts for nothing, and one that has not come back leaves how much came back unknown.
- */
 class RunBudgetIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
@@ -43,6 +39,7 @@ class RunBudgetIntegrationSpec extends Specification {
     def setup() {
         store = LibraryStore.copied(server, "run_budget_" + (++databasesMade))
         TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary',
                                           reviewer_model = 'general', reviewer_mode = 'ordinary'
@@ -52,8 +49,8 @@ class RunBudgetIntegrationSpec extends Specification {
         TicketWorkflow.run(store, OTHER_RUN, 2)
     }
 
-    /** The model's try {@code number} of summarise in {@code run}, come back with its summary. */
     private String produced(String run, int number) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING, ON CONFLICT.
         def runStep = store.session.sql("""
                 insert into run_steps (run_id, entry_version_id, workflow_step_id, step_kind, pinned_version_id,
                                        pinned_kind, producer, reviewed_by_model, tries, created_by, created_by_kind)
@@ -64,6 +61,7 @@ class RunBudgetIntegrationSpec extends Specification {
                 on conflict (run_id, workflow_step_id) do update set run_id = excluded.run_id
                 returning cast(run_step_id as text)
                 """).params(run, SYSTEM, SUMMARISE).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING.
         def production = store.session.sql("""
                 insert into productions (run_step_id, run_id, root_run_id, run_step_kind, step_producer,
                                          reviewed_by_model, tries, pinned_version_id, try_number, producer, created_by)
@@ -71,11 +69,13 @@ class RunBudgetIntegrationSpec extends Specification {
                 returning cast(production_id as text)
                 """).params(runStep, run, run, SUMMARISE_VERSION, number, SYSTEM).query(String).single()
         def call = called(run, runStep, production, "produce", "came_back", 100, 40)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("""
                 update productions set model_call_id = ?::uuid, model_call_outcome = 'came_back', ended_at = now(),
                                        ended_by = ?::uuid, ended_by_kind = 'system'
                  where production_id = ?::uuid
                 """).params(call, SYSTEM, production).update()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 insert into production_values (production_id, run_step_kind, producer, pinned_version_id,
                                                declaration_field_id, field_standing, value)
@@ -84,8 +84,8 @@ class RunBudgetIntegrationSpec extends Specification {
         production
     }
 
-    /** The model reviewing {@code production}, the call ended as {@code outcome}, or still out where it is none. */
     private void reviewCalled(String run, String production, String outcome, long sent) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         def runStep = store.session.sql("select cast(run_step_id as text) from productions where production_id = ?::uuid")
                 .params(production).query(String).single()
         called(run, runStep, production, "review", outcome, sent, outcome == "came_back" ? 10L : null)
@@ -93,6 +93,7 @@ class RunBudgetIntegrationSpec extends Specification {
 
     private String called(String run, String runStep, String production, String purpose, String outcome, long sent,
                           Long cameBack) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, RETURNING, enum type model_call_purpose.
         def attempt = store.session.sql("""
                 insert into run_step_send_attempts (run_step_id, run_id, run_step_kind, workflow_step_id, purpose, model,
                                                     mode, production_id, payload, created_by, created_by_kind)
@@ -100,6 +101,8 @@ class RunBudgetIntegrationSpec extends Specification {
                         ?::uuid, '{}', ?::uuid, 'system')
                 returning cast(run_step_send_attempt_id as text)
                 """).params(runStep, run, SUMMARISE, purpose, production, SYSTEM).query(String).single()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now(), RETURNING, enum type model_call_purpose, enum type
+        // model_call_outcome.
         store.session.sql("""
                 insert into model_calls (run_id, root_run_id, purpose, run_step_send_attempt_id, run_step_id,
                                          production_id, model, mode, envelope_version, sent_count, came_back_count,
@@ -117,8 +120,8 @@ class RunBudgetIntegrationSpec extends Specification {
         new ProductionId(UUID.fromString(spelled))
     }
 
-    /** The model saying what it counted of the call that produced {@code production}, as a call come back may. */
     private void countedByModel(String production) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update model_calls set counted_by_model = true
                  where production_id = ?::uuid and purpose = 'produce'
@@ -144,7 +147,6 @@ class RunBudgetIntegrationSpec extends Specification {
         refused.message == "Run tree ${RUN} was used outside the transaction that locked it" as String
     }
 
-    /** One try's calls counted together, the next's apart, and neither holding what another run or a help spent. */
     def "what the calls about each try spent is read by the try, a call turned away counting for nothing"() {
         given:
         def first = produced(RUN, 1)
@@ -158,8 +160,8 @@ class RunBudgetIntegrationSpec extends Specification {
         def spent = RunBudget.spentByTryAsRead(store.session, new RunId(UUID.fromString(RUN)))
 
         then:
-        spent == [(productionId(first)) : new RunBudget.Spend(100, 40, false, true),
-                  (productionId(second)): new RunBudget.Spend(130, 50, false, true)]
+        spent == [(productionId(first)) : new RunBudget.Spend(100, 40, false, 1, 1),
+                  (productionId(second)): new RunBudget.Spend(130, 50, false, 2, 2)]
 
         and: "the other run's try none of this run's"
         !spent.containsKey(productionId(elsewhere))
@@ -172,10 +174,41 @@ class RunBudgetIntegrationSpec extends Specification {
 
         expect:
         RunBudget.spentByTryAsRead(store.session, new RunId(UUID.fromString(RUN))) ==
-                [(productionId(first)): new RunBudget.Spend(130, 40, true, true)]
+                [(productionId(first)): new RunBudget.Spend(130, 40, true, 2, 2)]
     }
 
-    /** A call the model did not count, or that never came back, is counted as this system measured it, and says so. */
+    def "a call waiting after a turnaway spends nothing until it is actually resent"() {
+        given:
+        def first = produced(RUN, 1)
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        def runStep = store.session.sql("select run_step_id::text from productions where production_id = ?::uuid")
+                .params(first).query(String).single()
+        def waiting = called(RUN, runStep, first, "review", null, 30, null)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                insert into model_call_turnaways (model_call_id, said, created_by)
+                values (?::uuid, 'Demo Sample busy', ?::uuid)
+                """).params(waiting, SYSTEM).update()
+        def run = new RunId(UUID.fromString(RUN))
+
+        expect:
+        RunBudget.spentByTryAsRead(store.session, run) ==
+                [(productionId(first)): new RunBudget.Spend(100, 40, false, 1, 1)]
+        RunBudget.spentAsRead(store.session, run, true) == new RunBudget.Spend(100, 40, false, 1, 1)
+
+        when:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
+        store.session.sql("""
+                update model_call_turnaways set resent_at = greatest(now(), created_at)
+                 where model_call_id = ?::uuid
+                """).params(waiting).update()
+
+        then:
+        RunBudget.spentByTryAsRead(store.session, run) ==
+                [(productionId(first)): new RunBudget.Spend(130, 40, true, 2, 2)]
+        RunBudget.spentAsRead(store.session, run, true) == new RunBudget.Spend(130, 40, true, 2, 2)
+    }
+
     def "a try's spend and its run's say whether any of it is what this system measured rather than what the model counted"() {
         given:
         def first = produced(RUN, 1)
@@ -192,15 +225,15 @@ class RunBudgetIntegrationSpec extends Specification {
         def whole = RunBudget.spentAsRead(store.session, run, true)
 
         then:
-        byTry == [(productionId(first)): new RunBudget.Spend(sent, 40, unknown, measured)]
-        whole == new RunBudget.Spend(sent, 40, unknown, measured)
+        byTry == [(productionId(first)): new RunBudget.Spend(sent, 40, unknown, measured, total)]
+        whole == new RunBudget.Spend(sent, 40, unknown, measured, total)
 
         where:
-        modelCounted | reviewed       || sent | unknown | measured
-        true         | "not reviewed" || 100  | false   | false
-        false        | "not reviewed" || 100  | false   | true
-        true         | "review out"   || 130  | true    | true
-        true         | "turned away"  || 100  | false   | false
+        modelCounted | reviewed       || sent | unknown | measured | total
+        true         | "not reviewed" || 100  | false   | 0        | 1
+        false        | "not reviewed" || 100  | false   | 1        | 1
+        true         | "review out"   || 130  | true    | 1        | 2
+        true         | "turned away"  || 100  | false   | 0        | 1
     }
 
     def "a run no call was made about spent nothing on any try"() {

@@ -80,9 +80,9 @@ describe("useTypingPause", () => {
   it("shows what is typed at once, before anything is handed on", () => {
     const { box, onPause } = hosted();
 
-    type(box, "ada");
+    type(box, "avo");
 
-    expect(box).toHaveValue("ada");
+    expect(box).toHaveValue("avo");
     expect(onPause).not.toHaveBeenCalled();
   });
 
@@ -128,18 +128,18 @@ describe("useTypingPause", () => {
   /** Typed on and then back again: the pause is counted from the last keystroke, not the first. */
   it("counts the pause from the last keystroke, when the text comes back to what it was", () => {
     const { box, onPause } = hosted();
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS - 100);
-    type(box, "ada");
+    type(box, "avo");
     wait(50);
-    type(box, "ad");
+    type(box, "av");
 
     wait(QUIET_MS - 1);
     const beforeThePause = onPause.mock.calls.length;
     wait(1);
 
     expect(beforeThePause).toBe(0);
-    expect(onPause.mock.calls).toEqual([["ad"]]);
+    expect(onPause.mock.calls).toEqual([["av"]]);
   });
 
   it("hands on nothing typed before its text was set from outside", () => {
@@ -176,6 +176,20 @@ describe("useTypingPause", () => {
     expect(onPause).not.toHaveBeenCalled();
   });
 
+  it("keeps a composition from handing on an unchanged old value when input has no composing flag", () => {
+    const { box, onPause } = hosted();
+    type(box, "av");
+    wait(QUIET_MS - 1);
+    fireEvent.compositionStart(box);
+    type(box, "av");
+    wait(QUIET_MS * 2);
+
+    expect(onPause).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(box);
+    wait(QUIET_MS);
+    expect(onPause.mock.calls).toEqual([["av"]]);
+  });
+
   it("hands on what a composition settled on, once it has ended and typing paused", () => {
     const { box, onPause } = hosted();
     fireEvent.compositionStart(box);
@@ -188,6 +202,19 @@ describe("useTypingPause", () => {
     wait(1);
 
     expect(beforeThePause).toBe(0);
+    expect(onPause.mock.calls).toEqual([["中"]]);
+  });
+
+  it("waits for the final input after composition ends and sends only that value", () => {
+    const { box, onPause } = hosted();
+    fireEvent.compositionStart(box);
+    composing(box, "z");
+    fireEvent.compositionEnd(box);
+    wait(QUIET_MS - 1);
+    type(box, "中");
+    wait(QUIET_MS - 1);
+    expect(onPause).not.toHaveBeenCalled();
+    wait(1);
     expect(onPause.mock.calls).toEqual([["中"]]);
   });
 });

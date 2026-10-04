@@ -9,6 +9,7 @@ import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.declaration.FieldShape
 import org.lilradish.lite.domain.declaration.FieldStanding
 import org.lilradish.lite.domain.declaration.HowMany
+import org.lilradish.lite.domain.declaration.TextLines
 import org.lilradish.lite.domain.registry.EntryVersionId
 import spock.lang.Specification
 
@@ -24,6 +25,19 @@ class CodeStepDeclarationSpec extends Specification {
     static final EntryVersionId SILVER = new EntryVersionId(UUID.fromString("00000000-0000-4000-8000-00000000c001"))
 
     static final EntryVersionId GOLD = new EntryVersionId(UUID.fromString("00000000-0000-4000-8000-00000000c002"))
+
+    def "text beside code defaults to several and may explicitly promise one line"() {
+        given:
+        def one = new Field(new FieldName("title"), null, null, new FieldShape.Text(30, TextLines.ONE),
+                new HowMany.One(), new Demand.Given(true))
+        def takes = new Declaration(DeclarationSide.TAKES, Demands.ofQuestion(DeclarationSide.TAKES), [one])
+        def declared = new CodeStepDeclaration(takes, GIVES, false)
+
+        expect:
+        new CodeStepDeclaration(TAKES, GIVES, false).takes().fields()[0].shape().lines() == TextLines.SEVERAL
+        declared.takes().fields()[0].shape().lines() == TextLines.ONE
+        declared.gives().fields()[0].shape().lines() == TextLines.SEVERAL
+    }
 
     /** What it gives back stands as a question's does, so a workflow's demands, standing nowhere, are not what it asks. */
     def "refuses a half on the wrong side, or asking other than a question's half asks"() {

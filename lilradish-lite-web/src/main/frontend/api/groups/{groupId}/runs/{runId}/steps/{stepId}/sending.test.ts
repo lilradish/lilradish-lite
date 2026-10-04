@@ -20,7 +20,6 @@ const NOTHING_SPENT = {
   cameBackUnknown: false,
 };
 
-/** The step as the server reads it before what was pressed is sent: held back, its one try turned away. */
 const HELD = {
   run: {
     runId: RUN,

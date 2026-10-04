@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { GroupPermission, SurfaceAct } from "../../api/standing";
 import { ESTATE_ROLES, roleSaid } from "../../features/people/estateRoles";
@@ -33,13 +33,13 @@ const RULE_OF_EACH_GROUP_RULE = {
   change_membership:
     "A group's membership is changed only by a role in it that may change it.",
   author_entry:
-    "A group's entries are started, written and submitted only by a role in it that may write one.",
+    "A group's entries are made, written and submitted only by a role in it that may write one.",
   approve_entry:
     "A group's entries are put into service, and a run's raised ceiling approved or refused, only by a role in it that may approve an entry.",
   revoke_entry:
     "A group's entries are retired, stopped and let go only by a role in it that may revoke one.",
   start_run:
-    "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, only by a role in it that may start one.",
+    "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.",
   answer_step:
     "A group's steps are answered, and asked for again, only by a role in it that may answer one.",
   review_at_gate:
@@ -55,20 +55,9 @@ const GROUP_RULES = Object.entries(RULE_OF_EACH_GROUP_RULE) as [
 
 /** Every rule the catalogue words is one of an act: a rule for no act is one nothing can reach. */
 type RuleId = Extract<keyof typeof APP_EN, `reach.${string}`>;
-const EVERY_RULE_NAMES_AN_ACT: RuleId extends `reach.${SurfaceAct}`
-  ? true
-  : false = true;
 
 /** And every rule inside a group is one of a permission some page or control there asks. */
 type GroupRuleId = Extract<keyof typeof APP_EN, `inGroup.${string}`>;
-const EVERY_GROUP_RULE_NAMES_A_GATE: GroupRuleId extends `inGroup.${GroupRule}`
-  ? true
-  : false = true;
-
-/** And every rule inside a group is a permission a group grants, never a word of this side's own. */
-const EVERY_GROUP_RULE_IS_A_PERMISSION: GroupRule extends GroupPermission
-  ? true
-  : false = true;
 
 /** No rule may name an act by how it is spelt, or a role by any name. */
 const NOT_THE_READERS_WORDS = [
@@ -96,7 +85,7 @@ describe("ruleOf", () => {
   });
 
   it("words a rule for every act and for nothing else", () => {
-    expect(EVERY_RULE_NAMES_AN_ACT).toBe(true);
+    expectTypeOf<RuleId>().toExtend<`reach.${SurfaceAct}`>();
   });
 
   it.each(RULES)(
@@ -113,8 +102,8 @@ describe("ruleInGroup", () => {
   });
 
   it("words a rule for every permission a group's page is reached by or a control there asks, and for nothing else", () => {
-    expect(EVERY_GROUP_RULE_NAMES_A_GATE).toBe(true);
-    expect(EVERY_GROUP_RULE_IS_A_PERMISSION).toBe(true);
+    expectTypeOf<GroupRuleId>().toExtend<`inGroup.${GroupRule}`>();
+    expectTypeOf<GroupRule>().toExtend<GroupPermission>();
   });
 
   it.each(GROUP_RULES)(

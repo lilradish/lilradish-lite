@@ -7,37 +7,13 @@ import java.util.Locale;
  * that does everything, because the values needing them do not need the same set: one is bounded by
  * the column it is stored in, another is whatever its origin produced and is bounded by nothing.
  *
- * <p>What each refused category buys is why it is refused. A control character or a line separator
- * adds a line of the caller's own to whatever the value is interpolated into. A format character — a
- * zero-width space, a soft hyphen, a bidirectional override — leaves two unequal values rendering
- * identically, and an override reverses the order of everything printed after it. An unpaired
- * surrogate encodes to the same UTF-8 bytes as another does, so two values become one the moment
- * either is written down.
+ * <p>Each context calls the checks it needs. Character rules use Unicode categories and, where needed,
+ * {@link #requireNothingInvisible} rather than a single blanket rule. Where
+ * {@link #requireSpaceDecidesNothing} is required, U+0020 is the only admitted space and must occur between words.
  *
- * <p>That is a list of categories and not a class of forgery closed. Ways to write one value so that
- * it reaches a reader as another survive: a letter or a mark that renders as nothing is refused only by
- * {@link #requireNothingInvisible}, and only where Unicode calls it ignorable; two canonically equivalent
- * spellings are unequal strings that render identically, and a homoglyph is an ordinary letter.
- *
- * <p>Spacing is judged in the one category the list leaves alone, a value somebody typed being
- * entitled to a space between its words. U+0020 is the only space separator admitted, and only
- * between words: at either end, or doubled, a space decides nothing a reader can see and everything a
- * unique index can.
- *
- * <p>Everything here refuses and nothing rewrites. A constructor cannot tell a name somebody is
- * typing from a row being read back out of the store, so rewriting in one merges: two rows distinct
- * where they are kept come back as one value, and nothing afterwards can say that it happened. A
- * refusal blocks instead, which is visible and which whoever wrote the value can put right.
- *
- * <p>Judged by Unicode category, as {@link CharacterStanding} has it, rather than by {@link String#isBlank},
- * which counts neither U+00A0 nor U+2007 as whitespace and so reports a value made entirely of either as
- * holding something.
- *
- * <p>Each check that refuses is told the caller's type name, so what it throws reads as the caller's
- * own rule rather than as this class's. The offending code point is reported by position rather than
- * echoed back, for the reason the value is checked at all: a message carrying it verbatim is that
- * same escape one layer out. {@link Locale#ROOT} is what makes that position deterministic — under a
- * default locale of its own, {@code %d} renders in that locale's digits.
+ * <p>These checks refuse unacceptable input; they do not rewrite it. Refusals name the caller's
+ * value type. When a check reports an offending code point, it identifies its string position
+ * without echoing the character. Numeric positions are formatted with {@link Locale#ROOT}.
  */
 public final class Legibility {
 
@@ -168,7 +144,8 @@ public final class Legibility {
         while (index < value.length()) {
             int codePoint = value.codePointAt(index);
             CharacterStanding standing = CharacterStanding.of(codePoint);
-            if (!(prose ? standing.blankInProse() : standing.blankInALine())) {
+            if (!(prose ? standing.blankInProse() : standing.blankInALine())
+                    && !CharacterStanding.ignorable(codePoint)) {
                 return true;
             }
             index += Character.charCount(codePoint);

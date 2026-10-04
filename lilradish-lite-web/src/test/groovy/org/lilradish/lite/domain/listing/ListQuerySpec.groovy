@@ -10,7 +10,7 @@ class ListQuerySpec extends Specification {
     /** A list read whole is read within the empty scope, which is a scope and not the absence of one. */
     def "a query cannot be taken without what it is read within or without an order"() {
         when:
-        new ListQuery(scope, order, new ListFilter("grace"))
+        new ListQuery(scope, order, new ListFilter("greno"))
 
         then:
         def refused = thrown(NullPointerException)

@@ -7,13 +7,7 @@ import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.inference.ModelCallOutcome;
 import org.lilradish.lite.domain.inference.ModelCallPurpose;
 
-/**
- * How one try stands with the model its step names to review it, read from what was sent for that: nothing sent,
- * its call out, its call turned away for the last time, what it would be sent measured too long for it, or, of a
- * code step's try, what it would be sent not built, as a list the release pins is not here, or as the release no
- * longer declares what the try took or what it gave back. The published spelling is written out, for the reason
- * {@link org.lilradish.lite.domain.identity.EstateAct} gives.
- */
+/** Published spellings stay explicit so a stored review state keeps its wire name when enum names change. */
 public enum ReviewSending {
     UNSENT("unsent"),
     OUT("out"),
@@ -21,7 +15,8 @@ public enum ReviewSending {
     TOO_LONG("too_long"),
     LIST_NOT_HERE("list_not_here"),
     TAKES_NO_LONGER_DECLARED("takes_no_longer_declared"),
-    NO_LONGER_DECLARED("no_longer_declared");
+    NO_LONGER_DECLARED("no_longer_declared"),
+    HOLDS_A_FILE("holds_a_file");
 
     private final String published;
 
@@ -38,7 +33,8 @@ public enum ReviewSending {
         return this == TOO_LONG
                 || this == LIST_NOT_HERE
                 || this == TAKES_NO_LONGER_DECLARED
-                || this == NO_LONGER_DECLARED;
+                || this == NO_LONGER_DECLARED
+                || this == HOLDS_A_FILE;
     }
 
     /**
@@ -55,6 +51,7 @@ public enum ReviewSending {
                     case LIST_NOT_HERE -> LIST_NOT_HERE;
                     case TAKES_NO_LONGER_DECLARED -> TAKES_NO_LONGER_DECLARED;
                     case NO_LONGER_DECLARED -> NO_LONGER_DECLARED;
+                    case HOLDS_A_FILE -> HOLDS_A_FILE;
                 };
             }
         }

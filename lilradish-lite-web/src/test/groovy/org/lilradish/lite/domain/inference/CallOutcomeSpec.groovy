@@ -1,5 +1,8 @@
 package org.lilradish.lite.domain.inference
 
+import org.lilradish.lite.domain.model.DeployedModel
+import org.lilradish.lite.domain.model.ModelName
+import org.lilradish.lite.domain.model.SentText
 import spock.lang.Specification
 
 class CallOutcomeSpec extends Specification {
@@ -13,7 +16,7 @@ class CallOutcomeSpec extends Specification {
 
     def "an answer that came back keeps what it was given, down to an empty answer and nothing come back"() {
         when:
-        def cameBack = new CallOutcome.CameBack(answer, sentCount, cameBackCount, countedByModel, cutOff)
+        def cameBack = new CallOutcome.CameBack(answer, sentCount, cameBackCount, countedByModel, cutOff, null, null)
 
         then:
         cameBack.answer() == answer
@@ -31,7 +34,7 @@ class CallOutcomeSpec extends Specification {
 
     def "an answer that came back refuses counts the model could not have given, and a missing answer"() {
         when:
-        new CallOutcome.CameBack(answer, sentCount, cameBackCount, true, false)
+        new CallOutcome.CameBack(answer, sentCount, cameBackCount, true, false, null, null)
 
         then:
         def error = thrown(expectedException)
@@ -45,9 +48,21 @@ class CallOutcomeSpec extends Specification {
         "a"    | 1              | -1             || IllegalArgumentException | "CameBack came-back count must not be negative: -1"
     }
 
+    def "decline words belong only to a declined model completion"() {
+        when:
+        new CallOutcome.CameBack("Demo Sample answer", 1, 1, true, false, reason, "Demo Sample decline")
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == "CameBack has decline words only with model decline"
+
+        where:
+        reason << [null, DidNotFitReason.NOT_THE_SHAPE]
+    }
+
     def "an error refuses to leave what went wrong unsaid"() {
         when:
-        new CallOutcome.Errored(detail)
+        new CallOutcome.Errored(detail, null)
 
         then:
         def error = thrown(expectedException)
@@ -57,6 +72,35 @@ class CallOutcomeSpec extends Specification {
         detail || expectedException        | expectedMessage
         null   || NullPointerException     | "Errored detail must not be null"
         ""     || IllegalArgumentException | "Errored must say what went wrong"
+    }
+
+    def "fallback counts answer, decline and generated tool call together before rounding once"() {
+        given:
+        def model = new DeployedModel(new ModelName("sample_model"), [], 1000, new BigDecimal("2"), 1000, [])
+        def sent = SentText.measure("system", "question")
+
+        when:
+        def returned = CallOutcome.CameBack.measuredHere(model, sent, "a", false,
+                DidNotFitReason.MODEL_DECLINED, "b", 1L)
+
+        then:
+        returned.cameBackCount() == 2L
+        !returned.countedByModel()
+        returned.answer() == "a"
+        returned.declinedWords() == "b"
+    }
+
+    def "fallback refuses a negative generated tool-call count"() {
+        given:
+        def model = new DeployedModel(new ModelName("sample_model"), [], 1000, BigDecimal.ONE, 1000, [])
+
+        when:
+        CallOutcome.CameBack.measuredHere(model, SentText.measure("system", "question"), "answer", false,
+                null, null, -1L)
+
+        then:
+        def invalid = thrown(IllegalArgumentException)
+        invalid.message == "Generated tool-call characters must not be negative"
     }
 
     /** The one carrier of whether it was used up, since the last turnaway is reported nowhere else. */

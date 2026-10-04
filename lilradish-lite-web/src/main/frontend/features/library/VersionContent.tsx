@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type ReactNode } from "react";
 
 import type { EntryKind, Version } from "../../api/groups/{groupId}/{kind}";
 import type { ReferenceListVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
@@ -9,7 +9,7 @@ import { ReferenceListContent } from "./ReferenceListContent";
 import { WorkflowContent } from "./WorkflowContent";
 
 /**
- * The version picked, drawn by its kind's editor and nothing around it. Drawn afresh for every version picked,
+ * The version picked, drawn by its kind's editor. Drawn afresh for every version picked,
  * so nothing typed into one is carried to the next.
  */
 export function VersionContent({
@@ -21,6 +21,7 @@ export function VersionContent({
   onRefused,
   onWritten,
   onShown,
+  wrapDocument,
 }: {
   readonly kind: EntryKind;
   readonly groupId: string;
@@ -33,15 +34,19 @@ export function VersionContent({
   readonly onWritten: () => void;
   /** The content as last shown, which the page names a refusal's places from. */
   readonly onShown: (content: ReadContent | null) => void;
+  /** The document around the content; a workflow's panel stands outside it. */
+  readonly wrapDocument?: (content: ReactNode) => ReactNode;
 }) {
   const listShown = useCallback(
     (list: ReferenceListVersion | null) =>
       onShown(list === null ? null : contentOf(list)),
     [onShown],
   );
+  const wrap = (content: ReactNode) =>
+    wrapDocument === undefined ? content : wrapDocument(content);
   switch (kind) {
     case "question":
-      return (
+      return wrap(
         <QuestionContent
           key={version.versionId}
           groupId={groupId}
@@ -51,11 +56,12 @@ export function VersionContent({
           onRefused={onRefused}
           onWritten={onWritten}
           onShown={onShown}
-        />
+        />,
       );
     case "workflow":
       return (
         <WorkflowContent
+          wrapDocument={wrapDocument}
           key={version.versionId}
           groupId={groupId}
           entryId={entryId}
@@ -67,7 +73,7 @@ export function VersionContent({
         />
       );
     case "reference_list":
-      return (
+      return wrap(
         <ReferenceListContent
           key={version.versionId}
           groupId={groupId}
@@ -77,7 +83,7 @@ export function VersionContent({
           onRefused={onRefused}
           onWritten={onWritten}
           onShown={listShown}
-        />
+        />,
       );
     default: {
       // A kind added without a case here fails to compile rather than drawing nothing.

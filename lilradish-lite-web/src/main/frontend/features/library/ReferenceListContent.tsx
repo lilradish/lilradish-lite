@@ -19,6 +19,7 @@ import { VERSION_ACT_RULES } from "./actRules";
 import { ProsePart, type ProseWords } from "./ProsePart";
 import { TermsTable } from "./TermsTable";
 import { useVersionContent } from "./useVersionContent";
+import { useDraftPartStatus } from "./useDraftStatus";
 
 /** Each reason the server refuses a note, said as the refusal it would answer with. */
 const NOTE_REFUSALS = {
@@ -71,6 +72,11 @@ export function ReferenceListContent({
   >(load, readCount, onWritten, onShown);
   const noting = useAction<ReferenceListVersion>(written, onRefused);
   const listing = useAction<ReferenceListVersion>(written, onRefused);
+  useDraftPartStatus(
+    "read",
+    false,
+    read.loading || noting.running || listing.running,
+  );
   const editable = version.acts.has("write");
   const { versionId } = version;
   const list = shown;

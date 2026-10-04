@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.lilradish.lite.domain.declaration.Asking;
 import org.lilradish.lite.domain.inference.SendMeasure;
 import org.lilradish.lite.domain.model.DeployedModel;
@@ -35,13 +36,38 @@ record SendPast(UUID step, SendingRole role, ModelName model, long past) {
     }
 
     /**
-     * Each step asking a question of {@code asked} whose producing or reviewing model could be sent more than it
-     * takes, in the order they run, producing before reviewing; a model the deployment does not hold is passed
-     * over, being refused already.
+     * Where a held model would receive more than it takes, name the step and its producing or reviewing role.
+     * Results follow step order, with producing before reviewing.
      */
-    static List<SendPast> of(List<StoredWorkflow.Step> steps, Map<EntryVersionId, Asking> asked, ModelCatalog models) {
+    static List<SendPast> of(
+            List<StoredWorkflow.Step> steps,
+            Map<EntryVersionId, Asking> asked,
+            Map<String, Long> codeReviewsSent,
+            Map<UUID, Long> searchesSent,
+            Map<UUID, Long> searchesReviewed,
+            ModelCatalog models) {
         List<SendPast> found = new ArrayList<>();
         for (StoredWorkflow.Step step : steps) {
+            DeployedModel producing =
+                    step.producer() instanceof Producer.Model model ? held(model.choice(), models) : null;
+            if (step.runs() instanceof StoredWorkflow.Runs.Search) {
+                if (producing != null && searchesSent.get(step.id()) instanceof Long sent) {
+                    measured(step, SendingRole.PRODUCING, producing, sent, found);
+                }
+                DeployedModel reviewing = step.reviewer() == null ? null : held(step.reviewer(), models);
+                if (reviewing != null && searchesReviewed.get(step.id()) instanceof Long sent) {
+                    measured(step, SendingRole.REVIEWING, reviewing, sent, found);
+                }
+                continue;
+            }
+            if (step.runs() instanceof StoredWorkflow.Runs.Code code) {
+                DeployedModel reviewing = step.reviewer() == null ? null : held(step.reviewer(), models);
+                Long sent = code.codeStep() == null ? null : codeReviewsSent.get(code.codeStep());
+                if (reviewing != null && sent != null) {
+                    measured(step, SendingRole.REVIEWING, reviewing, sent, found);
+                }
+                continue;
+            }
             Asking asking =
                     step.runs() instanceof StoredWorkflow.Runs.Pinned pinned && pinned.kind() == EntryKind.QUESTION
                             ? asked.get(pinned.version())
@@ -49,12 +75,12 @@ record SendPast(UUID step, SendingRole role, ModelName model, long past) {
             if (asking == null) {
                 continue;
             }
-            if (step.producer() instanceof Producer.Model producing) {
-                measured(step, SendingRole.PRODUCING, producing.choice(), asking, models, found);
+            if (producing != null) {
+                measured(step, SendingRole.PRODUCING, producing, SendMeasure.mostSent(asking, told(step)), found);
             }
-            ModelChoice reviewer = step.reviewer();
-            if (reviewer != null) {
-                measured(step, SendingRole.REVIEWING, reviewer, asking, models, found);
+            DeployedModel reviewing = step.reviewer() == null ? null : held(step.reviewer(), models);
+            if (reviewing != null) {
+                measured(step, SendingRole.REVIEWING, reviewing, SendMeasure.mostSentToReview(asking), found);
             }
         }
         return List.copyOf(found);
@@ -65,21 +91,13 @@ record SendPast(UUID step, SendingRole role, ModelName model, long past) {
         return step.producer() instanceof Producer.Model producing && producing.toldWhatHappened();
     }
 
+    private static @Nullable DeployedModel held(ModelChoice choice, ModelCatalog models) {
+        return models.find(choice.model()).orElse(null);
+    }
+
     private static void measured(
-            StoredWorkflow.Step step,
-            SendingRole role,
-            ModelChoice choice,
-            Asking asking,
-            ModelCatalog models,
-            List<SendPast> found) {
-        DeployedModel model = models.find(choice.model()).orElse(null);
-        if (model == null) {
-            return;
-        }
-        long past = model.unitsPast(
-                role == SendingRole.REVIEWING
-                        ? SendMeasure.mostSentToReview(asking)
-                        : SendMeasure.mostSent(asking, told(step)));
+            StoredWorkflow.Step step, SendingRole role, DeployedModel model, long sent, List<SendPast> found) {
+        long past = model.unitsPast(sent);
         if (past > 0) {
             found.add(new SendPast(step.id(), role, model.name(), past));
         }

@@ -1,8 +1,9 @@
+import { iconButtonClasses } from "@mui/material/IconButton";
 import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { AppShell } from "./AppShell";
 import { theme } from "../lib/theme/theme";
@@ -10,6 +11,12 @@ import { theme } from "../lib/theme/theme";
 /** Either side of the theme's `md` breakpoint, which is 900px. */
 const WIDE = 1280;
 const NARROW = 700;
+
+const SIDEBAR_KEPT_AS = "lilradish.navigation.sidebar";
+
+afterEach(() => {
+  localStorage.clear();
+});
 
 /**
  * This environment implements no `matchMedia` at all, and the hook reading it
@@ -113,6 +120,18 @@ function iconOf(destination: string): Element {
   return icon;
 }
 
+/** Where each of the next `count` presses of Tab lands, from wherever focus is now. */
+async function tabStops(count: number): Promise<Element[]> {
+  const stops: Element[] = [];
+  for (let press = 0; press < count; press += 1) {
+    await userEvent.tab();
+    if (document.activeElement !== null) {
+      stops.push(document.activeElement);
+    }
+  }
+  return stops;
+}
+
 function precedes(earlier: Element, later: Element): boolean {
   const relation = earlier.compareDocumentPosition(later);
   return (relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
@@ -169,6 +188,7 @@ describe("AppShell", () => {
     );
 
     expect(resting.width).toBe("1px");
+    expect(resting.height).toBe("1px");
     expect(resting.clipPath).toBe("inset(50%)");
     expect(screen.getByRole("link", { name: "Skip to content" })).toBeVisible();
   });
@@ -190,13 +210,102 @@ describe("AppShell", () => {
     ).toBeNull();
   });
 
-  it("folds the destinations behind one control on a narrow viewport", async () => {
+  /**
+   * Put away for every reader, not only out of sight: a keyboard tabbing
+   * through destinations it cannot see, or a screen reader reading them out,
+   * would leave the page as crowded as before for everybody but the eye.
+   */
+  it("puts the docked destinations out of sight, reach and hearing, and leaves the control where it was", async () => {
+    shell(WIDE);
+    const control = screen.getByRole("button", { name: "Sidebar" });
+    const navigation = screen.getByRole("navigation", { name: "Site" });
+    const before = control.getAttribute("aria-expanded");
+
+    expect(control).toHaveClass(
+      iconButtonClasses.colorInherit,
+      iconButtonClasses.sizeSmall,
+    );
+    expect(getComputedStyle(control).borderColor).toBe("rgb(82, 101, 121)");
+
+    await userEvent.click(control);
+
+    expect(before).toBe("true");
+    expect(control).toHaveAttribute("aria-expanded", "false");
+    expect(control).toHaveAttribute("aria-controls", navigation.id);
+    expect(document.activeElement).toBe(control);
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(navigation).not.toBeVisible();
+    const stops = await tabStops(4);
+    expect(stops).toContain(
+      screen.getByRole("button", { name: "Who you are" }),
+    );
+    expect(stops.filter((stop) => navigation.contains(stop))).toEqual([]);
+  });
+
+  /** Putting the destinations away is no more reason to lose what they hold than shutting the narrow drawer is. */
+  it("brings the docked destinations back within reach, holding what they held when put away", async () => {
+    viewport(WIDE);
+    render(
+      <AppShell
+        brand={<span>lilradish</span>}
+        navigation={<input aria-label="Find a group" />}
+        utility={null}
+      >
+        <p>the work</p>
+      </AppShell>,
+      { wrapper: themed },
+    );
+    const control = screen.getByRole("button", { name: "Sidebar" });
+    await userEvent.type(screen.getByLabelText("Find a group"), "Pay");
+    await userEvent.click(control);
+
+    await userEvent.click(control);
+
+    expect(control).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("navigation", { name: "Site" })).toBeVisible();
+    const field = screen.getByRole("textbox", { name: "Find a group" });
+    expect(field).toHaveValue("Pay");
+    await userEvent.tab();
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("opens the docked destinations the way this device last left them", () => {
+    localStorage.setItem(SIDEBAR_KEPT_AS, "collapsed");
+
+    shell(WIDE);
+
+    expect(screen.getByRole("button", { name: "Sidebar" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByRole("navigation")).toBeNull();
+  });
+
+  /** Putting the docked destinations away is a choice about the room beside the work, which a narrow viewport never gives them. */
+  it("leaves the narrow drawer as it was, whatever this device chose for the docked one", async () => {
+    localStorage.setItem(SIDEBAR_KEPT_AS, "collapsed");
     shell(NARROW);
 
-    expect(screen.queryByRole("navigation")).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Open navigation" }),
     );
+
+    expect(
+      screen.queryAllByRole("button", { name: "Sidebar", hidden: true }),
+    ).toEqual([]);
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
+  });
+
+  it("folds the destinations behind one control on a narrow viewport", async () => {
+    shell(NARROW);
+    const opener = screen.getByRole("button", { name: "Open navigation" });
+
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(opener).toHaveClass(
+      iconButtonClasses.colorInherit,
+      iconButtonClasses.sizeSmall,
+    );
+    await userEvent.click(opener);
 
     const landmarks = screen.getAllByRole("navigation");
     expect(landmarks).toHaveLength(1);
@@ -287,7 +396,7 @@ describe("AppShell", () => {
     await userEvent.click(control);
     await userEvent.type(screen.getByLabelText("Find a group"), "Pay");
     await userEvent.keyboard("{Escape}");
-    await settle();
+    await waitFor(() => expect(screen.queryByRole("navigation")).toBeNull());
 
     const whileShut = screen.queryByRole("textbox", { name: "Find a group" });
     await userEvent.click(control);
@@ -347,5 +456,16 @@ describe("AppShell", () => {
     expect(precedes(brand, utility)).toBe(true);
     expect(precedes(utility, navigation)).toBe(true);
     expect(precedes(navigation, work)).toBe(true);
+  });
+
+  it("holds the work to the shared page width", () => {
+    shell(WIDE);
+
+    const container = screen.getByText("the work").parentElement!;
+    expect(container).toHaveClass(
+      "MuiContainer-root",
+      "MuiContainer-maxWidthXl",
+    );
+    expect(container).not.toHaveClass("MuiContainer-maxWidthLg");
   });
 });

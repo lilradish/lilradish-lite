@@ -127,8 +127,137 @@ class StepPositionsSpec extends Specification {
         "person"   | false   || new StepPosition.NotStarted()
         "model"    | true    || new StepPosition.Running(RunningOn.NEXT_TRY)
         "model"    | false   || new StepPosition.NotStarted()
-        "workflow" | true    || new StepPosition.NotStarted()
-        "route"    | true    || new StepPosition.NotStarted()
+        "workflow" | true    || new StepPosition.Running(RunningOn.NEXT_TRY)
+        "route"    | true    || new StepPosition.Running(RunningOn.NEXT_TRY)
+    }
+
+    def "a started run beneath keeps its parent running when its first person step has no try"() {
+        given:
+        def first = unstarted(question(1, person(), 1))
+        def child = childRun([first])
+        def parent = beneath(workflowStep(1), child)
+
+        when:
+        def position = StepPositions.of(run([parent]), parent)
+
+        then:
+        position instanceof StepPosition.Beneath
+        position.state() == StepState.RUNNING
+        position.where() instanceof StepPosition.NotStarted
+        position.nextTry() == null
+        StepPositions.waitsOn(run([parent]), position) == null
+    }
+
+    def "a child waiting or failing determines its parent's state and waiting person"() {
+        given:
+        def childStep = started(question(1, person(), 1), [open(1, BY_PERSON)])
+        def child = childRun([childStep])
+        def parent = beneath(routeStep(1), child)
+        def position = StepPositions.of(run([parent]), parent)
+
+        expect:
+        position instanceof StepPosition.Beneath
+        position.state() == StepState.WAITING
+        StepPositions.waitsOn(run([parent]), position) == WaitsOn.ANSWER_STEP
+        position.nextTry() == null
+
+        when:
+        def failedStep = started(question(1, model(), 1), [lost(1, BY_MODEL)])
+        def failedParent = beneath(workflowStep(1), childRun([failedStep]))
+        def failed = StepPositions.of(run([failedParent]), failedParent)
+
+        then:
+        failed instanceof StepPosition.Beneath
+        failed.state() == StepState.FAILED
+        StepPositions.waitsOn(run([failedParent]), failed) == WaitsOn.STARTER
+        failed.nextTry() == null
+    }
+
+    def "a held or running child remains the active parent step"() {
+        given:
+        def childStep = held ? started(question(1, person(), 1), [], hold(RunStepHoldReason.TOO_LONG, STOP))
+                : unstarted(question(1, model(), 1))
+        def parent = beneath(workflowStep(1), childRun([childStep]))
+        def top = run([parent])
+        def position = StepPositions.of(top, parent)
+
+        expect:
+        position instanceof StepPosition.Beneath
+        position.state() == expected
+        RunPositions.state(top, [position]) == RunState.RUNNING
+        RunPositions.at(top, [position]) == Optional.of(parent)
+        position.nextTry() == null
+
+        where:
+        held  || expected
+        true  || StepState.HELD_BACK
+        false || StepState.RUNNING
+    }
+
+    def "a stopped parent entry does not hold a child already started beneath it"() {
+        given:
+        def childStep = unstarted(question(1, model(), 1))
+        def parent = beneath(workflowStep(1), childRun([childStep]), stop(STOP))
+        def top = run([parent])
+
+        when:
+        def position = StepPositions.of(top, parent)
+
+        then:
+        position instanceof StepPosition.Beneath
+        position.state() == StepState.RUNNING
+        RunPositions.state(top, [position]) == RunState.RUNNING
+        RunPositions.at(top, [position]) == Optional.of(parent)
+        StepPositions.waitsOn(top, position) == null
+    }
+
+    def "a root stop takes priority over a failed child without hiding the failed step"() {
+        given:
+        def childStep = started(question(1, model(), 1), [lost(1, BY_MODEL)])
+        def parent = beneath(workflowStep(1), childRun([childStep], true))
+        def top = run([parent], true)
+        def position = StepPositions.of(top, parent)
+
+        expect:
+        position.state() == StepState.FAILED
+        RunPositions.state(top, [position]) == RunState.STOPPED
+        RunPositions.at(top, [position]).empty
+        StepPositions.waitsOn(top, position) == null
+        position.nextTry() == null
+    }
+
+    def "a failure several runs deep makes every containing run fail at its own step"() {
+        given:
+        def deepestStep = started(question(1, model(), 1), [lost(1, BY_MODEL)])
+        def deepest = childRun([deepestStep], false, 1011)
+        def middleStep = beneath(routeStep(1), deepest)
+        def middle = childRun([middleStep], false, 1012)
+        def topStep = beneath(workflowStep(1), middle)
+        def top = run([topStep])
+
+        when:
+        def position = StepPositions.of(top, topStep)
+
+        then:
+        position instanceof StepPosition.Beneath
+        position.where() instanceof StepPosition.Beneath
+        position.where().where() instanceof StepPosition.Failed
+        position.state() == StepState.FAILED
+        RunPositions.state(top, [position]) == RunState.FAILED
+        RunPositions.at(top, [position]).empty
+        position.nextTry() == null
+    }
+
+    def "a finished child completes its parent and lets the next step be reached"() {
+        given:
+        def finished = started(question(1, person(), 1), [yielded(1, BY_PERSON,
+                [value(1, "answer", false)], [], PERSON)])
+        def parent = beneath(workflowStep(1), childRun([finished]))
+        def next = unstarted(question(2, model(), 1))
+
+        expect:
+        StepPositions.of(run([parent, next])) == [
+                new StepPosition.Done(), new StepPosition.Running(RunningOn.NEXT_TRY)]
     }
 
     def "a model's step is reached once every step before it is done, and read so alone or with the rest"() {
@@ -178,7 +307,7 @@ class StepPositionsSpec extends Specification {
         given:
         def step = started(question(1, person(), 2), tries == "none" ? [] : [open(1, BY_PERSON)],
                 hold(reason, minutes(40)), [new FailureRecord(failureId(1), RunStepFailureReason.UNCLAIMED_VALUE, null,
-                null, minutes(30), false)])
+                null, minutes(30), false, null, null, null)])
 
         expect:
         StepPositions.of(run([step], false, stopped ? stop(STOP) : null), step) ==
@@ -217,7 +346,7 @@ class StepPositionsSpec extends Specification {
         def onTry = placed.startsWith("on the newest try") ? tryId(1) : null
         def step = started(question(1, person(), 2), tries, null,
                 [new FailureRecord(failureId(1), reason, onTry, onTry == null ? null : ModelCallPurpose.PRODUCE,
-                        minutes(50), false)])
+                        minutes(50), false, null, reason == RunStepFailureReason.TOOL_NOT_OFFERED ? "web_search" : null, null)])
 
         expect:
         StepPositions.unheld(step, true) == new StepPosition.Failed(
@@ -225,18 +354,45 @@ class StepPositionsSpec extends Specification {
 
         where:
         [reason, placed] << [
-                RunStepFailureReason.values().toList(),
+                RunStepFailureReason.values().findAll { it != RunStepFailureReason.SOURCE_NO_LONGER_MATCHES &&
+                    it != RunStepFailureReason.SOURCE_LIST_NOT_HERE },
                 ["on no try, before any", "on no try, beside an open one", "on the newest try",
                  "on the newest try, which gave back what stands"],
         ].combinations()
     }
 
+    def "a source mismatch holds the same unspent model production in a failed state until that failure is answered"() {
+        given:
+        def source = new FailureRecord.SourceRecord(new HoldRecord.SourceRecord(Runs.RUN, new RunStepId(Runs.key(1401)),
+                Runs.key(1402)), 'receipt.note')
+        def failure = new FailureRecord(failureId(1), reason, tryId(1),
+                ModelCallPurpose.PRODUCE, minutes(50), answered, null, null, source)
+        def production = new TryRecord(tryId(1), null, BY_MODEL, null, askedAt(1), null, null, null, null,
+                null, null, false, null, [], [], [], [], [])
+        def step = started(question(1, model(), 2), [production], null, [failure])
+
+        expect:
+        StepPositions.unheld(step, true) == (answered ? new StepPosition.Running(RunningOn.NEXT_TRY) :
+                new StepPosition.Failed(new StepFailure.Recorded(reason,
+                        ModelCallPurpose.PRODUCE), minutes(50)))
+        StepPositions.inForce(step) == (answered ? Optional.empty() : Optional.of(failure))
+        step.used() == 0
+        production.number() == null
+        production.calls().empty
+        production.attempts().empty
+        failure.source().field() == 'receipt.note'
+
+        where:
+        [reason, answered] << [[RunStepFailureReason.SOURCE_NO_LONGER_MATCHES,
+                              RunStepFailureReason.SOURCE_LIST_NOT_HERE], [false, true]].combinations()
+    }
+
     def "of the failures written the last is read, and an answer to it ends every one before it"() {
         given:
         def failures = [
-                new FailureRecord(failureId(1), RunStepFailureReason.UNCUTTABLE_LENGTH, null, null, minutes(50), false),
+                new FailureRecord(failureId(1), RunStepFailureReason.UNCUTTABLE_LENGTH, null, null, minutes(50), false, null, null, null),
                 new FailureRecord(failureId(2), RunStepFailureReason.MODEL_NOT_DEPLOYED, null, null, minutes(60),
-                        laterAnswered),
+                        laterAnswered, null, null, null),
         ]
         def step = started(question(1, person(), 2), [open(1, BY_PERSON)], null, failures)
 
@@ -253,7 +409,7 @@ class StepPositionsSpec extends Specification {
     def "a failure answered, or on a try before the newest, has ended and leaves the newest try to decide"() {
         given:
         def failure = new FailureRecord(failureId(1), RunStepFailureReason.UNCLAIMED_VALUE,
-                onTry == null ? null : tryId(onTry), onTry == null ? null : ModelCallPurpose.PRODUCE, minutes(50), answered)
+                onTry == null ? null : tryId(onTry), onTry == null ? null : ModelCallPurpose.PRODUCE, minutes(50), answered, null, null, null)
         def step = started(question(1, person(), 2), after(open(2, BY_PERSON)), null, [failure])
 
         expect:
@@ -270,7 +426,7 @@ class StepPositionsSpec extends Specification {
     def "a step the run holds a row of but no try has not started"() {
         given:
         def failures = answeredFailure
-                ? [new FailureRecord(failureId(1), RunStepFailureReason.UNCLAIMED_VALUE, null, null, minutes(50), true)] : []
+                ? [new FailureRecord(failureId(1), RunStepFailureReason.UNCLAIMED_VALUE, null, null, minutes(50), true, null, null, null)] : []
         def step = started(question(1, person(), 1), [], null, failures)
 
         expect:
@@ -284,9 +440,9 @@ class StepPositionsSpec extends Specification {
     def "the failure in force is the last written on the newest try or on none, and none once it is answered"() {
         given:
         def onEarlier = new FailureRecord(failureId(1), RunStepFailureReason.MODEL_NOT_DEPLOYED, tryId(1),
-                ModelCallPurpose.PRODUCE, minutes(40), false)
+                ModelCallPurpose.PRODUCE, minutes(40), false, null, null, null)
         def onNewest = new FailureRecord(failureId(2), RunStepFailureReason.MODEL_NOT_DEPLOYED, tryId(2),
-                ModelCallPurpose.REVIEW, minutes(50), answered)
+                ModelCallPurpose.REVIEW, minutes(50), answered, null, null, null)
         def step = started(question(1, model(), 3, MODEL), after(yielded(2, BY_MODEL, [value(1, "answer", true)])),
                 null, [onEarlier, onNewest])
 
@@ -509,6 +665,26 @@ class StepPositionsSpec extends Specification {
         "not built, a list not here"       || WaitsOn.REVIEW_AT_GATE | ReviewSending.LIST_NOT_HERE
         "not built, takes no longer"       || WaitsOn.REVIEW_AT_GATE | ReviewSending.TAKES_NO_LONGER_DECLARED
         "not built, gives no longer"       || WaitsOn.REVIEW_AT_GATE | ReviewSending.NO_LONGER_DECLARED
+        "not built, holds a file"         || WaitsOn.REVIEW_AT_GATE | ReviewSending.HOLDS_A_FILE
+    }
+
+    def "an unsent or turned-away review of code gone from the release waits on a person, but an out call remains out"() {
+        given:
+        def produced = reviewing(sent, yielded(1, CODE, [value(1, "answer", true)]))
+        def step = started(new PlannedStep(Runs.stepId(1), 1, new StepId("step_1"),
+                new StepRuns.Code("tidy", null), Runs.code(), 2, MODEL, []), [produced])
+        def run = Runs.run([step])
+
+        expect:
+        StepPositions.of(run, step) == new StepPosition.AwaitingReview(1,
+                [new StepPosition.WaitingValue(valueId(1), "answer", on)], null, endedAt(1), sending)
+        StepPositions.waitsOn(run, StepPositions.of(run, step)) == on
+
+        where:
+        sent                   || sending                            | on
+        "nothing sent"         || ReviewSending.NO_LONGER_DECLARED   | WaitsOn.REVIEW_AT_GATE
+        "its call turned away" || ReviewSending.NO_LONGER_DECLARED   | WaitsOn.REVIEW_AT_GATE
+        "its call out"         || ReviewSending.OUT                  | WaitsOn.MODEL
     }
 
     /** A review that came back, went wrong or never did is on record, so nothing of the try waits on one. */
@@ -674,6 +850,7 @@ class StepPositionsSpec extends Specification {
             case "not built, a list not here": return unbuilt(aTry, ReviewUnbuiltReason.LIST_NOT_HERE)
             case "not built, takes no longer": return unbuilt(aTry, ReviewUnbuiltReason.TAKES_NO_LONGER_DECLARED)
             case "not built, gives no longer": return unbuilt(aTry, ReviewUnbuiltReason.NO_LONGER_DECLARED)
+            case "not built, holds a file": return unbuilt(aTry, ReviewUnbuiltReason.HOLDS_A_FILE)
             default: throw new IllegalArgumentException(sent)
         }
     }
@@ -685,4 +862,15 @@ class StepPositionsSpec extends Specification {
                 aTry.returned(), aTry.values(), aTry.reviews(), aTry.inputs(),
                 [new AttemptRecord(Runs.attemptId(70), ModelCallPurpose.REVIEW, true, reason)], [])
     }
+    private static RunSnapshot childRun(List<StepSnapshot> steps, boolean stopped = false, int number = 1010) {
+        def template = run(steps)
+        new RunSnapshot(new RunId(Runs.key(number)), template.root(), template.group(), template.version(),
+                stopped, template.workflowStopped(), null, template.workflow(), template.steps())
+    }
+
+    private static StepSnapshot beneath(PlannedStep planned, RunSnapshot child, StopRecord pinStopped = null) {
+        new StepSnapshot(planned, pinStopped, new RunStepId(Runs.key(1020)), null, [], [],
+                new StepSnapshot.Beneath(child, planned.runs() instanceof StepRuns.Route ? Runs.key(701) : null), [:])
+    }
+
 }

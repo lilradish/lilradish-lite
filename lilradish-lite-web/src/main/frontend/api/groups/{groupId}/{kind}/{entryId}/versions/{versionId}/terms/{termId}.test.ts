@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NOT_AN_ADDRESS } from "../../../../../../../problem";
 import {
@@ -24,6 +24,34 @@ const ANSWER = {
 };
 
 describe("atTerm", () => {
+  it("escapes every usable identifier in the complete term address", async () => {
+    const ask = vi.fn((address: string) => Promise.resolve(address));
+
+    await expect(atTerm("g/a", "e/b", "v/c", "t/d", ask)).resolves.toBe(
+      "/api/groups/g%2Fa/reference-lists/e%2Fb/versions/v%2Fc/terms/t%2Fd",
+    );
+    expect(ask).toHaveBeenCalledExactlyOnceWith(
+      "/api/groups/g%2Fa/reference-lists/e%2Fb/versions/v%2Fc/terms/t%2Fd",
+    );
+  });
+
+  it.each([
+    ["group", "..", ENTRY, VERSION, TERM],
+    ["entry", GROUP, "..", VERSION, TERM],
+    ["version", GROUP, ENTRY, "..", TERM],
+    ["term", GROUP, ENTRY, VERSION, ".."],
+  ])(
+    "rejects an unusable %s before asking for a term",
+    async (_place, group, entry, version, term) => {
+      const ask = vi.fn((address: string) => Promise.resolve(address));
+
+      const failure = await refusalOf(atTerm(group, entry, version, term, ask));
+
+      expect(failure.problem).toEqual({ code: NOT_AN_ADDRESS });
+      expect(ask).not.toHaveBeenCalled();
+    },
+  );
+
   it("hands over the term's address under its list's version, each identifier escaped", async () => {
     const addresses = [TERM, "a/b"].map((term) =>
       atTerm(GROUP, ENTRY, VERSION, term, (address) =>
@@ -52,6 +80,7 @@ describe("rewordTerm", () => {
       [`PUT ${AT_TERMS}/${TERM}`]: [[JSON.stringify(ANSWER), 200]],
     });
 
+    const signal = new AbortController().signal;
     await expect(
       rewordTerm(
         GROUP,
@@ -60,10 +89,11 @@ describe("rewordTerm", () => {
         TERM,
         4,
         { term: "Refunds", meaning: "Money owed back." },
-        new AbortController().signal,
+        signal,
       ),
     ).resolves.toEqual(ANSWER);
     expect(requestsTo(sent)).toEqual([`PUT ${AT_TERMS}/${TERM}`]);
+    expect(sent.mock.calls[0]![1]?.signal).toBe(signal);
     expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
       revision: 4,
       term: "Refunds",

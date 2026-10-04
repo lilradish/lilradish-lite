@@ -8,13 +8,15 @@ import {
   present,
   textFrom,
 } from "../lib/request/document";
-import type { FieldKind } from "./declaration";
+import { oneLineWithin, showsInProse } from "../lib/text/legibility";
+import { textLinesFrom, type FieldKind, type TextLines } from "./declaration";
 import { servedAmong, type Problem } from "./problem";
 
 /** Why one filled value does not fit its field, spelt as the server publishes it. */
 export type FillReason =
   | "missing"
   | "malformed"
+  | "line_break"
   | "too_long"
   | "too_many"
   | "not_a_term"
@@ -27,6 +29,7 @@ export type FillReason =
 const KNOWN_REASONS = {
   missing: true,
   malformed: true,
+  line_break: true,
   too_long: true,
   too_many: true,
   not_a_term: true,
@@ -45,7 +48,14 @@ const KNOWN_KINDS = {
   yes_no: true,
   term: true,
   fields: true,
+  file: true,
 } satisfies Record<FieldKind, true>;
+
+const MEDIA_TYPE =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/;
+
+const FILE_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const VALUE_DOES_NOT_FIT: ReadonlySet<string> = new Set(["VALUE_DOES_NOT_FIT"]);
 
@@ -72,7 +82,10 @@ export interface ReadField {
   readonly help?: string;
   readonly kind: string;
   readonly longest?: number;
+  readonly lines?: TextLines;
   readonly most?: number;
+  readonly types?: readonly string[];
+  readonly maximumBytes?: number;
   readonly mustBeGiven: boolean;
   readonly terms?: FillTerms;
   /** In declared order. */
@@ -89,7 +102,60 @@ export interface FillField extends ReadField {
  * A value as it is sent: every one of one field its text, yes and no written `"true"` and `"false"`, none as
  * null; many as a list, none of them an empty one; fields as an object naming every field they hold.
  */
-export type FillValue = string | null | readonly FillValue[] | FillValues;
+export type FillValue =
+  string | null | FileValue | readonly FillValue[] | FillValues;
+
+export interface FileValue {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  readonly size: number;
+}
+
+/** A read may withhold one value within fields or a list without hiding its neighbours. */
+export interface WithheldLeaf {
+  readonly withheld: true;
+}
+
+export type ShownValue =
+  | string
+  | null
+  | FileValue
+  | WithheldLeaf
+  | readonly ShownValue[]
+  | ShownValues;
+
+export interface ShownValues {
+  readonly [name: string]: ShownValue;
+}
+
+export type FillSubmissionValue =
+  | string
+  | null
+  | { readonly upload: number; readonly name: string }
+  | { readonly keep: number }
+  | readonly FillSubmissionValue[]
+  | FillSubmissionValues;
+
+export interface FillSubmissionValues {
+  readonly [name: string]: FillSubmissionValue;
+}
+
+export interface FillSubmission {
+  readonly values: FillSubmissionValues;
+  readonly uploads: readonly File[];
+  readonly hasFilePositions: boolean;
+}
+
+export function multipartOf(
+  document: unknown,
+  uploads: readonly File[],
+): FormData {
+  const body = new FormData();
+  body.append("document", JSON.stringify(document));
+  uploads.forEach((file, index) => body.append(`upload${index}`, file, "file"));
+  return body;
+}
 
 /** Every field of one level by name. */
 export interface FillValues {
@@ -134,18 +200,38 @@ function readFieldFrom(body: unknown): ReadField | null {
   const label = optional(body, "label", textFrom);
   const help = optional(body, "help", textFrom);
   const longest = optional(body, "longest", countFrom);
+  const lines = optional(body, "lines", textLinesFrom);
   const most = optional(body, "most", countFrom);
+  const types = optional(body, "types", fileTypesFrom);
+  const maximumBytes = optional(body, "maximumBytes", countFrom);
   const terms = optional(body, "terms", termsFrom);
   const fields = optional(body, "fields", readFieldsFrom);
   if (
     typeof name !== "string" ||
     typeof kind !== "string" ||
     typeof mustBeGiven !== "boolean" ||
-    [label, help, longest, most, terms, fields].includes(null) ||
+    label === null ||
+    help === null ||
+    longest === null ||
+    lines === null ||
+    most === null ||
+    types === null ||
+    maximumBytes === null ||
+    terms === null ||
+    fields === null ||
     (Object.hasOwn(KNOWN_KINDS, kind) &&
       ((kind === "text") !== (longest !== undefined) ||
+        (kind !== "text" && lines !== undefined) ||
         (kind === "term") !== (terms !== undefined) ||
-        (kind === "fields") !== (fields?.length ?? 0) > 0))
+        (kind === "fields") !== (fields?.length ?? 0) > 0 ||
+        (kind === "file") !==
+          (types !== undefined &&
+            maximumBytes !== undefined &&
+            maximumBytes !== null &&
+            maximumBytes > 0) ||
+        (kind !== "file" &&
+          (types !== undefined || maximumBytes !== undefined)) ||
+        (kind === "file" && most !== undefined && most !== null && most < 1)))
   ) {
     return null;
   }
@@ -153,7 +239,7 @@ function readFieldFrom(body: unknown): ReadField | null {
     name,
     kind,
     mustBeGiven,
-    ...present({ label, help, longest, most }),
+    ...present({ label, help, longest, lines, most, types, maximumBytes }),
     ...present({ terms, fields }),
   };
 }
@@ -204,9 +290,77 @@ export function isFillValue(said: unknown): said is FillValue {
   if (said === null || typeof said === "string") {
     return true;
   }
-  return Array.isArray(said)
-    ? said.every(isFillValue)
-    : isUnchecked(said) && Object.values(said).every(isFillValue);
+  if (Array.isArray(said)) {
+    return said.every(isFillValue);
+  }
+  if (!isUnchecked(said)) {
+    return false;
+  }
+  return typeof said.size === "number"
+    ? isFileValue(said)
+    : Object.values(said).every(isFillValue);
+}
+
+export function isWithheldLeaf(value: unknown): value is WithheldLeaf {
+  return (
+    isUnchecked(value) &&
+    Object.keys(value).length === 1 &&
+    value.withheld === true
+  );
+}
+
+/** Only read-side values may contain a withheld leaf; submissions keep their own narrower shape. */
+export function isShownValue(value: unknown): value is ShownValue {
+  if (isWithheldLeaf(value)) {
+    return true;
+  }
+  if (value === null || typeof value === "string") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isShownValue);
+  }
+  if (!isUnchecked(value)) {
+    return false;
+  }
+  return typeof value.size === "number"
+    ? isFileValue(value)
+    : Object.values(value).every(isShownValue);
+}
+
+export function isBareMediaType(type: string): boolean {
+  return MEDIA_TYPE.test(type);
+}
+
+function fileTypesFrom(body: unknown): string[] | null {
+  const types = listOf(body, textFrom);
+  return types !== null &&
+    types.length > 0 &&
+    new Set(types.map((type) => type.toLowerCase())).size === types.length &&
+    types.every(isBareMediaType)
+    ? types
+    : null;
+}
+
+export function isFileValue(body: unknown): body is FileValue {
+  return (
+    isUnchecked(body) &&
+    Object.keys(body).length === 4 &&
+    typeof body.id === "string" &&
+    body.id.length > 0 &&
+    typeof body.name === "string" &&
+    oneLineWithin(body.name, 255) &&
+    showsInProse(body.name) &&
+    typeof body.type === "string" &&
+    isBareMediaType(body.type) &&
+    Number.isSafeInteger(body.size) &&
+    (body.size as number) >= 0
+  );
+}
+
+/** File metadata may become a download link only with the identifier the file route accepts. */
+export function isDownloadableFileValue(body: unknown): body is FileValue {
+  return isFileValue(body) && FILE_ID.test(body.id);
 }
 
 /** Where two paths name one place, as a key a place is looked up by. */

@@ -61,8 +61,8 @@ class ReferenceListContentCheckIntegrationSpec extends Specification {
         termed(OTHER_VERSION, 1, "Billing")
 
         expect:
-        check.problemsIn(groupId(GROUP), versionId(VERSION)) ==
-                [new ContentProblem(ContentProblemCode.NO_TERMS, new ContentPlace.Whole(ContentPart.TERMS), null)]
+        check.problemsIn(groupId(GROUP), versionId(VERSION)).problems() ==
+                [new ContentProblem(ContentProblemCode.NO_TERMS, new ContentPlace.Whole(ContentPart.TERMS), null, null)]
     }
 
     /**
@@ -74,11 +74,11 @@ class ReferenceListContentCheckIntegrationSpec extends Specification {
         def keys = terms.withIndex().collect { term, index -> termed(VERSION, positions[index], term) }
 
         when:
-        def problems = check.problemsIn(groupId(GROUP), versionId(VERSION))
+        def problems = check.problemsIn(groupId(GROUP), versionId(VERSION)).problems()
 
         then:
         problems == repeated.collect {
-            new ContentProblem(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(keys[it]), null)
+            new ContentProblem(ContentProblemCode.TERM_REPEATED, new ContentPlace.AtTerm(keys[it]), null, null)
         }
 
         where:
@@ -93,6 +93,21 @@ class ReferenceListContentCheckIntegrationSpec extends Specification {
         ["Billing", "Billing dispute"]                          | [1, 2]    || []
     }
 
+    def "a list counts every repeated term but lists only the first two hundred"() {
+        given:
+        def keys = (1..206).collect { termed(VERSION, it, "Billing") }
+
+        when:
+        def report = check.problemsIn(groupId(GROUP), versionId(VERSION))
+
+        then:
+        report.total() == 205
+        report.problems().size() == 200
+        report.problems()*.code().every { it == ContentProblemCode.TERM_REPEATED }
+        report.problems().first().place() == new ContentPlace.AtTerm(keys[1])
+        report.problems().last().place() == new ContentPlace.AtTerm(keys[200])
+    }
+
     def "terms alike in another version of the list are nothing to this one"() {
         given:
         termed(VERSION, 1, "Billing")
@@ -100,10 +115,11 @@ class ReferenceListContentCheckIntegrationSpec extends Specification {
         termed(OTHER_VERSION, 2, "billing")
 
         expect:
-        check.problemsIn(groupId(GROUP), versionId(VERSION)) == []
+        check.problemsIn(groupId(GROUP), versionId(VERSION)).problems() == []
     }
 
     private UUID termed(String version, int position, String term) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid; RETURNING.
         store.session.sql("""
                 insert into reference_list_terms (entry_version_id, position, term, meaning, created_by)
                 values (?::uuid, ?, ?, 'What it means.', ?::uuid)

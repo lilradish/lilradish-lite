@@ -43,6 +43,41 @@ class AskingSpec extends Specification {
                         : new Demand.Stands(true, FieldStanding.NEVER, null))])
     }
 
+    def "asking preserves text lines at every depth and keeps the default where code said nothing"() {
+        given:
+        def one = new Field(new FieldName("title"), null, null, new FieldShape.Text(30, TextLines.ONE),
+                new HowMany.One(), new Demand.Given(true))
+        def several = new Field(new FieldName("detail"), null, null, new FieldShape.Text(60),
+                new HowMany.Many(2), new Demand.Given(false))
+        def nested = new Field(new FieldName("details"), null, null, new FieldShape.Nested([one, several]),
+                new HowMany.One(), new Demand.Given(false))
+        def half = new Declaration(DeclarationSide.TAKES, Demands.ofQuestion(DeclarationSide.TAKES), [one, nested])
+
+        when:
+        def asked = Asking.told(half, [:])
+
+        then:
+        asked[0].lines() == TextLines.ONE
+        asked[1].lines() == null
+        asked[1].fields()*.lines() == [TextLines.ONE, TextLines.SEVERAL]
+    }
+
+    def "a selected field is told without needing a list pinned only by its sibling"() {
+        given:
+        def detail = GIVES.fields()[1]
+
+        expect:
+        Asking.told(detail, [:]) == Asking.told(GIVES, [(LIST): OFFERED])[1]
+        Asking.told(detail, [:]).fields()*.name()*.value() == ['product', 'order_reference']
+
+        when:
+        Asking.told(GIVES.fields()[0], [:])
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == 'Asking was handed no terms for list ' + LIST.value()
+    }
+
     def "a question is told as its instruction and both halves, field by field, each list's terms beside its field"() {
         when:
         def asking = Asking.of(INSTRUCTION, TAKES, GIVES, [(LIST): OFFERED])

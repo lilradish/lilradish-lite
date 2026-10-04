@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BROKEN_HERE, NOT_REACHED, RequestFailed } from "../../api/problem";
 import { serving } from "../../testutil/answering";
@@ -9,6 +9,10 @@ import { post } from "./http";
 import { useAction } from "./useAction";
 
 vi.mock("../report/reportCaught", () => ({ reportCaught: vi.fn() }));
+
+beforeEach(() => {
+  vi.mocked(reportCaught).mockClear();
+});
 
 describe("useAction", () => {
   it("says it is running from the moment the reader asks", () => {

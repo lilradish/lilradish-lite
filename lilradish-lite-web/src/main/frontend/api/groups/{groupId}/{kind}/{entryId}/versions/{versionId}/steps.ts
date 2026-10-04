@@ -4,6 +4,9 @@ import { atVersion } from "../../versions";
 import {
   workflowFrom,
   type BindingSource,
+  type SearchField,
+  type SearchSource,
+  type SearchStanding,
   type WorkflowVersion,
 } from "../{versionId}";
 
@@ -36,9 +39,18 @@ export interface SentCase {
   readonly bindings: readonly SentBinding[];
 }
 
+export type SentSearchPart =
+  { readonly text: string } | { readonly from: SearchSource };
+
 export type SentRuns =
   | { readonly kind: "question" | "workflow"; readonly version: string }
   | { readonly kind: "code_step"; readonly codeStep: string | null }
+  | {
+      readonly kind: "search";
+      readonly searchWay: string | null;
+      readonly question: readonly SentSearchPart[];
+      readonly standings: Record<SearchField, SearchStanding | null>;
+    }
   | {
       readonly kind: "route";
       readonly discriminator: BindingSource | null;
@@ -48,7 +60,7 @@ export type SentRuns =
 
 /**
  * One step as it is sent: exactly the members what it runs takes, a producer, tries and a reviewer only where
- * it runs a question or a code step.
+ * it runs a question, code step or search.
  */
 export interface SentStep {
   /** The key it was read under, which keeps what it pins; none for a step added. */

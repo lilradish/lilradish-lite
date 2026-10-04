@@ -24,9 +24,9 @@ interface Row {
   readonly here: boolean;
 }
 
-const ADA: Row = { id: "u1", name: "Ada Lovelace", here: false };
-const ADAM: Row = { id: "u2", name: "Adam Smith", here: false };
-const ADAH: Row = { id: "u3", name: "Adah Menken", here: true };
+const AVO: Row = { id: "u1", name: "Avo Lumerace", here: false };
+const AVOM: Row = { id: "u2", name: "Avom Sivva", here: false };
+const AVOH: Row = { id: "u3", name: "Avoh Mivven", here: true };
 
 const EMPTY = "Nothing matches that.";
 
@@ -203,14 +203,14 @@ describe("FindOne", () => {
     const { box, searches } = finding();
     type(box, "a");
     wait(QUIET_MS - 100);
-    type(box, "ad");
+    type(box, "av");
 
     wait(QUIET_MS - 1);
     const beforeThePause = searches.length;
     wait(1);
 
     expect(beforeThePause).toBe(0);
-    expect(searches.map((each) => each.typed)).toEqual(["ad"]);
+    expect(searches.map((each) => each.typed)).toEqual(["av"]);
   });
 
   /** The server's own test for nothing typed is this one, and a second test would be a second answer. */
@@ -238,7 +238,7 @@ describe("FindOne", () => {
 
   /** Which part of it matches what is the server's to say, so none of it is taken away here. */
   it.each([
-    ["with the spaces round it", " ada "],
+    ["with the spaces round it", " avo "],
     ["a tab, which is not a space separator", String.fromCodePoint(0x09)],
     [
       "a zero-width no-break space, which trimming would take",
@@ -255,13 +255,13 @@ describe("FindOne", () => {
 
   it("abandons a search still out once a different one is sent", () => {
     const { box, searches } = finding();
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
 
-    type(box, "ada");
+    type(box, "avo");
     wait(QUIET_MS);
 
-    expect(searches.map((each) => each.typed)).toEqual(["ad", "ada"]);
+    expect(searches.map((each) => each.typed)).toEqual(["av", "avo"]);
     expect(searches[0]!.signal.aborted).toBe(true);
     expect(searches[1]!.signal.aborted).toBe(false);
   });
@@ -269,18 +269,18 @@ describe("FindOne", () => {
   /** A refusal may have been passing, and typing the same again is how a reader asks again. */
   it("asks again when the search sent is the one that was refused", async () => {
     const { box, searches, refuse, answer } = finding();
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
     await refuse();
 
-    type(box, "adx");
-    type(box, "ad");
+    type(box, "avx");
+    type(box, "av");
     wait(QUIET_MS);
     const whileAskedAgain = status();
     const refusalWhileAskedAgain = screen.queryByRole("alert");
-    await answer({ items: [ADA], more: false });
+    await answer({ items: [AVO], more: false });
 
-    expect(searches.map((each) => each.typed)).toEqual(["ad", "ad"]);
+    expect(searches.map((each) => each.typed)).toEqual(["av", "av"]);
     expect(whileAskedAgain).toBe("Still reading…");
     expect(refusalWhileAskedAgain).toBeNull();
     expect(status()).toBe("1 found");
@@ -288,18 +288,18 @@ describe("FindOne", () => {
 
   /** Typed away and back within one pause: what is sent is what was sent already. */
   it("keeps the pick, and asks nothing, when the search sent is the one already answered", async () => {
-    const { box, picks, searches } = await searchedFor("ad", {
-      items: [ADA],
+    const { box, picks, searches } = await searchedFor("av", {
+      items: [AVO],
       more: false,
     });
-    fireEvent.click(radio("Ada Lovelace"));
+    fireEvent.click(radio("Avo Lumerace"));
 
-    type(box, "ada");
-    type(box, "ad");
+    type(box, "avo");
+    type(box, "av");
     wait(QUIET_MS);
 
-    expect(picks).toEqual([ADA]);
-    expect(radio("Ada Lovelace").checked).toBe(true);
+    expect(picks).toEqual([AVO]);
+    expect(radio("Avo Lumerace").checked).toBe(true);
     expect(searches).toHaveLength(1);
   });
 
@@ -308,11 +308,11 @@ describe("FindOne", () => {
     const title = vi.fn((row: Row) => row.name);
     const rows = Array.from({ length: 20 }, (_unused, index) => ({
       id: `u${index}`,
-      name: `Ada ${index}`,
+      name: `Avo ${index}`,
       here: false,
     }));
     const { box } = await searchedFor(
-      "ad",
+      "av",
       { items: rows, more: false },
       {
         title,
@@ -320,19 +320,19 @@ describe("FindOne", () => {
     );
     const drawnSoFar = title.mock.calls.length;
 
-    for (const text of ["ada", "ada ", "ada l", "ada lo", "ada lov"]) {
+    for (const text of ["avo", "avo ", "avo l", "avo lu", "avo lum"]) {
       type(box, text);
     }
 
     expect(drawnSoFar).toBeGreaterThanOrEqual(rows.length);
     expect(title.mock.calls.length).toBe(drawnSoFar);
-    expect(box).toHaveValue("ada lov");
+    expect(box).toHaveValue("avo lum");
   });
 
   it("says it is still reading while a search is out", () => {
     const { box } = finding();
 
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
 
     expect(status()).toBe("Still reading…");
@@ -343,24 +343,24 @@ describe("FindOne", () => {
     ["the caller's words where nothing was found", [], false, EMPTY],
     [
       "how many were found where all of them are shown",
-      [ADA, ADAM],
+      [AVO, AVOM],
       false,
       "2 found",
     ],
     [
       "that there are more, and how to reach them, where some are not shown",
-      [ADA, ADAM],
+      [AVO, AVOM],
       true,
       "More were found than the 2 shown. Type more to narrow them down.",
     ],
   ])("says %s", async (_case, items, more, said) => {
-    await searchedFor("ad", { items, more });
+    await searchedFor("av", { items, more });
 
     expect(status()).toBe(said);
   });
 
   it("says how many it found as a reading, in the secondary text colour and no notice", async () => {
-    await searchedFor("ad", { items: [ADA], more: false });
+    await searchedFor("av", { items: [AVO], more: false });
 
     const said = within(screen.getByRole("status")).getByText("1 found");
 
@@ -373,14 +373,14 @@ describe("FindOne", () => {
     ["nothing was found", [], false, EMPTY],
     [
       "more were found than shown",
-      [ADA],
+      [AVO],
       true,
       "More were found than the 1 shown. Type more to narrow them down.",
     ],
   ])(
     "says as an information notice, inside the region that announces it, that %s",
     async (_case, items, more, said) => {
-      await searchedFor("ad", { items, more });
+      await searchedFor("av", { items, more });
 
       expect(infoNotices(screen.getByRole("status"))).toEqual([said]);
       expect(screen.queryByRole("alert")).toBeNull();
@@ -392,9 +392,9 @@ describe("FindOne", () => {
     const { box, answer } = finding();
     const region = screen.getByRole("status");
 
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
-    await answer({ items: [ADA], more: false });
+    await answer({ items: [AVO], more: false });
 
     expect(screen.getByRole("status")).toBe(region);
     expect(region.textContent).toBe("1 found");
@@ -403,7 +403,7 @@ describe("FindOne", () => {
   /** A refusal said beside "nothing matches" would tell the reader nothing does. */
   it("shows a refused search in the caller's words, and says nothing was found nowhere", async () => {
     const { box, refuse } = finding();
-    type(box, "ad");
+    type(box, "av");
     wait(QUIET_MS);
 
     await refuse();
@@ -418,14 +418,14 @@ describe("FindOne", () => {
 
   /** Native radios in one group: the arrow keys and the announcing are the browser's own. */
   it("offers every match as a radio in one group named for the matches, none picked", async () => {
-    await searchedFor("ad", { items: [ADA, ADAM], more: false });
+    await searchedFor("av", { items: [AVO, AVOM], more: false });
 
     const group = screen.getByRole("radiogroup", { name: "Matches" });
     const radios = within(group).getAllByRole<HTMLInputElement>("radio");
 
     expect(radios.map((each) => each.labels?.[0]?.textContent)).toEqual([
-      "Ada Lovelace",
-      "Adam Smith",
+      "Avo Lumerace",
+      "Avom Sivva",
     ]);
     expect(radios.every((each) => each.type === "radio")).toBe(true);
     expect(new Set(radios.map((each) => each.name)).size).toBe(1);
@@ -433,48 +433,48 @@ describe("FindOne", () => {
   });
 
   it("picks the one match chosen, and lets go of the one chosen before", async () => {
-    const { picks } = await searchedFor("ad", {
-      items: [ADA, ADAM],
+    const { picks } = await searchedFor("av", {
+      items: [AVO, AVOM],
       more: false,
     });
-    fireEvent.click(radio("Ada Lovelace"));
+    fireEvent.click(radio("Avo Lumerace"));
 
-    fireEvent.click(radio("Adam Smith"));
+    fireEvent.click(radio("Avom Sivva"));
 
-    expect(picks).toEqual([ADA, ADAM]);
-    expect(radio("Adam Smith").checked).toBe(true);
-    expect(radio("Ada Lovelace").checked).toBe(false);
+    expect(picks).toEqual([AVO, AVOM]);
+    expect(radio("Avom Sivva").checked).toBe(true);
+    expect(radio("Avo Lumerace").checked).toBe(false);
   });
 
   it("lets go of the pick once a different search is sent, and not while it is typed", async () => {
-    const { box, picks } = await searchedFor("ad", {
-      items: [ADA],
+    const { box, picks } = await searchedFor("av", {
+      items: [AVO],
       more: false,
     });
-    fireEvent.click(radio("Ada Lovelace"));
+    fireEvent.click(radio("Avo Lumerace"));
 
-    type(box, "ada");
+    type(box, "avo");
     wait(QUIET_MS - 1);
-    const whileTyped = radio("Ada Lovelace").checked;
+    const whileTyped = radio("Avo Lumerace").checked;
     wait(1);
 
     expect(whileTyped).toBe(true);
-    expect(picks).toEqual([ADA, null]);
+    expect(picks).toEqual([AVO, null]);
     expect(screen.queryByRole("radio")).toBeNull();
   });
 
   it("takes back everything it offered once the box holds nothing again", async () => {
-    const { box, picks, searches } = await searchedFor("ad", {
-      items: [ADA],
+    const { box, picks, searches } = await searchedFor("av", {
+      items: [AVO],
       more: false,
     });
-    fireEvent.click(radio("Ada Lovelace"));
+    fireEvent.click(radio("Avo Lumerace"));
 
     type(box, "");
     wait(QUIET_MS);
     await act(async () => {});
 
-    expect(picks).toEqual([ADA, null]);
+    expect(picks).toEqual([AVO, null]);
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(status()).toBe("");
     expect(searches).toHaveLength(1);
@@ -482,8 +482,8 @@ describe("FindOne", () => {
 
   /** The refusal is the reader's to act on, and the pick is what they would act with. */
   it("keeps the pick when what it was picked for is refused", async () => {
-    const { picks } = await searchedFor("ad", { items: [ADA], more: false });
-    fireEvent.click(radio("Ada Lovelace"));
+    const { picks } = await searchedFor("av", { items: [AVO], more: false });
+    fireEvent.click(radio("Avo Lumerace"));
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
@@ -492,24 +492,24 @@ describe("FindOne", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "Confirming refused: OTHER_REFUSAL",
     );
-    expect(radio("Ada Lovelace").checked).toBe(true);
-    expect(picks).toEqual([ADA]);
+    expect(radio("Avo Lumerace").checked).toBe(true);
+    expect(picks).toEqual([AVO]);
   });
 
   /** What is and is not isolated is `isolated`'s to say; here, only that a title goes through it. */
   it("isolates a title given as words", async () => {
-    await searchedFor("ad", { items: [ADA], more: false });
+    await searchedFor("av", { items: [AVO], more: false });
 
-    const label = radio("Ada Lovelace").labels![0]!;
+    const label = radio("Avo Lumerace").labels![0]!;
 
-    expect(within(label).getByText("Ada Lovelace").tagName).toBe("BDI");
+    expect(within(label).getByText("Avo Lumerace").tagName).toBe("BDI");
   });
 
   /** Not offered is no option: a disabled one would still be a stop on the way through. */
   it("says why a match is not offered, in words outside the choice", async () => {
     await searchedFor(
-      "ad",
-      { items: [ADA, ADAH], more: false },
+      "av",
+      { items: [AVO, AVOH], more: false },
       { whyNot: notHere },
     );
 
@@ -519,9 +519,9 @@ describe("FindOne", () => {
       within(screen.getByRole("radiogroup"))
         .getAllByRole("radio")
         .map((each) => (each as HTMLInputElement).labels?.[0]?.textContent),
-    ).toEqual(["Ada Lovelace"]);
+    ).toEqual(["Avo Lumerace"]);
     expect(withheld.map((each) => each.textContent)).toEqual([
-      `Adah Menken${NOT_OFFERED}`,
+      `Avoh Mivven${NOT_OFFERED}`,
     ]);
     expect(withheld[0]!.querySelector("input, button")).toBeNull();
     expect(status()).toBe("2 found");
@@ -529,14 +529,14 @@ describe("FindOne", () => {
 
   it("isolates the title of a match it does not offer, and says why as an information notice beside it", async () => {
     await searchedFor(
-      "adah",
-      { items: [ADAH], more: false },
+      "avoh",
+      { items: [AVOH], more: false },
       { whyNot: notHere },
     );
 
     const withheld = screen.getByRole("listitem");
 
-    expect(within(withheld).getByText("Adah Menken").tagName).toBe("BDI");
+    expect(within(withheld).getByText("Avoh Mivven").tagName).toBe("BDI");
     expect(infoNotices(withheld)).toEqual([NOT_OFFERED]);
   });
 
@@ -546,8 +546,8 @@ describe("FindOne", () => {
    */
   it("names what it does not offer a list outright, its markers being taken away", async () => {
     await searchedFor(
-      "ad",
-      { items: [ADAH], more: false },
+      "av",
+      { items: [AVOH], more: false },
       { whyNot: notHere },
     );
 
@@ -559,15 +559,15 @@ describe("FindOne", () => {
 
   it("draws no choice at all where every match is withheld", async () => {
     await searchedFor(
-      "adah",
-      { items: [ADAH], more: false },
+      "avoh",
+      { items: [AVOH], more: false },
       { whyNot: notHere },
     );
 
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.queryAllByRole("radio")).toEqual([]);
     expect(screen.getByRole("listitem").textContent).toBe(
-      `Adah Menken${NOT_OFFERED}`,
+      `Avoh Mivven${NOT_OFFERED}`,
     );
   });
 

@@ -75,6 +75,11 @@ const NOT_DONE = {
  * control is left offering what was just refused.
  */
 export function MembersPage() {
+  const { groupId = "" } = useParams();
+  return <MembersInGroup key={groupId} />;
+}
+
+function MembersInGroup() {
   const standingRead = useStandingRead();
   const reloadStanding = standingRead.reload;
   const { groupId = "", subjectId } = useParams();
@@ -200,30 +205,29 @@ export function MembersPage() {
             : say("members.heading", { group: isolatedInText(group.name) })
         }
         actions={
-          <>
-            <CurrencyPicker
-              // Read again as the right to change it moves, which is what the currencies offered follow.
-              key={String(mayChange)}
+          mayChange ? (
+            <BringSomebodyIn
               groupId={groupId}
-              onChosen={(currency) =>
-                setSaid({
-                  severity: "info",
-                  words: say("currency.chosen", { currency }),
-                })
-              }
+              changing={changing}
+              refused={asked?.place === "bringIn" ? changing.problem : null}
+              onAsk={setAsked}
               onMoved={reloadStanding}
             />
-            {mayChange ? (
-              <BringSomebodyIn
-                groupId={groupId}
-                changing={changing}
-                refused={asked?.place === "bringIn" ? changing.problem : null}
-                onAsk={setAsked}
-                onMoved={reloadStanding}
-              />
-            ) : null}
-          </>
+          ) : null
         }
+      />
+      <CurrencyPicker
+        // Read again as the right to change it moves, which is what the currencies offered follow.
+        key={`${groupId}:${String(mayChange)}`}
+        groupId={groupId}
+        mayChange={mayChange}
+        onChosen={(currency) =>
+          setSaid({
+            severity: "info",
+            words: say("currency.chosen", { currency }),
+          })
+        }
+        onMoved={reloadStanding}
       />
       <FilterField
         label={say("person.numberOrName")}

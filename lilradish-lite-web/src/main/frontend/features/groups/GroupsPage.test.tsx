@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -10,9 +10,6 @@ import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { answered } from "../../testutil/standingRead";
 import { GROUPS_PAGE, GroupsPage } from "./GroupsPage";
-
-/** How long typing has to pause before what was typed is handed on. */
-const QUIET_MS = 300;
 
 const GROUPS = "/api/groups";
 
@@ -42,10 +39,10 @@ const TRIAGE = {
   memberCount: 1,
 };
 
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-000000000130",
   userId: "000130",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
 };
 
 function listOf(...groups: (typeof PAYROLL)[]): readonly [string, number] {
@@ -69,7 +66,7 @@ function opening(
   const sent = serving({
     [`GET ${GROUPS}`]: [listOf(EMPTY_ROOM, PAYROLL)],
     "GET /api/pool/search": [
-      [JSON.stringify({ items: [ADA], more: false }), 200],
+      [JSON.stringify({ items: [AVO], more: false }), 200],
     ],
     ...routes,
   });
@@ -120,14 +117,6 @@ async function listed(): Promise<string[][]> {
 
 function filterBox(): HTMLElement {
   return screen.getByRole("searchbox", { name: "Part of a group's name" });
-}
-
-/** The pause that hands typing on, waited out in real time. */
-async function typedInto(box: HTMLElement, text: string) {
-  await userEvent.type(box, text);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  });
 }
 
 describe("GroupsPage", () => {
@@ -226,7 +215,7 @@ describe("GroupsPage", () => {
     const { sent, at } = opening(GROUPS_PAGE);
     await listed();
 
-    await typedInto(filterBox(), "pay");
+    await userEvent.type(filterBox(), "pay");
 
     await waitFor(() => expect(at()).toBe(`${GROUPS_PAGE}?filter=pay`));
     await waitFor(() =>
@@ -279,12 +268,12 @@ describe("GroupsPage", () => {
       screen.getByRole("textbox", { name: "Key" }),
       "triage",
     );
-    await typedInto(
+    await userEvent.type(
       screen.getByRole("searchbox", { name: "User number or name" }),
-      "ada",
+      "avo",
     );
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -294,7 +283,7 @@ describe("GroupsPage", () => {
     await within(table()).findByText("TRIAGE");
     expect(requestsTo(sent)).toEqual([
       `GET ${GROUPS}?sort=name`,
-      "GET /api/pool/search?search=ada",
+      "GET /api/pool/search?search=avo",
       `POST ${GROUPS}`,
       `GET ${GROUPS}?sort=name`,
     ]);
@@ -318,12 +307,12 @@ describe("GroupsPage", () => {
       screen.getByRole("textbox", { name: "Key" }),
       "TRIAGE",
     );
-    await typedInto(
+    await userEvent.type(
       screen.getByRole("searchbox", { name: "User number or name" }),
-      "ada",
+      "avo",
     );
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -438,12 +427,12 @@ describe("GroupsPage", () => {
       screen.getByRole("textbox", { name: "Key" }),
       "triage",
     );
-    await typedInto(
+    await userEvent.type(
       screen.getByRole("searchbox", { name: "User number or name" }),
-      "ada",
+      "avo",
     );
     await userEvent.click(
-      await screen.findByRole("radio", { name: "000130 Ada Lovelace" }),
+      await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Create" }));

@@ -52,6 +52,12 @@ function headsOf(columns: readonly { label: string; sortKey?: string }[]) {
   return columns.map((column) => [column.label, column.sortKey]);
 }
 
+function figuresOf(columns: readonly { label: string; numeric?: true }[]) {
+  return columns
+    .filter((column) => column.numeric === true)
+    .map((column) => column.label);
+}
+
 describe("modelColumns", () => {
   it("heads the models with the model, its mode and each of its figures, every one sorting by what it shows", () => {
     expect(headsOf(modelColumns())).toEqual([
@@ -62,6 +68,16 @@ describe("modelColumns", () => {
       ["Reviews", "reviews"],
       ["Refusing", "refusing"],
       ["Did not fit", "didNotFit"],
+    ]);
+  });
+
+  it("sets each count as a figure, and neither the model nor its mode", () => {
+    expect(figuresOf(modelColumns())).toEqual([
+      "Productions",
+      "Refused on review",
+      "Reviews",
+      "Refusing",
+      "Did not fit",
     ]);
   });
 
@@ -109,6 +125,14 @@ describe("systemColumns", () => {
       ["Went wrong", "wentWrong"],
       ["Never came back", "neverCameBack"],
       ["Turned away", "turnedAway"],
+    ]);
+  });
+
+  it("sets each count as a figure, and not the model", () => {
+    expect(figuresOf(systemColumns())).toEqual([
+      "Went wrong",
+      "Never came back",
+      "Turned away",
     ]);
   });
 

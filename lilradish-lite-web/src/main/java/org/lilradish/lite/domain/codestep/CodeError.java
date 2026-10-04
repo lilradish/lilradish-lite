@@ -21,19 +21,15 @@ public sealed interface CodeError permits CodeError.Fault, CodeError.Said {
      *     back, no further than the outermost many holding what is wrong, and for a member nothing declares, the field
      *     holding it, empty at the first level; at the try's start, the field of what it takes or gives back that no
      *     longer matches; empty exactly where the reason is about no field
-     * @param member the name of a member nothing declares, as the code wrote it, cleaned for one line and cut past
-     *     64 characters, marked so; given exactly where that is the reason
+     * @param member the member nothing declares, given exactly where that is the reason
      * @param readBy what reads the field that no longer matches, given exactly where that is the reason
      */
     record Fault(
             CodeErrorReason reason,
             List<FieldName> path,
-            @DoNotLog @Nullable String member,
-            @Nullable ReadBy readBy) implements CodeError {
-
-        private static final int LONGEST_MEMBER = 64;
-
-        private static final String CUT = "…";
+            @DoNotLog @Nullable UndeclaredMember member,
+            @Nullable ReadBy readBy)
+            implements CodeError {
 
         public Fault {
             requireNonNull(reason, "CodeError.Fault reason must not be null");
@@ -47,15 +43,19 @@ public sealed interface CodeError permits CodeError.Fault, CodeError.Said {
             }
             boolean placed =
                     switch (reason) {
-                        case GAVE_NOTHING, FAILED_ON_THIS_SIDE, SAID_NOTHING -> path.isEmpty();
+                        case GAVE_NOTHING, FAILED_ON_THIS_SIDE, SAID_NOTHING, FILE_TOTAL_TOO_LARGE -> path.isEmpty();
                         case NOT_DECLARED -> true;
                         case NOTHING_GIVEN,
                                 NOT_ITS_KIND,
+                                LINE_BREAK,
                                 TOO_LONG,
                                 TOO_MANY,
                                 NOT_A_TERM,
                                 UNKEEPABLE,
                                 TOO_LONG_TO_KEEP,
+                                FILE_TYPE_UNUSABLE,
+                                FILE_NAME_UNUSABLE,
+                                FILE_TOO_LARGE,
                                 TAKES_A_LIST_NOT_HERE,
                                 GIVES_A_LIST_NOT_HERE,
                                 TAKES_OTHERWISE,
@@ -65,28 +65,40 @@ public sealed interface CodeError permits CodeError.Fault, CodeError.Said {
                 throw new IllegalArgumentException("CodeError.Fault " + reason.published()
                         + (path.isEmpty() ? " names the field it is about" : " is about no field, and names none"));
             }
-            member = member == null ? null : oneLine(member);
         }
+    }
 
-        /* Read back from the store it is cleaned again, and must come out as it went in: the mark stands past the
-         * 64th character, so a name cut once is cut the same way twice. */
-        private static String oneLine(String written) {
-            StringBuilder kept = new StringBuilder(Math.min(written.length(), 2 * LONGEST_MEMBER));
+    /**
+     * @param cut whether the name was cut already, retained when reconstructing a stored name
+     */
+    record UndeclaredMember(String name, boolean cut) {
+
+        private static final int LONGEST = 64;
+
+        /* Also built from the store's name, already cleaned and cut, which cleaning leaves as it is; a cut carried in
+         * must stay, as a name cut to 64 characters no longer shows it. */
+        public UndeclaredMember {
+            requireNonNull(name, "CodeError.UndeclaredMember name must not be null");
+            StringBuilder kept = new StringBuilder(Math.min(name.length(), 2 * LONGEST));
             int count = 0;
             int index = 0;
-            while (index < written.length()) {
-                int codePoint = written.codePointAt(index);
+            while (index < name.length()) {
+                int codePoint = name.codePointAt(index);
                 index += Character.charCount(codePoint);
                 if (CharacterStanding.of(codePoint).refusedInAVisibleLine()) {
                     continue;
                 }
-                if (count == LONGEST_MEMBER) {
-                    return kept.append(CUT).toString();
+                if (count == LONGEST) {
+                    cut = true;
+                    break;
                 }
                 kept.appendCodePoint(codePoint);
                 count++;
             }
-            return kept.toString();
+            if (cut && count != LONGEST) {
+                throw new IllegalArgumentException("CodeError.UndeclaredMember is cut only at 64 characters");
+            }
+            name = kept.toString();
         }
     }
 

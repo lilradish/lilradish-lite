@@ -15,13 +15,10 @@ import static org.lilradish.lite.domain.run.fixture.Runs.tidy
 import static org.lilradish.lite.domain.run.fixture.Runs.unstarted
 
 import org.lilradish.lite.domain.identity.UserId
+import org.lilradish.lite.domain.run.RunInTree
 import org.lilradish.lite.domain.workflow.StepProducer
 import spock.lang.Specification
 
-/**
- * Whether a code step's try handed over is still the one to make once its tree is held, worked out from the run
- * alone: nothing but that decides whether the engine's thread writes it and runs the code.
- */
 class EngineCodesSpec extends Specification {
 
     static final UserId ASKER = new UserId("000c01")
@@ -31,7 +28,7 @@ class EngineCodesSpec extends Specification {
         def running = run([step], stopped, workflowStopped ? stop(STARTED) : null)
 
         expect:
-        EngineCodes.due(running, running.steps()[0], pending(number, null)) == due
+        EngineCodes.due(RunInTree.root(running), running.steps()[0], pending(number, null), Deployments.DEEP_ENOUGH.maximumDepth()) == due
 
         where:
         step                                                                  | number | stopped | workflowStopped || due
@@ -52,7 +49,7 @@ class EngineCodesSpec extends Specification {
         def running = run([step], stopped, workflowStopped ? stop(STARTED) : null)
 
         expect:
-        EngineCodes.due(running, running.steps()[0], pending(number, ASKER)) == due
+        EngineCodes.due(RunInTree.root(running), running.steps()[0], pending(number, ASKER), Deployments.DEEP_ENOUGH.maximumDepth()) == due
 
         where:
         step                                                                  | number | stopped | workflowStopped || due
@@ -70,7 +67,7 @@ class EngineCodesSpec extends Specification {
         def running = run([step])
 
         when:
-        EngineCodes.due(running, running.steps()[0], pending(1, asker))
+        EngineCodes.due(RunInTree.root(running), running.steps()[0], pending(1, asker), Deployments.DEEP_ENOUGH.maximumDepth())
 
         then:
         def refused = thrown(IllegalStateException)

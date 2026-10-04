@@ -5,12 +5,14 @@ import type { FillReason } from "../../api/filling";
 import CASES from "./writing.cases.json";
 import {
   codePointsIn,
+  hasLineBreak,
   holdsNothing,
+  holdsNothingFor,
   valueRefused,
   type WrittenField,
 } from "./writing";
 
-type WrittenKind = Exclude<FieldKind, "fields">;
+type WrittenKind = Exclude<FieldKind, "fields" | "file">;
 
 /**
  * The page's half of how a value is written, run over the one table the server's half is run over too
@@ -67,6 +69,52 @@ describe("holdsNothing", () => {
       expect(holdsNothing(typedIn(row))).toBe(row.refused === "missing");
     },
   );
+});
+
+describe("line choice", () => {
+  const text: WrittenField = {
+    name: "value",
+    kind: "text",
+    longest: 20,
+    mustBeGiven: false,
+    lines: "one",
+  };
+
+  it.each([0x0a, 0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029])(
+    "refuses code point %i as a line break before empty text, prose and length",
+    (point) => {
+      const breakText = String.fromCodePoint(point);
+
+      expect(hasLineBreak(breakText)).toBe(true);
+      expect(holdsNothingFor(text, breakText)).toBe(false);
+      expect(valueRefused(text, breakText)).toBe("line_break");
+      expect(valueRefused(text, `a${breakText}b`)).toBe("line_break");
+    },
+  );
+
+  it("keeps a line feed under a several-line or older text field, and leaves ordinary spaces empty", () => {
+    const newline = String.fromCodePoint(0x0a);
+
+    expect(
+      valueRefused({ ...text, lines: "several" }, `a${newline}b`),
+    ).toBeNull();
+    expect(
+      valueRefused({ ...text, lines: undefined }, `a${newline}b`),
+    ).toBeNull();
+    expect(valueRefused(text, "   ")).toBeNull();
+    expect(hasLineBreak("plain text")).toBe(false);
+  });
+
+  it("names a one-line break before a direction or tag character", () => {
+    const newline = String.fromCodePoint(0x0a);
+
+    expect(
+      valueRefused(text, `a${String.fromCodePoint(0x202e)}${newline}`),
+    ).toBe("line_break");
+    expect(
+      valueRefused(text, `a${String.fromCodePoint(0xe0041)}${newline}`),
+    ).toBe("line_break");
+  });
 });
 
 describe("valueRefused", () => {

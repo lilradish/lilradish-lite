@@ -1,5 +1,5 @@
--- The directory, which this system reads and never writes. No key joins it to subjects either way:
--- somebody leaves the directory and stays the subject every act of theirs is recorded against.
+-- No foreign key joins people to subjects in either direction; their rows can exist independently.
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions and generated always use PostgreSQL's syntax and semantics.
 create table people (
     user_id       text not null,
     display_name  text not null,

@@ -49,6 +49,9 @@ describe("refusalSentence", () => {
     expect(unreadable).not.toBe(
       refusalSentence({ code: NOT_A_PROBLEM_DOCUMENT }),
     );
+    expect(refusalSentence({ status: 200, code: NOT_A_PROBLEM_DOCUMENT })).toBe(
+      "The server answered, but this page could not read the answer. Check what happened before trying again.",
+    );
   });
 
   /**

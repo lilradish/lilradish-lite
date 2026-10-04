@@ -67,21 +67,21 @@ class RunStepsControllerIntegrationSpec extends Specification {
                     [new FillFieldAnswer("summary", null, "One line.", "text", 1000, null, true, null, null)])]
 
     static final StepAnswers.FromAnswer FROM_TICKET =
-            new StepAnswers.FromAnswer("run_input", "ticket", null, null, null, null)
+            new StepAnswers.FromAnswer("run_input", "ticket", null, null, null, null, null, null, null)
 
     /** Waiting on a review the reader may give, with what went in drawn beside it. */
     static final StepAnswers.StepRowAnswer ROW = new StepAnswers.StepRowAnswer(STEP, 1, "summarise",
-            new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null),
+            new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null, null, null), null,
             new StepAnswers.WhoAnswer("person", null, null, null), new StepAnswers.WhoAnswer("person", null, null, null),
             "waiting",
             new StepAnswers.WhereAnswer("waiting_on_review", null, null, null, null, null, 1,
                     [new StepAnswers.WaitingValueAnswer("summary", "review_at_gate")], null, null, null,
-                    "2026-09-26T09:00:00Z", null, null, "review_at_gate", null),
-            [new StepAnswers.TakesFromAnswer("text", FROM_TICKET)],
+                    "2026-09-26T09:00:00Z", null, null, "review_at_gate", null, null, null, null, null, null, null, null, null),
+            [new StepAnswers.TakesFromAnswer("text", FROM_TICKET, null)],
             new StepAnswers.TriesAnswer(1, 2, false), new StepAnswers.CostAnswer(false, null, null, null, null, null),
             [new StepAnswers.ShownValueAnswer("summary", NODES.stringNode("A printer fire."), null, "waiting_on_review",
                     null)],
-            [new StepAnswers.WentInAnswer("text", FROM_TICKET, NODES.nullNode(), null, null)],
+            [new StepAnswers.WentInAnswer("text", FROM_TICKET, NODES.nullNode(), null, null, null, null)],
             "try", null, ["review"], [])
 
     @Autowired
@@ -140,8 +140,8 @@ class RunStepsControllerIntegrationSpec extends Specification {
                         "at":{"stepId":"${STEP}","name":"summarise"},"acts":["stop","rename"],
                         "progress":{"done":0,"of":1}},
                  "declarations":{"${QUESTION_VERSION}":{
-                     "takes":[{"name":"text","label":"Ticket","kind":"text","longest":4000,"mustBeGiven":true}],
-                     "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true}]}},
+                     "takes":[{"name":"text","label":"Ticket","kind":"text","longest":4000,"mustBeGiven":true,"lines":"several"}],
+                     "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true,"lines":"several"}]}},
                  "gaveBack":{"declares":"values","standing":[]},
                  "steps":[{"stepId":"${STEP}","order":1,"name":"summarise",
                            "runs":{"kind":"question","entryId":"${QUESTION}","name":"Summarise","version":2,
@@ -177,19 +177,19 @@ class RunStepsControllerIntegrationSpec extends Specification {
                 [new StepAnswers.TriedValueAnswer("summary", NODES.stringNode("A fire."), null, "refused", null,
                         new StepAnswers.DecisionAnswer("refused", "Too short.", null), null)],
                 new StepAnswers.ReviewAnswer(true, new StepAnswers.WhoAnswer("person", new PersonAnswer("000003", null),
-                        null, null), null, null, null),
-                "refused_on_review", null, null, null, null, null,
-                new StepAnswers.CostAnswer(false, null, null, null, null, null))
+                        null, null), null, null, null, null, null),
+                "refused_on_review", null, null, null, null, null, null,
+                new StepAnswers.CostAnswer(false, null, null, null, null, null), null, null, null)
         given(steps.step(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), READER)).willReturn(
                 new StepAnswers.StepAnswer(HEADER, DECLARED, ROW,
-                        [new StepAnswers.WentInAnswer("text", FROM_TICKET, NODES.stringNode("Fire."), null, null)],
+                        [new StepAnswers.WentInAnswer("text", FROM_TICKET, NODES.stringNode("Fire."), null, null, null, null)],
                         "try",
-                        [new StepAnswers.CameOutAnswer("summary", null, "refused")],
+                        [new StepAnswers.CameOutAnswer("summary", null, "refused", null, null, null)],
                         [tried],
                         new StepAnswers.AnsweringAnswer(2, false, "Say what the ticket is about.",
                                 DECLARED[QUESTION_VERSION.toString()].gives(),
-                                new StepAnswers.LastRefusedAnswer(1, tried.values())),
-                        RunSteps.REREAD_AFTER_SECONDS))
+                                new StepAnswers.LastRefusedAnswer(1, tried.values()), null, null, null),
+                        "# {{text}}", RunSteps.REREAD_AFTER_SECONDS))
 
         when:
         def answered = JSON.readTree(reading(ADDRESS + "/" + STEP).response.contentAsString)
@@ -205,9 +205,10 @@ class RunStepsControllerIntegrationSpec extends Specification {
         answered.get("cameOut") == JSON.readTree('[{"field":"summary","now":"refused"}]')
         answered.get("wentIn") == JSON.readTree('[{"input":"text","from":{"kind":"run_input","path":"ticket"},"value":"Fire."}]')
         answered.get("wentInFrom").asString() == "try"
+        answered.get("drawing").asString() == "# {{text}}"
         answered.get("answering") == JSON.readTree("""
                 {"number":2,"beyond":false,"instruction":"Say what the ticket is about.",
-                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true}],
+                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true,"lines":"several"}],
                  "lastRefused":{"number":1,"values":[{"field":"summary","value":"A fire.","now":"refused",
                                 "decision":{"outcome":"refused","why":"Too short."}}]}}""")
 
@@ -224,8 +225,8 @@ class RunStepsControllerIntegrationSpec extends Specification {
         given(steps.step(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), READER)).willReturn(
                 new StepAnswers.StepAnswer(HEADER, DECLARED, ROW, null, null, null, [],
                         new StepAnswers.AnsweringAnswer(2, true, null, DECLARED[QUESTION_VERSION.toString()].gives(),
-                                null),
-                        null))
+                                null, null, null, null),
+                        null, null))
 
         when:
         def answered = JSON.readTree(reading(ADDRESS + "/" + STEP).response.contentAsString)
@@ -233,10 +234,11 @@ class RunStepsControllerIntegrationSpec extends Specification {
         then:
         answered.get("answering") == JSON.readTree("""
                 {"number":2,"beyond":true,
-                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true}]}""")
+                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true,"lines":"several"}]}""")
 
         and: "not read again by itself, the run not running"
         !answered.has("rereadAfterSeconds")
+        !answered.has("drawing")
     }
 
     /**
@@ -247,27 +249,32 @@ class RunStepsControllerIntegrationSpec extends Specification {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
         def code = new StepAnswers.WhoAnswer("code", null, null, null)
-        def nothing = new StepAnswers.ReviewAnswer(false, null, null, null, null)
+        def nothing = new StepAnswers.ReviewAnswer(false, null, null, null, null, null, null)
         def free = new StepAnswers.CostAnswer(false, null, null, null, null, null)
         def erredFor = { int number, StepAnswers.ErroredForAnswer why, String returned ->
             new StepAnswers.TryAnswer(number, false, null, code, null, [], nothing, "errored", null, null, why, returned,
-                    null, free)
+                    null, null, free, null, null, null)
         }
         given(steps.step(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), READER)).willReturn(
                 new StepAnswers.StepAnswer(HEADER, DECLARED, ROW, null, null, null, [
-                        erredFor(1, new StepAnswers.ErroredForAnswer("too_long", "lines.sku", null, null, null),
+                        erredFor(1, new StepAnswers.ErroredForAnswer("too_long", "lines.sku", null, null, null, null),
                                 '{"lines":[]}'),
-                        erredFor(2, new StepAnswers.ErroredForAnswer("not_declared", null, "extra", null, null), null),
-                        erredFor(3, new StepAnswers.ErroredForAnswer("not_declared", "lines", "", null, null), null),
-                        erredFor(4, new StepAnswers.ErroredForAnswer("unkeepable", "note", null, null, true), null),
-                        erredFor(5, new StepAnswers.ErroredForAnswer("gives_otherwise", "receipt", null,
+                        erredFor(2, new StepAnswers.ErroredForAnswer("not_declared", null, "extra", null, null, null),
+                                null),
+                        erredFor(3, new StepAnswers.ErroredForAnswer("not_declared", "lines", "", null, null, null),
+                                null),
+                        erredFor(4, new StepAnswers.ErroredForAnswer("unkeepable", "note", null, null, null, true),
+                                null),
+                        erredFor(5, new StepAnswers.ErroredForAnswer("gives_otherwise", "receipt", null, null,
                                 new StepAnswers.ReadByAnswer(STEP, null), null), null),
-                        erredFor(6, new StepAnswers.ErroredForAnswer("gives_otherwise", "receipt", null,
+                        erredFor(6, new StepAnswers.ErroredForAnswer("gives_otherwise", "receipt", null, null,
                                 new StepAnswers.ReadByAnswer(null, "result.receipt"), null), null),
                         new StepAnswers.TryAnswer(7, false, null, code, null, [], nothing, "errored", null,
                                 new StepAnswers.WentWrongAnswer("The mail server refused it.", true, null), null, null,
-                                null, free)],
-                        null, null))
+                                null, null, free, null, null, null),
+                        erredFor(8, new StepAnswers.ErroredForAnswer("not_declared", "lines", "n" * 64, true, null,
+                                null), null)],
+                        null, null, null))
 
         when:
         def answered = JSON.readTree(reading(ADDRESS + "/" + STEP).response.contentAsString)
@@ -295,7 +302,15 @@ class RunStepsControllerIntegrationSpec extends Specification {
                   "cost":{"callsAModel":false}},
                  {"number":7,"beyond":false,"producedBy":{"kind":"code"},"values":[],"review":{"asked":false},
                   "ended":"errored","wentWrong":{"detail":"The mail server refused it.","cut":true},
+                  "cost":{"callsAModel":false}},
+                 {"number":8,"beyond":false,"producedBy":{"kind":"code"},"values":[],"review":{"asked":false},
+                  "ended":"errored",
+                  "erroredFor":{"reason":"not_declared","field":"lines","member":"${"n" * 64}","memberCut":true},
                   "cost":{"callsAModel":false}}]""")
+
+        and: "a member's name said to be cut only where it was, and one not cut saying nothing of it"
+        answered.get("triesMade").findAll { it.path("erroredFor").has("member") }
+                .collect { it.path("erroredFor").has("memberCut") } == [false, false, true]
     }
 
     /**
@@ -308,26 +323,26 @@ class RunStepsControllerIntegrationSpec extends Specification {
         holding(EnumSet.of(GroupRole.OPERATOR))
         def turnaway = new StepAnswers.TurnawayAnswer("2026-09-26T09:01:00Z", "Spent.", false, null, false)
         def withheld = new StepAnswers.TurnawayAnswer("2026-09-26T09:00:00Z", null, null, true, true)
-        def fromCode = new StepAnswers.FromAnswer("step", "answer", STEP, "tidy_up", null, "tidy")
+        def fromCode = new StepAnswers.FromAnswer("step", "answer", STEP, "tidy_up", null, "tidy", null, null, null)
         def row = new StepAnswers.StepRowAnswer(STEP, 2, "summarise",
-                new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null),
+                new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null, null, null), null,
                 new StepAnswers.WhoAnswer("model", null, "general", null), null, "held_back",
                 new StepAnswers.WhereAnswer("held_back", "turned_away", true, null, null, null, null, null, null, null,
-                        null, "2026-09-26T09:01:00Z", null, [withheld, turnaway], "starter", null),
-                [new StepAnswers.TakesFromAnswer("text", fromCode)], new StepAnswers.TriesAnswer(3, 3, false),
-                new StepAnswers.CostAnswer(true, "30", "0", "30", true, true), null, null, null, null, [], [])
+                        null, "2026-09-26T09:01:00Z", null, [withheld, turnaway], "starter", null, null, null, null, null, null, null, null, null),
+                [new StepAnswers.TakesFromAnswer("text", fromCode, null)], new StepAnswers.TriesAnswer(3, 3, false),
+                new StepAnswers.CostAnswer(true, "30", "0", "30", true, "wholly"), null, null, null, null, [], [])
         def misfit = new StepAnswers.TryAnswer(1, false, null, new StepAnswers.WhoAnswer("model", null, "general", null),
-                null, [], new StepAnswers.ReviewAnswer(false, null, null, null, null), "did_not_fit", "cut_off", null,
-                null, null, null, new StepAnswers.CostAnswer(true, "10", "0", "10", false, null))
+                null, [], new StepAnswers.ReviewAnswer(false, null, null, null, null, null, null), "did_not_fit", "cut_off", null,
+                null, null, null, null, new StepAnswers.CostAnswer(true, "10", "0", "10", false, null), null, null, null)
         def wrong = new StepAnswers.TryAnswer(2, false, null, new StepAnswers.WhoAnswer("model", null, "general", null),
-                null, [], new StepAnswers.ReviewAnswer(false, null, null, null, null), "errored", null,
-                new StepAnswers.WentWrongAnswer(null, null, true), null, null, null,
-                new StepAnswers.CostAnswer(true, "10", "0", "10", true, true))
+                null, [], new StepAnswers.ReviewAnswer(false, null, null, null, null, null, null), "errored", null,
+                new StepAnswers.WentWrongAnswer(null, null, true), null, null, null, null,
+                new StepAnswers.CostAnswer(true, "10", "0", "10", true, "wholly"), null, null, null)
         def declared = new LinkedHashMap<String, StepAnswers.DeclaredAnswer>(DECLARED)
         declared.put("tidy", new StepAnswers.DeclaredAnswer([], DECLARED[QUESTION_VERSION.toString()].gives()))
         given(steps.step(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), READER)).willReturn(
                 new StepAnswers.StepAnswer(HEADER, declared, row, null, null, null, [misfit, wrong], null,
-                        RunSteps.REREAD_AFTER_SECONDS))
+                        null, RunSteps.REREAD_AFTER_SECONDS))
 
         when:
         def answered = JSON.readTree(reading(ADDRESS + "/" + STEP).response.contentAsString)
@@ -343,7 +358,7 @@ class RunStepsControllerIntegrationSpec extends Specification {
                                          "codeStep":"tidy"}}]""" as String)
         answered.get("declarations").get("tidy") == JSON.readTree("""
                 {"takes":[],
-                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true}]}""")
+                 "gives":[{"name":"summary","help":"One line.","kind":"text","longest":1000,"mustBeGiven":true,"lines":"several"}]}""")
 
         and: "no reviewer where every field it gives back stands as given"
         !answered.get("step").has("reviewer")
@@ -356,18 +371,48 @@ class RunStepsControllerIntegrationSpec extends Specification {
                  {"number":2,"beyond":false,"producedBy":{"kind":"model","model":"general"},"values":[],
                   "review":{"asked":false},"ended":"errored","wentWrong":{"withheld":true},
                   "cost":{"callsAModel":true,"sent":"10","cameBack":"0","spent":"10","cameBackUnknown":true,
-                          "measuredHere":true}}]""")
+                          "measuredHere":"wholly"}}]""")
+    }
+
+    def "a declined model call sends two separate text blocks or one withheld marker"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def model = new StepAnswers.WhoAnswer("model", null, "general", null)
+        def noReview = new StepAnswers.ReviewAnswer(false, null, null, null, null, null, null)
+        def cost = new StepAnswers.CostAnswer(true, "10", "0", "10", false, null)
+        def shown = new StepAnswers.TryAnswer(1, false, null, model, null, [], noReview, "did_not_fit",
+                "model_declined", null, null, null, null, null, cost, null,
+                new StepAnswers.DeclinedAnswer(
+                        new StepAnswers.DeclinedTextAnswer("Demo Sample refusal", true, false),
+                        new StepAnswers.DeclinedTextAnswer("Demo Sample answer", true, true), null), null)
+        def withheld = new StepAnswers.TryAnswer(2, false, null, model, null, [], noReview, "did_not_fit",
+                "model_declined", null, null, null, null, null, cost, null,
+                new StepAnswers.DeclinedAnswer(null, null, true), null)
+        given(steps.step(new GroupId(GROUP), new RunId(RUN), new WorkflowStepId(STEP), READER)).willReturn(
+                new StepAnswers.StepAnswer(HEADER, DECLARED, ROW, null, null, null, [shown, withheld], null,
+                        null, RunSteps.REREAD_AFTER_SECONDS))
+
+        when:
+        def tries = JSON.readTree(reading(ADDRESS + "/" + STEP).response.contentAsString).get("triesMade")
+
+        then:
+        tries[0].get("declined") == JSON.readTree("""
+                {"words":{"text":"Demo Sample refusal","altered":true,"truncated":false},
+                 "content":{"text":"Demo Sample answer","altered":true,"truncated":true}}""")
+        tries[1].get("declined") == JSON.readTree('{"withheld":true}')
+        !tries[1].get("declined").has("words")
+        !tries[1].get("declined").has("content")
     }
 
     def "a failure for a model not held goes out naming the model, its mode, and that it was to review"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
         def row = new StepAnswers.StepRowAnswer(STEP, 1, "summarise",
-                new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null),
+                new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null, null, null), null,
                 new StepAnswers.WhoAnswer("person", null, null, null),
                 new StepAnswers.WhoAnswer("model", null, "small", "research"), "failed",
                 new StepAnswers.WhereAnswer("failed", "model_not_deployed", null, "small", "research", true, null, null,
-                        null, null, null, "2026-09-26T09:00:00Z", null, null, "starter", null),
+                        null, null, null, "2026-09-26T09:00:00Z", null, null, "starter", null, null, null, null, null, null, null, null, null),
                 [], new StepAnswers.TriesAnswer(1, 2, false), new StepAnswers.CostAnswer(true, "0", "0", "0", false, null),
                 null, null, null, null, [], [])
         given(steps.steps(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(new StepAnswers.RunStepsAnswer(
@@ -383,13 +428,42 @@ class RunStepsControllerIntegrationSpec extends Specification {
         !answered.has("rereadAfterSeconds")
     }
 
+    /** A reader refuses a failure whose reason and what it names disagree, so the value nothing gave goes out as null. */
+    def "a failure on a value no case claimed, or on going too deep, goes out naming that alone, a value not given as null and one withheld as withheld only"() {
+        given:
+        holding(EnumSet.of(GroupRole.OPERATOR))
+        def row = new StepAnswers.StepRowAnswer(STEP, 1, "summarise",
+                new StepAnswers.RunsAnswer("question", QUESTION, "Summarise", 2, QUESTION_VERSION, null, null, null), null,
+                new StepAnswers.WhoAnswer("person", null, null, null), null, "failed",
+                new StepAnswers.WhereAnswer("failed", reason, null, null, null, null, null, null, null, null, null,
+                        "2026-09-26T09:00:00Z", null, null, "starter", null, unclaimed, tooDeep, null, null, null, null, null, null),
+                [], new StepAnswers.TriesAnswer(0, 1, false), new StepAnswers.CostAnswer(false, "0", "0", "0", false, null),
+                null, null, null, null, [], [])
+        given(steps.steps(new GroupId(GROUP), new RunId(RUN), READER)).willReturn(new StepAnswers.RunStepsAnswer(
+                HEADER, DECLARED, new StepAnswers.GaveBackAnswer("values", []), [row], null))
+
+        when:
+        def answered = JSON.readTree(reading(ADDRESS).response.contentAsString)
+
+        then:
+        answered.get("steps").get(0).get("where") == JSON.readTree("""
+                {"kind":"failed","reason":"${reason}","since":"2026-09-26T09:00:00Z","waitsOn":"starter",${named}}""")
+
+        where:
+        reason            | unclaimed                                       | tooDeep                             || named
+        "unclaimed_value" | new StepAnswers.UnclaimedAnswer.Named("wait")   | null                                || '"failedUnclaimed":{"term":"wait"}'
+        "unclaimed_value" | new StepAnswers.UnclaimedAnswer.Named(null)     | null                                || '"failedUnclaimed":{"term":null}'
+        "unclaimed_value" | new StepAnswers.UnclaimedAnswer.Withheld(true)  | null                                || '"failedUnclaimed":{"withheld":true}'
+        "too_deep"        | null                                            | new StepAnswers.TooDeepAnswer("32") || '"failedTooDeep":{"most":"32"}'
+    }
+
     /** What a code step giving otherwise is named with goes out only where it is named, never as null. */
     def "an act withheld goes out naming the field and what reads it only where a code step giving otherwise names them"() {
         given:
         holding(EnumSet.of(GroupRole.OPERATOR))
         def codeRow = { int order, List<StepAnswers.WithheldAnswer> withheld ->
             new StepAnswers.StepRowAnswer(STEP, order, "send", new StepAnswers.RunsAnswer("code_step", null, null, null,
-                    null, "send_reply"), new StepAnswers.WhoAnswer("code", null, null, null), null, "not_started", null,
+                    null, "send_reply", null, null), null, new StepAnswers.WhoAnswer("code", null, null, null), null, "not_started", null,
                     [], null, new StepAnswers.CostAnswer(false, null, null, null, null, null), null, null, null, null, [],
                     withheld)
         }

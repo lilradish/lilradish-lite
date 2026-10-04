@@ -10,5 +10,18 @@ lilradish:
         came-back-per-call-limit: 8192
         prices-per-million:
           - currency: USD
-            sent-per-million: "3"
-            came-back-per-million: "15"
+            sent-per-million: "7"
+            came-back-per-million: "21"
+        tools:
+          - name: web_search
+            kind: web_search
+            max-uses-per-call: 3
+            prices-per-use:
+              - currency: USD
+                per-use: "0.01"
+  development-model-calls:
+    routes:
+      - model: sample_model
+        tools: [web_search]
+        outbound: development_search
+        inbound: development_search

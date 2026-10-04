@@ -1,5 +1,11 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +15,8 @@ import type { Problem } from "../../api/problem";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { deferred } from "../../testutil/deferred";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { noticesIn } from "../../testutil/notices";
 import type { ReadContent } from "./ContentProblems";
 import { QuestionContent } from "./QuestionContent";
 
@@ -19,6 +27,9 @@ const ENTRY = "00000006-0000-4000-8000-000000000c41";
 const VERSION = "00000007-0000-4000-8000-000000000c41";
 
 const ADDRESS = `/api/groups/${GROUP}/questions/${ENTRY}/versions/${VERSION}`;
+
+const FIELD_NAME_REFUSED =
+  "A field's name is one to 63 lowercase English letters, digits and underscores, starting with a letter.";
 
 const DRAFT: Version = {
   versionId: VERSION,
@@ -54,16 +65,7 @@ const QUESTION = {
       stands: "always",
     },
   ],
-  added: [
-    {
-      name: "summary",
-      kind: "text",
-      longest: 1000,
-      many: false,
-      mustBeGiven: true,
-      confidence: false,
-    },
-  ],
+  added: 'Answer with one JSON object.\nJSON Schema:\n{"type":"object"}\n',
   lists: [],
 };
 
@@ -108,11 +110,198 @@ function part(name: string): HTMLElement {
   return screen.getByRole("region", { name });
 }
 
+function nameInOpenedField(partName: string): HTMLElement {
+  const region = part(partName);
+  const closed = region.querySelector<HTMLElement>(
+    'fieldset button[aria-expanded="false"]',
+  );
+  if (closed !== null) {
+    fireEvent.click(closed);
+  }
+  return within(region).getByRole("textbox", { name: "Name" });
+}
+
 async function opened(): Promise<void> {
   await screen.findByRole("region", { name: "The instruction" });
 }
 
 describe("QuestionContent", () => {
+  it("offers the exact Markdown guidance and saves the raw drawing on a draft", async () => {
+    const drawing = "## Case\n{{complaint}} \\{{literal}}";
+    const { sent } = opening(DRAFT, {
+      [`PUT ${ADDRESS}/drawing`]: [
+        reply({ ...QUESTION, revision: 5, drawing }),
+      ],
+    });
+    await opened();
+
+    const section = part("How it is drawn");
+    const box = within(section).getByRole("textbox", {
+      name: "How it is drawn",
+    });
+    expect(section).toHaveTextContent(
+      "Written as Markdown. Put {{name}} where a value it takes should appear; write \\{{ for two braces as they are. A value is only ever drawn as text: never as where a link goes, and never as an image.",
+    );
+    fireEvent.change(box, { target: { value: drawing } });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Save how it is drawn" }));
+
+    await waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
+      revision: 4,
+      drawing,
+    });
+    expect(within(part("How it is drawn")).getByRole("textbox")).toHaveValue(
+      drawing,
+    );
+  });
+
+  it("names an absent drawing as the normal field-by-field view", async () => {
+    opening({ ...DRAFT, standing: "submitted", acts: new Set() });
+    await opened();
+
+    expect(part("How it is drawn")).toHaveTextContent(
+      "It has no drawing, so a person answering it is shown what it takes field by field.",
+    );
+  });
+
+  it.each([
+    [
+      " ",
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+    [
+      "\n\t",
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+    [
+      "a".repeat(8193),
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+    [
+      "🙂".repeat(8193),
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+  ])(
+    "refuses a drawing containing %j before it sends a request",
+    async (typed, why) => {
+      const { sent } = opening(DRAFT);
+      await opened();
+      const box = within(part("How it is drawn")).getByRole("textbox");
+      fireEvent.change(box, { target: { value: typed } });
+
+      const save = screen.getByRole("button", { name: "Save how it is drawn" });
+      expect(save).toHaveAttribute("aria-disabled", "true");
+      expect(box).toHaveAccessibleDescription(why);
+      expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
+    },
+  );
+
+  it.each(["a".repeat(8192), "🙂".repeat(8192), "a\u202Eb", "a\u{E0041}b"])(
+    "sends a drawing at its boundary or with a direction control or tag",
+    async (typed) => {
+      const { sent } = opening(DRAFT, {
+        [`PUT ${ADDRESS}/drawing`]: [reply({ ...QUESTION, drawing: typed })],
+      });
+      await opened();
+      const box = within(part("How it is drawn")).getByRole("textbox");
+      fireEvent.change(box, { target: { value: typed } });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Save how it is drawn" }),
+      );
+
+      await waitFor(() =>
+        expect(requestsTo(sent)).toContain(`PUT ${ADDRESS}/drawing`),
+      );
+      expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
+        revision: 4,
+        drawing: typed,
+      });
+    },
+  );
+
+  it.each([
+    ">".repeat(33),
+    "> ".repeat(32) + "-\nx",
+    " ".repeat(64) + "- x",
+    "*a ".repeat(33) + "a* ".repeat(32) + "a*",
+    "_a ".repeat(17) + "*a\n".repeat(16) + "a* ".repeat(16) + "a_ ".repeat(17),
+  ])(
+    "refuses a drawing that could nest past 32 deep, %j, before it sends a request",
+    async (typed) => {
+      const { sent } = opening(DRAFT);
+      await opened();
+      const box = within(part("How it is drawn")).getByRole("textbox");
+      fireEvent.change(box, { target: { value: typed } });
+
+      const save = screen.getByRole("button", { name: "Save how it is drawn" });
+      expect(save).toHaveAttribute("aria-disabled", "true");
+      expect(box).toHaveAccessibleDescription(
+        "A drawing holds lists and quotes at most 32 deep, counting on each line every marker it opens with and every two spaces of indent before and between them, a tab as four; and emphasis at most 32 deep, counting every two asterisks or underscores between blank lines, an underscore inside a word aside.",
+      );
+      expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
+    },
+  );
+
+  it.each([
+    [
+      "too long",
+      ">".repeat(8193),
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+    [
+      "showing nothing",
+      " ".repeat(66),
+      "A drawing is one to 8192 characters with something in it that shows. Lines may be broken, and indented with tabs.",
+    ],
+  ])(
+    "refuses a drawing both too deep and %s for what else is wrong with it, before it sends a request",
+    async (_case, typed, why) => {
+      const { sent } = opening(DRAFT);
+      await opened();
+      const box = within(part("How it is drawn")).getByRole("textbox");
+      fireEvent.change(box, { target: { value: typed } });
+
+      const save = screen.getByRole("button", { name: "Save how it is drawn" });
+      expect(save).toHaveAttribute("aria-disabled", "true");
+      expect(box).toHaveAccessibleDescription(why);
+      expect(requestsTo(sent)).toEqual([`GET ${ADDRESS}`]);
+    },
+  );
+
+  it.each([
+    ">".repeat(32),
+    "> ".repeat(31) + "-\nx",
+    " ".repeat(62) + "- x",
+    "*a ".repeat(32) + "a* ".repeat(31) + "a*",
+    "{{first_name}} *a\n\na* ".repeat(33),
+  ])("sends a drawing nesting at most 32 deep, %j, as typed", async (typed) => {
+    const { sent } = opening(DRAFT, {
+      [`PUT ${ADDRESS}/drawing`]: [reply({ ...QUESTION, drawing: typed })],
+    });
+    await opened();
+    const box = within(part("How it is drawn")).getByRole("textbox");
+    fireEvent.change(box, { target: { value: typed } });
+    const save = screen.getByRole("button", { name: "Save how it is drawn" });
+
+    expect(save).not.toHaveAttribute("aria-disabled");
+    expect(box).toHaveAccessibleDescription(
+      "Written as Markdown. Put {{name}} where a value it takes should appear; write \\{{ for two braces as they are. A value is only ever drawn as text: never as where a link goes, and never as an image.",
+    );
+    await userEvent.click(save);
+    await waitFor(() =>
+      expect(requestsTo(sent)).toEqual([
+        `GET ${ADDRESS}`,
+        `PUT ${ADDRESS}/drawing`,
+      ]),
+    );
+    expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
+      revision: 4,
+      drawing: typed,
+    });
+  });
+
   /** Nothing to change where the server says the reader may not write: every part is only read. */
   it("reads every part of a version the reader may not write, and offers nothing to change", async () => {
     opening({ ...DRAFT, standing: "in_service", acts: new Set(["retire"]) });
@@ -124,12 +313,34 @@ describe("QuestionContent", () => {
     expect(instruction.textContent).toBe("Say which category.\n\tBriefly.");
     expect(part("What it takes")).toHaveTextContent("complaint");
     expect(part("The declared answer")).toHaveTextContent("summary");
-    expect(part("What is added when it runs")).toHaveTextContent(
-      "Text, At most 1000 characters, Holds one",
+    await userEvent.click(
+      screen.getByRole("button", { name: "What is added when it runs" }),
     );
-    expect(document.querySelectorAll("input, textarea, button")).toHaveLength(
-      0,
-    );
+    expect(
+      part("What is added when it runs").querySelector("pre")?.textContent,
+    ).toBe(QUESTION.added);
+    expect(document.querySelectorAll("input, textarea")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /^Save / })).toBeNull();
+  });
+
+  it("draws every part as a block of the version, none within another", async () => {
+    opening({ ...DRAFT, standing: "in_service", acts: new Set(["retire"]) });
+    await opened();
+
+    const parts = [
+      "The instruction",
+      "How it is drawn",
+      "What it takes",
+      "The declared answer",
+      "What is added when it runs",
+    ].map(part);
+
+    expect(parts.map(drawnOf)).toEqual(parts.map(() => drawnAtDepth(2)));
+    expect(
+      parts.flatMap((outer) =>
+        parts.filter((inner) => inner !== outer && outer.contains(inner)),
+      ),
+    ).toEqual([]);
   });
 
   it("says a version telling nobody anything so, and that what is added waits on a whole declared answer", async () => {
@@ -342,11 +553,10 @@ describe("QuestionContent", () => {
       [`PUT ${ADDRESS}/gives`]: [reply(answered)],
     });
     await opened();
-    const takenName = within(part("What it takes")).getByRole("textbox", {
-      name: "Name",
-    });
+    const takenName = nameInOpenedField("What it takes");
     await userEvent.type(takenName, "_text");
 
+    nameInOpenedField("The declared answer");
     await userEvent.click(
       within(part("The declared answer")).getByRole("checkbox", {
         name: "Holds many",
@@ -372,6 +582,7 @@ describe("QuestionContent", () => {
           many: true,
           most: null,
           longest: 1000,
+          lines: "several",
           mustBeGiven: true,
           stands: "always",
           floor: null,
@@ -380,12 +591,36 @@ describe("QuestionContent", () => {
     });
     await waitFor(() =>
       expect(
-        within(part("The declared answer")).getByRole("checkbox", {
-          name: "Holds many",
+        within(part("The declared answer")).getByRole("button", {
+          name: /^summary ·/,
         }),
-      ).not.toBeChecked(),
+      ).toBeInTheDocument(),
     );
+    nameInOpenedField("The declared answer");
+    expect(
+      within(part("The declared answer")).getByRole("checkbox", {
+        name: "Holds many",
+      }),
+    ).not.toBeChecked();
     expect(takenName).toHaveValue("complaint_text");
+  });
+
+  /** That nothing has changed is what to do next; a name the server would refuse is a warning. */
+  it("holds saving a declaration as read in a quiet line, and one holding a name the server would refuse with a warning", async () => {
+    opening(DRAFT);
+    await opened();
+    const save = () =>
+      screen.getByRole("button", { name: "Save what it takes" });
+
+    expect(save()).toHaveAccessibleDescription("Change something first.");
+    expect(noticesIn(save().parentElement!)).toEqual([]);
+
+    await userEvent.type(nameInOpenedField("What it takes"), " Text");
+
+    expect(save()).toHaveAttribute("aria-disabled", "true");
+    expect(noticesIn(save().parentElement!)).toEqual([
+      { severity: "warning", words: FIELD_NAME_REFUSED },
+    ]);
   });
 
   it("hands a refused write to the page, and says it where it was asked", async () => {
@@ -396,10 +631,7 @@ describe("QuestionContent", () => {
     });
     await opened();
 
-    await userEvent.type(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
+    await userEvent.type(nameInOpenedField("What it takes"), "_text");
     await userEvent.click(
       screen.getByRole("button", { name: "Save what it takes" }),
     );
@@ -432,10 +664,7 @@ describe("QuestionContent", () => {
     );
     await waitFor(() => expect(box).toHaveValue("Say why."));
 
-    await userEvent.type(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
+    await userEvent.type(nameInOpenedField("What it takes"), "_text");
     await userEvent.click(
       screen.getByRole("button", { name: "Save what it takes" }),
     );
@@ -455,10 +684,7 @@ describe("QuestionContent", () => {
       [`PUT ${ADDRESS}/instruction`]: [held.promise],
     });
     await opened();
-    await userEvent.type(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
+    await userEvent.type(nameInOpenedField("What it takes"), "_text");
     await userEvent.type(
       within(part("The instruction")).getByRole("textbox", {
         name: "The instruction",
@@ -493,9 +719,7 @@ describe("QuestionContent", () => {
       ],
     });
     await opened();
-    const taken = within(part("What it takes")).getByRole("textbox", {
-      name: "Name",
-    });
+    const taken = nameInOpenedField("What it takes");
     await userEvent.type(taken, "_text");
     const box = within(part("The instruction")).getByRole("textbox", {
       name: "The instruction",
@@ -531,13 +755,11 @@ describe("QuestionContent", () => {
         }),
       ).toHaveValue("Somebody else's."),
     );
-    expect(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-    ).toHaveValue("complaint");
     expect(within(part("The instruction")).queryByRole("alert")).toBeNull();
     expect(
       screen.getByRole("heading", { level: 3, name: "The instruction" }),
     ).toHaveFocus();
+    expect(nameInOpenedField("What it takes")).toHaveValue("complaint");
     expect(requestsTo(sent).filter((each) => each.startsWith("GET"))).toEqual([
       `GET ${ADDRESS}`,
       `GET ${ADDRESS}`,
@@ -575,10 +797,7 @@ describe("QuestionContent", () => {
       }),
       " Again.",
     );
-    await userEvent.type(
-      within(part("What it takes")).getByRole("textbox", { name: "Name" }),
-      "_text",
-    );
+    await userEvent.type(nameInOpenedField("What it takes"), "_text");
     const held = [
       screen.getByRole("button", { name: "Save the instruction" }),
       screen.getByRole("button", { name: "Save what it takes" }),

@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 import org.gradle.language.jvm.tasks.ProcessResources
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
@@ -46,6 +49,116 @@ dependencies {
     // Compiled against, not merely present: what a refusal names is read off the driver's own error
     // model, and a test that only knows something threw cannot tell two defences apart.
     testImplementation(libs.postgresql)
+}
+
+
+// The runner can halt before its shutdown hooks; the Gradle task outlives that JVM.
+abstract class StopTaskPostgres : DefaultTask() {
+    @get:Internal abstract val postgresDirectory: DirectoryProperty
+    @get:Internal abstract val ownerTask: Property<String>
+
+    private data class Postmaster(val process: ProcessHandle, val data: java.nio.file.Path, val started: java.time.Instant)
+
+    private fun awaitExit(process: ProcessHandle, deadline: Long) {
+        if (process.isAlive) {
+            process.onExit().get((deadline - System.nanoTime()).coerceAtLeast(1), TimeUnit.NANOSECONDS)
+        }
+    }
+
+    private fun postmaster(process: ProcessHandle, root: java.nio.file.Path, deadline: Long): Postmaster? {
+        if (!process.isAlive) return null
+        val information = process.info()
+        if (information.command().map { File(it).name != "postgres" }.orElse(true)) return null
+        val arguments = information.arguments().orElseThrow { GradleException("Cannot inspect a PostgreSQL process while finishing ${ownerTask.get()}") }
+        val directoryArgument = arguments.indexOf("-D")
+        if (directoryArgument < 0 || directoryArgument + 1 >= arguments.size) return null
+        val data = File(arguments[directoryArgument + 1]).canonicalFile.toPath()
+        if (!data.startsWith(root)) return null
+        val pid = try {
+            Files.readAllLines(data.resolve("postmaster.pid")).first().toLong()
+        } catch (failure: NoSuchFileException) {
+            // PostgreSQL removes its pid file before the process finishes exiting.
+            awaitExit(process, deadline)
+            return null
+        }
+        if (pid != process.pid()) return null
+        return Postmaster(process, data, information.startInstant().orElseThrow { GradleException("Cannot identify a PostgreSQL process while finishing ${ownerTask.get()}") })
+    }
+
+    private fun postmasters(root: java.nio.file.Path, deadline: Long, failures: MutableList<Exception>): List<Postmaster> =
+        ProcessHandle.allProcesses().use { processes ->
+            processes.map { process ->
+                try {
+                    postmaster(process, root, deadline)
+                } catch (failure: Exception) {
+                    if (failure is InterruptedException) throw failure
+                    failures.add(failure)
+                    null
+                }
+            }.filter { it != null }.map { it!! }.toList()
+        }
+
+    @TaskAction
+    fun stop() {
+        val root = postgresDirectory.get().asFile.canonicalFile.toPath()
+        val failures = mutableListOf<Exception>()
+        val inspectionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+        val servers = postmasters(root, inspectionDeadline, failures)
+        logger.warn("{} has {} PostgreSQL postmasters left at task completion", ownerTask.get(), servers.size)
+        servers.forEach { server ->
+            try {
+                val current = postmaster(server.process, root, inspectionDeadline)
+                if (current == null) {
+                    if (server.process.isAlive) throw GradleException("PostgreSQL identity cannot be confirmed while finishing ${ownerTask.get()}")
+                } else {
+                    if (current.data != server.data || current.started != server.started) throw GradleException("PostgreSQL identity changed while finishing ${ownerTask.get()}")
+                    val signal = ProcessBuilder("kill", "-INT", "--", server.process.pid().toString()).start()
+                    if (!signal.waitFor(5, TimeUnit.SECONDS) || signal.exitValue() != 0) {
+                        if (server.process.isAlive) throw GradleException("Cannot stop a PostgreSQL process while finishing ${ownerTask.get()}")
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is InterruptedException) throw failure
+                failures.add(failure)
+            }
+        }
+        // Share one exit budget after attempting every confirmed target.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        servers.forEach { server ->
+            try {
+                awaitExit(server.process, deadline)
+            } catch (failure: Exception) {
+                if (failure is InterruptedException) throw failure
+                failures.add(failure)
+            }
+        }
+        val remaining = postmasters(root, System.nanoTime() + TimeUnit.SECONDS.toNanos(1), failures).size
+        logger.lifecycle("{} PostgreSQL postmasters remaining: {}", ownerTask.get(), remaining)
+        if (remaining != 0 || failures.isNotEmpty()) {
+            val failure = GradleException("Cannot finish PostgreSQL cleanup for ${ownerTask.get()}: $remaining postmasters remain, ${failures.size} failures")
+            failures.forEach { failure.addSuppressed(it) }
+            throw failure
+        }
+    }
+}
+
+val testPostgresDirectory = layout.buildDirectory.dir("tmp/test").get().asFile
+val stopTestPostgres = tasks.register<StopTaskPostgres>("stopTestPostgres") {
+    postgresDirectory.set(testPostgresDirectory)
+    ownerTask.set(":lilradish-lite-flyway:test")
+}
+
+tasks.named<Test>("test") {
+    if (providers.gradleProperty("skipDatabaseTests").isPresent) {
+        onlyIf { task ->
+            task.logger.lifecycle("{} is skipped because skipDatabaseTests is present", task.path)
+            false
+        }
+    }
+    val postgresDirectory = testPostgresDirectory
+    systemProperty("java.io.tmpdir", postgresDirectory.absolutePath)
+    doFirst { postgresDirectory.toPath().let { Files.createDirectories(it) } }
+    finalizedBy(stopTestPostgres)
 }
 
 tasks.named<ProcessResources>("processResources") { from(baselineFiles) { into("db/migration/common") } }

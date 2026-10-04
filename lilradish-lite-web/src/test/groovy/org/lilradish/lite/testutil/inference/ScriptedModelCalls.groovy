@@ -64,7 +64,7 @@ final class ScriptedModelCalls implements ModelCalls {
         events << SENT
         // Interrupted while a send is under way, a call has gone wrong, which a port returns rather than throws.
         if (script.pause != null && !script.pause.hold()) {
-            return new CallOutcome.Errored(INTERRUPTED_IN_A_SEND)
+            return new CallOutcome.Errored(INTERRUPTED_IN_A_SEND, null)
         }
         Iterator<TurnAway> resentAfter = script.resentAfter.iterator()
         while (resentAfter.hasNext()) {

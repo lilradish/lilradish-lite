@@ -57,7 +57,8 @@ final class SpecCodeStep implements CodeStep {
     }
 
     @Override
-    JsonValue.JsonObject run(JsonValue.JsonObject takes) {
-        new JsonValue.JsonObject([new JsonValue.JsonMember("receipt", new JsonValue.JsonString("sent"))])
+    CodeStep.Output run(CodeStep.Input takes) {
+        CodeStep.Output.plain(new JsonValue.JsonObject(
+                [new JsonValue.JsonMember("receipt", new JsonValue.JsonString("sent"))]))
     }
 }

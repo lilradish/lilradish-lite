@@ -8,6 +8,8 @@ import { RequestFailed } from "../../api/problem";
 import type { MessageId } from "../../i18n/app";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
+import { drawnAtDepth, drawnOf } from "../../testutil/depths";
+import { noticesIn } from "../../testutil/notices";
 import { ProsePart, type ProseWords } from "./ProsePart";
 
 const WORDS: ProseWords = {
@@ -90,6 +92,12 @@ function heading(): HTMLElement {
 }
 
 describe("ProsePart", () => {
+  it("stands as a block of the version, framed apart from the next", () => {
+    writing(SAID, { editable: false });
+
+    expect(drawnOf(part())).toEqual(drawnAtDepth(2));
+  });
+
   it("reads what it says, its lines kept, where it may not be written, and offers nothing to change", () => {
     writing(SAID, { editable: false });
 
@@ -111,12 +119,18 @@ describe("ProsePart", () => {
   it("saves what is typed, lines and all, and draws what the save answered", async () => {
     const { saved } = writing(SAID);
 
+    expect(within(part()).queryByText("Unsaved")).toBeNull();
+    expect(save()).not.toHaveClass("MuiButton-contained");
     await userEvent.clear(box());
     await userEvent.type(box(), "Pick one.{Enter}Never two.");
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+    expect(save()).toHaveClass("MuiButton-contained");
     await userEvent.click(save());
 
     expect(saved.mock.calls).toEqual([["Pick one.\nNever two."]]);
     await waitFor(() => expect(box()).toHaveValue("Pick one.\nNever two."));
+    expect(within(part()).queryByText("Unsaved")).toBeNull();
+    expect(save()).not.toHaveClass("MuiButton-contained");
   });
 
   it("saves what is emptied as none, rather than as empty", async () => {
@@ -132,15 +146,16 @@ describe("ProsePart", () => {
   });
 
   it.each([
-    ["unchanged", "", "Change the note first."],
+    ["unchanged", "", "Change the note first.", []],
     [
       "one the server would refuse",
       ` ${OVERRIDE}`,
       "What was written holds a direction control, which text sent to a model may not hold.",
+      ["warning"],
     ],
-  ])(
-    "holds a save %s, saying why beside it, and sends nothing",
-    async (_case, typed, why) => {
+  ] as const)(
+    "holds a save %s, saying why beside it, a refusal as a warning, and sends nothing",
+    async (_case, typed, why, severities) => {
       const { saved } = writing(SAID);
       await userEvent.click(box());
       await userEvent.paste(typed);
@@ -150,6 +165,9 @@ describe("ProsePart", () => {
 
       expect(save()).toHaveAttribute("aria-disabled", "true");
       expect(save()).toHaveAccessibleDescription(why);
+      expect(noticesIn(save().parentElement!)).toEqual(
+        severities.map((severity) => ({ severity, words: why })),
+      );
       expect(saved).not.toHaveBeenCalled();
     },
   );
@@ -172,6 +190,8 @@ describe("ProsePart", () => {
     const { saved } = writing(SAID, { waiting: true });
     await userEvent.type(box(), " Now.");
 
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+    expect(save()).toHaveClass("MuiButton-contained");
     save().focus();
     await userEvent.keyboard("{Enter}");
 
@@ -191,6 +211,8 @@ describe("ProsePart", () => {
     expect(await within(part()).findByRole("alert")).toHaveTextContent(
       "Somebody changed this draft since it was read; nothing was saved.",
     );
+    expect(within(part()).getByText("Unsaved")).toBeVisible();
+    expect(save()).toHaveClass("MuiButton-contained");
     expect(box()).toHaveValue(`${SAID} Now.`);
     expect(readAfresh).not.toHaveBeenCalled();
 

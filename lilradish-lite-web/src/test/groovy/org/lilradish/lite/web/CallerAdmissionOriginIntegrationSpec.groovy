@@ -54,6 +54,11 @@ class CallerAdmissionOriginIntegrationSpec extends Specification {
     @Autowired
     private MockMvc mockMvc
 
+    @Autowired
+    private LargeBodyAdmission largeBodyAdmission
+
+    private LargeBodyTurn largeBodyTurn
+
     @MockitoBean
     private UserIdentification identification
 
@@ -68,26 +73,36 @@ class CallerAdmissionOriginIntegrationSpec extends Specification {
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>()
 
     def setup() {
+        largeBodyTurn = largeBodyAdmission.@turn
         logged.start()
         door.addAppender(logged)
         given(identification.identify(any(HttpServletRequest))).willReturn(Optional.of(READER))
     }
 
     def cleanup() {
+        largeBodyTurn.turn.drainPermits()
+        largeBodyTurn.turn.release()
+        largeBodyTurn.waiting.set(0)
         door.detachAppender(logged)
     }
 
     private MvcResult sending(String method, String address, Map<String, String> headers) {
         MockHttpServletRequestBuilder sent = request(HttpMethod.valueOf(method), address)
         headers.each { name, value -> sent = sent.header(name, value) }
-        mockMvc.perform(sent).andReturn()
+        def answered = mockMvc.perform(sent).andReturn()
+        assert largeBodyTurn.turn.availablePermits() == 1
+        assert largeBodyTurn.waiting.get() == 0
+        answered
     }
 
     /** The request line as a caller writes it, rather than as a builder would re-encode it. */
     private MvcResult sendingRaw(String method, String requestUri) {
-        mockMvc.perform(request(HttpMethod.valueOf(method), "/")
+        def answered = mockMvc.perform(request(HttpMethod.valueOf(method), "/")
                 .with({ sent -> sent.setRequestURI(requestUri); sent } as RequestPostProcessor))
                 .andReturn()
+        assert largeBodyTurn.turn.availablePermits() == 1
+        assert largeBodyTurn.waiting.get() == 0
+        answered
     }
 
     private static String codeIn(MvcResult answered) {

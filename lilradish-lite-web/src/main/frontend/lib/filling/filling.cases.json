@@ -59,7 +59,7 @@
         "complaint": " Broken\n",
         "amount": "12.5",
         "tags": ["kettle", "lid"],
-        "contact": { "email": "ada@example.org", "phones": ["0123"] },
+        "contact": { "email": "avo@example.org", "phones": ["0123"] },
         "address": { "street": "1 Main" },
         "items": [{ "name": "kettle", "count": "2" }],
         "notes": ["first", "second"]
@@ -69,7 +69,7 @@
         "complaint": " Broken\n",
         "amount": "12.5",
         "tags": ["kettle", "lid"],
-        "contact": { "email": "ada@example.org", "phones": ["0123"] },
+        "contact": { "email": "avo@example.org", "phones": ["0123"] },
         "address": { "street": "1 Main" },
         "items": [{ "name": "kettle", "count": "2" }],
         "notes": ["first", "second"]
@@ -258,7 +258,7 @@
         "complaint": "Broken",
         "amount": "",
         "tags": ["kettle"],
-        "contact": { "email": "ada@example.org", "phones": ["1", "", "\u202e"] },
+        "contact": { "email": "avo@example.org", "phones": ["1", "", "\u202e"] },
         "address": { "street": "1 Main" },
         "items": [],
         "notes": []

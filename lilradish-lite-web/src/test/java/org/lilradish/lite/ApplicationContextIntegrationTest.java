@@ -3,6 +3,8 @@ package org.lilradish.lite;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.lilradish.lite.app.files.FileDeployment;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
@@ -31,6 +33,12 @@ class ApplicationContextIntegrationTest {
     @Test
     void theApplicationStartsWithEverythingItsOwnClasspathCarries() {
         // Reaching here is the assertion: a failed context start fails the test before it runs.
+    }
+
+    @Test
+    void fileDeploymentLimitsBindFromTheApplicationConfiguration(@Autowired FileDeployment deployment) {
+        assertThat(deployment.maximumSize().toBytes()).isEqualTo(100L * 1024 * 1024);
+        assertThat(deployment.maximumPerField()).isEqualTo(100);
     }
 
     @Test

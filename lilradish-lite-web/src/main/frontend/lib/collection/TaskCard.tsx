@@ -14,12 +14,7 @@ export interface Task {
   readonly id: string;
   readonly title: string;
   readonly detail: string;
-  /**
-   * An in-app path, always rooted and percent-encoded as the URL parser writes
-   * it; one that would leave the site is not drawn, and neither is one the
-   * parser would re-encode — a raw space or non-ASCII character, a `'` in the
-   * query, a bare trailing `?` or `#`.
-   */
+  /** A canonical same-origin path; one leaving the site or changed by URL parsing is not drawn. */
   readonly path: string;
 }
 
@@ -109,13 +104,7 @@ export function TaskCard({
     >
       <CardContent>
         <Box sx={HEADER_SX}>
-          <Typography
-            variant="subtitle1"
-            component="h2"
-            sx={{ typography: "term" }}
-          >
-            {heading}
-          </Typography>
+          <Typography variant="h2">{heading}</Typography>
           {/* A reload keeps the last answer's rows while it runs, and a card
               showing rows with no count beside them has lost the count. */}
           {loading && onSite.length === 0 ? null : (

@@ -7,7 +7,7 @@ import {
   type FillPath,
   type FillProblem,
   type FillReason,
-  type FillValues,
+  type FillSubmissionValues,
 } from "../../../api/filling";
 import type { Problem } from "../../../api/problem";
 import { say } from "../../../i18n/app";
@@ -53,7 +53,9 @@ export interface FillDraft {
   readonly onUnread: Unread;
   readonly marks: ReadonlyMap<string, FillReason>;
   /** Every value as it would be sent. */
-  readonly values: FillValues;
+  readonly values: FillSubmissionValues;
+  readonly uploads: readonly File[];
+  readonly hasFilePositions: boolean;
   /** Where the first of what the page finds wrong stands; absent where it finds nothing. */
   readonly firstUnfit: FillPath | undefined;
   /** What the page finds wrong in what is filled; absent where it finds nothing. */
@@ -81,11 +83,12 @@ export function useFillDraft(
   fields: readonly FillField[],
   key: string,
   startWith: () => LevelDraft,
+  allowKept: boolean,
 ): FillDraft {
   const formId = useId();
   const sent = useRef<Sent | null>(null);
   const landing = useRef<FillPath | null>(null);
-  const [reader] = useState(() => draftReader());
+  const [reader] = useState(() => draftReader(allowKept));
   const [held, setFilling] = useState(() => fillingFor(key, startWith()));
   const [marksHeld, setMarks] = useState<{
     readonly said: string;
@@ -163,6 +166,8 @@ export function useFillDraft(
     onUnread,
     marks,
     values: read.values,
+    uploads: read.uploads,
+    hasFilePositions: read.hasFilePositions,
     firstUnfit: read.problems[0]?.path,
     unfit: unfitSaid(read.problems),
     unmarked: filling.served?.unmarked ?? 0,

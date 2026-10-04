@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionOperations;
  * {@link GroupReach#requireStillReached} after the lock, and records its {@link Author}.
  */
 @Component
-final class GroupCurrencies {
+public final class GroupCurrencies {
 
     // DB-SPECIFIC: now(), greatest and for no key update are PostgreSQL's.
     private static final String AUTHOR = Author.OF_CALLER;
@@ -123,7 +123,7 @@ final class GroupCurrencies {
         });
     }
 
-    private Optional<Currency> chosenIn(GroupId group) {
+    public Optional<Currency> chosenIn(GroupId group) {
         return database.sql(CHOSEN)
                 .param("group", group.value())
                 .query((result, number) -> heldAs(group, result.getString(1)))

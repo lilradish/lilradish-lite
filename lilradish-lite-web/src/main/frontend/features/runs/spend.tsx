@@ -13,7 +13,6 @@ export function countSaid(digits: string): string {
 
 /**
  * What was spent, sent and came back; beneath it, who counted it where the model did not, and what is not known.
- * The wire says whether any call was measured here, never whether all were, so a try's figure is said as a total's.
  */
 export function Spent({ spend }: { readonly spend: Spend }) {
   return (
@@ -25,7 +24,11 @@ export function Spent({ spend }: { readonly spend: Spend }) {
       })}
       {spend.measuredHere === undefined ? null : (
         <Typography variant="body2" sx={QUIET_SX}>
-          {say("run.someMeasuredHere")}
+          {say(
+            spend.measuredHere === "wholly"
+              ? "run.allMeasuredHere"
+              : "run.someMeasuredHere",
+          )}
         </Typography>
       )}
       {spend.cameBackUnknown ? (

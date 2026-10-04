@@ -6,18 +6,22 @@ import static org.lilradish.lite.migration.fixture.SchemaRows.*
 final class V6Cases {
 
     static final List<String> FIXTURE = [
-        "insert into app.people (user_id, display_name) values ('000002', 'Ada Lovelace')",
+        "insert into app.people (user_id, display_name) values ('000002', 'Demo Sample Ada One')",
     ]
 
     static final List<Map<String, String>> CASES = [
         attack("people_pk", "people",
-                "insert into app.people (user_id, display_name) values ('000002', 'Grace Hopper')"),
+                "insert into app.people (user_id, display_name) values ('000002', 'Demo Sample Grace One')"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("people_user_id_visible", "people",
-                "insert into app.people (user_id, display_name) values ('00' || chr(9) || '99', 'Grace Hopper')"),
+                "insert into app.people (user_id, display_name) values ('00' || chr(9) || '99', 'Demo Sample Grace One')"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("people_user_id_bounded", "people",
-                "insert into app.people (user_id, display_name) values (repeat('9', 257), 'Grace Hopper')"),
+                "insert into app.people (user_id, display_name) values (repeat('9', 257), 'Demo Sample Grace One')"),
+        // DB-SPECIFIC: chr() uses PostgreSQL's syntax and semantics.
         attack("people_display_name_visible", "people",
-                "insert into app.people (user_id, display_name) values ('000099', 'Grace' || chr(10) || 'Hopper')"),
+                "insert into app.people (user_id, display_name) values ('000099', 'Demo Sample Grace' || chr(10) || 'One')"),
+        // DB-SPECIFIC: repeat() uses PostgreSQL's syntax and semantics.
         attack("people_display_name_bounded", "people",
                 "insert into app.people (user_id, display_name) values ('000099', repeat('a', 257))"),
     ]

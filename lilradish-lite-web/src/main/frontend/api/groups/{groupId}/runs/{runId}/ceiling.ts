@@ -10,8 +10,14 @@ export function changeCeiling(
   runId: string,
   ceiling: string | null,
   signal: AbortSignal,
+  targetRunId?: string,
 ): Promise<Run> {
   return atRun(groupId, runId, (run) =>
-    patch(`${run}/ceiling`, { ceiling }, signal, runFrom),
+    patch(
+      `${run}/ceiling`,
+      { ceiling, ...(targetRunId === undefined ? {} : { runId: targetRunId }) },
+      signal,
+      runFrom,
+    ),
   );
 }

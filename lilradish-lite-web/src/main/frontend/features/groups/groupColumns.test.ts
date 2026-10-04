@@ -42,6 +42,14 @@ describe("groupColumns", () => {
     ]);
   });
 
+  it("sets how many are in it as a figure, and no other column", () => {
+    expect(
+      groupColumns(() => null)
+        .filter((column) => "numeric" in column && column.numeric)
+        .map((column) => column.label),
+    ).toEqual(["Members"]);
+  });
+
   it.each([
     [PAYROLL, ["PAYROLL", "Payroll", "Yes", 2, "control for PAYROLL"]],
     [EMPTY_ROOM, ["VOID", "Empty room", "No", 0, "control for VOID"]],

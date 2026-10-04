@@ -9,7 +9,6 @@ import org.lilradish.lite.app.group.GroupRoles;
 import org.lilradish.lite.domain.failure.RefusalCode;
 import org.lilradish.lite.domain.identity.GroupId;
 import org.lilradish.lite.domain.identity.UserId;
-import org.lilradish.lite.domain.registry.ContentProblem;
 import org.lilradish.lite.domain.registry.EntryAct;
 import org.lilradish.lite.domain.registry.EntryId;
 import org.lilradish.lite.domain.registry.EntryKind;
@@ -262,10 +261,11 @@ final class VersionChanges {
             requireAdmitted(database, roles, act, group, kind, entry, version, caller);
             List<RetiredPinsRefusal.RetiredPin> retired =
                     act == VersionAct.SUBMIT || act == VersionAct.APPROVE ? retiredPins(group, version) : List.of();
-            List<ContentProblem> problems =
-                    act == VersionAct.SUBMIT ? checks.problemsIn(kind, group, version) : List.of();
-            if (!problems.isEmpty()) {
-                throw new ContentProblemsRefusal(problems, retired);
+            if (act == VersionAct.SUBMIT) {
+                ContentProblemReport.Result problems = checks.problemsIn(kind, group, version);
+                if (problems.total() > 0) {
+                    throw new ContentProblemsRefusal(problems, retired);
+                }
             }
             if (!retired.isEmpty()) {
                 throw new RetiredPinsRefusal(retired);

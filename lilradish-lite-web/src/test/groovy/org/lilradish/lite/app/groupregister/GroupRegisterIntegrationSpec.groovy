@@ -18,17 +18,7 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * The register of groups as the store answers it, asked of a real server running the real baseline.
- * Which membership is current, which role may change it, how people are counted, and which collation
- * orders and matches a value are all decided in SQL.
- *
- * <p>Every order is asked of two databases on one server, one defaulting to the C locale and one to
- * ICU: the names below order differently under each, so a collation left to the default is wrong on
- * one of them. Every order is written out as a list.
- *
- * <p>What a feature adds of its own is added on a connection of its own and rolled back afterwards.
- */
+/** Ordering must be independent of the database default collation. */
 class GroupRegisterIntegrationSpec extends Specification {
 
     static final String SEEDER = "00000000-0000-4000-8000-000000000000"
@@ -39,7 +29,7 @@ class GroupRegisterIntegrationSpec extends Specification {
 
     static final String SMALL_E_ACUTE = Character.toString(0xE9)
 
-    /** The group, its key and its name. */
+
     static final List<List<String>> GROUPS = [
             [group("1"), "PAYROLL", "Payroll"],
             [group("2"), "FINANCE", "finance"],
@@ -48,11 +38,7 @@ class GroupRegisterIntegrationSpec extends Specification {
             [group("5"), "BOARD", "Two owners"],
     ]
 
-    /**
-     * Whether each can still be administered, and how many are in it. An owner and an operator; one
-     * person holding two roles, neither of them the owner's; an owner whose role was taken beside an
-     * operator still there; nobody at all; two owners, and an operator who has left.
-     */
+
     static final Map<String, List> STANDING = [
             "PAYROLL": [true, 2L],
             "FINANCE": [false, 1L],
@@ -61,12 +47,7 @@ class GroupRegisterIntegrationSpec extends Specification {
             "BOARD"  : [true, 2L],
     ]
 
-    /**
-     * Each column in each direction, and the keys in the order it puts them. Keys by code point. Names
-     * by the Unicode collation algorithm: an accented capital among its unaccented neighbours, a small
-     * letter among capitals. Those nobody can administer, and those nobody is in, gather at one end.
-     * Ties by key ascending either way.
-     */
+    /** Expected ordering is independent of the implementation and includes a unique tie-breaker. */
     static final List<List> ORDERS = [
             [GroupSortColumn.KEY, false, ["BOARD", "ELAN", "FINANCE", "PAYROLL", "VOID"]],
             [GroupSortColumn.KEY, true, ["VOID", "PAYROLL", "FINANCE", "ELAN", "BOARD"]],
@@ -112,6 +93,7 @@ class GroupRegisterIntegrationSpec extends Specification {
     def setupSpec() {
         server.postgresDatabase.connection.withCloseable { Connection administration ->
             administration.createStatement().withCloseable { statement ->
+                // DB-SPECIFIC: PostgreSQL CREATE DATABASE TEMPLATE ICU locale options.
                 statement.execute("""
                         create database icu_default template template0 encoding 'UTF8'
                             locale_provider icu icu_locale 'und' locale 'C'
@@ -155,7 +137,7 @@ class GroupRegisterIntegrationSpec extends Specification {
         [database, order] << [DEFAULTS, EXPECTED.keySet() as List].combinations()
     }
 
-    /** Resumed after each group in turn as a reader carries the position, so a boundary falls between every pair. */
+
     def "resumed after any group, a page holds every group after it in that order and offers nothing beyond"() {
         given:
         def asked = query(order, null)
@@ -172,10 +154,7 @@ class GroupRegisterIntegrationSpec extends Specification {
         [database, order] << [DEFAULTS, EXPECTED.keySet() as List].combinations()
     }
 
-    /**
-     * Matched as text anywhere in the name as SearchFolding folds it — case folded, canonical spellings
-     * equal, an accent still an accent; a key is not a name, and a wildcard is itself.
-     */
+
     def "a filter narrows the register to the groups whose name holds what was typed, whatever its case"() {
         expect:
         keysOf(registers.postgres.page(query(BY_NAME, new ListFilter(typed)), null).rows()) == found
@@ -229,10 +208,11 @@ class GroupRegisterIntegrationSpec extends Specification {
         new ListPosition(false, "ELAN") || 4
     }
 
-    /** A name the store's floor admits and the type does not: shown, it is a twin; left out, the list is not the register. */
+    /** Stored group names that cannot be shown must fail the whole read. */
     def "a stored name this system will not show fails the whole read loudly, naming whose row it was"() {
         given:
         def (Connection connection, JdbcClient session) = rolledBackOn("postgres")
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, 'LEADING', ' Leading', ?::uuid)")
                 .params(group("9"), FIRST_STEWARD).update()
 
@@ -299,7 +279,7 @@ class GroupRegisterIntegrationSpec extends Specification {
         rows*.key()*.value()
     }
 
-    /** What the group under this key holds in the column, as the fixture above wrote it. */
+
     private static Object heldIn(String key, GroupSortColumn column) {
         switch (column) {
             case GroupSortColumn.KEY: return key
@@ -315,6 +295,7 @@ class GroupRegisterIntegrationSpec extends Specification {
 
     private String defaultProviderOf(String database) {
         JdbcClient.create(databases[database])
+                // DB-SPECIFIC: PostgreSQL :: casts to text; pg_database; current_database().
                 .sql("select datlocprovider::text from pg_database where datname = current_database()")
                 .query(String)
                 .single()
@@ -328,14 +309,17 @@ class GroupRegisterIntegrationSpec extends Specification {
 
     private static void populate(JdbcClient session) {
         (1..8).each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("""
                     insert into subjects (subject_id, kind, user_id, display_name, created_by)
                     values (?::uuid, 'person', ?, ?, ?::uuid)
                     """).params(person("$it"), "00070$it", "Person $it", SEEDER).update()
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("insert into pool_members (subject_id, created_by) values (?::uuid, ?::uuid)")
                     .params(person("$it"), FIRST_STEWARD).update()
         }
         GROUPS.each {
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
             session.sql("insert into groups (group_id, key, name, created_by) values (?::uuid, ?, ?, ?::uuid)")
                     .params(it[0], it[1], it[2], FIRST_STEWARD).update()
         }
@@ -351,6 +335,7 @@ class GroupRegisterIntegrationSpec extends Specification {
     }
 
     private static void member(JdbcClient session, String group, String subject, String role) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role.
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid)
@@ -358,6 +343,7 @@ class GroupRegisterIntegrationSpec extends Specification {
     }
 
     private static void ended(JdbcClient session, String group, String subject, String role, String removal) {
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid, group_role, group_member_removal; now().
         session.sql("""
                 insert into group_members (group_id, subject_id, role, created_by, removed_at, removed_by, removal)
                 values (?::uuid, ?::uuid, ?::group_role, ?::uuid, now(), ?::uuid, ?::group_member_removal)

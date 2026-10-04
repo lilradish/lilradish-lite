@@ -12,15 +12,18 @@ import spock.lang.Specification
  */
 class UnendedCallSpec extends Specification {
 
-    def "a call left unended was out unless it waits to be sent again after its newest turnaway"() {
-        expect:
-        call(turnedAwayBefore, resent).wasOut() == out
+    def "a call left unended without its call or purpose is refused"() {
+        when:
+        new UnendedCall(callId, purpose, null, null, false, false)
+
+        then:
+        def refused = thrown(NullPointerException)
+        refused.message == message
 
         where:
-        turnedAwayBefore | resent || out
-        false            | false  || true
-        true             | true   || true
-        true             | false  || false
+        callId                            | purpose                  || message
+        null                              | ModelCallPurpose.PRODUCE || "UnendedCall call must not be null"
+        new ModelCallId(UUID.randomUUID()) | null                     || "UnendedCall purpose must not be null"
     }
 
     def "a call said to be sent again after no turnaway is refused"() {
@@ -30,6 +33,17 @@ class UnendedCallSpec extends Specification {
         then:
         def refused = thrown(IllegalArgumentException)
         refused.message == "UnendedCall was sent again after no turnaway"
+    }
+
+    def "a call left unended was out unless it waits to be sent again after its newest turnaway"() {
+        expect:
+        call(turnedAwayBefore, resent).wasOut() == out
+
+        where:
+        turnedAwayBefore | resent || out
+        false            | false  || true
+        true             | true   || true
+        true             | false  || false
     }
 
     private static UnendedCall call(boolean turnedAwayBefore, boolean resent) {

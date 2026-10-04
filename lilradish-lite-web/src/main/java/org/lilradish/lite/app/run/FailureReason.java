@@ -12,7 +12,11 @@ public enum FailureReason {
     TRIES_SPENT("tries_spent"),
     UNCUTTABLE_LENGTH(RunStepFailureReason.UNCUTTABLE_LENGTH.published()),
     UNCLAIMED_VALUE(RunStepFailureReason.UNCLAIMED_VALUE.published()),
-    MODEL_NOT_DEPLOYED(RunStepFailureReason.MODEL_NOT_DEPLOYED.published());
+    MODEL_NOT_DEPLOYED(RunStepFailureReason.MODEL_NOT_DEPLOYED.published()),
+    TOO_DEEP(RunStepFailureReason.TOO_DEEP.published()),
+    TOOL_NOT_OFFERED(RunStepFailureReason.TOOL_NOT_OFFERED.published()),
+    SOURCE_NO_LONGER_MATCHES(RunStepFailureReason.SOURCE_NO_LONGER_MATCHES.published()),
+    SOURCE_LIST_NOT_HERE(RunStepFailureReason.SOURCE_LIST_NOT_HERE.published());
 
     private final String published;
 
@@ -32,6 +36,10 @@ public enum FailureReason {
                     case UNCUTTABLE_LENGTH -> UNCUTTABLE_LENGTH;
                     case UNCLAIMED_VALUE -> UNCLAIMED_VALUE;
                     case MODEL_NOT_DEPLOYED -> MODEL_NOT_DEPLOYED;
+                    case TOO_DEEP -> TOO_DEEP;
+                    case TOOL_NOT_OFFERED -> TOOL_NOT_OFFERED;
+                    case SOURCE_NO_LONGER_MATCHES -> SOURCE_NO_LONGER_MATCHES;
+                    case SOURCE_LIST_NOT_HERE -> SOURCE_LIST_NOT_HERE;
                 };
         };
     }

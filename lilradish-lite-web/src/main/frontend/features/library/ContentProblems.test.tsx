@@ -1,9 +1,11 @@
+import { ThemeProvider } from "@mui/material/styles";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DeclaredField } from "../../api/declaration";
 import type { ContentProblem } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { theme } from "../../lib/theme/theme";
 import {
   ContentProblems,
   contentOf,
@@ -106,6 +108,47 @@ const QUESTION: ReadContent = {
   terms: [],
 };
 
+describe("content problem totals", () => {
+  it("names one omitted problem after the visible places", () => {
+    render(
+      <ContentProblems
+        problems={[{ code: "no_steps", part: "steps" }]}
+        problemTotal={2}
+        content={WORKFLOW}
+      />,
+    );
+
+    expect(
+      screen.getByText("1 more thing does not hold and is not listed."),
+    ).toBeVisible();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("names several omitted problems, and says nothing extra when every one is shown", () => {
+    const { rerender } = render(
+      <ContentProblems
+        problems={[{ code: "no_steps", part: "steps" }]}
+        problemTotal={203}
+        content={WORKFLOW}
+      />,
+    );
+
+    expect(
+      screen.getByText("202 more things do not hold and are not listed."),
+    ).toBeVisible();
+    rerender(
+      <ContentProblems
+        problems={[{ code: "no_steps", part: "steps" }]}
+        problemTotal={1}
+        content={WORKFLOW}
+      />,
+    );
+    expect(
+      screen.queryByText(/more things? do not hold/),
+    ).not.toBeInTheDocument();
+  });
+});
+
 const SAID_REPEATED =
   "A term before it is already this one, whatever the case either is written in.";
 
@@ -113,10 +156,20 @@ function placesOf(
   problems: readonly ContentProblem[],
   content: ReadContent | null,
 ): (string | null)[] {
-  render(<ContentProblems problems={problems} content={content} />);
+  render(
+    <ThemeProvider theme={theme}>
+      <ContentProblems problems={problems} content={content} />
+    </ThemeProvider>,
+  );
   return within(screen.getByRole("list", { name: "What does not hold yet" }))
     .getAllByRole("listitem")
-    .map((each) => each.textContent);
+    .map((each) => {
+      const words = each.getAttribute("aria-label");
+      expect(each.textContent).toBe(
+        words?.replaceAll("\u2068", "").replaceAll("\u2069", ""),
+      );
+      return words;
+    });
 }
 
 const TRIAGE = isolatedInText("triage");
@@ -165,6 +218,7 @@ describe("contentOf", () => {
         questions: [],
         workflows: [],
         codeSteps: [],
+        searchWays: [],
         models: [],
       },
       terms: new Map(),
@@ -175,6 +229,191 @@ describe("contentOf", () => {
 });
 
 describe("ContentProblems", () => {
+  it("keeps data names separate from inherited warning notes through binding and case locators", () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <div style={{ color: theme.palette.warning.dark }}>
+          <ContentProblems
+            problems={[
+              {
+                code: "source_unknown",
+                part: "steps",
+                stepId: "s2",
+                bindingId: "b3",
+              },
+              {
+                code: "target_unknown",
+                part: "steps",
+                stepId: "s2",
+                caseId: "c2",
+              },
+              { code: "name_repeated", part: "gives", fieldId: "f2" },
+            ]}
+            content={WORKFLOW}
+          />
+        </div>
+      </ThemeProvider>,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    for (const item of items) {
+      expect(item.textContent).toBe(
+        item
+          .getAttribute("aria-label")
+          ?.replaceAll("\u2068", "")
+          .replaceAll("\u2069", ""),
+      );
+      for (const data of item.querySelectorAll("bdi")) {
+        expect(getComputedStyle(data).fontStyle).not.toBe("italic");
+      }
+      for (const hint of item.querySelectorAll("span")) {
+        expect(getComputedStyle(hint).fontStyle).toBe("italic");
+        expect(getComputedStyle(hint).color).toBe(getComputedStyle(item).color);
+      }
+    }
+    expect(within(items[0]!).getByText("route").tagName).toBe("BDI");
+    expect(within(items[0]!).getByText("urgent").tagName).toBe("BDI");
+    expect(within(items[0]!).getByText("complaint").tagName).toBe("BDI");
+    expect(within(items[1]!).getByText("the fallback")).toBeVisible();
+    expect(within(items[2]!).getByText("summary").tagName).toBe("BDI");
+  });
+
+  it("isolates names inside drawing and search problems without rendering their markup", () => {
+    const name = "Demo Sample <img src=x>";
+    placesOf(
+      [
+        { code: "drawing_names_unknown", part: "drawing", name },
+        {
+          code: "search_standing_missing",
+          part: "steps",
+          stepId: "s1",
+          fields: ["Demo_Sample", "body", name],
+        },
+        {
+          code: "search_standing_missing",
+          part: "steps",
+          stepId: "s1",
+          fields: [],
+        },
+        { code: "drawing_names_unknown", part: "drawing" },
+      ],
+      WORKFLOW,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(within(items[0]!).getByText(name).tagName).toBe("BDI");
+    expect(within(items[1]!).getByText("Demo Sample").tagName).toBe("BDI");
+    expect(within(items[1]!).getByText("body").tagName).toBe("BDI");
+    expect(within(items[1]!).getByText(name).tagName).toBe("BDI");
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(items[3]!).toHaveAccessibleName(
+      "The question, how it is drawn: Something here does not hold.",
+    );
+  });
+
+  it("keeps a repeated field's position as a note beside its data name", () => {
+    placesOf([{ code: "name_repeated", part: "takes", fieldId: "f2" }], {
+      ...QUESTION,
+      takes: [COMPLAINT, { ...COMPLAINT, fieldId: "f2" }],
+    });
+    const item = screen.getByRole("listitem");
+    expect(item).toHaveAccessibleName(
+      `What it takes, ${isolatedInText("complaint (field 2 there)")}: A field beside it already has this name.`,
+    );
+    const name = within(item).getByText("complaint");
+    expect(name.tagName).toBe("BDI");
+    expect(getComputedStyle(name).fontStyle).not.toBe("italic");
+    expect(
+      getComputedStyle(within(item).getByText("(field 2 there)")).fontStyle,
+    ).toBe("italic");
+  });
+  it("places a searching read problem at its part key, not merely its step", () => {
+    const content: ReadContent = {
+      ...WORKFLOW,
+      steps: [
+        ...WORKFLOW.steps,
+        {
+          stepId: "s4",
+          name: "find",
+          bindings: [],
+          runs: {
+            kind: "search",
+            searchWay: "web",
+            question: [
+              { partId: "p1", from: { input: "complaint" } },
+              { partId: "p2", from: { step: 0, path: "summary" } },
+            ],
+            standings: {},
+          },
+        },
+      ],
+    };
+    const atPart = placesOf(
+      [{ code: "source_unknown", part: "steps", bindingId: "p2" }],
+      content,
+    )[0]!;
+
+    expect(atPart).toContain("Part 2");
+    expect(atPart).toContain("find");
+    expect(atPart).not.toContain("Part 1");
+    expect(atPart).not.toContain("triage");
+  });
+
+  it("uses separate counted and uncounted words for a search's review and the asking it makes", () => {
+    const content: ReadContent = {
+      ...WORKFLOW,
+      steps: [
+        {
+          stepId: "s4",
+          name: "find",
+          bindings: [],
+          runs: { kind: "search", question: [], standings: {} },
+        },
+      ],
+    };
+    const places = placesOf(
+      [
+        { code: "asking_past_largest", part: "steps", stepId: "s4", excess: 2 },
+        {
+          code: "search_review_past_largest",
+          part: "steps",
+          stepId: "s4",
+          excess: 3,
+        },
+        {
+          code: "search_review_past_largest",
+          part: "steps",
+          stepId: "s4",
+          excess: Number.MAX_SAFE_INTEGER + 1,
+        },
+      ],
+      content,
+    );
+
+    expect(places[0]).toContain("one asking");
+    expect(places[0]).not.toContain("reviewing what it finds");
+    expect(places[1]).toContain("reviewing what it finds");
+    expect(places[1]).toContain("3 characters");
+    expect(places[2]).toContain("more than");
+    expect(places[2]).not.toContain("9007199254740992");
+  });
+
+  it("names an unheld drawing reference at the question drawing", () => {
+    render(
+      <ContentProblems
+        problems={[
+          { code: "drawing_names_unknown", part: "drawing", name: "missing" },
+        ]}
+        content={null}
+      />,
+    );
+    expect(screen.getByRole("listitem")).toHaveAccessibleName(
+      `The question, how it is drawn: It names ${isolatedInText("missing")}, which this question does not take.`,
+    );
+    expect(screen.getByRole("listitem").textContent).toBe(
+      "The question, how it is drawn: It names missing, which this question does not take.",
+    );
+  });
+
   it("names nothing where there is nothing to name", () => {
     const { container } = render(
       <ContentProblems problems={null} content={WORKFLOW} />,
@@ -212,6 +451,147 @@ describe("ContentProblems", () => {
       `The steps, ${ROUTE}, the fallback: It leads to no workflow at a fixed version yet.`,
       `The steps, ${TRIAGE}, input ${isolatedInText("complaint")}: Nothing fills it yet.`,
       `The steps, ${ROUTE}, the case on ${URGENT}, input ${isolatedInText("complaint")}: Nothing fills it yet.`,
+    ]);
+  });
+
+  it("names a case output by its labels, preferring the target before the route, and a missing required output by the route", () => {
+    const caseOutput: DeclaredField = {
+      ...SUMMARY,
+      fieldId: "shared",
+      name: "case_details",
+      label: "Case details",
+      kind: "fields",
+      fields: [
+        { ...SUMMARY, fieldId: "inner", name: "case_note", label: "Case note" },
+      ],
+    };
+    const routeOutput: DeclaredField = {
+      ...caseOutput,
+      label: "Route details",
+      fields: [{ ...SUMMARY, fieldId: "inner", label: "Route note" }],
+    };
+    const routeStep = WORKFLOW.steps[1]!;
+    const routeRuns = routeStep.runs!;
+    const content: ReadContent = {
+      ...WORKFLOW,
+      steps: [
+        WORKFLOW.steps[0]!,
+        {
+          ...routeStep,
+          runs: {
+            ...routeRuns,
+            gives: [
+              routeOutput,
+              { ...SUMMARY, fieldId: "required", label: "Required answer" },
+            ],
+            cases: [
+              {
+                caseId: "c1",
+                term: "urgent",
+                gives: [caseOutput],
+                bindings: [],
+              },
+              { caseId: "c2", gives: [], bindings: [] },
+            ],
+          },
+        },
+      ],
+    };
+
+    const places = placesOf(
+      [
+        {
+          code: "case_gives_past_limit",
+          part: "steps",
+          stepId: "s2",
+          caseId: "c1",
+          fieldId: "inner",
+        },
+        {
+          code: "case_may_give_nothing",
+          part: "steps",
+          stepId: "s2",
+          caseId: "c2",
+          fieldId: "required",
+        },
+        {
+          code: "case_gives_other_kind",
+          part: "steps",
+          stepId: "s2",
+          caseId: "c1",
+          fieldId: "f1",
+        },
+      ],
+      content,
+    );
+
+    expect(places).toEqual([
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case details")} › ${isolatedInText("Case note")}: It could be longer, or hold more, than the route allows.`,
+      `The steps, ${ROUTE}, the fallback, what it gives back as ${isolatedInText("Required answer")}: The route says it must be given, and the workflow it leads to need not give it.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}: The route declares it as another kind.`,
+    ]);
+    expect(places.join(" ")).not.toContain("input complaint");
+  });
+
+  it("words all four case output refusal reasons at the target's output field", () => {
+    const routeStep = WORKFLOW.steps[1]!;
+    const content: ReadContent = {
+      ...WORKFLOW,
+      steps: [
+        WORKFLOW.steps[0]!,
+        {
+          ...routeStep,
+          runs: {
+            ...routeStep.runs!,
+            cases: [
+              {
+                caseId: "c1",
+                term: "urgent",
+                gives: [{ ...SUMMARY, fieldId: "f9", label: "Case answer" }],
+                bindings: [],
+              },
+              { caseId: "c2", bindings: [] },
+            ],
+          },
+        },
+      ],
+    };
+    const problems: ContentProblem[] = [
+      {
+        code: "case_gives_undeclared",
+        part: "steps",
+        stepId: "s2",
+        caseId: "c1",
+        fieldId: "f9",
+      },
+      {
+        code: "case_gives_other_kind",
+        part: "steps",
+        stepId: "s2",
+        caseId: "c1",
+        fieldId: "f9",
+      },
+      {
+        code: "case_gives_past_limit",
+        part: "steps",
+        stepId: "s2",
+        caseId: "c1",
+        fieldId: "f9",
+      },
+      {
+        code: "case_may_give_nothing",
+        part: "steps",
+        stepId: "s2",
+        caseId: "c1",
+        fieldId: "f9",
+      },
+    ];
+
+    expect(placesOf(problems, content)).toEqual([
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route declares nothing by this name.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route declares it as another kind.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: It could be longer, or hold more, than the route allows.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route says it must be given, and the workflow it leads to need not give it.`,
     ]);
   });
 
@@ -331,6 +711,102 @@ describe("ContentProblems", () => {
     ]);
   });
 
+  it("says a missing file size and both deployment limits at the named field", () => {
+    const places = placesOf(
+      [
+        { code: "file_size_missing", part: "gives", fieldId: "f2" },
+        {
+          code: "file_limit_past_deployment",
+          part: "gives",
+          fieldId: "f2",
+          fileLimits: {
+            maximumBytes: 104857600,
+            maximumPerField: 100,
+            maximumTotalBytes: 1073741824,
+          },
+        },
+      ],
+      WORKFLOW,
+    );
+
+    expect(places).toEqual([
+      `What it gives back, ${isolatedInText("summary")}: A field of files says how large one file may be, and this one does not yet.`,
+      `What it gives back, ${isolatedInText("summary")}: It allows a larger file, or more files, than this deployment takes: files of up to 100 MB each, and at most 100 in one field.`,
+    ]);
+  });
+
+  it("uses the file-type refusal for a stored field with too many types", () => {
+    expect(
+      placesOf(
+        [{ code: "file_types_too_many", part: "gives", fieldId: "f2" }],
+        WORKFLOW,
+      ),
+    ).toEqual([
+      `What it gives back, ${isolatedInText("summary")}: A field of files takes at most 64 types.`,
+    ]);
+  });
+
+  it("names the total file bound at what a workflow takes", () => {
+    const limits = {
+      maximumBytes: 104857600,
+      maximumPerField: 100,
+      maximumTotalBytes: 1073741824,
+    };
+    expect(
+      placesOf(
+        [
+          {
+            code: "file_total_past_deployment",
+            part: "takes",
+            fileLimits: limits,
+          },
+        ],
+        WORKFLOW,
+      ),
+    ).toEqual([
+      "What it takes: At their limits, its files together could come to more than the 1 GB this deployment takes at once.",
+    ]);
+  });
+
+  it("names the total file bound at what a question gives back", () => {
+    const limits = {
+      maximumBytes: 104857600,
+      maximumPerField: 100,
+      maximumTotalBytes: 1073741824,
+    };
+    expect(
+      placesOf(
+        [
+          {
+            code: "file_total_past_deployment",
+            part: "gives",
+            fileLimits: limits,
+          },
+        ],
+        QUESTION,
+      ),
+    ).toEqual([
+      "The declared answer: At their limits, its files together could come to more than the 1 GB this deployment takes at once.",
+    ]);
+  });
+
+  it("names a file taken by a question and file output assigned to model work", () => {
+    const places = placesOf(
+      [
+        { code: "question_takes_file", part: "takes", fieldId: "f1" },
+        { code: "step_file_made_by_model", part: "steps", stepId: "s1" },
+        { code: "step_file_reviewed_by_model", part: "steps", stepId: "s1" },
+      ],
+      WORKFLOW,
+    );
+
+    expect(places).toEqual([
+      `What it takes, ${isolatedInText("complaint")}: It is a file, and a question takes none: a model is sent text alone.`,
+      `The steps, ${TRIAGE}: It gives back a file, which no model can make; a person may answer it.`,
+      `The steps, ${TRIAGE}: It takes or gives back a file, which no model can review; a person may review it, by downloading it.`,
+    ]);
+  });
+
   it("says all a workflow takes could be written out too long by the figure the server holds it to", () => {
     const places = placesOf(
       [{ code: "takes_past_largest", part: "takes" }],
@@ -421,6 +897,46 @@ describe("ContentProblems", () => {
 
     expect(places).toEqual([
       `The steps, ${TRIAGE}, what fills ${isolatedInText("complaint")}: What it fills must be given, and what it reads need not be, so that may be empty.`,
+    ]);
+  });
+
+  it("says a searching step's problems, its fields none is chosen for named as people read them, in the server's order", () => {
+    const places = placesOf(
+      [
+        { code: "search_tool_not_offered", part: "steps", stepId: "s1" },
+        { code: "search_way_not_held", part: "steps", stepId: "s1" },
+        { code: "search_question_may_be_empty", part: "steps", stepId: "s1" },
+        {
+          code: "search_standing_missing",
+          part: "steps",
+          stepId: "s1",
+          fields: ["other"],
+        },
+        {
+          code: "search_standing_missing",
+          part: "steps",
+          stepId: "s1",
+          fields: ["references", "other"],
+        },
+        {
+          code: "search_standing_missing",
+          part: "steps",
+          stepId: "s1",
+          fields: ["seen_at", "references", "other"],
+        },
+        { code: "search_standing_missing", part: "steps", stepId: "s1" },
+      ],
+      WORKFLOW,
+    );
+
+    expect(places).toEqual([
+      `The steps, ${TRIAGE}: It searches with a model that does not offer the tool this way to search needs.`,
+      `The steps, ${TRIAGE}: It runs a way to search this release does not offer.`,
+      `The steps, ${TRIAGE}: It searches with a question that could hold nothing: write something into it, or put in a value that must be given.`,
+      `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("other")} stands always or waits on a review.`,
+      `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("references")} and ${isolatedInText("other")} stand always or wait on a review.`,
+      `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("seen at")}, ${isolatedInText("references")}, and ${isolatedInText("other")} stand always or wait on a review.`,
+      `The steps, ${TRIAGE}: Something here does not hold.`,
     ]);
   });
 

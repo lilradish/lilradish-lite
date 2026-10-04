@@ -28,6 +28,7 @@ const ANSWER = {
     questions: [],
     workflows: [],
     codeSteps: [],
+    searchWays: [],
     models: [],
   },
   terms: {},

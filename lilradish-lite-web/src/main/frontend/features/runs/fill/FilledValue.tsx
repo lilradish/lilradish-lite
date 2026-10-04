@@ -1,12 +1,20 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { useId, useState, type ReactNode } from "react";
+import { Fragment, useContext, useId, useState, type ReactNode } from "react";
 
-import type { FillValue, FillValues, ReadField } from "../../../api/filling";
+import {
+  isDownloadableFileValue,
+  isWithheldLeaf,
+  type FileValue,
+  type ReadField,
+  type ShownValue,
+  type ShownValues,
+} from "../../../api/filling";
 import type { ShownOrKept } from "../../../api/groups/{groupId}/runs/{runId}/steps";
-import { say } from "../../../i18n/app";
-import { readersIntl } from "../../../i18n/intl";
+import { say, type MessageId } from "../../../i18n/app";
+import { intl, readersIntl } from "../../../i18n/intl";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import {
   codePointsIn,
@@ -18,7 +26,10 @@ import {
 } from "../../../lib/filling/writing";
 import { Field, Fields } from "../../../lib/form/Fields";
 import { QUIET_SX } from "../../../lib/layout/parts";
+import { HiddenShown, HiddenShownAcross } from "../../../lib/text/HiddenShown";
+import { ModelProse } from "../../../lib/text/ModelProse";
 import { spokenName } from "../steps/stepTitle";
+import { CurrentFileRunContext, fileDownloadHref } from "./CurrentFileRun";
 
 // Parts, not a style: a style takes no fraction of a second, and every moment is drawn alike, with one or without.
 const CLOCK = {
@@ -34,18 +45,25 @@ const TEXT_SX = { whiteSpace: "pre-wrap" };
 
 const MANY_SX = { m: 0, pl: 2 };
 
+// A span set as a block: a value may stand within a line, where a paragraph may not.
+const SENTENCE_SX = { ...QUIET_SX, display: "block" };
+
+const LABELLED: MessageId = "question.labelledValue";
+
 const LONGEST_OPEN_TEXT = 200;
 
 /**
  * One value as it was filled, drawn as its field's kind is read: none said as none, one withheld said so, one kept
  * in a shape the step had before drawn as it was kept, and one shaped as its field never is, or of a kind this build
- * does not know, said to be something it cannot say yet.
+ * does not know, said to be something it cannot say yet. Every text within it is marked as one, by
+ * `HiddenShownAcross`, unless it stands within a value that is.
  */
 export function FilledValue({
   field,
   label,
   shown,
   shut,
+  inLine = false,
 }: {
   /** Absent where nothing the read holds declares it: drawn by its shape alone. */
   readonly field?: ReadField;
@@ -54,26 +72,115 @@ export function FilledValue({
   readonly shown: ShownOrKept;
   /** Whether a long text is shut until opened: only what a run was started with is, as a reviewer reads in full. */
   readonly shut: boolean;
+  /** Whether it stands within a line, as a heading or a link's words: many, and fields, then run on in it. */
+  readonly inLine?: boolean;
 }) {
   if ("withheld" in shown) {
     return (
-      <Typography variant="body2" sx={QUIET_SX}>
+      <Typography variant="body2" component="span" sx={SENTENCE_SX}>
         {say("step.withheld")}
       </Typography>
     );
   }
-  if ("asKept" in shown) {
-    return <KeptEarlier label={label} text={shown.asKept} shut={shut} />;
+  return (
+    <HiddenShownAcross
+      value={
+        "asKept" in shown ? shown.asKept : visibleTextOf(field, shown.value)
+      }
+    >
+      {"asKept" in shown ? (
+        <KeptEarlier label={label} text={shown.asKept} shut={shut} />
+      ) : (
+        valueDrawn(field, label, shown.value, shut, inLine)
+      )}
+    </HiddenShownAcross>
+  );
+}
+
+function visibleTextOf(
+  field: ReadField | undefined,
+  value: ShownValue,
+): unknown {
+  if (isWithheldLeaf(value)) {
+    return null;
   }
-  const { value } = shown;
+  if (field?.kind === "file") {
+    if (Array.isArray(value)) {
+      return field.most === undefined
+        ? null
+        : value.map((each) => visibleFileTextOf(each));
+    }
+    return field.most !== undefined && value !== null
+      ? null
+      : visibleFileTextOf(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((each) => visibleTextOf(field, each));
+  }
+  if (field?.kind === "fields" && value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([name, each]) => [
+        name,
+        visibleTextOf(
+          field.fields?.find((declared) => declared.name === name),
+          each,
+        ),
+      ]),
+    );
+  }
+  return value;
+}
+
+function visibleFileTextOf(value: ShownValue): unknown {
+  return isDownloadableFileValue(value)
+    ? { name: value.name, type: value.type, size: value.size }
+    : null;
+}
+
+function valueDrawn(
+  field: ReadField | undefined,
+  label: string,
+  value: ShownValue,
+  shut: boolean,
+  inLine: boolean,
+): ReactNode {
+  if (
+    field?.kind === "file" &&
+    value !== null &&
+    Array.isArray(value) !== (field.most !== undefined)
+  ) {
+    return say("step.unknown");
+  }
   if (!Array.isArray(value)) {
-    return <One field={field} label={label} value={value} shut={shut} />;
+    return (
+      <One
+        field={field}
+        label={label}
+        value={value}
+        shut={shut}
+        inLine={inLine}
+      />
+    );
   }
   if (field !== undefined && field.most === undefined) {
     return say("step.unknown");
   }
   if (value.length === 0) {
     return say("step.none");
+  }
+  if (inLine) {
+    return inOneLine(
+      value.map((each, at) => (
+        <One
+          key={at}
+          field={field}
+          label={say("step.itemOf", { field: label, number: at + 1 })}
+          value={each}
+          shut={shut}
+          inLine
+        />
+      )),
+    );
   }
   return (
     <Box component="ul" sx={MANY_SX}>
@@ -84,6 +191,7 @@ export function FilledValue({
             label={say("step.itemOf", { field: label, number: at + 1 })}
             value={each}
             shut={shut}
+            inLine={false}
           />
         </li>
       ))}
@@ -96,12 +204,23 @@ function One({
   label,
   value,
   shut,
+  inLine,
 }: {
   readonly field: ReadField | undefined;
   readonly label: string;
-  readonly value: FillValue;
+  readonly value: ShownValue;
   readonly shut: boolean;
+  readonly inLine: boolean;
 }): ReactNode {
+  if (isWithheldLeaf(value)) {
+    return field?.kind === "file" ? (
+      say("step.unknown")
+    ) : (
+      <Typography variant="body2" component="span" sx={SENTENCE_SX}>
+        {say("step.withheld")}
+      </Typography>
+    );
+  }
   if (value === null) {
     return say("step.none");
   }
@@ -109,12 +228,20 @@ function One({
     return say("step.unknown");
   }
   if (typeof value !== "string") {
+    if (field?.kind === "file") {
+      return isDownloadableFileValue(value) ? (
+        <FileShown value={value} />
+      ) : (
+        say("step.unknown")
+      );
+    }
     return field === undefined || field.kind === "fields" ? (
       <FilledFields
         fields={field?.fields}
-        values={value as FillValues}
+        values={value as ShownValues}
         shut={shut}
         outer={label}
+        inLine={inLine}
       />
     ) : (
       say("step.unknown")
@@ -123,7 +250,14 @@ function One({
   switch (field?.kind) {
     case undefined:
     case "text":
-      return shut ? <ShutText label={label} value={value} /> : drawnText(value);
+      if (shut) {
+        return <ShutText label={label} value={value} />;
+      }
+      return field?.lines === "several" && !inLine ? (
+        <ModelProse text={value} plain={drawnText(value)} />
+      ) : (
+        drawnText(value)
+      );
     case "number":
       return numberWritten(value) ? (
         readersIntl.formatNumber(value as `${number}`, asWritten(value))
@@ -164,10 +298,32 @@ function One({
   }
 }
 
+function FileShown({ value }: { readonly value: FileValue }) {
+  const currentRun = useContext(CurrentFileRunContext);
+  const name = (
+    <Box component="bdi">
+      <HiddenShown text={value.name} />
+    </Box>
+  );
+  return (
+    <Box component="span">
+      {currentRun === null ? (
+        name
+      ) : (
+        <Link href={fileDownloadHref(currentRun, value.id)} download>
+          {say("step.downloadFile")} {name}
+        </Link>
+      )}{" "}
+      {say("step.fileType", { type: isolatedInText(value.type) })}{" "}
+      {say("step.fileSize", { size: value.size })}
+    </Box>
+  );
+}
+
 function drawnText(value: string) {
   return (
     <Box component="bdi" sx={TEXT_SX}>
-      {value}
+      <HiddenShown text={value} />
     </Box>
   );
 }
@@ -192,6 +348,7 @@ function ShutText({
   return (
     <>
       <Button
+        color="inherit"
         size="small"
         aria-expanded={open}
         aria-controls={textId}
@@ -212,53 +369,85 @@ export function FilledFields({
   values,
   shut,
   outer,
+  inLine = false,
 }: {
   readonly fields: readonly ReadField[] | undefined;
-  readonly values: FillValues;
+  readonly values: ShownValues;
   readonly shut: boolean;
   /** What the value holding these fields is named by; absent at the top. */
   readonly outer?: string;
+  /** Whether they stand within a line: each then runs on in it after its label. */
+  readonly inLine?: boolean;
 }) {
   const within = (inner: string) =>
     outer === undefined
       ? isolatedInText(inner)
       : say("step.fieldWithin", { outer, inner: isolatedInText(inner) });
+  const each =
+    fields === undefined
+      ? Object.entries(values).map(([name, value]) => ({
+          name,
+          said: spokenName(name),
+          field: undefined,
+          value,
+        }))
+      : fields.map((declared) => ({
+          name: declared.name,
+          said: declared.label ?? declared.name,
+          field: declared,
+          value: Object.hasOwn(values, declared.name)
+            ? values[declared.name]!
+            : null,
+        }));
+  const drawn = each.map(({ said, field, value }) => (
+    <FilledValue
+      field={field}
+      label={within(said)}
+      shown={{ value }}
+      shut={shut}
+      inLine={inLine}
+    />
+  ));
+  if (inLine) {
+    return inOneLine(
+      each.map(({ said }, at) => labelledInLine(<bdi>{said}</bdi>, drawn[at])),
+    );
+  }
   return (
     <Fields>
-      {fields === undefined
-        ? Object.entries(values).map(([name, value]) => (
-            <Field key={name} label={<bdi>{spokenName(name)}</bdi>}>
-              <FilledValue
-                label={within(spokenName(name))}
-                shown={{ value }}
-                shut={shut}
-              />
-            </Field>
-          ))
-        : fields.map((each) => (
-            <Field key={each.name} label={<bdi>{each.label ?? each.name}</bdi>}>
-              <FilledValue
-                field={each}
-                label={within(each.label ?? each.name)}
-                shut={shut}
-                shown={{
-                  value: Object.hasOwn(values, each.name)
-                    ? values[each.name]!
-                    : null,
-                }}
-              />
-            </Field>
-          ))}
+      {each.map(({ name, said }, at) => (
+        <Field key={name} label={<bdi>{said}</bdi>}>
+          {drawn[at]}
+        </Field>
+      ))}
     </Fields>
   );
+}
+
+/** Each in one line, joined as the reader's language joins a list of things that all hold. */
+export function inOneLine(items: readonly ReactNode[]): ReactNode {
+  const joined = readersIntl.formatList(
+    items.map((item, at) => <Fragment key={at}>{item}</Fragment>),
+    { type: "conjunction" },
+  );
+  return Array.isArray(joined)
+    ? joined.map((part, at) => <Fragment key={at}>{part}</Fragment>)
+    : joined;
+}
+
+/** A value within a line after what it is called. */
+export function labelledInLine(label: ReactNode, value: ReactNode): ReactNode {
+  return intl.formatMessage({ id: LABELLED }, { label, value });
 }
 
 /** As it came, and said to be unreadable rather than read as something it is not. */
 function Unreadable({ value }: { readonly value: string }) {
   return (
     <>
-      <bdi>{value}</bdi>
-      <Typography variant="body2" sx={QUIET_SX}>
+      <bdi>
+        <HiddenShown text={value} />
+      </bdi>
+      <Typography variant="body2" component="span" sx={SENTENCE_SX}>
         {say("step.unreadable")}
       </Typography>
     </>
@@ -287,7 +476,7 @@ function KeptEarlier({
       ) : (
         drawnText(text)
       )}
-      <Typography variant="body2" sx={QUIET_SX}>
+      <Typography variant="body2" component="span" sx={SENTENCE_SX}>
         {say("step.earlierShape")}
       </Typography>
     </>
@@ -329,7 +518,7 @@ function Moment({ parts }: { readonly parts: MomentParts }) {
           offset,
         })}
       </time>
-      <Typography variant="body2" sx={QUIET_SX}>
+      <Typography variant="body2" component="span" sx={SENTENCE_SX}>
         {say("step.momentLocal", {
           when: clockSaid(wall.getTime() - east * 60_000, fraction),
         })}

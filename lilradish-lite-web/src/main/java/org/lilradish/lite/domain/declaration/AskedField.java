@@ -25,7 +25,29 @@ public record AskedField(
         @Nullable OfferedTerms terms,
         List<AskedField> fields,
         boolean mustBeGiven,
-        boolean confidenceAsked) {
+        boolean confidenceAsked,
+        @Nullable TextLines lines) {
+
+    public AskedField(
+            FieldName name,
+            FieldKind kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            @Nullable OfferedTerms terms,
+            List<AskedField> fields,
+            boolean mustBeGiven,
+            boolean confidenceAsked) {
+        this(
+                name,
+                kind,
+                longest,
+                most,
+                terms,
+                fields,
+                mustBeGiven,
+                confidenceAsked,
+                kind == FieldKind.TEXT ? TextLines.SEVERAL : null);
+    }
 
     public AskedField {
         requireNonNull(name, "AskedField name must not be null");
@@ -33,6 +55,9 @@ public record AskedField(
         fields = List.copyOf(requireNonNull(fields, "AskedField fields must not be null"));
         if ((kind == FieldKind.TEXT) != (longest != null) || (longest != null && longest < 1)) {
             throw new IllegalArgumentException("AskedField says how long, of at least one, exactly where it is text");
+        }
+        if ((kind == FieldKind.TEXT) != (lines != null)) {
+            throw new IllegalArgumentException("AskedField says how many lines exactly where it is text");
         }
         if (most != null && most < 1) {
             throw new IllegalArgumentException("AskedField most must be at least one: " + most);

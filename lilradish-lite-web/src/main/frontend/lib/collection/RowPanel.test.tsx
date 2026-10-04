@@ -1,3 +1,5 @@
+import { iconButtonClasses } from "@mui/material/IconButton";
+import Box from "@mui/material/Box";
 import { ThemeProvider } from "@mui/material/styles";
 import {
   act,
@@ -13,15 +15,27 @@ import { createPortal } from "react-dom";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { laidOutAt } from "../../testutil/layout";
+import { HEADING_SX } from "../layout/parts";
 import type { Line } from "../notice/StatusLine";
 import { theme } from "../theme/theme";
-import { RowPanel } from "./RowPanel";
+import { BESIDE_FROM, RowPanel } from "./RowPanel";
 
-/** The panel's own threshold: a table's least width, a gap, and the panel. */
-const ROOM_FOR_BOTH = 944;
+/** A table's least width and the gap beside it: the room for both is this and the panel. */
+const TABLE_AND_GAP = 584;
 
-/** How far past that threshold a covering panel waits before it steps aside. */
+/** How far past the room for both a covering panel waits before it steps aside. */
 const SCROLLBAR_ALLOWANCE = 24;
+
+/** The width a panel takes where it is given none. */
+const USUAL_PANEL = 360;
+
+const WIDER_PANEL = 464;
+
+/** A panel given no width and one given its own: what is given, and the width that follows. */
+const PANELS = [
+  ["of the usual width", undefined, USUAL_PANEL],
+  ["given a wider width", WIDER_PANEL, WIDER_PANEL],
+] as const;
 
 const WIDE = 1280;
 const NARROW = 700;
@@ -49,6 +63,8 @@ async function opened(
   width: number,
   openAtFirst: boolean,
   saidOver: Line | null = null,
+  panelWidth?: number,
+  leastListWidth?: number,
 ) {
   const resizeTo = laidOutAt(width, VIEWPORT);
   // The box the panel is given, standing where the layout gives it a width,
@@ -82,8 +98,8 @@ async function opened(
     }, []);
     return (
       <>
-        <p>Details of Ada Lovelace</p>
-        <button onClick={onShut}>Done with Ada</button>
+        <p>Details of Avo Lumerace</p>
+        <button onClick={onShut}>Done with Avo</button>
         <button onClick={onForgetRow}>Take the row away</button>
         <button onKeyDown={(event) => event.stopPropagation()}>
           Keeps its keys
@@ -104,10 +120,12 @@ async function opened(
               closes();
               setOpen(false);
             }}
-            title="Ada Lovelace"
+            title="Avo Lumerace"
+            width={panelWidth}
+            leastListWidth={leastListWidth}
             list={
               row ? (
-                <button onClick={() => setOpen(true)}>Ada Lovelace</button>
+                <button onClick={() => setOpen(true)}>Avo Lumerace</button>
               ) : null
             }
             listLabel="Records"
@@ -137,21 +155,21 @@ async function opened(
 function formsShown() {
   return {
     beside: screen.queryAllByRole("region", {
-      name: "Ada Lovelace",
+      name: "Avo Lumerace",
       hidden: true,
     }).length,
     over: screen.queryAllByRole("dialog", { hidden: true }).length,
   };
 }
 
-const ADA_IN: Line = { severity: "info", words: "Ada Lovelace is in." };
+const AVO_IN: Line = { severity: "info", words: "Avo Lumerace is in." };
 
 const BESIDE = { beside: 1, over: 0 };
 const OVER = { beside: 0, over: 1 };
 
 /** The row that opens the panel, found whether or not the panel covers it. */
 function row(): HTMLElement {
-  return screen.getByRole("button", { name: "Ada Lovelace", hidden: true });
+  return screen.getByRole("button", { name: "Avo Lumerace", hidden: true });
 }
 
 /** The list's own box, found whether or not the panel covers it. */
@@ -159,20 +177,128 @@ function listBox(): HTMLElement {
   return screen.getByRole("region", { name: "Records", hidden: true });
 }
 
-/**
- * The drawer leaves on a transition, and what happens once it has gone happens
- * after it. Real time rather than a faked clock, which `waitFor` in this suite
- * cannot see and would deadlock on.
- */
 async function settle() {
-  await act(async () => {
-    await new Promise((resolve) =>
-      setTimeout(resolve, theme.transitions.duration.leavingScreen * 2),
-    );
-  });
+  await waitFor(() =>
+    expect(screen.queryByText("Details of Avo Lumerace")).toBeNull(),
+  );
 }
 
 describe("RowPanel", () => {
+  it("keeps the caller's list width with the wider panel and hysteresis", async () => {
+    const { resizeTo, content } = await opened(1131, true, null, 464, 620);
+    expect(formsShown()).toEqual(OVER);
+    const done = screen.getByRole("button", { name: "Done with Avo" });
+    done.focus();
+    resizeTo(1132);
+    await waitFor(() => expect(formsShown()).toEqual(BESIDE));
+    expect(screen.getByRole("button", { name: "Done with Avo" })).toBe(done);
+    expect(done).toHaveFocus();
+    resizeTo(1108);
+    await waitFor(() => expect(formsShown()).toEqual(BESIDE));
+    resizeTo(1107);
+    await waitFor(() => expect(formsShown()).toEqual(OVER));
+    expect(screen.getByRole("button", { name: "Done with Avo" })).toBe(done);
+    expect(done).toHaveFocus();
+    expect(content).toEqual({ mounts: 1, unmounts: 0 });
+  });
+
+  it.each([
+    ["beside the list", WIDE, "region"],
+    ["over the list", NARROW, "dialog"],
+  ] as const)(
+    "draws a node title %s with its complete accessible name",
+    (_where, width, role) => {
+      laidOutAt(width, VIEWPORT);
+      const name = "Demo Sample <img src=x> مرحبا";
+      const title = `${name}, not named yet`;
+      render(
+        <RowPanel
+          open
+          onClose={vi.fn()}
+          title={title}
+          visibleTitle={
+            <>
+              <bdi>{name}</bdi>
+              {", "}
+              <Box component="span" sx={{ typography: "systemHint" }}>
+                not named yet
+              </Box>
+            </>
+          }
+          list={<p>Records</p>}
+          listLabel="Records"
+        >
+          <p>Details</p>
+        </RowPanel>,
+        { wrapper: themed },
+      );
+
+      const panel = screen.getByRole(role, { name: title });
+      const heading = within(panel).getByRole("heading", { name: title });
+      const hint = getComputedStyle(within(heading).getByText("not named yet"));
+
+      expect(heading.textContent).toBe(title);
+      expect(within(heading).getByText(name).tagName).toBe("BDI");
+      expect(hint.fontWeight).toBe("400");
+      expect(hint.fontStyle).toBe("italic");
+      expect(hint.fontSize).toBe(getComputedStyle(heading).fontSize);
+      expect(panel.querySelector("img")).toBeNull();
+      expect(
+        screen.queryByRole(role === "region" ? "dialog" : "region", {
+          name: title,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps node titles, editable content and focus as the panel moves between forms", async () => {
+    const resizeTo = laidOutAt(WIDE, VIEWPORT);
+    render(
+      <RowPanel
+        open
+        onClose={vi.fn()}
+        title="Demo Sample, not named yet"
+        visibleTitle={
+          <>
+            <bdi>Demo Sample</bdi>
+            {", "}
+            <i>not named yet</i>
+          </>
+        }
+        list={<p>Records</p>}
+        listLabel="Records"
+      >
+        <label>
+          Value
+          <input defaultValue="first" />
+        </label>
+      </RowPanel>,
+      { wrapper: themed },
+    );
+    const input = screen.getByRole("textbox", { name: "Value" });
+    await userEvent.type(input, " changed");
+
+    await resizeTo(NARROW);
+
+    expect(
+      screen.getByRole("dialog", { name: "Demo Sample, not named yet" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Value" })).toBe(input);
+    expect(input).toHaveValue("first changed");
+    expect(input).toHaveFocus();
+    expect(
+      screen.queryByRole("region", { name: "Demo Sample, not named yet" }),
+    ).toBeNull();
+
+    await resizeTo(WIDE);
+
+    expect(
+      screen.getByRole("region", { name: "Demo Sample, not named yet" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Value" })).toBe(input);
+    expect(input).toHaveFocus();
+  });
   it.each([
     ["beside the list", WIDE, BESIDE],
     ["over the list", NARROW, OVER],
@@ -229,23 +355,31 @@ describe("RowPanel", () => {
     },
   );
 
-  it.each([
-    ["short of the room for both", ROOM_FOR_BOTH - 1, OVER],
-    [
-      "at the room for both, with less than a scrollbar to spare",
-      ROOM_FOR_BOTH + SCROLLBAR_ALLOWANCE - 1,
-      OVER,
-    ],
-    [
-      "at the room for both and a scrollbar",
-      ROOM_FOR_BOTH + SCROLLBAR_ALLOWANCE,
-      BESIDE,
-    ],
-  ])("opens %s in the form that width calls for", async (_at, width, forms) => {
-    await opened(width, true);
+  it.each(
+    PANELS.flatMap(([panel, given, drawn]) =>
+      (
+        [
+          ["short of the room for both", -1, OVER],
+          [
+            "at the room for both, with less than a scrollbar to spare",
+            SCROLLBAR_ALLOWANCE - 1,
+            OVER,
+          ],
+          ["at the room for both and a scrollbar", SCROLLBAR_ALLOWANCE, BESIDE],
+        ] as const
+      ).map(
+        ([at, past, forms]) =>
+          [panel, at, given, TABLE_AND_GAP + drawn + past, forms] as const,
+      ),
+    ),
+  )(
+    "opens a panel %s %s in the form that width calls for",
+    async (_panel, _at, given, width, forms) => {
+      await opened(width, true, null, given);
 
-    expect(formsShown()).toEqual(forms);
-  });
+      expect(formsShown()).toEqual(forms);
+    },
+  );
 
   /**
    * The window has room for both and the box the list was given does not,
@@ -266,32 +400,84 @@ describe("RowPanel", () => {
    * and covering it takes that scrollbar away again. One threshold both ways
    * would switch on each, back and forth, for as long as the page is open.
    */
-  it.each([
-    [
-      "beside, narrowed to exactly the room for both",
-      WIDE,
-      ROOM_FOR_BOTH,
-      BESIDE,
-    ],
-    ["beside, narrowed below the room for both", WIDE, ROOM_FOR_BOTH - 1, OVER],
-    [
-      "over, widened to less than a scrollbar past the room",
-      NARROW,
-      ROOM_FOR_BOTH + SCROLLBAR_ALLOWANCE - 1,
-      OVER,
-    ],
-    [
-      "over, widened to a scrollbar past the room",
-      NARROW,
-      ROOM_FOR_BOTH + SCROLLBAR_ALLOWANCE,
-      BESIDE,
-    ],
-  ])("stands %s in the form that follows", async (_how, from, to, forms) => {
-    const { resizeTo } = await opened(from, true);
+  it.each(
+    PANELS.flatMap(([panel, given, drawn]) =>
+      (
+        [
+          ["beside, narrowed to exactly the room for both", WIDE, 0, BESIDE],
+          ["beside, narrowed below the room for both", WIDE, -1, OVER],
+          [
+            "over, widened to less than a scrollbar past the room",
+            NARROW,
+            SCROLLBAR_ALLOWANCE - 1,
+            OVER,
+          ],
+          [
+            "over, widened to a scrollbar past the room",
+            NARROW,
+            SCROLLBAR_ALLOWANCE,
+            BESIDE,
+          ],
+        ] as const
+      ).map(
+        ([how, from, past, forms]) =>
+          [
+            panel,
+            how,
+            given,
+            from,
+            TABLE_AND_GAP + drawn + past,
+            forms,
+          ] as const,
+      ),
+    ),
+  )(
+    "stands a panel %s %s in the form that follows",
+    async (_panel, _how, given, from, to, forms) => {
+      const { resizeTo } = await opened(from, true, null, given);
 
-    await resizeTo(to);
+      await resizeTo(to);
 
-    expect(formsShown()).toEqual(forms);
+      expect(formsShown()).toEqual(forms);
+    },
+  );
+
+  /** What stands beside a panel of the usual width elsewhere on a page is laid out from this same width. */
+  it("gives out the width a panel of the usual width stands beside the list from", () => {
+    expect(BESIDE_FROM).toBe(TABLE_AND_GAP + USUAL_PANEL + SCROLLBAR_ALLOWANCE);
+  });
+
+  it.each(
+    PANELS.flatMap(([panel, given, drawn]) =>
+      (
+        [
+          ["beside the list", WIDE, "region"],
+          ["over the list", NARROW, "dialog"],
+        ] as const
+      ).map(
+        ([where, width, role]) =>
+          [panel, where, given, width, role, drawn] as const,
+      ),
+    ),
+  )(
+    "stands a panel %s %s as wide as that",
+    async (_panel, _where, given, width, role, drawn) => {
+      await opened(width, true, null, given);
+
+      const panel = screen.getByRole(role, { name: "Avo Lumerace" });
+
+      expect(getComputedStyle(panel).width).toBe(`${drawn}px`);
+    },
+  );
+
+  /** Held to the window rather than measured here: this environment lays nothing out to measure. */
+  it("covers no more than the window, however wide it is given", async () => {
+    await opened(NARROW, true, null, WIDER_PANEL);
+
+    const paper = screen.getByRole("dialog", { name: "Avo Lumerace" });
+
+    expect(getComputedStyle(paper).maxWidth).toBe("100%");
+    expect(getComputedStyle(paper).width).toBe(`${WIDER_PANEL}px`);
   });
 
   /** Which row is open is in the address, and a width is no reason to drop it. */
@@ -304,22 +490,51 @@ describe("RowPanel", () => {
 
     expect(narrowed).toEqual(OVER);
     expect(formsShown()).toEqual(BESIDE);
-    expect(screen.getByText("Details of Ada Lovelace")).toBeVisible();
+    expect(screen.getByText("Details of Avo Lumerace")).toBeVisible();
     expect(closes).not.toHaveBeenCalled();
   });
 
   it("stands beside the list as a region named by its own heading, with nothing to shut it", async () => {
     await opened(WIDE, true);
 
-    const region = screen.getByRole("region", { name: "Ada Lovelace" });
+    const region = screen.getByRole("region", { name: "Avo Lumerace" });
 
     expect(
-      within(region).getByRole("heading", { level: 2, name: "Ada Lovelace" }),
+      within(region).getByRole("heading", { level: 2, name: "Avo Lumerace" }),
     ).toBeVisible();
-    expect(within(region).getByText("Details of Ada Lovelace")).toBeVisible();
+    expect(within(region).getByText("Details of Avo Lumerace")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Close", hidden: true }),
     ).toBeNull();
+  });
+
+  it("draws the panel beside the list as one white card with space below its heading", async () => {
+    await opened(WIDE, true);
+
+    const region = screen.getByRole("region", { name: "Avo Lumerace" });
+    const drawn = getComputedStyle(region);
+    expect(drawn.backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(drawn.boxShadow).toBe(theme.shadows[1]);
+    expect(drawn.borderRadius).toBe("8px");
+    expect(drawn.padding).toBe("30px");
+    expect(drawn.borderLeftStyle).not.toBe("solid");
+    expect(getComputedStyle(region.firstElementChild!).marginBottom).toBe(
+      theme.spacing(HEADING_SX.mb),
+    );
+    expect(
+      within(region).getByRole("heading", { name: "Avo Lumerace" }),
+    ).toBeVisible();
+  });
+
+  it("keeps the covering drawer's paper shape and inner space", async () => {
+    await opened(NARROW, true);
+
+    const dialog = screen.getByRole("dialog", { name: "Avo Lumerace" });
+    const drawn = getComputedStyle(dialog);
+    expect(drawn.maxWidth).toBe("100%");
+    expect(drawn.padding).toBe("30px");
+    expect(drawn.borderRadius).not.toBe("8px");
+    expect(screen.queryByRole("region", { name: "Avo Lumerace" })).toBeNull();
   });
 
   it("heads itself at the level it is given, one below the heading its list sits under", () => {
@@ -329,27 +544,91 @@ describe("RowPanel", () => {
       <RowPanel
         open
         onClose={() => undefined}
-        title="Ada Lovelace"
+        title="Avo Lumerace"
         headingLevel="h4"
         list={<p>Everybody</p>}
         listLabel="People"
       >
-        <p>Details of Ada Lovelace</p>
+        <p>Details of Avo Lumerace</p>
       </RowPanel>,
       { wrapper: themed },
     );
 
     expect(
-      screen.getByRole("heading", { level: 4, name: "Ada Lovelace" }),
+      screen.getByRole("heading", { level: 4, name: "Avo Lumerace" }),
     ).toBeVisible();
     expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+  });
+
+  it.each([
+    ["beside the list", WIDE, "region"],
+    ["over the list", NARROW, "dialog"],
+  ] as const)(
+    "draws what it is given beside its heading on the heading's line %s, no part of the name it takes from it",
+    (_case, width, role) => {
+      laidOutAt(width, VIEWPORT);
+
+      render(
+        <RowPanel
+          open
+          onClose={() => undefined}
+          title="Avo Lumerace"
+          besideHeading={<span>Member</span>}
+          list={<p>Everybody</p>}
+          listLabel="People"
+        >
+          <p>Details of Avo Lumerace</p>
+        </RowPanel>,
+        { wrapper: themed },
+      );
+
+      const panel = screen.getByRole(role, { name: "Avo Lumerace" });
+      const heading = within(panel).getByRole("heading", {
+        level: 2,
+        name: "Avo Lumerace",
+      });
+      const besideIt = within(panel).getByText("Member");
+
+      expect(heading.nextElementSibling).toBe(besideIt);
+      expect(getComputedStyle(heading.parentElement!).display).toBe("flex");
+      expect(heading).not.toContainElement(besideIt);
+      if (role === "region") {
+        expect(getComputedStyle(heading.parentElement!).marginBottom).toBe(
+          theme.spacing(HEADING_SX.mb),
+        );
+      }
+      expect(within(panel).getByText("Details of Avo Lumerace")).toBeVisible();
+    },
+  );
+
+  it("draws its heading alone where it is given nothing to draw beside it", () => {
+    laidOutAt(WIDE, VIEWPORT);
+
+    render(
+      <RowPanel
+        open
+        onClose={() => undefined}
+        title="Avo Lumerace"
+        list={<p>Everybody</p>}
+        listLabel="People"
+      >
+        <p>Details of Avo Lumerace</p>
+      </RowPanel>,
+      { wrapper: themed },
+    );
+
+    const panel = screen.getByRole("region", { name: "Avo Lumerace" });
+
+    expect(panel.firstElementChild).toBe(
+      within(panel).getByRole("heading", { level: 2 }),
+    );
   });
 
   it("leaves the list where it was and reachable while it stands beside it", async () => {
     await opened(WIDE, true);
 
-    const list = screen.getByRole("button", { name: "Ada Lovelace" });
-    const region = screen.getByRole("region", { name: "Ada Lovelace" });
+    const list = screen.getByRole("button", { name: "Avo Lumerace" });
+    const region = screen.getByRole("region", { name: "Avo Lumerace" });
 
     expect(
       list.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -364,12 +643,12 @@ describe("RowPanel", () => {
   it("covers the list as a dialog named by its own heading", async () => {
     await opened(NARROW, true);
 
-    const dialog = screen.getByRole("dialog", { name: "Ada Lovelace" });
+    const dialog = screen.getByRole("dialog", { name: "Avo Lumerace" });
 
     expect(
-      within(dialog).getByRole("heading", { level: 2, name: "Ada Lovelace" }),
+      within(dialog).getByRole("heading", { level: 2, name: "Avo Lumerace" }),
     ).toBeVisible();
-    expect(within(dialog).getByText("Details of Ada Lovelace")).toBeVisible();
+    expect(within(dialog).getByText("Details of Avo Lumerace")).toBeVisible();
     expect(formsShown()).toEqual(OVER);
   });
 
@@ -385,35 +664,40 @@ describe("RowPanel", () => {
 
   /** The page's own line is hidden behind it then, and words written there are never heard. */
   it("says the page's line inside itself while it covers the list, where it is heard", async () => {
-    await opened(NARROW, true, ADA_IN);
+    await opened(NARROW, true, AVO_IN);
 
-    const dialog = screen.getByRole("dialog", { name: "Ada Lovelace" });
+    const dialog = screen.getByRole("dialog", { name: "Avo Lumerace" });
 
     await waitFor(() =>
       expect(within(dialog).getByRole("status")).toHaveTextContent(
-        ADA_IN.words,
+        AVO_IN.words,
       ),
     );
     expect(
       screen
         .queryAllByRole("status")
-        .filter((each) => each.textContent === ADA_IN.words),
+        .filter((each) => each.textContent === AVO_IN.words),
     ).toHaveLength(1);
   });
 
   it("says nothing of the page's beside the list, where the page's own line is heard", async () => {
-    await opened(WIDE, true, ADA_IN);
+    await opened(WIDE, true, AVO_IN);
 
-    const region = screen.getByRole("region", { name: "Ada Lovelace" });
+    const region = screen.getByRole("region", { name: "Avo Lumerace" });
 
     expect(within(region).queryAllByRole("status")).toEqual([]);
-    expect(screen.queryByText(ADA_IN.words)).toBeNull();
+    expect(screen.queryByText(AVO_IN.words)).toBeNull();
   });
 
   it("shuts from its own close control only once, and only when covering the list", async () => {
     const { closes } = await opened(NARROW, true);
+    const close = screen.getByRole("button", { name: "Close" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(close).toHaveClass(iconButtonClasses.colorInherit);
+    expect(close).not.toHaveClass(iconButtonClasses.sizeSmall);
+    expect(getComputedStyle(close).borderColor).toBe("rgb(82, 101, 121)");
+
+    await userEvent.click(close);
     await settle();
 
     expect(closes).toHaveBeenCalledOnce();
@@ -433,7 +717,7 @@ describe("RowPanel", () => {
   /** A control inside the content is where the keyboard is while it covers the list. */
   it("shuts on Escape pressed on a control inside its content", async () => {
     const { closes } = await opened(NARROW, true);
-    screen.getByRole("button", { name: "Done with Ada" }).focus();
+    screen.getByRole("button", { name: "Done with Avo" }).focus();
 
     await userEvent.keyboard("{Escape}");
     await settle();
@@ -454,7 +738,7 @@ describe("RowPanel", () => {
     async (_where, width, times) => {
       const { heardAbove } = await opened(width, true);
 
-      fireEvent.keyDown(screen.getByRole("button", { name: "Done with Ada" }), {
+      fireEvent.keyDown(screen.getByRole("button", { name: "Done with Avo" }), {
         key: "a",
       });
 
@@ -467,7 +751,6 @@ describe("RowPanel", () => {
     screen.getByRole("button", { name: "Keeps its keys" }).focus();
 
     await userEvent.keyboard("{Escape}");
-    await settle();
 
     expect(closes).not.toHaveBeenCalled();
     expect(formsShown()).toEqual(OVER);
@@ -518,7 +801,7 @@ describe("RowPanel", () => {
     await userEvent.click(row());
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Done with Ada" }),
+      screen.getByRole("button", { name: "Done with Avo" }),
     );
     await settle();
 
@@ -534,7 +817,7 @@ describe("RowPanel", () => {
   it.each([
     [
       "the caller shuts it, on the list",
-      () => screen.getByRole("button", { name: "Done with Ada" }),
+      () => screen.getByRole("button", { name: "Done with Avo" }),
       listBox,
     ],
     [
@@ -591,7 +874,7 @@ describe("RowPanel", () => {
     "keeps its content, and the keyboard on it, as it moves from %s",
     async (_how, from, to) => {
       const { resizeTo, content } = await opened(from, true);
-      const control = screen.getByRole("button", { name: "Done with Ada" });
+      const control = screen.getByRole("button", { name: "Done with Avo" });
       control.focus();
 
       await resizeTo(to);
@@ -599,7 +882,7 @@ describe("RowPanel", () => {
       expect(content.mounts).toBe(1);
       expect(content.unmounts).toBe(0);
       expect(
-        screen.getByRole("button", { name: "Done with Ada", hidden: true }),
+        screen.getByRole("button", { name: "Done with Avo", hidden: true }),
       ).toBe(control);
       expect(document.activeElement).toBe(control);
     },
@@ -610,7 +893,7 @@ describe("RowPanel", () => {
     await opened(WIDE, true);
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Done with Ada" }),
+      screen.getByRole("button", { name: "Done with Avo" }),
     );
 
     expect(formsShown()).toEqual({ beside: 0, over: 0 });
@@ -624,7 +907,7 @@ describe("RowPanel", () => {
     outside.focus();
 
     await act(async () => {
-      screen.getByRole("button", { name: "Done with Ada" }).click();
+      screen.getByRole("button", { name: "Done with Avo" }).click();
     });
 
     expect(document.activeElement).toBe(outside);
@@ -635,12 +918,12 @@ describe("RowPanel", () => {
     const { content } = await opened(WIDE, true);
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Done with Ada" }),
+      screen.getByRole("button", { name: "Done with Avo" }),
     );
 
     expect(content.unmounts).toBe(1);
     expect(content.mounts).toBe(1);
-    expect(screen.queryByText("Details of Ada Lovelace")).toBeNull();
+    expect(screen.queryByText("Details of Avo Lumerace")).toBeNull();
   });
 
   /** Taken out before the drawer has left, it would empty the drawer on its way out. */
@@ -653,7 +936,7 @@ describe("RowPanel", () => {
 
     expect(whileLeaving).toBe(0);
     expect(content.unmounts).toBe(1);
-    expect(screen.queryByText("Details of Ada Lovelace")).toBeNull();
+    expect(screen.queryByText("Details of Avo Lumerace")).toBeNull();
   });
 
   it.each([
@@ -664,7 +947,7 @@ describe("RowPanel", () => {
     async (_where, width) => {
       const { content } = await opened(width, true);
       await userEvent.click(
-        screen.getByRole("button", { name: "Done with Ada" }),
+        screen.getByRole("button", { name: "Done with Avo" }),
       );
       await settle();
 
@@ -672,7 +955,7 @@ describe("RowPanel", () => {
 
       expect(content.mounts).toBe(2);
       expect(content.unmounts).toBe(1);
-      expect(screen.getByText("Details of Ada Lovelace")).toBeInTheDocument();
+      expect(screen.getByText("Details of Avo Lumerace")).toBeInTheDocument();
     },
   );
 
@@ -689,7 +972,7 @@ describe("RowPanel", () => {
 
       expect(heading.firstElementChild?.tagName).toBe("BDI");
       expect(
-        screen.getByRole(role, { name: "Ada Lovelace" }),
+        screen.getByRole(role, { name: "Avo Lumerace" }),
       ).toBeInTheDocument();
     },
   );

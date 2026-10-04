@@ -1,7 +1,7 @@
 package org.lilradish.lite.domain.inference;
 
 /**
- * Why an answer, or what a code step gave back, does not fit the fields it was read against, as the store keeps it.
+ * Why an answer or code result did not fit, or a model declined to answer, as the store keeps it.
  *
  * <p>The store declares the same vocabulary, spelt as these constants and in their order. The published
  * spelling is written out rather than folded from the constant name, for the reason
@@ -16,6 +16,7 @@ public enum DidNotFitReason {
     NOTHING_GIVEN("nothing_given"),
     /** A value not written as its field's kind is, or many where one is declared, or one where many. */
     NOT_ITS_KIND("not_its_kind"),
+    LINE_BREAK("line_break"),
     TOO_LONG("too_long"),
     TOO_MANY("too_many"),
     NOT_A_TERM("not_a_term"),
@@ -35,7 +36,9 @@ public enum DidNotFitReason {
     /** An answer the model stopped giving at the most it may give back. */
     CUT_OFF("cut_off"),
     /** An answer holding something that could not be kept exactly as it came. */
-    NOT_KEPT_AS_IT_CAME("not_kept_as_it_came");
+    NOT_KEPT_AS_IT_CAME("not_kept_as_it_came"),
+    /** The model declined to give an answer. */
+    MODEL_DECLINED("model_declined");
 
     private final String published;
 
@@ -45,5 +48,10 @@ public enum DidNotFitReason {
 
     public String published() {
         return published;
+    }
+
+    /** Whether conversion can end a call with this reason before its declared answer is unwrapped. */
+    public boolean mayEndCallBeforeUnwrapping() {
+        return this == NOT_THE_SHAPE || this == MODEL_DECLINED;
     }
 }

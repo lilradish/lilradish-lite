@@ -19,12 +19,16 @@ import org.lilradish.lite.app.codestep.CodeRuns
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.run.fixture.StepRows
 import org.lilradish.lite.app.run.fixture.TicketWorkflow
+import org.lilradish.lite.app.search.SearchWays
 import org.lilradish.lite.domain.declaration.AskedField
 import org.lilradish.lite.domain.declaration.FieldKind
 import org.lilradish.lite.domain.declaration.FieldName
 import org.lilradish.lite.domain.inference.CallOutcome
 import org.lilradish.lite.domain.inference.CallProgress
 import org.lilradish.lite.domain.inference.CallRequest
+import org.lilradish.lite.domain.inference.DidNotFitReason
+import org.lilradish.lite.domain.inference.Envelope
+import org.lilradish.lite.domain.inference.KeptAnswer
 import org.lilradish.lite.domain.inference.ModelCallPurpose
 import org.lilradish.lite.domain.inference.ModelCalls
 import org.lilradish.lite.domain.inference.TurnAway
@@ -32,6 +36,7 @@ import org.lilradish.lite.domain.model.DeployedModel
 import org.lilradish.lite.domain.model.ModelCatalog
 import org.lilradish.lite.domain.model.ModelName
 import org.lilradish.lite.domain.model.SentText
+import org.lilradish.lite.domain.run.Ceiling
 import org.lilradish.lite.domain.run.ModelCallId
 import org.lilradish.lite.domain.run.ProductionId
 import org.lilradish.lite.domain.run.ReviewOutcome
@@ -51,21 +56,14 @@ import spock.lang.AutoCleanup
 import spock.lang.Shared
 import spock.lang.Specification
 
-/**
- * A step a model produces, on a real server running the real baseline, the model scripted: its try asked in the
- * transaction that reached it, its call written down as sent and made on the engine's own threads, and each way
- * the call can end landing as that try's values, a try spent, or the step held or failed.
- */
 class ModelProductionIntegrationSpec extends Specification {
 
     static final String SYSTEM = RunRows.WORKFLOW_RUNNER
 
     static final String FITS = '{"values":{"summary":"A printer fire."},"confidences":{}}'
 
-    /** Half a pair inside a value: it unwraps as not kept, and is kept with the half replaced. */
     static final String UNKEEPABLE = '{"values":{"summary":"A \uD800fire."},"confidences":{}}'
 
-    /** What a model stopped at its limit gives back: read as it is, it would not be the shape either. */
     static final String CUT_SHORT = '{"values":{"summ'
 
     static final Logger CALLS_LOGGER = LoggerFactory.getLogger(EngineCalls) as Logger
@@ -83,14 +81,19 @@ class ModelProductionIntegrationSpec extends Specification {
 
     ScriptedModelCalls model
 
-    /** For each call made, whether it was made on an engine thread, and whether inside a transaction. */
     List<List<Boolean>> madeOn = [].asSynchronized()
 
     RunTree tree
 
     EngineWrites writes
 
+    RunSnapshots snapshots
+
+    org.lilradish.lite.app.files.RunFiles heldFiles
+
     EngineExecutor executor
+
+    EngineTaskBarrier tasks
 
     EngineCalls calls
 
@@ -109,14 +112,17 @@ class ModelProductionIntegrationSpec extends Specification {
         model = new ScriptedModelCalls()
         tree = new RunTree(store.session)
         writes = new EngineWrites(store.session)
+        snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([]))
+        heldFiles = EngineWiring.files(store)
         executor = EngineExecutors.of(store.database)
+        tasks = EngineTaskBarrier.attach(executor)
         def recording = { CallRequest request, CallProgress progress ->
             madeOn << [Thread.currentThread() instanceof EngineThread,
                        TransactionSynchronizationManager.isActualTransactionActive()]
             model.call(request, progress)
         } as ModelCalls
         ceilings = new CeilingReach(store.session, DeployedModels.HELD, writes)
-        calls = new EngineCalls(recording, store.transactions(), tree, writes, ceilings)
+        calls = new EngineCalls(EngineWiring.withoutTools(), recording, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
         holding(DeployedModels.HELD)
         TicketWorkflow.seed(store)
         producedByModel("general", "ordinary")
@@ -127,15 +133,15 @@ class ModelProductionIntegrationSpec extends Specification {
     }
 
     private void holding(ModelCatalog catalog) {
-        def snapshots = new RunSnapshots(store.session, CodeStepsHeld.NONE)
         engine = new RunEngine(store.session, store.transactions(), tree, snapshots, writes, executor, calls,
-                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor),
-                catalog, ceilings, new GroupRoles(store.session))
+                new EngineCodes(new CodeRuns(CodeStepsHeld.NONE), store.transactions(), tree, snapshots, writes, executor, heldFiles),
+                catalog, ceilings, new GroupRoles(store.session), Deployments.DEEP_ENOUGH, heldFiles)
         acts = new StepActs(store.session, store.transactions(), new GroupRoles(store.session), tree, snapshots, writes,
-                engine)
+                engine, heldFiles, EngineWiring.fileDeployment())
     }
 
     private void producedByModel(String name, String mode, boolean tells = false) {
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = ?, producer_mode = ?,
                                           tells_what_happened = ?
@@ -146,7 +152,7 @@ class ModelProductionIntegrationSpec extends Specification {
         new RunId(UUID.fromString(RUN))
     }
 
-    /** As a start does: the run written, its tree locked, the first step planned, in one transaction. */
+    // Write the run, lock its tree, and plan the first step in one transaction.
     private void started(String startedWith = TicketWorkflow.STARTED_WITH) {
         store.transactions().executeWithoutResult {
             StepRows.run(store, RUN, GROUP, 1, WORKFLOW, VERSION, CAT, startedWith)
@@ -166,10 +172,10 @@ class ModelProductionIntegrationSpec extends Specification {
         until("${calls} calls ended") { store.count("select count(*) from model_calls where outcome is not null") == calls }
     }
 
-    /** Each try of a step as its number, producer, who asked for it, and how it stands. */
     private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
         store.texts("""
-                select try.try_number || ' ' || try.producer || ' ' || try.created_by || ' '
+                select coalesce(try.try_number::text, '-') || ' ' || try.producer || ' ' || try.created_by || ' '
                        || case when try.ended_at is null then 'open'
                                else coalesce(try.lost_reason::text || ' ' || coalesce(try.did_not_fit_reason::text, '-'),
                                              'yielded') end
@@ -178,10 +184,10 @@ class ModelProductionIntegrationSpec extends Specification {
                 """, step)
     }
 
-    /** Each call as its try, outcome, counts, whether the model counted, whether its answer was altered. */
     private List<String> callRows() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
-                select try.try_number || ' ' || coalesce(call.outcome::text, 'out') || ' ' || call.sent_count || ' '
+                select coalesce(try.try_number::text, '-') || ' ' || coalesce(call.outcome::text, 'out') || ' ' || call.sent_count || ' '
                        || coalesce(call.came_back_count::text, '-') || ' ' || call.counted_by_model || ' '
                        || call.answer_altered || ' ' || call.mode || ' ' || call.envelope_version
                   from model_calls call join productions try on try.production_id = call.production_id
@@ -190,6 +196,7 @@ class ModelProductionIntegrationSpec extends Specification {
     }
 
     private List<String> holds() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select hold.reason || ' ' || (hold.run_step_send_attempt_id = attempt.run_step_send_attempt_id)
                        || ' ' || coalesce(hold.released_at::text, 'held')
@@ -203,20 +210,20 @@ class ModelProductionIntegrationSpec extends Specification {
     }
 
     private List<String> values() {
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select value::text || ' ' || coalesce(confidence::text, '-') || ' ' || needs_review
                   from production_values order by production_value_id
                 """)
     }
 
-    /** The units this system measured the {@code index}th call's sending at. */
     private long measured(int index) {
         def request = model.requests[index]
         request.model().unitsOf(request.sent().characters())
     }
 
     private static CallOutcome.CameBack cameBack(String answer, boolean cutOff = false) {
-        new CallOutcome.CameBack(answer, 321, 12, true, cutOff)
+        new CallOutcome.CameBack(answer, 321, 12, true, cutOff, null, null)
     }
 
     private static PendingCall pendingOf(String sentText) {
@@ -227,6 +234,28 @@ class ModelProductionIntegrationSpec extends Specification {
                 new PendingCall.Producing(
                         [new AskedField(new FieldName("summary"), FieldKind.TEXT, 1000, null, null, [], true, false)],
                         [UUID.fromString(SUMMARY)]))
+    }
+
+    def "a model's one-line text with a break spends a try and keeps the answer without values"() {
+        given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("update declaration_fields set text_lines = 'one' where declaration_field_id = ?::uuid")
+                .params(SUMMARY).update()
+        def answer = '{"values":{"summary":"Demo Sample\\n"},"confidences":{}}'
+        model.answering(cameBack(answer))
+        model.answering(new CallOutcome.Errored("Demo Sample", null))
+
+        when:
+        started()
+        untilEnded(2)
+        executor.destroy()
+
+        then:
+        triesOf(SUMMARISE) == ["1 model ${SYSTEM} did_not_fit line_break" as String,
+                               "2 model ${SYSTEM} errored -" as String]
+        store.texts("select answer from model_calls where answer is not null") == [answer]
+        values() == []
+        triesOf(CONFIRM) == []
     }
 
     def "a model's step reached is asked of its first try by the system, and its call written down as sent on the engine's thread before anything is sent"() {
@@ -240,11 +269,12 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then: "the try, its attempt holding what is sent, and the call, all written before the call was made"
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        // DB-SPECIFIC: PostgreSQL ::jsonb casts, JSON/JSONB ->/->>.
         store.texts("""
                 select attempt.purpose || ' ' || attempt.model || ' ' || attempt.mode || ' ' || attempt.too_long || ' '
                        || attempt.created_by_kind || ' ' || (attempt.payload::jsonb -> 'takes' ->> 'text')
                   from run_step_send_attempts attempt""") == ["produce general ordinary false system The printer is on fire."]
-        callRows() == ["1 out ${measured(0)} - false false ordinary 2" as String]
+        callRows() == ["1 out ${measured(0)} - false false ordinary ${Envelope.VERSION}" as String]
 
         and: "made once, on an engine thread and outside any transaction"
         madeOn == [[true, false]]
@@ -296,7 +326,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         failures() == ["model_not_deployed: ${said}" as String]
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
 
         and:
         store.count("select count(*) from run_step_send_attempts") == 0
@@ -311,7 +341,6 @@ class ModelProductionIntegrationSpec extends Specification {
         "general"| "deep"     || "Model general in mode deep is not held here."
     }
 
-    /** Four characters a unit: what it cannot cut is about 250 units, and a ticket this long adds nearly 1,000. */
     def "a try too long to send is held on its attempt, which keeps what would have been sent, and nothing is sent"() {
         given:
         holding(new ModelCatalog([new DeployedModel(new ModelName("general"), [], 600, 4.0G, 4000, [])]))
@@ -323,6 +352,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         holds() == ["too_long true held"]
+        // DB-SPECIFIC: PostgreSQL ::jsonb casts, JSON/JSONB ->/->>.
         store.texts("""
                 select attempt.too_long || ' ' || (attempt.payload::jsonb -> 'takes' ->> 'text' = ?)
                   from run_step_send_attempts attempt""", ticket) == ["true true"]
@@ -330,7 +360,7 @@ class ModelProductionIntegrationSpec extends Specification {
         and:
         store.count("select count(*) from model_calls") == 0
         failures() == []
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
         model.requests == []
     }
 
@@ -391,7 +421,7 @@ class ModelProductionIntegrationSpec extends Specification {
         model.requests == []
     }
 
-    /** Code may never give its thread back, so a call made there could wait behind it for good. */
+    // Calls need a separate pool because code may occupy its thread indefinitely.
     def "a call is refused on the engine's code threads, and sends nothing"() {
         given:
         def outcome = new CompletableFuture<Throwable>()
@@ -418,6 +448,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
     def "an answer that fits lands as the try's values, and the run goes on as they stand"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update declaration_fields set standing = 'above_confidence', standing_threshold = 80 where declaration_field_id = ?::uuid")
                 .params(SUMMARY).update()
         model.answering(cameBack("""{"values":{"summary":"A printer fire."},"confidences":{"summary":${sure}}}"""))
@@ -429,7 +460,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} yielded" as String]
-        callRows() == ["1 came_back 321 12 true false ordinary 2"]
+        callRows() == ["1 came_back 321 12 true false ordinary ${Envelope.VERSION}" as String]
         values() == ["\"A printer fire.\" ${sure} ${waits}" as String]
         store.texts("select answer from model_calls") == ["""{"values":{"summary":"A printer fire."},"confidences":{"summary":${sure}}}""" as String]
 
@@ -447,7 +478,7 @@ class ModelProductionIntegrationSpec extends Specification {
     def "an answer that does not fit spends the try, keeping why and what came back, and the next try is sent"() {
         given:
         model.answering(outcome)
-        model.answering(new CallOutcome.Errored("Gone."))
+        model.answering(new CallOutcome.Errored("Gone.", null))
 
         when:
         started()
@@ -457,9 +488,10 @@ class ModelProductionIntegrationSpec extends Specification {
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} did_not_fit ${reason}" as String,
                                "2 model ${SYSTEM} errored -" as String]
         store.texts("""
-                select call.answer_altered || ' ' || try.call_answer_altered || ' ' || length(call.answer)
+                select call.answer_altered || ' ' || call.answer_truncated || ' ' ||
+                       try.call_answer_altered || ' ' || length(call.answer)
                   from model_calls call join productions try on try.model_call_id = call.model_call_id
-                 where try.try_number = 1""") == ["${altered} ${altered} ${kept}" as String]
+                 where try.try_number = 1""") == ["${altered} ${truncated} ${altered} ${kept}" as String]
 
         and: "nothing given back, and the step failed with its tries spent"
         values() == []
@@ -467,18 +499,98 @@ class ModelProductionIntegrationSpec extends Specification {
         model.requests.size() == 2
 
         where:
-        outcome                          || reason                | altered | kept
-        cameBack(FITS, true)             || "cut_off"             | false   | FITS.length()
-        cameBack(CUT_SHORT, true)        || "cut_off"             | false   | CUT_SHORT.length()
-        cameBack(UNKEEPABLE, true)       || "cut_off"             | true    | UNKEEPABLE.length()
-        cameBack("A printer fire.")      || "not_the_shape"       | false   | "A printer fire.".length()
-        cameBack(UNKEEPABLE)             || "unkeepable"          | true    | UNKEEPABLE.length()
-        cameBack(FITS + " " * 8_388_608) || "not_kept_as_it_came" | true    | 8_388_608
+        outcome                          || reason                | altered | truncated | kept
+        cameBack(FITS, true)             || "cut_off"             | false   | false     | FITS.length()
+        cameBack(CUT_SHORT, true)        || "cut_off"             | false   | false     | CUT_SHORT.length()
+        cameBack(UNKEEPABLE, true)       || "cut_off"             | true    | false     | UNKEEPABLE.length()
+        cameBack("A printer fire.")      || "not_the_shape"       | false   | false     | "A printer fire.".length()
+        cameBack(UNKEEPABLE)             || "unkeepable"          | true    | false     | UNKEEPABLE.length()
+        cameBack(FITS + " " * 8_388_608) || "not_kept_as_it_came" | true    | true      | 8_388_608
+    }
+
+    def "a model decline keeps answer and decline words independently with their own replacement and cut flags"() {
+        given:
+        def answer = "Demo Sample answer" + Character.toString(0)
+        def words = "Demo Sample decline" + Character.toString(0) + "x" * 8_388_608
+        model.answering(new CallOutcome.CameBack(answer, 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, words))
+        model.answering(new CallOutcome.Errored("Gone.", null))
+
+        when:
+        started()
+        untilEnded(2)
+
+        then:
+        triesOf(SUMMARISE) == ["1 model ${SYSTEM} did_not_fit model_declined" as String,
+                               "2 model ${SYSTEM} errored -" as String]
+        values() == []
+        store.texts("select answer from model_calls where outcome = 'came_back'") == ["Demo Sample answer\uFFFD"]
+        // DB-SPECIFIC: PostgreSQL left().
+        store.texts("select left(declined_words, ?) from model_calls where outcome = 'came_back'",
+                "Demo Sample decline\uFFFD".length()) == ["Demo Sample decline\uFFFD"]
+
+        and: "the two saved texts have separate flags and the model's reported usage is unchanged"
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("""
+                select answer_altered || ' ' || answer_truncated || ' ' || declined_words_altered || ' '
+                       || declined_words_truncated || ' ' || length(declined_words) || ' ' || came_back_count::text
+                  from model_calls where outcome = 'came_back'""") == ["true false true true 8388608 12"]
+        store.texts("""
+                select (declined_words is null) || ' ' || declined_words_altered || ' ' || declined_words_truncated
+                  from model_calls where outcome = 'errored'""") == ["true false false"]
+    }
+
+    def "a model decline preserves an empty answer and cuts an overlong answer without decline words"() {
+        given:
+        model.answering(new CallOutcome.CameBack("", 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, "Demo Sample decline"))
+        model.answering(new CallOutcome.CameBack("Demo Sample answer" + "x" * 8_388_608, 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, null))
+
+        when:
+        started()
+        untilEnded(2)
+
+        then:
+        triesOf(SUMMARISE) == ["1 model ${SYSTEM} did_not_fit model_declined" as String,
+                               "2 model ${SYSTEM} did_not_fit model_declined" as String]
+        values() == []
+        // DB-SPECIFIC: PostgreSQL left().
+        store.texts("""
+                select left(call.answer, ?) || '|' || length(call.answer) || '|' ||
+                       coalesce(call.declined_words, '<absent>') || '|' ||
+                       call.answer_altered || '|' || call.answer_truncated || '|' ||
+                       call.declined_words_altered || '|' || call.declined_words_truncated
+                  from model_calls call join productions try on try.model_call_id = call.model_call_id
+                 order by try.try_number""", "Demo Sample answer".length()) ==
+                ["|0|Demo Sample decline|false|false|false|false",
+                 "Demo Sample answer|8388608|<absent>|true|true|false|false"]
+    }
+
+    def "an empty model decline still spends the try and gives no value"() {
+        given:
+        model.answering(new CallOutcome.CameBack("", 321, 12, true, false,
+                DidNotFitReason.MODEL_DECLINED, null))
+        model.answering(new CallOutcome.Errored("Gone.", null))
+
+        when:
+        started()
+        untilEnded(2)
+
+        then:
+        triesOf(SUMMARISE) == ["1 model ${SYSTEM} did_not_fit model_declined" as String,
+                               "2 model ${SYSTEM} errored -" as String]
+        values() == []
+        store.texts("""
+                select answer || '|' || (declined_words is null) || '|' || answer_altered || '|' ||
+                       answer_truncated || '|' || declined_words_altered || '|' || declined_words_truncated ||
+                       '|' || came_back_count
+                  from model_calls where outcome = 'came_back'""") == ["|true|false|false|false|false|12"]
     }
 
     def "a call that went wrong spends the try, keeping what was said cleaned and cut, and the next try is sent"() {
         given:
-        model.answering(new CallOutcome.Errored("\u0007Upstream failed: " + "x" * 3000))
+        model.answering(new CallOutcome.Errored("\u0007Upstream failed: " + "x" * 3000, null))
         model.answering(cameBack(FITS))
 
         when:
@@ -487,14 +599,47 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} errored -" as String, "2 model ${SYSTEM} yielded" as String]
+        // DB-SPECIFIC: PostgreSQL left().
         store.texts("""
                 select length(error_detail) || ' ' || error_detail_truncated || ' ' || left(error_detail, 16)
                   from model_calls where outcome = 'errored'""") == ["2048 true Upstream failed:"]
         store.count("select count(*) from model_calls where outcome = 'errored' and came_back_count is null and answer is null") == 1
+        store.count("select count(*) from model_calls where outcome = 'errored' and unreadable_response is null and not unreadable_response_altered and not unreadable_response_truncated") == 1
 
         and:
         values() == ['"A printer fire." - true']
         holds() == []
+    }
+
+    def "an unreadable service response is kept atomically with its errored producing call and no returned count"() {
+        given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql('update workflow_steps set tries = 1 where workflow_step_id = ?::uuid')
+                .param(SUMMARISE).update()
+        model.answering(new CallOutcome.Errored(
+                'The model service returned a response this system could not read.', kept))
+
+        when:
+        started()
+        untilEnded(1)
+
+        then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts('''
+                select coalesce(unreadable_response, '<absent>') || '|' || unreadable_response_altered || '|' ||
+                       unreadable_response_truncated || '|' || (came_back_count is null) || '|' ||
+                       (sent_count is not null) || '|' || outcome::text
+                  from model_calls
+                ''') == [expected]
+        triesOf(SUMMARISE) == ["1 model ${SYSTEM} errored -" as String]
+        store.count('select count(*) from production_values') == 0
+
+        where:
+        kept                                                  || expected
+        KeptAnswer.of('Demo Sample raw')                       || 'Demo Sample raw|false|false|true|true|errored'
+        KeptAnswer.captured('Demo Sample replaced', true, false) || 'Demo Sample replaced|true|false|true|true|errored'
+        KeptAnswer.captured('Demo Sample partial', false, true)  || 'Demo Sample partial|true|true|true|true|errored'
+        KeptAnswer.of('')                                      || '|false|false|true|true|errored'
     }
 
     def "a call turned away and sent again after each turnaway, each on record as sent again, lands as it came back"() {
@@ -513,7 +658,7 @@ class ModelProductionIntegrationSpec extends Specification {
         model.events.count { it == ScriptedModelCalls.SENT } == 3
 
         and:
-        callRows() == ["1 came_back 321 12 true false ordinary 2"]
+        callRows() == ["1 came_back 321 12 true false ordinary ${Envelope.VERSION}" as String]
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} yielded" as String]
         holds() == []
     }
@@ -527,7 +672,8 @@ class ModelProductionIntegrationSpec extends Specification {
         untilEnded(1)
 
         then:
-        callRows() == ["1 turned_away ${measured(0)} - false false ordinary 2" as String]
+        callRows() == ["- turned_away ${measured(0)} - false false ordinary ${Envelope.VERSION}" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select coalesce(said, '-') || ' ' || spent_up || ' ' || coalesce(model_call_outcome::text, '-') || ' '
                        || coalesce(resent_at::text, 'not sent again')
@@ -535,7 +681,7 @@ class ModelProductionIntegrationSpec extends Specification {
         holds() == ["turned_away true held"]
 
         and: "the try still open, and nothing given back"
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
         values() == []
 
         where:
@@ -558,17 +704,170 @@ class ModelProductionIntegrationSpec extends Specification {
         untilEnded(1)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text from model_calls") == ["turned_away"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select coalesce(resent_at::text, 'not sent again') from model_call_turnaways") == ["not sent again"]
         holds() == ["turned_away true held"]
 
         and:
         model.events.count { it == ScriptedModelCalls.SENT } == 1
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
         values() == []
     }
 
-    /** Writing the turnaway is made to fail by a check this spec adds, which the store never holds. */
+    def "stopped by hand, or by its ceiling lowered under what it spent, and opened again during a turnaway wait, a run keeps the old call ended until Try sending is pressed"() {
+        given:
+        def gate = new Pause()
+        def logged = new SnapshottingAppender()
+        logged.start()
+        def callsLogger = LoggerFactory.getLogger(EngineCalls) as Logger
+        callsLogger.addAppender(logged)
+        waitingAfterTurnaway(gate, lateProgress)
+        model.answering([new TurnAway("Busy.", false)], cameBack(FITS))
+        started()
+        gate.awaitReached()
+        assert store.count("select count(*) from model_calls where outcome is null") == 1
+        assert store.count("select count(*) from model_call_turnaways where resent_at is null") == 1
+        if (atCeiling) {
+            RunRows.called(store, RUN, "came_back", 10, 10)
+        }
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def original = store.texts("select model_call_id::text from model_calls where purpose = 'produce'")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def production = store.texts("select production_id::text from productions")[0]
+        def changes = new RunChanges(store.session, store.transactions(), new GroupRoles(store.session), tree,
+                new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([])), engine)
+
+        when:
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), new Ceiling(1), ANN_USER)
+        } else {
+            changes.stop(groupId(GROUP), runId(), ANN_USER)
+        }
+        def stopsMade = RunRows.stops(store)
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), null, ANN_USER)
+        }
+
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def endedAtStop = store.texts("select outcome::text from model_calls where purpose = 'produce'")
+        def heldAtStop = holds()
+        changes.openAgain(groupId(GROUP), runId(), ANN_USER)
+        gate.release()
+        tasks.awaitDrained()
+
+        then:
+        stopsMade == [atCeiling ? "system ${RUN} 0" as String : "person - 0"]
+        model.events == [ScriptedModelCalls.SENT, new TurnAway("Busy.", false)]
+        endedAtStop == ["turned_away"]
+        heldAtStop == ["turned_away true held"]
+        model.requests.size() == 1
+        logged.list.findAll { it.formattedMessage.contains(original) }.every {
+            !it.formattedMessage.contains("writing what happened to it failed") && it.throwableProxy == null
+        }
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select model_call_id::text from model_calls where purpose = 'produce'") == [original]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_id::text from productions where ended_at is null") == [production]
+        store.count("select count(*) from run_step_send_attempts") == 1
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select coalesce(resent_at::text, 'not sent again') from model_call_turnaways") == ["not sent again"]
+        RunBudget.spentAsRead(store.session, runId(), true) ==
+                (atCeiling ? new RunBudget.Spend(10, 10, false, 1, 1) : RunBudget.Spend.NOTHING)
+        values() == []
+        store.count("select count(*) from reviews") == 0
+        failures() == []
+        holds() == ["turned_away true held"]
+
+        when:
+        model.answering(cameBack(FITS))
+        acts.trySending(groupId(GROUP), runId(), new WorkflowStepId(UUID.fromString(SUMMARISE)), ANN_USER)
+        untilEnded(atCeiling ? 3 : 2)
+        tasks.awaitDrained()
+
+        then:
+        model.requests.size() == 2
+        model.events.count { it == ScriptedModelCalls.SENT } == 2
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select production_id::text from productions where producer = 'model'") == [production]
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts.
+        store.texts("select outcome::text from model_calls where model_call_id = ?::uuid", original) == ["turned_away"]
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.count("select count(*) from model_calls where purpose = 'produce' and model_call_id <> ?::uuid and outcome = 'came_back'", original) == 1
+        store.count("select count(*) from run_step_send_attempts") == 2
+        store.count("select count(*) from run_step_holds where released_at is null") == 0
+        store.count("select count(*) from model_call_turnaways where resent_at is not null") == 0
+        RunBudget.spentAsRead(store.session, runId(), true).spent() == (atCeiling ? 353 : 333)
+
+        cleanup:
+        gate.release()
+        callsLogger.detachAppender(logged)
+
+        where:
+        atCeiling | lateProgress
+        false     | false
+        true      | false
+        false     | true
+    }
+
+    def "stopped by hand, or by its ceiling lowered under what it spent, and opened again while a call is already out, a run keeps its completion and cost"() {
+        given:
+        def gate = new Pause()
+        if (resentAlready) {
+            waitingAfterResend(gate)
+            model.answering([new TurnAway("Busy.", false)], cameBack(FITS))
+        } else {
+            model.pausing(gate, [], cameBack(FITS))
+        }
+        started()
+        gate.awaitReached()
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def original = store.texts("select model_call_id::text from model_calls")[0]
+        def changes = new RunChanges(store.session, store.transactions(), new GroupRoles(store.session), tree,
+                new RunSnapshots(store.session, CodeStepsHeld.NONE, new SearchWays([])), engine)
+
+        when:
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), new Ceiling(1), ANN_USER)
+        } else {
+            changes.stop(groupId(GROUP), runId(), ANN_USER)
+        }
+        def stopsMade = RunRows.stops(store)
+        if (atCeiling) {
+            changes.changeCeiling(groupId(GROUP), runId(), runId(), null, ANN_USER)
+        }
+        changes.openAgain(groupId(GROUP), runId(), ANN_USER)
+        gate.release()
+        untilEnded(1)
+        tasks.awaitDrained()
+
+        then:
+        stopsMade == [atCeiling ? "system ${RUN} 0" as String : "person - 0"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.texts("select model_call_id::text from model_calls") == [original]
+        callRows() == ["1 came_back 321 12 true false ordinary ${Envelope.VERSION}" as String]
+        values() == ['"A printer fire." - true']
+        holds() == []
+        model.events == (resentAlready
+                ? [ScriptedModelCalls.SENT, new TurnAway("Busy.", false), ScriptedModelCalls.SENT]
+                : [ScriptedModelCalls.SENT])
+        store.count("select count(*) from model_call_turnaways") == (resentAlready ? 1 : 0)
+        store.count("select count(*) from model_call_turnaways where resent_at is not null") == (resentAlready ? 1 : 0)
+        RunBudget.spentAsRead(store.session, runId(), true).spent() == 333
+
+        cleanup:
+        gate.release()
+
+        where:
+        atCeiling | resentAlready
+        false     | false
+        false     | true
+        true      | false
+        true      | true
+    }
+
+
     def "a call whose own writing of a turnaway fails is ended as not sent again, holding the step, logged by its keys alone"() {
         given:
         store.session.sql("alter table model_call_turnaways add constraint spec_refuses_turnaways check (said is null)")
@@ -583,10 +882,11 @@ class ModelProductionIntegrationSpec extends Specification {
         untilEnded(1)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text from model_calls") == ["turned_away"]
         holds() == ["turned_away true held"]
         store.count("select count(*) from model_call_turnaways") == 0
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
 
         and: "never sent again, and nothing of what was said logged"
         model.events.count { it == ScriptedModelCalls.SENT } == 1
@@ -597,7 +897,6 @@ class ModelProductionIntegrationSpec extends Specification {
         CALLS_LOGGER.detachAppender(logged)
     }
 
-    /** Recording the resend is made to fail by a check this spec adds, which the store never holds. */
     def "a call whose own recording of a resend fails is ended as not sent again, holding the step, logged by its keys alone"() {
         given:
         store.session.sql("alter table model_call_turnaways add constraint spec_refuses_resends check (resent_at is null)")
@@ -613,11 +912,13 @@ class ModelProductionIntegrationSpec extends Specification {
         untilEnded(1)
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text from model_calls") == ["turned_away"]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select coalesce(said, '-') || ' ' || coalesce(resent_at::text, 'not sent again') from model_call_turnaways") ==
                 ["Busy. not sent again"]
         holds() == ["turned_away true held"]
-        triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
+        triesOf(SUMMARISE) == ["- model ${SYSTEM} open" as String]
 
         and: "sent once only, and nothing the failure said logged"
         model.requests.size() == 1
@@ -636,7 +937,7 @@ class ModelProductionIntegrationSpec extends Specification {
     def "a call that fails on this side otherwise spends the try as gone wrong, naming only what kind of failure it was"() {
         given:
         def failing = { CallRequest request, progress -> throw new IllegalStateException("sent: The printer is on fire.") } as ModelCalls
-        calls = new EngineCalls(failing, store.transactions(), tree, writes, ceilings)
+        calls = new EngineCalls(EngineWiring.withoutTools(), failing, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
         holding(DeployedModels.HELD)
         def logged = new SnapshottingAppender()
         logged.start()
@@ -648,6 +949,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} errored -" as String, "2 model ${SYSTEM} errored -" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text || ': ' || error_detail from model_calls") ==
                 ["errored: The call failed on this side with java.lang.IllegalStateException."] * 2
 
@@ -661,11 +963,12 @@ class ModelProductionIntegrationSpec extends Specification {
         CALLS_LOGGER.detachAppender(logged)
     }
 
-    /** Confirm's input is made to point at nothing its question takes, so asking it fails the plan after the end. */
     def "planning what follows failing after an answer came back leaves the answer, the call's end and the try's standing"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update declaration_fields set standing = 'above_confidence', standing_threshold = 80 where declaration_field_id = ?::uuid")
                 .params(SUMMARY).update()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("update bindings set target_path = 'nowhere' where binding_id = ?::uuid")
                 .params(TicketWorkflow.SUMMARY_IN).update()
         model.answering(cameBack('{"values":{"summary":"A printer fire."},"confidences":{"summary":90}}'))
@@ -681,7 +984,7 @@ class ModelProductionIntegrationSpec extends Specification {
         logged.list*.formattedMessage.toSet() == ["Run ${RUN} of group ${GROUP} could not go on by itself" as String] as Set
 
         and: "the end stands as it was written"
-        callRows() == ["1 came_back 321 12 true false ordinary 2"]
+        callRows() == ["1 came_back 321 12 true false ordinary ${Envelope.VERSION}" as String]
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} yielded" as String]
         values() == ['"A printer fire." 90 false']
         store.texts("select answer from model_calls") ==
@@ -703,6 +1006,7 @@ class ModelProductionIntegrationSpec extends Specification {
         CALLS_LOGGER.addAppender(logged)
         started()
         gate.awaitReached()
+        // DB-SPECIFIC: PostgreSQL now().
         store.session.sql("update model_calls set outcome = 'nothing_came_back', ended_at = now()").update()
 
         when:
@@ -710,12 +1014,14 @@ class ModelProductionIntegrationSpec extends Specification {
         until("the late end logged") { !logged.list.isEmpty() }
 
         then:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("select outcome::text || ' ' || coalesce(answer, '-') from model_calls") == ["nothing_came_back -"]
         triesOf(SUMMARISE) == ["1 model ${SYSTEM} open" as String]
         values() == []
         holds() == []
 
         and:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         logged.list*.formattedMessage == ["Call ${store.texts('select model_call_id::text from model_calls')[0]} of try "
                 + "${store.texts('select production_id::text from productions')[0]} of run ${RUN} had ended already; "
                 + "how it ended now is dropped" as String]
@@ -771,8 +1077,10 @@ class ModelProductionIntegrationSpec extends Specification {
         store.stopped(TicketWorkflow.SUMMARISE_QUESTION, TicketWorkflow.ANN)
         model.answering(cameBack(FITS))
         started()
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         def heldBefore = store.texts("select reason || ' ' || coalesce(released_at::text, 'held') from run_step_holds")
         def triedBefore = triesOf(SUMMARISE)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts, now().
         store.session.sql("update entry_stops set let_go_at = now(), let_go_by = ?::uuid")
                 .params(TicketWorkflow.ANN).update()
 
@@ -791,12 +1099,13 @@ class ModelProductionIntegrationSpec extends Specification {
         madeOn == [[true, false]]
     }
 
-    /** Confirm made a model's, reached by the drive after summarise's value is assured; its note given as none. */
     def "a model's step reached by the run going on after a person's act is sent, a value given as none kept as none"() {
         given:
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'person', producer_model = null, producer_mode = null
                  where workflow_step_id = ?::uuid""").params(SUMMARISE).update()
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
         store.session.sql("""
                 update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
                  where workflow_step_id = ?::uuid""").params(CONFIRM).update()
@@ -811,6 +1120,7 @@ class ModelProductionIntegrationSpec extends Specification {
 
         then:
         triesOf(CONFIRM) == ["1 model ${SYSTEM} yielded" as String]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
         store.texts("""
                 select field.name || ' ' || coalesce(held.value::text, 'none')
                   from production_values held join declaration_fields field
@@ -822,4 +1132,37 @@ class ModelProductionIntegrationSpec extends Specification {
         model.requests.size() == 1
         madeOn == [[true, false]]
     }
+    private void waitingAfterTurnaway(Pause gate, boolean lateProgress) {
+        def waiting = { CallRequest request, CallProgress progress ->
+            def outcome = model.call(request, [aboutToSend: { progress.aboutToSend() },
+                                              turnedAway: { TurnAway away ->
+                                                  progress.turnedAway(away)
+                                                  gate.hold()
+                                                  if (lateProgress) {
+                                                      progress.turnedAway(away)
+                                                  }
+                                              },
+                                              mayResend: { progress.mayResend() }] as CallProgress)
+            lateProgress ? cameBack(FITS) : outcome
+        } as ModelCalls
+        calls = new EngineCalls(EngineWiring.withoutTools(), waiting, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
+        holding(DeployedModels.HELD)
+    }
+
+    private void waitingAfterResend(Pause gate) {
+        def waiting = { CallRequest request, CallProgress progress ->
+            model.call(request, [aboutToSend: { progress.aboutToSend() },
+                                 turnedAway: { TurnAway away -> progress.turnedAway(away) },
+                                 mayResend: {
+                                     def allowed = progress.mayResend()
+                                     if (allowed) {
+                                         gate.hold()
+                                     }
+                                     allowed
+                                 }] as CallProgress)
+        } as ModelCalls
+        calls = new EngineCalls(EngineWiring.withoutTools(), waiting, store.transactions(), tree, writes, ceilings, snapshots, heldFiles)
+        holding(DeployedModels.HELD)
+    }
+
 }

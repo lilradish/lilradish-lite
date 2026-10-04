@@ -22,13 +22,27 @@ describe("PageHeading", () => {
     expect(screen.getAllByRole("heading")).toEqual([heading]);
   });
 
-  it("names a page drawn within another's at the second level, leaving the first to that page", () => {
-    render(<PageHeading title="Things" level={2} />, { wrapper: themed });
+  it("places a small tag beside the title without adding it to the heading's name", () => {
+    render(<PageHeading title="Triage" besideTitle={<span>Question</span>} />, {
+      wrapper: themed,
+    });
 
-    const heading = screen.getByRole("heading", { name: "Things" });
+    const heading = screen.getByRole("heading", { level: 1, name: "Triage" });
+    const tag = screen.getByText("Question");
 
-    expect(heading.tagName).toBe("H2");
-    expect(screen.queryAllByRole("heading", { level: 1 })).toEqual([]);
+    expect(heading.parentElement).toContainElement(tag);
+    expect(
+      heading.compareDocumentPosition(tag) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(getComputedStyle(heading.parentElement!).flexWrap).toBe("wrap");
+  });
+
+  it("draws its heading in the first level's variant", () => {
+    render(<PageHeading title="Run 7" />, { wrapper: themed });
+
+    const page = getComputedStyle(screen.getByRole("heading", { level: 1 }));
+
+    expect(page.fontSize).toBe("28px");
   });
 
   it("leaves the keyboard where it was, and the heading out of it, on a page opened plainly", () => {

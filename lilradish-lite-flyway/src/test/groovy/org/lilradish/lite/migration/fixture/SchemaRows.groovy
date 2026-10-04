@@ -21,10 +21,14 @@ final class SchemaRows {
     /** The four of those that are about who changed a row, for a table whose author is held to a kind. */
     static List<Map<String, String>> editorAttacks(String table) {
         [
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             attack("${table}_editor_person_fk", table, setting(table, "updated_at = now(), updated_by = '${SEEDER}'")),
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             attack("${table}_editor_is_person", table,
                     setting(table, "updated_at = now(), updated_by = '${WORKFLOW_RUNNER}', updated_by_kind = 'system'")),
+            // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
             attack("${table}_updated_together", table, setting(table, "updated_at = now()")),
+            // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
             attack("${table}_updated_after_created", table,
                     setting(table, "updated_at = created_at - interval '1 day', updated_by = '${STEWARD}'")),
         ]
@@ -34,6 +38,7 @@ final class SchemaRows {
         "update app.${table} set ${assignments} where ${ROW_OF[table]}"
     }
 
+    // DB-SPECIFIC: untyped SQL literals use PostgreSQL's syntax and semantics.
     /** Quoted whatever it is: PostgreSQL types an untyped literal by the column it is written to. */
     static String literal(Object value) {
         value == null ? "null" : "'${value}'"

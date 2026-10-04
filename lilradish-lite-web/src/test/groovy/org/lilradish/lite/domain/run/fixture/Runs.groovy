@@ -20,6 +20,7 @@ import org.lilradish.lite.domain.identity.SubjectId
 import org.lilradish.lite.domain.inference.ModelCallOutcome
 import org.lilradish.lite.domain.inference.ModelCallPurpose
 import org.lilradish.lite.domain.model.ModelName
+import org.lilradish.lite.domain.model.ModelToolName
 import org.lilradish.lite.domain.registry.EntryId
 import org.lilradish.lite.domain.registry.EntryName
 import org.lilradish.lite.domain.registry.EntryVersionId
@@ -54,10 +55,13 @@ import org.lilradish.lite.domain.run.TryRecord
 import org.lilradish.lite.domain.run.ValueRecord
 import org.lilradish.lite.domain.run.WaitsOn
 import org.lilradish.lite.domain.run.WorkflowStepId
+import org.lilradish.lite.domain.search.SearchWay
 import org.lilradish.lite.domain.wire.JsonValue
 import org.lilradish.lite.domain.workflow.Binding
+import org.lilradish.lite.domain.workflow.BindingSource
 import org.lilradish.lite.domain.workflow.ModelChoice
 import org.lilradish.lite.domain.workflow.Producer
+import org.lilradish.lite.domain.workflow.SearchQuestionPart
 import org.lilradish.lite.domain.workflow.StepId
 import org.lilradish.lite.domain.workflow.StepProducer
 
@@ -181,13 +185,32 @@ final class Runs {
                 producer, tries, null, bindings)
     }
 
+    static SearchWay webSearch(int titleLimit = 120) {
+        new SearchWay("web_search", new ModelToolName("search"), titleLimit, 5000, 2000, 300)
+    }
+
+    static Map<FieldName, FieldStanding> standingAll(FieldStanding standing) {
+        SearchWay.FIELDS.collectEntries { [(it): standing] }
+    }
+
+    /** A step searching {@code web_search} as {@code released} declares it, none where the release holds no such way. */
+    static PlannedStep searchStep(int order, SearchWay released = webSearch(),
+                                  List<SearchQuestionPart> question = [new SearchQuestionPart.LiteralPart("Demo Sample")]) {
+        new PlannedStep(stepId(order), order, new StepId("step_" + order),
+                new StepRuns.Search("web_search", released, question, standingAll(FieldStanding.ALWAYS)),
+                person(), 1, null, [])
+    }
+
     static PlannedStep workflowStep(int order) {
-        new PlannedStep(stepId(order), order, new StepId("step_" + order), new StepRuns.Workflow(pinned(order)),
+        new PlannedStep(stepId(order), order, new StepId("step_" + order), new StepRuns.Workflow(pinned(order), workflowHalf(DeclarationSide.GIVES)),
                 null, null, null, [])
     }
 
     static PlannedStep routeStep(int order) {
-        new PlannedStep(stepId(order), order, new StepId("step_" + order), new StepRuns.Route(), null, null, null, [])
+        def discriminator = new Binding(key(600 + order), null, new BindingSource.Written(json("case")))
+        def routed = new StepRuns.Route(discriminator, workflowHalf(DeclarationSide.GIVES),
+                [new StepRuns.Route.Case(key(700 + order), "case", pinned(order), [])])
+        new PlannedStep(stepId(order), order, new StepId("step_" + order), routed, null, null, null, [])
     }
 
     /** A stop in force since {@code since}, made by {@link #STOPPER}. */
@@ -196,12 +219,12 @@ final class Runs {
     }
 
     static StepSnapshot unstarted(PlannedStep planned, StopRecord pinStopped = null) {
-        new StepSnapshot(planned, pinStopped, null, null, [], [])
+        new StepSnapshot(planned, pinStopped, null, null, [], [], null, [:])
     }
 
     static StepSnapshot started(PlannedStep planned, List<TryRecord> tries, HoldRecord hold = null,
                                 List<FailureRecord> failures = [], StopRecord pinStopped = null) {
-        new StepSnapshot(planned, pinStopped, new RunStepId(key(500 + planned.order())), hold, failures, tries)
+        new StepSnapshot(planned, pinStopped, new RunStepId(key(500 + planned.order())), hold, failures, tries, null, [:])
     }
 
     static ProductionId tryId(int number) {
@@ -221,7 +244,7 @@ final class Runs {
                 false, null, [], [], [], [], [])
     }
 
-    /** Gone wrong, code's try for the one reason that names nothing, as a try of code gone wrong always has one. */
+    /** A code try without readable words, represented by the system's reason for that outcome. */
     static TryRecord lost(int number, StepProducer producer) {
         new TryRecord(tryId(number), number, producer, null, askedAt(number), endedAt(number), null, null,
                 TryLostReason.ERRORED,
@@ -242,7 +265,7 @@ final class Runs {
     /** A hold since {@code since}, naming an attempt where its reason needs one, and its model not spent up. */
     static HoldRecord hold(RunStepHoldReason reason, Instant since) {
         boolean onAttempt = reason == RunStepHoldReason.TOO_LONG || reason == RunStepHoldReason.TURNED_AWAY
-        new HoldRecord(reason, since, onAttempt ? attemptId(1) : null, false)
+        new HoldRecord(reason, since, onAttempt ? attemptId(1) : null, false, null)
     }
 
     /** {@code newest} after as many tries before it as its number says, each ended with nothing given back. */

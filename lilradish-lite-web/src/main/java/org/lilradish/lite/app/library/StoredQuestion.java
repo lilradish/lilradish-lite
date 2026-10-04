@@ -29,11 +29,16 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * {@link StoredDeclarations} reads a declaration.
  *
  * @param instruction none where the version says nothing yet
+ * @param drawing none where the version has no human layout
  */
-record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half takes, StoredDeclarations.Half gives) {
+record StoredQuestion(
+        @Nullable Instruction instruction,
+        @Nullable String drawing,
+        StoredDeclarations.Half takes,
+        StoredDeclarations.Half gives) {
 
     private static final String INSTRUCTION =
-            "select question.instruction from question_versions question where question.entry_version_id = :version";
+            "select question.instruction, question.drawing from question_versions question where question.entry_version_id = :version";
 
     private static final String INSTRUCTIONS = """
             select question.entry_version_id, question.instruction
@@ -62,9 +67,10 @@ record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half
 
     /** Inside the caller's transaction; none where the version holds no question content. */
     static Optional<StoredQuestion> read(JdbcClient database, EntryVersionId version) {
-        List<Optional<String>> said = database.sql(INSTRUCTION)
+        List<QuestionText> said = database.sql(INSTRUCTION)
                 .param("version", version.value())
-                .query((result, number) -> Optional.ofNullable(result.getString("instruction")))
+                .query((result, number) ->
+                        new QuestionText(result.getString("instruction"), result.getString("drawing")))
                 .list();
         if (said.isEmpty()) {
             return Optional.empty();
@@ -72,7 +78,8 @@ record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half
         StoredDeclarations.Halves halves =
                 requireNonNull(StoredDeclarations.ofVersions(database, Map.of(version, EntryKind.QUESTION))
                         .get(version));
-        return Optional.of(of(version, said.getFirst().orElse(null), halves));
+        QuestionText text = said.getFirst();
+        return Optional.of(of(version, text.instruction(), text.drawing(), halves));
     }
 
     /**
@@ -105,10 +112,7 @@ record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half
         return askings;
     }
 
-    /**
-     * Inside the caller's transaction: each of {@code questions} holding question content, from the halves read
-     * of them already, in one read however many there are; one holding none is left out.
-     */
+    /** Bulk run/model read; a person's drawing is not loaded because neither uses it. */
     static Map<EntryVersionId, StoredQuestion> readAll(
             JdbcClient database, Map<EntryVersionId, StoredDeclarations.Halves> questions) {
         if (questions.isEmpty()) {
@@ -121,7 +125,7 @@ record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half
                     EntryVersionId version = new EntryVersionId(result.getObject("entry_version_id", UUID.class));
                     read.put(
                             version,
-                            of(version, result.getString("instruction"), requireNonNull(questions.get(version))));
+                            of(version, result.getString("instruction"), null, requireNonNull(questions.get(version))));
                 });
         return read;
     }
@@ -166,14 +170,19 @@ record StoredQuestion(@Nullable Instruction instruction, StoredDeclarations.Half
         return side == DeclarationSide.TAKES ? takes : gives;
     }
 
-    private static StoredQuestion of(EntryVersionId version, @Nullable String said, StoredDeclarations.Halves halves) {
+    private static StoredQuestion of(
+            EntryVersionId version, @Nullable String said, @Nullable String drawing, StoredDeclarations.Halves halves) {
         try {
-            return new StoredQuestion(said == null ? null : new Instruction(said), halves.takes(), halves.gives());
+            return new StoredQuestion(
+                    said == null ? null : new Instruction(said), drawing, halves.takes(), halves.gives());
         } catch (IllegalArgumentException refused) {
             throw new IllegalStateException(
                     "Version " + version.value() + " holds an instruction this system will not read", refused);
         }
     }
+
+    private record QuestionText(
+            @Nullable String instruction, @Nullable String drawing) {}
 
     private static Map<EntryVersionId, OfferedTerms> offeredIn(
             JdbcClient database, GroupId group, Collection<EntryVersionId> lists) {

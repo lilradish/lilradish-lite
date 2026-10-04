@@ -31,7 +31,7 @@ class PersonNameSpec extends Specification {
         name.value() == value
 
         where:
-        value << ["Ada Lovelace", "A", "Ada" + ZERO_WIDTH_JOINER + "Lovelace", "Mi" + ZERO_WIDTH_NON_JOINER + "tra",
+        value << ["Ari Mockvale", "A", "Ari" + ZERO_WIDTH_JOINER + "Mockvale", "Mi" + ZERO_WIDTH_NON_JOINER + "tra",
                   "山田 太郎", GRINNING_FACE * 256]
     }
 
@@ -45,18 +45,18 @@ class PersonNameSpec extends Specification {
 
         where:
         value                                                  || message
-        " Ada"                                                 || "PersonName must not begin with a space"
-        "Ada "                                                 || "PersonName must not end with a space"
-        "Ada  Lovelace"                                        || "PersonName must not contain two spaces in a row, but a pair begins at index 3"
-        "Ada" + NO_BREAK_SPACE + "Lovelace"                    || "PersonName must not contain a space other than U+0020, but the one at index 3 is U+00A0"
-        "Ada" + IDEOGRAPHIC_SPACE + "Lovelace"                 || "PersonName must not contain a space other than U+0020, but the one at index 3 is U+3000"
-        "Ada\tLovelace"                                        || CONTROL_REFUSED + "0009"
-        "Ada" + LINE_SEPARATOR + "Lovelace"                    || CONTROL_REFUSED + "2028"
-        "Ada" + Character.toString(0x1C)                       || CONTROL_REFUSED + "001C"
-        "Ada" + Character.toString(0x1D)                       || CONTROL_REFUSED + "001D"
-        "Ada" + Character.toString(0x1E)                       || CONTROL_REFUSED + "001E"
-        "Ada" + Character.toString(0x1F)                       || CONTROL_REFUSED + "001F"
-        "Ada" + Character.toString(0xD800)                     || CONTROL_REFUSED + "D800"
+        " Ari"                                                 || "PersonName must not begin with a space"
+        "Ari "                                                 || "PersonName must not end with a space"
+        "Ari  Mockvale"                                        || "PersonName must not contain two spaces in a row, but a pair begins at index 3"
+        "Ari" + NO_BREAK_SPACE + "Mockvale"                    || "PersonName must not contain a space other than U+0020, but the one at index 3 is U+00A0"
+        "Ari" + IDEOGRAPHIC_SPACE + "Mockvale"                 || "PersonName must not contain a space other than U+0020, but the one at index 3 is U+3000"
+        "Ari\tMockvale"                                        || CONTROL_REFUSED + "0009"
+        "Ari" + LINE_SEPARATOR + "Mockvale"                    || CONTROL_REFUSED + "2028"
+        "Ari" + Character.toString(0x1C)                       || CONTROL_REFUSED + "001C"
+        "Ari" + Character.toString(0x1D)                       || CONTROL_REFUSED + "001D"
+        "Ari" + Character.toString(0x1E)                       || CONTROL_REFUSED + "001E"
+        "Ari" + Character.toString(0x1F)                       || CONTROL_REFUSED + "001F"
+        "Ari" + Character.toString(0xD800)                     || CONTROL_REFUSED + "D800"
         ""                                                     || "PersonName must not be empty"
         ZERO_WIDTH_SPACE                                       || NOTHING_VISIBLE
         ZERO_WIDTH_SPACE + " " + ZERO_WIDTH_JOINER             || NOTHING_VISIBLE
@@ -81,7 +81,7 @@ class PersonNameSpec extends Specification {
         name.value().is(held)
 
         where:
-        held << [new String("Ada Lovelace"), new String("A"), new String("山田 太郎")]
+        held << [new String("Ari Mockvale"), new String("A"), new String("山田 太郎")]
     }
 
     /** Held to the bound once spaced, which is the value kept, and not as the directory held it. */
@@ -107,9 +107,9 @@ class PersonNameSpec extends Specification {
 
         where:
         held                                            || refusal
-        "Ada" + Character.toString(0x00) + "Lovelace"   || CONTROL_REFUSED + "0000"
-        "Ada" + Character.toString(0x7F) + "Lovelace"   || CONTROL_REFUSED + "007F"
-        "Ada" + Character.toString(0xDC00) + " "        || CONTROL_REFUSED + "DC00"
+        "Ari" + Character.toString(0x00) + "Mockvale"   || CONTROL_REFUSED + "0000"
+        "Ari" + Character.toString(0x7F) + "Mockvale"   || CONTROL_REFUSED + "007F"
+        "Ari" + Character.toString(0xDC00) + " "        || CONTROL_REFUSED + "DC00"
         "a" * 257 + " "                                 || "PersonName must be at most 256 characters, but this one is 257"
     }
 
@@ -131,7 +131,7 @@ class PersonNameSpec extends Specification {
         spaced.is(typed)
 
         where:
-        typed << [new String(""), new String("ADA "), new String(" Ada Lovelace "), new String("山田 太郎")]
+        typed << [new String(""), new String("ARI "), new String(" Ari Mockvale "), new String("山田 太郎")]
     }
 
     def "text spaced as names are cannot be nothing"() {

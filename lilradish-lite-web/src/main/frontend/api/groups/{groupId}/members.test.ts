@@ -6,10 +6,10 @@ import { atMembers, bringIn, membersLoader, panelFrom } from "./members";
 
 const GROUP = "00000003-0000-4000-8000-000000000971";
 
-const ADA = {
+const AVO = {
   subjectId: "00000002-0000-4000-8000-000000000971",
   userId: "000971",
-  displayName: "Ada Lovelace",
+  displayName: "Avo Lumerace",
   roles: ["owner", "operator"],
 };
 
@@ -19,7 +19,7 @@ const NAMELESS = {
   roles: ["overseer"],
 };
 
-const ADA_PANEL = { ...ADA, lastChangingRoles: ["owner"], removable: false };
+const AVO_PANEL = { ...AVO, lastChangingRoles: ["owner"], removable: false };
 
 describe("atMembers", () => {
   it("hands over the members' address under the group's escaped segment", async () => {
@@ -50,20 +50,20 @@ describe("membersLoader", () => {
       null,
       new AbortController().signal,
     );
-    await membersLoader(GROUP, { filter: "Ada", order: "-displayName" })(
+    await membersLoader(GROUP, { filter: "Avo", order: "-displayName" })(
       "c1",
       new AbortController().signal,
     );
 
     expect(sent.mock.calls.map(([address]) => address)).toEqual([
       `/api/groups/${GROUP}/members?sort=userId`,
-      `/api/groups/${GROUP}/members?sort=-displayName&filter=Ada&cursor=c1`,
+      `/api/groups/${GROUP}/members?sort=-displayName&filter=Avo&cursor=c1`,
     ]);
   });
 
   it("reads every member with every role they hold, and a name only where one arrived", async () => {
     answering([
-      JSON.stringify({ items: [ADA, NAMELESS], nextCursor: "c2" }),
+      JSON.stringify({ items: [AVO, NAMELESS], nextCursor: "c2" }),
       200,
     ]);
 
@@ -74,7 +74,7 @@ describe("membersLoader", () => {
 
     expect(page).toEqual({
       items: [
-        { ...ADA, roles: new Set(["owner", "operator"]) },
+        { ...AVO, roles: new Set(["owner", "operator"]) },
         { ...NAMELESS, roles: new Set(["overseer"]) },
       ],
       nextCursor: "c2",
@@ -83,9 +83,9 @@ describe("membersLoader", () => {
   });
 
   it.each([
-    ["no roles", { ...ADA, roles: undefined }],
-    ["a name that is no text", { ...ADA, displayName: null }],
-    ["no user number", { ...ADA, userId: 7 }],
+    ["no roles", { ...AVO, roles: undefined }],
+    ["a name that is no text", { ...AVO, displayName: null }],
+    ["no user number", { ...AVO, userId: 7 }],
   ])("refuses a whole page holding a member with %s", async (_case, member) => {
     answering([JSON.stringify({ items: [NAMELESS, member] }), 200]);
 
@@ -105,11 +105,11 @@ describe("membersLoader", () => {
 
 describe("bringIn", () => {
   it("sends the person and the roles, and nothing else, to the group's members", async () => {
-    const sent = answering([JSON.stringify(ADA_PANEL), 201]);
+    const sent = answering([JSON.stringify(AVO_PANEL), 201]);
 
     await bringIn(
       GROUP,
-      ADA.subjectId,
+      AVO.subjectId,
       ["operator", "owner"],
       new AbortController().signal,
     );
@@ -118,23 +118,23 @@ describe("bringIn", () => {
     expect(address).toBe(`/api/groups/${GROUP}/members`);
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({
-      subjectId: ADA.subjectId,
+      subjectId: AVO.subjectId,
       roles: ["operator", "owner"],
     });
   });
 
   it("reads the member as the group now holds them", async () => {
-    answering([JSON.stringify(ADA_PANEL), 201]);
+    answering([JSON.stringify(AVO_PANEL), 201]);
 
     const brought = await bringIn(
       GROUP,
-      ADA.subjectId,
+      AVO.subjectId,
       ["owner"],
       new AbortController().signal,
     );
 
     expect(brought).toEqual({
-      ...ADA,
+      ...AVO,
       roles: new Set(["owner", "operator"]),
       lastChangingRoles: new Set(["owner"]),
       removable: false,
@@ -151,7 +151,7 @@ describe("bringIn", () => {
       answering([JSON.stringify({ code }), status]);
 
       const failure = await refusalOf(
-        bringIn(GROUP, ADA.subjectId, ["owner"], new AbortController().signal),
+        bringIn(GROUP, AVO.subjectId, ["owner"], new AbortController().signal),
       );
 
       expect(failure.problem).toEqual({ status, code });
@@ -177,17 +177,17 @@ describe("panelFrom", () => {
   });
 
   it.each([
-    ["no list of the last roles", { ...ADA, removable: true }],
+    ["no list of the last roles", { ...AVO, removable: true }],
     [
       "a list of the last roles that is none",
-      { ...ADA, lastChangingRoles: "owner", removable: true },
+      { ...AVO, lastChangingRoles: "owner", removable: true },
     ],
-    ["no word on removal", { ...ADA, lastChangingRoles: [] }],
+    ["no word on removal", { ...AVO, lastChangingRoles: [] }],
     [
       "a word on removal that is no yes or no",
-      { ...ADA, lastChangingRoles: [], removable: "yes" },
+      { ...AVO, lastChangingRoles: [], removable: "yes" },
     ],
-    ["no document at all", "Ada"],
+    ["no document at all", "Avo"],
   ])("refuses %s", (_case, body) => {
     expect(panelFrom(body)).toBeNull();
   });

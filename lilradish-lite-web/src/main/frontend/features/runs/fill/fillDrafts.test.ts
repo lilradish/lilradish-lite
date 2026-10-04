@@ -13,11 +13,11 @@ import {
   draftFrom,
   draftOf,
   draftReader,
+  fileIssueOf,
   offsetOf,
   offsetWritten,
   oneDraftOf,
   placedAt,
-  suggestedName,
   type LevelDraft,
 } from "./fillDrafts";
 
@@ -100,6 +100,20 @@ const ITEMS: FillField = {
   ],
 };
 
+const ATTACHMENT: FillField = {
+  name: "attachment",
+  kind: "file",
+  types: ["application/vnd.demo-sample+json", "text/plain"],
+  maximumBytes: 8,
+  mustBeGiven: true,
+};
+
+const ATTACHMENTS: FillField = {
+  ...ATTACHMENT,
+  name: "attachments",
+  most: 2,
+};
+
 const FIELDS = [COMPLAINT, AMOUNT, URGENT, AT, TAGS, CONTACT, ADDRESS, ITEMS];
 
 /** As little as fits: what must be given, and nothing else. */
@@ -118,6 +132,200 @@ function readDraft(
 ) {
   return draftReader()(fields, draft, unreadable);
 }
+
+describe("file drafts", () => {
+  it("starts file fields empty and keeps prior readable metadata without making a new browser file", () => {
+    const kept = {
+      id: "stored-one",
+      name: "Demo Sample.txt",
+      type: "text/plain",
+      size: 4,
+    };
+    const fields = [
+      ATTACHMENT,
+      ATTACHMENTS,
+      {
+        name: "details",
+        kind: "fields",
+        mustBeGiven: false,
+        fields: [ATTACHMENT],
+      },
+    ] satisfies readonly FillField[];
+
+    expect(draftOf(fields)).toEqual({
+      attachment: null,
+      attachments: [],
+      details: { attachment: null },
+    });
+    expect(
+      draftFrom(fields, {
+        attachment: kept,
+        attachments: [kept],
+        details: { attachment: kept },
+      }),
+    ).toEqual({
+      attachment: { kept, originalIndex: 0 },
+      attachments: [{ kept, originalIndex: 0 }],
+      details: { attachment: { kept, originalIndex: 0 } },
+    });
+  });
+
+  it("numbers uploads by declared depth-first order and keeps prior positions without sending ids", () => {
+    const first = new File(["one"], "Demo Sample one.txt", {
+      type: "text/plain",
+    });
+    const second = new File(["two"], "Demo Sample two.txt", {
+      type: "text/plain",
+    });
+    const kept = {
+      id: "stored-one",
+      name: "Demo Sample kept.txt",
+      type: "text/plain",
+      size: 4,
+    };
+    const nested: FillField = {
+      name: "details",
+      kind: "fields",
+      fields: [ATTACHMENT],
+      mustBeGiven: false,
+    };
+    const fields = [ATTACHMENT, ATTACHMENTS, nested];
+    const draft = {
+      attachment: { pending: first },
+      attachments: [{ kept, originalIndex: 1 }, { pending: second }],
+      details: { attachment: { pending: first } },
+    };
+    const read = draftReader(true)(fields, draft, NONE_UNREADABLE);
+
+    expect(read.values).toEqual({
+      attachment: { upload: 0, name: "Demo Sample one.txt" },
+      attachments: [{ keep: 1 }, { upload: 1, name: "Demo Sample two.txt" }],
+      details: { attachment: { upload: 2, name: "Demo Sample one.txt" } },
+    });
+    expect(read.uploads).toEqual([first, second, first]);
+    expect(read.hasFilePositions).toBe(true);
+    expect(read.problems).toEqual([]);
+    expect(JSON.stringify(read.values)).not.toContain("stored-one");
+
+    const start = readDraft(fields, draft);
+    expect(start.problems).toEqual([
+      { path: ["attachments", 0], reason: "malformed" },
+    ]);
+    expect(JSON.stringify(start.values)).not.toContain("keep");
+  });
+
+  it("retains the old many-file index after removing and reordering entries beside new uploads", () => {
+    const first = {
+      id: "stored-first",
+      name: "Demo Sample first.txt",
+      type: "text/plain",
+      size: 5,
+    };
+    const second = {
+      id: "stored-second",
+      name: "Demo Sample second.txt",
+      type: "text/plain",
+      size: 6,
+    };
+    const pending = new File(["new"], "Demo Sample new.txt", {
+      type: "text/plain",
+    });
+    const old = draftFrom([ATTACHMENTS], {
+      attachments: [first, second],
+    }).attachments;
+    expect(old).toEqual([
+      { kept: first, originalIndex: 0 },
+      { kept: second, originalIndex: 1 },
+    ]);
+    if (!Array.isArray(old)) {
+      throw new Error("The file field has lost its ordered entries.");
+    }
+    const read = draftReader(true)(
+      [ATTACHMENTS],
+      { attachments: [{ pending }, old[1]!] },
+      NONE_UNREADABLE,
+    );
+
+    expect(read.values).toEqual({
+      attachments: [{ upload: 0, name: "Demo Sample new.txt" }, { keep: 1 }],
+    });
+    expect(read.uploads).toEqual([pending]);
+    expect(read.problems).toEqual([]);
+    expect(JSON.stringify(read.values)).not.toContain("stored-second");
+  });
+
+  it("blocks a rejected many-file selection even when no file was added to an optional field", () => {
+    const optional = { ...ATTACHMENTS, mustBeGiven: false };
+    const draft = draftOf([optional]);
+
+    expect(readDraft([optional], draft).problems).toEqual([]);
+    expect(
+      readDraft([optional], draft, new Set([pathKey(["attachments"])])),
+    ).toEqual({
+      values: { attachments: null },
+      uploads: [],
+      hasFilePositions: false,
+      problems: [{ path: ["attachments"], reason: "malformed" }],
+    });
+  });
+
+  it.each([
+    [
+      "valid arbitrary type",
+      new File(["x"], "Demo Sample.dat", {
+        type: "application/vnd.demo-sample+json",
+      }),
+      null,
+    ],
+    [
+      "parameterized accepted type",
+      new File(["x"], "Demo Sample.txt", {
+        type: 'TEXT/PLAIN; charset="utf-8"',
+      }),
+      null,
+    ],
+    [
+      "parameterized type not taken",
+      new File(["x"], "Demo Sample.png", { type: "image/png;version=1" }),
+      "type_not_taken",
+    ],
+    [
+      "parameter without value",
+      new File(["x"], "Demo Sample.txt", { type: "text/plain;bad" }),
+      "type_malformed",
+    ],
+    [
+      "unclosed parameter quote",
+      new File(["x"], "Demo Sample.txt", {
+        type: 'text/plain;name="unfinished',
+      }),
+      "type_malformed",
+    ],
+    [
+      "bad name",
+      new File(["x"], "Demo\nSample.txt", { type: "text/plain" }),
+      "name",
+    ],
+    ["missing type", new File(["x"], "Demo Sample.txt"), "type_missing"],
+    [
+      "malformed type",
+      new File(["x"], "Demo Sample.txt", { type: "wrong" }),
+      "type_malformed",
+    ],
+    [
+      "type not taken",
+      new File(["x"], "Demo Sample.png", { type: "image/png" }),
+      "type_not_taken",
+    ],
+    [
+      "too large",
+      new File(["123456789"], "Demo Sample.txt", { type: "text/plain" }),
+      "too_large",
+    ],
+  ])("checks a selected file with %s", (_case, file, issue) => {
+    expect(fileIssueOf(ATTACHMENT, file)).toBe(issue);
+  });
+});
 
 describe("draftOf", () => {
   it("starts every field empty: many with none, a moment with nothing chosen, and fields holding their own", () => {
@@ -149,7 +357,7 @@ describe("draftFrom", () => {
     urgent: "true",
     at: "2026-09-26T10:15:30+02:00",
     tags: ["kettle", "lid"],
-    contact: { email: "ada@example.org", phones: ["0123"] },
+    contact: { email: "avo@example.org", phones: ["0123"] },
     address: { street: "1 Main" },
     items: [{ name: "kettle", count: null }],
   };
@@ -161,7 +369,7 @@ describe("draftFrom", () => {
       urgent: "true",
       at: { date: "2026-09-26", time: "10:15:30", offset: "+02:00" },
       tags: ["kettle", "lid"],
-      contact: { email: "ada@example.org", phones: ["0123"] },
+      contact: { email: "avo@example.org", phones: ["0123"] },
       address: { street: "1 Main" },
       items: [{ name: "kettle", count: "" }],
     });
@@ -174,22 +382,25 @@ describe("draftFrom", () => {
     expect(read.problems).toEqual([]);
   });
 
-  it("keeps a moment's fraction of a second of up to three digits and an offset west of UTC as they were written", () => {
-    const written = "0999-01-02T03:04:05.123-05:30";
+  it.each(["123", "1234", "123456"])(
+    "keeps a moment's %s fractional digits and offset west of UTC as written",
+    (fraction) => {
+      const written = `0999-01-02T03:04:05.${fraction}-05:30`;
 
-    const drawn = draftFrom([AT], { at: written });
+      const drawn = draftFrom([AT], { at: written });
 
-    expect(drawn.at).toEqual({
-      date: "0999-01-02",
-      time: "03:04:05.123",
-      offset: "-05:30",
-    });
-    expect(readDraft([AT], drawn).values).toEqual({ at: written });
-  });
+      expect(drawn.at).toEqual({
+        date: "0999-01-02",
+        time: `03:04:05.${fraction}`,
+        offset: "-05:30",
+      });
+      expect(readDraft([AT], drawn).values).toEqual({ at: written });
+    },
+  );
 
-  it("leaves as nothing filled a moment whose fraction of a second runs past the three digits a time box holds", () => {
+  it("leaves as nothing filled a moment with seven fractional digits", () => {
     const drawn = draftFrom([{ ...AT, mustBeGiven: true }], {
-      at: "0999-01-02T03:04:05.1234-05:30",
+      at: "0999-01-02T03:04:05.1234567-05:30",
     });
 
     expect(drawn.at).toEqual({ date: "", time: "", offset: null });
@@ -205,7 +416,7 @@ describe("draftFrom", () => {
       urgent: { yes: "true" },
       at: "2026-09-26 10:15",
       tags: "kettle",
-      contact: "ada@example.org",
+      contact: "avo@example.org",
       items: null,
     });
 
@@ -265,13 +476,57 @@ describe("placedAt", () => {
 });
 
 describe("draftReader", () => {
+  it("keeps one-line breaks as refusals at optional, nested and many places without changing the draft", () => {
+    const newline = String.fromCodePoint(0x0a);
+    const note: FillField = {
+      name: "note",
+      kind: "text",
+      lines: "one",
+      longest: 20,
+      mustBeGiven: false,
+    };
+    const fields: readonly FillField[] = [
+      note,
+      {
+        name: "details",
+        kind: "fields",
+        mustBeGiven: true,
+        fields: [{ ...note, name: "nested", mustBeGiven: true }],
+      },
+      { ...note, name: "items", most: 2 },
+    ];
+    const draft = {
+      note: newline,
+      details: { nested: newline },
+      items: [newline],
+    };
+
+    const read = readDraft(fields, draft);
+
+    expect(read.problems).toEqual([
+      { path: ["note"], reason: "line_break" },
+      { path: ["details", "nested"], reason: "line_break" },
+      { path: ["items", 0], reason: "line_break" },
+    ]);
+    expect(read.values).toEqual({
+      note: null,
+      details: { nested: null },
+      items: [null],
+    });
+    expect(draft).toEqual({
+      note: newline,
+      details: { nested: newline },
+      items: [newline],
+    });
+  });
+
   it("sends each value as typed, none where nothing was, and names no problem where everything fits", () => {
     const read = readDraft(FIELDS, {
       ...LEAST,
       complaint: " Broken\n",
       amount: "12.50",
       urgent: "false",
-      contact: { email: "ada@example.org", phones: [] },
+      contact: { email: "avo@example.org", phones: [] },
       items: [{ name: "kettle", count: "" }],
     });
 
@@ -281,7 +536,7 @@ describe("draftReader", () => {
       urgent: "false",
       at: null,
       tags: ["kettle"],
-      contact: { email: "ada@example.org", phones: [] },
+      contact: { email: "avo@example.org", phones: [] },
       address: { street: "1 Main" },
       items: [{ name: "kettle", count: null }],
     });
@@ -447,7 +702,7 @@ describe("draftReader", () => {
     const before: LevelDraft = {
       ...LEAST,
       amount: "12.50",
-      contact: { email: "ada@example.org", phones: [] },
+      contact: { email: "avo@example.org", phones: [] },
     };
     reader(FIELDS, before, NONE_UNREADABLE);
     vi.mocked(valueRefused).mockClear();
@@ -463,7 +718,7 @@ describe("draftReader", () => {
     ).toEqual(["1e3"]);
     expect(read.problems).toEqual([{ path: ["amount"], reason: "malformed" }]);
     expect(read.values.contact).toEqual({
-      email: "ada@example.org",
+      email: "avo@example.org",
       phones: [],
     });
   });
@@ -533,95 +788,6 @@ describe("offsetOf", () => {
     expect(offsetOf({ date: "1850-01-01", time: "12:00", offset: null })).toBe(
       "+00:53",
     );
-  });
-});
-
-describe("suggestedName", () => {
-  it("is the first line of the first text given, cut at a tab as at any control", () => {
-    expect(
-      suggestedName(FIELDS, {
-        ...LEAST,
-        complaint: "Kettle broke\tagain\nSecond line",
-      }),
-    ).toBe("Kettle broke");
-  });
-
-  it("is cut to 60 characters, a character beyond the basic plane counted once", () => {
-    const grinning = String.fromCodePoint(0x1f600);
-
-    expect(
-      suggestedName(FIELDS, { ...LEAST, complaint: grinning.repeat(70) }),
-    ).toBe(grinning.repeat(60));
-  });
-
-  it("is none where the first text field's first line is none a run could be called, whatever a later line or text holds", () => {
-    expect(
-      suggestedName(FIELDS, {
-        ...LEAST,
-        complaint: "  \nKettle",
-        tags: ["second"],
-        contact: { email: "ada@example.org", phones: [] },
-      }),
-    ).toBeNull();
-    expect(
-      suggestedName(FIELDS, { ...draftOf(FIELDS), complaint: "\n" }),
-    ).toBeNull();
-  });
-
-  it("is the first of many where the first text field holds many, and none where it holds none or the first is empty", () => {
-    const tagsFirst = [TAGS, COMPLAINT];
-
-    expect(
-      suggestedName(tagsFirst, {
-        tags: ["kettle", "leak"],
-        complaint: "Broken",
-      }),
-    ).toBe("kettle");
-    expect(
-      suggestedName(tagsFirst, { tags: ["", "leak"], complaint: "Broken" }),
-    ).toBeNull();
-    expect(
-      suggestedName(tagsFirst, { tags: [], complaint: "Broken" }),
-    ).toBeNull();
-  });
-
-  it("finds the first text field depth first, within fields declared before any text, and within the first of many fields", () => {
-    const contactFirst = [AMOUNT, CONTACT, COMPLAINT];
-    const itemsFirst = [ITEMS, COMPLAINT];
-
-    expect(
-      suggestedName(contactFirst, {
-        amount: "12",
-        contact: { email: "ada@example.org", phones: [] },
-        complaint: "Broken",
-      }),
-    ).toBe("ada@example.org");
-    expect(
-      suggestedName(contactFirst, {
-        amount: "12",
-        contact: { email: "", phones: ["0123"] },
-        complaint: "Broken",
-      }),
-    ).toBeNull();
-    expect(
-      suggestedName(itemsFirst, {
-        items: [
-          { name: "kettle", count: "" },
-          { name: "lid", count: "" },
-        ],
-        complaint: "Broken",
-      }),
-    ).toBe("kettle");
-    expect(
-      suggestedName(itemsFirst, { items: [], complaint: "Broken" }),
-    ).toBeNull();
-  });
-
-  it("is none where no text field is declared", () => {
-    expect(
-      suggestedName([AMOUNT, URGENT], { amount: "12", urgent: "true" }),
-    ).toBeNull();
-    expect(suggestedName([], {})).toBeNull();
   });
 });
 

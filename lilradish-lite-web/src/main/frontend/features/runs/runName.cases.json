@@ -1,6 +1,6 @@
 {
   "name": [
-    { "typed": "Claim from Ada", "accepted": true },
+    { "typed": "Claim from Avo", "accepted": true },
     { "typed": "Two  spaces", "accepted": true },
     { "typed": " Leading", "accepted": true },
     { "typed": "Trailing ", "accepted": true },
@@ -12,8 +12,8 @@
     { "typed": "\u200b", "accepted": false },
     { "typed": "n", "times": 129, "accepted": false },
     { "typed": "\ud83d\ude00", "times": 129, "accepted": false },
-    { "typed": "Claim\nfrom Ada", "accepted": false },
-    { "typed": "Claim\u2028from Ada", "accepted": false },
-    { "typed": "Claim\u0085from Ada", "accepted": false }
+    { "typed": "Claim\nfrom Avo", "accepted": false },
+    { "typed": "Claim\u2028from Avo", "accepted": false },
+    { "typed": "Claim\u0085from Avo", "accepted": false }
   ]
 }

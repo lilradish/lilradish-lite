@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allMembersRead,
   countFrom,
   isUnchecked,
   listOf,
@@ -85,6 +86,22 @@ describe("present", () => {
 
     expect(kept).toEqual({ said: "a", counted: 0 });
     expect(Object.hasOwn(kept, "missing")).toBe(false);
+  });
+
+  it("keeps an explicit null while leaving out an undefined member", () => {
+    expect(present({ empty: null, missing: undefined, no: false })).toEqual({
+      empty: null,
+      no: false,
+    });
+  });
+});
+
+describe("allMembersRead", () => {
+  it("accepts absent members and rejects an unreadable one", () => {
+    expect(allMembersRead({ missing: undefined, no: false, empty: "" })).toBe(
+      true,
+    );
+    expect(allMembersRead({ missing: null, no: false })).toBe(false);
   });
 });
 

@@ -4,17 +4,15 @@ import org.lilradish.lite.domain.listing.ListColumn;
 import org.lilradish.lite.domain.listing.ListValueKind;
 
 /**
- * What a group's entries of one kind sort by. In service sorts by whether one is, two entries' version
- * numbers saying nothing of each other; published names are written out, as EstateAct's are.
+ * What a group's entries of one kind sort by. In service sorts by whether one is; status sorts
+ * waiting, stopped-only, then neither. Published names are written out, as EstateAct's are.
  */
 public enum LibrarySortColumn implements ListColumn {
     NAME("name", ListValueKind.TEXT),
 
     IN_SERVICE("inService", ListValueKind.BOOLEAN),
 
-    SUBMITTED("submitted", ListValueKind.BOOLEAN),
-
-    STOPPED("stopped", ListValueKind.BOOLEAN);
+    STATUS("status", ListValueKind.LONG);
 
     private final String published;
 

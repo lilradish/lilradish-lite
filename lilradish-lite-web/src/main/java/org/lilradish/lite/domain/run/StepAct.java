@@ -29,9 +29,8 @@ public enum StepAct {
     REVIEW("review", GroupPermission.REVIEW_AT_GATE),
 
     /**
-     * Sends again what a model was to be sent and was not: the try a model's step is held back or failed on before
-     * anything came of it, or values waiting on the model the step names to review them, which it turned away or is
-     * not held here; measured afresh. Whoever may start a run may, since what is sent may cost.
+     * Retries sending a model request, or hands an unbuildable review to a person.
+     * Starting a run is required because retrying a model request may incur cost.
      */
     TRY_SENDING("try_sending", GroupPermission.START_RUN);
 
@@ -145,10 +144,20 @@ public enum StepAct {
         return waiting.values().stream().anyMatch(value -> value.on() == WaitsOn.MODEL);
     }
 
-    /* Nothing of a code step the running release does not hold is sent, by the run or by a press. */
+    /* Missing code cannot produce; a failed review may be tried to pass its yielded values to a person. */
     private static @Nullable RefusalCode unsent(StepGround standing) {
         RefusalCode unsent = unsentWhere(standing);
-        return unsent == null && standing.unreleased() ? RefusalCode.TRY_SENDING_NOT_OFFERED : unsent;
+        if (unsent != null || !standing.unreleased()) {
+            return unsent;
+        }
+        if (standing.producer() == StepProducer.CODE
+                && standing.position() instanceof StepPosition.Failed failed
+                && failed.why() instanceof StepFailure.Recorded recorded
+                && recorded.reason() == RunStepFailureReason.MODEL_NOT_DEPLOYED
+                && recorded.purpose() == ModelCallPurpose.REVIEW) {
+            return null;
+        }
+        return RefusalCode.TRY_SENDING_NOT_OFFERED;
     }
 
     /*
@@ -168,13 +177,18 @@ public enum StepAct {
                 failed.why() instanceof StepFailure.Recorded recorded
                                 && (recorded.reason() == RunStepFailureReason.MODEL_NOT_DEPLOYED
                                         || (modelProduces
-                                                && recorded.reason() == RunStepFailureReason.UNCUTTABLE_LENGTH))
+                                                && (recorded.reason() == RunStepFailureReason.UNCUTTABLE_LENGTH
+                                                        || recorded.reason() == RunStepFailureReason.TOOL_NOT_OFFERED
+                                                        || recorded.reason()
+                                                                == RunStepFailureReason.SOURCE_NO_LONGER_MATCHES
+                                                        || recorded.reason()
+                                                                == RunStepFailureReason.SOURCE_LIST_NOT_HERE)))
                         ? null
                         : RefusalCode.TRY_SENDING_NOT_OFFERED;
             case StepPosition.AwaitingReview waiting ->
                 switch (waiting.sending()) {
                     case TURNED_AWAY -> null;
-                    case TOO_LONG, LIST_NOT_HERE, TAKES_NO_LONGER_DECLARED, NO_LONGER_DECLARED ->
+                    case TOO_LONG, LIST_NOT_HERE, TAKES_NO_LONGER_DECLARED, NO_LONGER_DECLARED, HOLDS_A_FILE ->
                         RefusalCode.TRY_SENDING_NOT_OFFERED;
                     case UNSENT, OUT -> RefusalCode.STEP_MOVED_ON;
                     case null -> RefusalCode.STEP_MOVED_ON;
@@ -183,10 +197,10 @@ public enum StepAct {
             case StepPosition.Running ignored -> RefusalCode.STEP_MOVED_ON;
             case StepPosition.Owed ignored -> RefusalCode.STEP_MOVED_ON;
             case StepPosition.Done ignored -> RefusalCode.STEP_MOVED_ON;
+            case StepPosition.Beneath ignored -> RefusalCode.STEP_MOVED_ON;
         };
     }
 
-    /** Whether what would be sent again is values to be reviewed: turned away, or failed on the reviewer not held. */
     private static boolean reviewing(StepPosition position) {
         return position instanceof StepPosition.AwaitingReview
                 || (position instanceof StepPosition.Failed failed

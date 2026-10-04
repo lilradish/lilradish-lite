@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import { useId } from "react";
+import { Children, useId } from "react";
 
 import type {
   SendingRole,
@@ -8,6 +8,7 @@ import type {
   Step,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say, type MessageId } from "../../i18n/app";
+import { visible } from "../../i18n/visible";
 import { isolatedInText } from "../../lib/direction/isolated";
 
 // Its markers taken away, so it is named a list outright.
@@ -42,32 +43,62 @@ export function SendsPast({
   }
   return (
     <>
-      <Typography id={labelId} variant="subtitle2" component="p">
+      <Typography id={labelId} variant="subtitle2">
         {say("sendsPast.label")}
       </Typography>
-      <Typography variant="body2" sx={QUIET_SX}>
+      <Typography
+        variant="body2"
+        sx={{ ...QUIET_SX, typography: "systemHint" }}
+      >
         {say("sendsPast.hint")}
       </Typography>
       <Box component="ul" role="list" aria-labelledby={labelId} sx={LIST_SX}>
-        {sendsPast.map((each) => (
-          <li key={`${each.stepId}:${each.role}`}>{pastSaid(each, steps)}</li>
-        ))}
+        {sendsPast.map((each) => {
+          const past = pastSaid(each, steps);
+          return (
+            <li key={`${each.stepId}:${each.role}`} aria-label={past.words}>
+              {past.node}
+            </li>
+          );
+        })}
       </Box>
     </>
   );
 }
 
-function pastSaid(each: SendPast, steps: readonly Step[]): string {
-  const step = isolatedInText(
-    steps.find((held) => held.stepId === each.stepId)?.name ?? each.stepId,
-  );
-  const model = isolatedInText(each.model);
+function pastSaid(each: SendPast, steps: readonly Step[]) {
+  const step =
+    steps.find((held) => held.stepId === each.stepId)?.name ?? each.stepId;
+  const model = each.model;
   // Past a double's exact integers the count arrived rounded, so only that it passed them is said.
-  return each.past > Number.MAX_SAFE_INTEGER
-    ? say(SAID_UNCOUNTED[each.role], {
-        step,
-        model,
-        max: Number.MAX_SAFE_INTEGER,
-      })
-    : say(SAID[each.role], { step, model, past: each.past });
+  const id =
+    each.past > Number.MAX_SAFE_INTEGER
+      ? SAID_UNCOUNTED[each.role]
+      : SAID[each.role];
+  const figures: Readonly<Record<string, number>> =
+    each.past > Number.MAX_SAFE_INTEGER
+      ? { max: Number.MAX_SAFE_INTEGER }
+      : { past: each.past };
+  return {
+    words: say(id, {
+      ...figures,
+      step: isolatedInText(step),
+      model: isolatedInText(model),
+    }),
+    node: Children.map(
+      visible(id, {
+        ...figures,
+        step: <bdi>{step}</bdi>,
+        model: <bdi>{model}</bdi>,
+      }),
+      (part) =>
+        typeof part === "string" ? (
+          <Box component="span" sx={{ typography: "systemHint" }}>
+            {part}
+          </Box>
+        ) : (
+          part
+        ),
+    ),
+  };
 }

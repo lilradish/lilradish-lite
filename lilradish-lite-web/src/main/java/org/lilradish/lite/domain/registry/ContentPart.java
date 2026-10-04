@@ -8,6 +8,7 @@ package org.lilradish.lite.domain.registry;
  */
 public enum ContentPart {
     INSTRUCTION("instruction"),
+    DRAWING("drawing"),
     TAKES("takes"),
     GIVES("gives"),
     STEPS("steps"),

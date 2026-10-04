@@ -19,6 +19,7 @@ import org.lilradish.lite.domain.members.GroupMemberRemoval
 import org.lilradish.lite.domain.registry.EntryKind
 import org.lilradish.lite.domain.run.ReviewOutcome
 import org.lilradish.lite.domain.run.ReviewUnbuiltReason
+import org.lilradish.lite.domain.run.RunCeilingChangeOutcome
 import org.lilradish.lite.domain.run.RunStepFailureReason
 import org.lilradish.lite.domain.run.RunStepHoldReason
 import org.lilradish.lite.domain.run.TryLostReason
@@ -29,40 +30,14 @@ import spock.lang.Shared
 import spock.lang.Specification
 
 /**
- * A vocabulary written down twice: once as a type the database enforces, once as a type Java
- * dispatches on. Nothing in either artefact can see the other, and a label spelt one way on one side
- * and another way on the other is a value that round-trips as far as the first query and then stops
- * matching anything.
- *
- * <p>Both sides are discovered. The schema's are read from pg_enum against a server the migrations
- * have actually been run into, rather than parsed out of the migration text — ALTER TYPE … ADD VALUE
- * is precisely the shape text parsing gets wrong, and it is also the shape a vocabulary grows by.
- * The Java side is a walk over the compiled classes filtered by {@code isEnum()}.
- *
- * <p>The pairing between them is the one thing written by hand, so it is held total: every type the
- * schema has must be named as owned or named as deliberately unowned, and nothing may be in both
- * lists. What holds the second list is a naming convention — {@code estate_role} would be owned by
- * {@code EstateRole} — asserted against the owned ones as well, so it is a rule this suite follows
- * rather than an assumption it makes. A Java type appearing for an unowned schema type is caught by
- * its name, which is the only thing that exists before anybody has agreed on its labels; catching it
- * by its labels would be silent in exactly the case worth catching, where they were spelt wrongly.
- *
- * <p>What cannot be derived, stated rather than implied: a Java enum that should have been persisted
- * and was not. Most of the domain's enums are deliberately never persisted, so an unpaired Java type
- * is the ordinary case and carries no signal. This holds the schema total against Java, and not Java
- * total against the schema.
+ * Every schema vocabulary must be named as owned or deliberately unowned, never both.
+ * Java enums may remain unpersisted, so completeness is enforced only from schema to Java.
  */
 class SchemaVocabularyIntegrationSpec extends Specification {
 
     /**
-     * A quoted literal and the type PostgreSQL prints the cast to beside it, as it stores every enum
-     * literal in a rule. The inner alternation consumes a doubled quote rather than ending on it, so
-     * a label holding an apostrophe is read whole instead of being split in two.
-     *
-     * <p>The schema qualifier is optional because whether one is printed is a property of the
-     * reader: the same constraint comes back as {@code 'person'::subject_kind} to a session with the
-     * schema on its search path and as {@code 'person'::app.subject_kind} to one without, so a
-     * pattern that accepts only one of them reads every rule on one server and none on another.
+     * Doubled quotes must remain inside a label rather than ending it.
+     * Schema qualifiers depend on the session's search path, so both forms must match.
      */
     static final Pattern CAST_TO_AN_ENUM = Pattern.compile(/'((?:[^']|'')*)'::(?:\w+\.)?(\w+)/)
 
@@ -80,31 +55,24 @@ class SchemaVocabularyIntegrationSpec extends Specification {
             "model_call_purpose": ModelCallPurpose,
             "review_outcome": ReviewOutcome,
             "review_unbuilt_reason": ReviewUnbuiltReason,
+            "run_ceiling_change_outcome": RunCeilingChangeOutcome,
             "run_step_failure_reason": RunStepFailureReason,
             "run_step_hold_reason": RunStepHoldReason,
             "step_kind": StepKind,
             "step_producer": StepProducer,
             "try_lost_reason": TryLostReason]
 
-    /**
-     * Named here rather than absent, so that a type gaining an owner is a change to this file and
-     * not a silent pairing. No Java code reads these yet; each moves to OWNERS as its domain comes to.
-     */
+    /** Unowned vocabularies must be named explicitly so an owner cannot appear silently. */
     static final Set<String> UNOWNED_ON_PURPOSE = [
         "code_step",
-        "run_ceiling_change_outcome",
         "run_step_kind",
         "soundness_check_outcome",
         "subject_kind",
     ] as Set
 
     /**
-     * A vocabulary a rule, a default or a generated column pins to one of its labels, which is a second
-     * place a label is spelt out. PostgreSQL refuses a literal that is not a label of the type cast to,
-     * so what this adds is that the set of such pins is fixed: a pin added against a different label, or
-     * one quietly changed to the other, is a change to this map rather than to nothing. Each entry is the
-     * type the literal was cast to and the literal itself, because the type is what makes the label mean
-     * anything.
+     * Pins must be explicit so changes between valid labels are caught as well as invalid labels.
+     * A label's type is part of its identity.
      */
     static final Map<String, List<String>> PINNED_TO_A_LABEL = [
         "bindings.bindings_editor_is_person": ["subject_kind:person"],
@@ -123,12 +91,17 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "declaration_fields.declaration_fields_term_list_is_reference_list": ["entry_kind:reference_list"],
         "declaration_fields.declaration_fields_term_list_only_for_term": ["field_kind:term"],
         "declaration_fields.declaration_fields_text_limit_only_for_text": ["field_kind:text"],
+        "declaration_fields.declaration_fields_text_lines_only_for_text": ["field_kind:text"],
         "declaration_fields.declaration_fields_version_is_question_or_workflow":
                 ["entry_kind:question", "entry_kind:workflow"],
         "declaration_fields.parent_kind": ["field_kind:fields"],
         "declaration_fields.step_kind": ["step_kind:route"],
         "declaration_fields.term_list_kind": ["entry_kind:reference_list"],
         "declaration_fields.updated_by_kind": ["subject_kind:person"],
+        "errored_code_returned_files.errored_code_returned_files_code_only":
+                ["step_producer:code", "try_lost_reason:errored"],
+        "errored_code_returned_files.lost_reason": ["try_lost_reason:errored"],
+        "errored_code_returned_files.producer": ["step_producer:code"],
         "entries.entries_editor_is_person": ["subject_kind:person"],
         "entries.updated_by_kind": ["subject_kind:person"],
         "entry_stops.created_by_kind": ["subject_kind:person"],
@@ -163,6 +136,14 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "group_members.subject_kind": ["subject_kind:person"],
         "groups.groups_editor_is_person": ["subject_kind:person"],
         "groups.updated_by_kind": ["subject_kind:person"],
+        "model_call_searches.model_call_outcome": ["model_call_outcome:came_back"],
+        "model_call_searches.model_call_searches_came_back": ["model_call_outcome:came_back"],
+        "model_call_tool_uses.model_call_purpose": ["model_call_purpose:produce"],
+        "model_call_tool_uses.model_call_tool_uses_purpose_is_produce": ["model_call_purpose:produce"],
+        "model_call_tool_uses.model_call_tool_uses_counted_exactly_once_taken_up":
+                ["model_call_outcome:came_back", "model_call_outcome:errored", "model_call_outcome:nothing_came_back"],
+        "model_call_tool_uses.model_call_tool_uses_said_only_for_came_back": ["model_call_outcome:came_back"],
+        "model_call_tool_uses.model_call_tool_uses_record_only_for_came_back": ["model_call_outcome:came_back"],
         "model_call_turnaways.created_by_kind": ["subject_kind:system"],
         "model_call_turnaways.model_call_turnaways_author_is_system": ["subject_kind:system"],
         "model_call_turnaways.model_call_turnaways_model_call_outcome_is_turned_away": ["model_call_outcome:turned_away"],
@@ -173,19 +154,25 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "model_calls.model_calls_author_is_system": ["subject_kind:system"],
         "model_calls.model_calls_came_back_count_exactly_for_came_back": ["model_call_outcome:came_back"],
         "model_calls.model_calls_counted_by_model_only_for_came_back": ["model_call_outcome:came_back"],
+        "model_calls.model_calls_declined_words_only_for_came_back": ["model_call_outcome:came_back"],
         "model_calls.model_calls_error_detail_exactly_for_errored": ["model_call_outcome:errored"],
         "model_calls.model_calls_request_exactly_for_help": ["model_call_purpose:help"],
         "model_calls.model_calls_root_version_exactly_for_help": ["model_call_purpose:help"],
+        "model_calls.model_calls_unreadable_response_only_for_errored": ["model_call_outcome:errored"],
         "pool_members.pool_members_is_person": ["subject_kind:person"],
         "pool_members.pool_members_remover_is_person": ["subject_kind:person"],
         "pool_members.removed_by_kind": ["subject_kind:person"],
         "pool_members.subject_kind": ["subject_kind:person"],
-        "production_inputs.source_run_id": ["run_step_kind:code_step", "run_step_kind:question"],
+        "production_inputs.source_run_id": ["run_step_kind:code_step", "run_step_kind:question", "run_step_kind:search"],
+        "production_inputs.production_inputs_search_part_only_for_search_try": ["run_step_kind:search"],
         "production_values.needs_review": ["field_standing:always", "field_standing:never"],
         "production_values.production_values_confidence_exactly_for_model_above_confidence":
                 ["field_standing:above_confidence", "step_producer:model"],
         "production_values.production_values_field_exactly_for_question": ["run_step_kind:question"],
-        "production_values.production_values_field_name_exactly_for_code_step": ["run_step_kind:code_step"],
+        "production_values.production_values_field_name_exactly_for_code_step_or_search":
+                ["run_step_kind:code_step", "run_step_kind:search"],
+        "production_values.production_values_search_stands_always_or_never":
+                ["field_standing:always", "field_standing:never", "run_step_kind:search"],
         "production_values.production_values_pinned_exactly_for_question": ["run_step_kind:question"],
         "production_values.production_values_threshold_exactly_for_above_confidence":
                 ["field_standing:above_confidence"],
@@ -198,7 +185,8 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "productions.productions_code_again_only_for_may_run_again": ["step_producer:code"],
         "productions.productions_code_error_member_exactly_for_not_declared": ["code_error_reason:not_declared"],
         "productions.productions_code_error_path_as_its_reason_names":
-                ["code_error_reason:failed_on_this_side", "code_error_reason:gave_nothing",
+                ["code_error_reason:failed_on_this_side", "code_error_reason:file_total_too_large",
+                 "code_error_reason:gave_nothing",
                  "code_error_reason:not_declared", "code_error_reason:said_nothing"],
         "productions.productions_code_error_read_by_exactly_for_gives_otherwise":
                 ["code_error_reason:gives_otherwise"],
@@ -225,7 +213,13 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "productions.productions_pinned_exactly_for_question": ["run_step_kind:question"],
         "productions.productions_producer_is_step_producer_or_person": ["step_producer:person"],
         "productions.productions_returned_by_code_only_for_code_errored":
-                ["step_producer:code", "try_lost_reason:errored"],
+                ["code_error_reason:file_name_unusable", "code_error_reason:file_too_large",
+                 "code_error_reason:file_total_too_large", "code_error_reason:file_type_unusable",
+                 "code_error_reason:line_break", "code_error_reason:not_a_term", "code_error_reason:not_declared", "code_error_reason:not_its_kind",
+                 "code_error_reason:nothing_given", "code_error_reason:too_long", "code_error_reason:too_long_to_keep",
+                 "code_error_reason:too_many", "code_error_reason:unkeepable",
+                 "step_producer:code", "try_lost_reason:errored"],
+        "productions.productions_try_number_absent_only_for_open_model": ["step_producer:model"],
         "question_versions.entry_kind": ["entry_kind:question"],
         "question_versions.question_versions_editor_is_person": ["subject_kind:person"],
         "question_versions.question_versions_is_question": ["entry_kind:question"],
@@ -266,7 +260,8 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "run_ceiling_changes.created_by_kind": ["subject_kind:person"],
         "run_ceiling_changes.decided_by_kind": ["subject_kind:person"],
         "run_ceiling_changes.run_ceiling_changes_author_is_person": ["subject_kind:person"],
-        "run_ceiling_changes.run_ceiling_changes_decider_is_not_requester": ["run_ceiling_change_outcome:withdrawn"],
+        "run_ceiling_changes.run_ceiling_changes_decider_matches_outcome":
+                ["run_ceiling_change_outcome:superseded_by_change", "run_ceiling_change_outcome:withdrawn_by_requester"],
         "run_ceiling_changes.run_ceiling_changes_decider_is_person": ["subject_kind:person"],
         "run_help_exchanges.created_by_kind": ["subject_kind:person"],
         "run_help_exchanges.model_call_purpose": ["model_call_purpose:help"],
@@ -277,14 +272,30 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "run_step_failures.produced_production_id": ["model_call_purpose:produce"],
         "run_step_failures.production_producer": ["step_producer:model"],
         "run_step_failures.reviewed_production_id": ["model_call_purpose:review"],
+        "run_step_failures.source_run_step_kind": ["run_step_kind:code_step"],
+        "run_step_failures.run_step_failures_source_exactly_for_a_source_failure":
+                ["run_step_failure_reason:source_list_not_here", "run_step_failure_reason:source_no_longer_matches"],
+        "run_step_failures.run_step_failures_source_only_for_produce":
+                ["model_call_purpose:produce", "run_step_failure_reason:source_list_not_here", "run_step_failure_reason:source_no_longer_matches"],
         "run_step_failures.run_step_failures_author_is_system": ["subject_kind:system"],
-        "run_step_failures.run_step_failures_length_or_undeployed_only_for_calls_a_model":
+        "run_step_failures.run_step_failures_detail_for_length_or_undeployed":
                 ["run_step_failure_reason:model_not_deployed", "run_step_failure_reason:uncuttable_length"],
-        "run_step_failures.run_step_failures_production_exactly_for_length_or_undeployed":
-                ["run_step_failure_reason:model_not_deployed", "run_step_failure_reason:uncuttable_length"],
+        "run_step_failures.run_step_failures_sending_failure_only_for_calls_a_model":
+                ["run_step_failure_reason:model_not_deployed", "run_step_failure_reason:source_list_not_here", "run_step_failure_reason:source_no_longer_matches",
+                 "run_step_failure_reason:tool_not_offered", "run_step_failure_reason:uncuttable_length"],
+        "run_step_failures.run_step_failures_production_exactly_for_a_sending_failure":
+                ["run_step_failure_reason:model_not_deployed", "run_step_failure_reason:source_list_not_here", "run_step_failure_reason:source_no_longer_matches",
+                 "run_step_failure_reason:tool_not_offered", "run_step_failure_reason:uncuttable_length"],
+        "run_step_failures.run_step_failures_tool_not_offered_only_for_search_produce":
+                ["model_call_purpose:produce", "run_step_failure_reason:tool_not_offered", "run_step_kind:search"],
+        "run_step_failures.run_step_failures_tool_exactly_for_tool_not_offered":
+                ["run_step_failure_reason:tool_not_offered"],
+        "run_step_failures.run_step_failures_no_detail_for_too_deep": ["run_step_failure_reason:too_deep"],
         "run_step_failures.run_step_failures_production_is_model": ["step_producer:model"],
         "run_step_failures.run_step_failures_purpose_is_produce_or_review":
                 ["model_call_purpose:produce", "model_call_purpose:review"],
+        "run_step_failures.run_step_failures_too_deep_only_for_workflow_or_route":
+                ["run_step_failure_reason:too_deep", "run_step_kind:route", "run_step_kind:workflow"],
         "run_step_failures.run_step_failures_unclaimed_value_only_for_route":
                 ["run_step_failure_reason:unclaimed_value", "run_step_kind:route"],
         "run_step_failures.run_step_failures_uncuttable_length_only_for_produce":
@@ -293,12 +304,16 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "run_step_holds.attempt_too_long": ["run_step_hold_reason:too_long"],
         "run_step_holds.created_by_kind": ["subject_kind:system"],
         "run_step_holds.released_by_kind": ["subject_kind:system"],
+        "run_step_holds.source_run_step_kind": ["run_step_kind:code_step"],
         "run_step_holds.run_step_holds_attempt_exactly_for_too_long_or_turned_away":
                 ["run_step_hold_reason:too_long", "run_step_hold_reason:turned_away"],
         "run_step_holds.run_step_holds_attempt_is_produce": ["model_call_purpose:produce"],
         "run_step_holds.run_step_holds_author_is_system": ["subject_kind:system"],
-        "run_step_holds.run_step_holds_code_step_not_held_only_for_code_step":
+        "run_step_holds.run_step_holds_code_step_not_held_for_current_or_source_code":
                 ["run_step_hold_reason:code_step_not_held", "run_step_kind:code_step"],
+        "run_step_holds.run_step_holds_source_only_for_code_step_not_held": ["run_step_hold_reason:code_step_not_held"],
+        "run_step_holds.run_step_holds_search_way_not_held_only_for_search":
+                ["run_step_hold_reason:search_way_not_held", "run_step_kind:search"],
         "run_step_holds.run_step_holds_releaser_is_system": ["subject_kind:system"],
         "run_step_holds.run_step_holds_too_long_or_turned_away_only_for_calls_a_model":
                 ["run_step_hold_reason:too_long", "run_step_hold_reason:turned_away"],
@@ -311,10 +326,12 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "run_step_send_attempts.reviewed_with": ["model_call_purpose:review"],
         "run_step_send_attempts.run_step_send_attempts_author_is_person_or_system":
                 ["subject_kind:person", "subject_kind:system"],
-        "run_step_send_attempts.run_step_send_attempts_only_for_question_or_code_step":
-                ["run_step_kind:code_step", "run_step_kind:question"],
-        "run_step_send_attempts.run_step_send_attempts_produce_only_for_question":
-                ["model_call_purpose:review", "run_step_kind:question"],
+        "run_step_send_attempts.run_step_send_attempts_only_for_a_producing_step":
+                ["run_step_kind:code_step", "run_step_kind:question", "run_step_kind:search"],
+        "run_step_send_attempts.run_step_send_attempts_produce_only_for_question_or_search":
+                ["model_call_purpose:review", "run_step_kind:question", "run_step_kind:search"],
+        "run_step_send_attempts.run_step_send_attempts_search_question_exactly_for_search":
+                ["model_call_purpose:produce", "run_step_kind:search"],
         "run_step_send_attempts.run_step_send_attempts_production_is_model": ["step_producer:model"],
         "run_step_send_attempts.run_step_send_attempts_purpose_is_produce_or_review":
                 ["model_call_purpose:produce", "model_call_purpose:review"],
@@ -326,11 +343,12 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "run_steps.created_by_kind": ["subject_kind:system"],
         "run_steps.kind":
                 ["entry_kind:question", "entry_kind:workflow", "run_step_kind:code_step", "run_step_kind:question",
-                 "run_step_kind:route", "run_step_kind:workflow", "step_kind:code_step", "step_kind:route"],
+                 "run_step_kind:route", "run_step_kind:search", "run_step_kind:workflow", "step_kind:code_step",
+                 "step_kind:route", "step_kind:search"],
         "run_steps.run_steps_author_is_system": ["subject_kind:system"],
         "run_steps.run_steps_pinned_exactly_for_entry": ["step_kind:entry"],
-        "run_steps.run_steps_producer_exactly_for_question_or_code_step":
-                ["run_step_kind:code_step", "run_step_kind:question"],
+        "run_steps.run_steps_producer_exactly_for_a_producing_step":
+                ["run_step_kind:code_step", "run_step_kind:question", "run_step_kind:search"],
         "run_stops.created_by_kind": ["subject_kind:person"],
         "run_stops.opened_again_by_kind": ["subject_kind:person"],
         "run_stops.run_stops_author_is_person_or_system": ["subject_kind:person", "subject_kind:system"],
@@ -344,6 +362,10 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "runs.runs_parent_route_case_exactly_for_route": ["run_step_kind:route"],
         "runs.runs_parent_step_is_workflow_or_route": ["run_step_kind:route", "run_step_kind:workflow"],
         "runs.updated_by_kind": ["subject_kind:person"],
+        "search_question_parts.search_question_parts_editor_is_person": ["subject_kind:person"],
+        "search_question_parts.search_question_parts_step_kind_is_search": ["step_kind:search"],
+        "search_question_parts.step_kind": ["step_kind:search"],
+        "search_question_parts.updated_by_kind": ["subject_kind:person"],
         "soundness_checks.created_by_kind": ["subject_kind:person"],
         "soundness_checks.soundness_checks_author_is_person": ["subject_kind:person"],
         "soundness_counts.check_outcome": ["soundness_check_outcome:finished"],
@@ -360,6 +382,10 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         "workflow_steps.workflow_steps_producer_model_only_for_model": ["step_producer:model"],
         "workflow_steps.workflow_steps_question_produced_by_model_or_person":
                 ["entry_kind:question", "step_producer:code"],
+        "workflow_steps.workflow_steps_search_only_for_search": ["step_kind:search"],
+        "workflow_steps.workflow_steps_search_produced_by_model_or_person": ["step_kind:search", "step_producer:code"],
+        "workflow_steps.workflow_steps_search_standing_without_confidence":
+                ["field_standing:always", "field_standing:never"],
         "workflow_steps.workflow_steps_told_only_for_model": ["step_producer:model"],
         "workflow_steps.workflow_steps_workflow_or_route_unproduced": ["entry_kind:workflow", "step_kind:route"],
         "workflow_versions.entry_kind": ["entry_kind:workflow"],
@@ -376,30 +402,22 @@ class SchemaVocabularyIntegrationSpec extends Specification {
     @AutoCleanup
     Connection session
 
-    /** Walked once. It is a walk over every compiled class and several features ask for it. */
     @Shared
     List<Class<?>> javaEnums
 
-    /** Read once per type. Two features ask for the same labels and one asks inside a loop. */
     @Shared
     Map<String, List<String>> labels = [:]
 
     /**
-     * Demanded rather than defaulted. Unset, it would be interpolated as the literal location
-     * {@code filesystem:null}, and the failure would point at a directory that does not exist rather
-     * than at a property nobody set.
+     * Require the location before interpolation so an unset property cannot become a directory name.
      */
     static final String MIGRATIONS = Objects.requireNonNull(System.getProperty("baseline.location"),
             "baseline.location was not set; the build names it to test and to pitest")
 
     def setupSpec() {
         DataSource database = server.postgresDatabase
-        // A filesystem location, because the migrations are deliberately off this project's test
-        // classpath: on it, Spring Boot's Flyway auto-configuration would find them unasked.
-        //
-        // The two flags are the runner's own, from its application.yaml. Without them this path
-        // accepts what the deploy path refuses — a location holding nothing, or a file whose name
-        // Flyway will not parse — and the build goes green over an artefact that cannot start.
+        // Migrations stay off the test classpath to avoid unrequested Flyway auto-configuration.
+        // Missing locations and invalid migration names must fail as they do at deployment.
         Flyway.configure()
                 .dataSource(database)
                 .schemas("app")
@@ -440,9 +458,7 @@ class SchemaVocabularyIntegrationSpec extends Specification {
     }
 
     /**
-     * By name and not by labels. A type declared unowned has no agreed spelling yet, so the day one
-     * appears the thing that identifies it is what it is called — and a check on its labels would go
-     * quiet in the one case this exists for, where they were spelt or ordered wrongly.
+     * Unowned types have no agreed labels, so owner detection must use names even when labels disagree.
      */
     def "no Java type already exists for a vocabulary declared unowned"() {
         expect:
@@ -477,13 +493,13 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         !pinned.isEmpty()
     }
 
-    /** {@code estate_role} would be owned by {@code EstateRole}: the label rule read backwards. */
     private static String conventionalOwnerOf(String type) {
         type.split("_").collect { it.capitalize() }.join()
     }
 
     /** By the type's own kind rather than through pg_enum, where a type declared with no label yet has no row. */
     private Set<String> enumTypesInSchema() {
+        // DB-SPECIFIC: pg_type and ::regnamespace identify PostgreSQL's enum types in a schema.
         queryForRows("""
             select t.typname
               from pg_type t
@@ -491,8 +507,8 @@ class SchemaVocabularyIntegrationSpec extends Specification {
             """).collect { it[0] } as Set
     }
 
-    /** Ordered by enumsortorder, which is the order the type declares and not the order it was written. */
     private List<String> readLabelsOf(String type) {
+        // DB-SPECIFIC: pg_type, pg_enum, enumsortorder and ::regnamespace read PostgreSQL's enum declaration order.
         queryForRows("""
             select e.enumlabel
               from pg_type t
@@ -503,23 +519,14 @@ class SchemaVocabularyIntegrationSpec extends Specification {
     }
 
     /**
-     * Every check in the schema, every partial index predicate, and every column default and generated
-     * expression, the last two keyed by table and column, scanned for the cast PostgreSQL prints around an
-     * enum literal. Selecting candidates by "this constraint covers a column of an enum type" misses the
-     * ordinary shapes: a check over an array of the enum, whose column type is the array type, and a
-     * check casting a text column to the enum, whose covered column is the text one. The cast in the
-     * stored definition is what is actually being pinned, so that is what is read.
-     *
-     * <p>Each label is counted once however often one definition names it, so a definition naming a
-     * label twice is not a different pin from one naming it once.
-     *
-     * <p>The definitions come back from the server rather than from the file, so a rule written one
-     * way and stored another is read as stored. Doubled quotes inside a literal are consumed by the
-     * pattern rather than splitting it in two.
+     * Inspect stored casts, since column types cannot identify every enum pin.
+     * Read the server's definitions, since it may rewrite migration expressions.
      */
     private Map<String, List<String>> labelsPinnedInDefinitions() {
         def types = labels.keySet()
         def found = [:]
+        // DB-SPECIFIC: PostgreSQL's pg_* catalogs, ::regnamespace, pg_get_constraintdef() and pg_get_expr()
+        // return stored check, index predicate, default and generated expressions.
         queryForRows("""
             select coalesce(t.relname, d.typname) || '.' || con.conname, pg_get_constraintdef(con.oid)
               from pg_constraint con
@@ -555,10 +562,6 @@ class SchemaVocabularyIntegrationSpec extends Specification {
         found
     }
 
-    /**
-     * Keyed on what the compiler produced, the way the logging walk is, so it cannot drift out of
-     * step with the source it was meant to describe.
-     */
     private static List<Class<?>> walkForJavaEnums() {
         def classes = Path.of(GroupRole.protectionDomain.codeSource.location.toURI())
         Files.walk(classes.resolve("org/lilradish/lite")).withCloseable { paths ->

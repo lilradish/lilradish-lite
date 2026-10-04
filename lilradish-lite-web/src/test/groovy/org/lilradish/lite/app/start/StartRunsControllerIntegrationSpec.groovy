@@ -11,10 +11,15 @@ import jakarta.servlet.http.HttpServletRequest
 import javax.sql.DataSource
 import org.libprunus.spring.error.ApiErrorAutoConfiguration
 import org.lilradish.lite.app.estate.EstateRoleGrants
+import org.lilradish.lite.app.files.DatabaseFileContentStore
+import org.lilradish.lite.app.files.FileDeployment
+import org.lilradish.lite.app.files.RunFiles
 import org.lilradish.lite.app.group.GroupRoles
 import org.lilradish.lite.app.identification.UserIdentification
+import org.lilradish.lite.app.inference.ToolModelCalls
 import org.lilradish.lite.app.run.EngineCalls
 import org.lilradish.lite.app.run.EngineExecutor
+import org.lilradish.lite.app.run.EngineWiring
 import org.lilradish.lite.app.run.EngineWrites
 import org.lilradish.lite.app.run.RunEngine
 import org.lilradish.lite.app.run.RunSnapshots
@@ -26,8 +31,11 @@ import org.lilradish.lite.testutil.library.LibraryStore
 import org.lilradish.lite.testutil.library.TakingWorkflow
 import org.lilradish.lite.testutil.run.EngineModels
 import org.lilradish.lite.testutil.run.RecordedModelCalls
+import org.mockito.Mockito
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration
+import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Bean
@@ -35,6 +43,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.mock.web.MockHttpServletRequest
+import org.springframework.test.context.TestPropertySource
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.MvcResult
@@ -44,28 +53,26 @@ import spock.lang.Specification
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 
-/**
- * Starting a run over a real dispatcher and a real store: what a start is answered with, and every refusal met on
- * the way, each writing nothing. Only who is calling is replaced; every request says it came from this
- * application's own pages, which is the door's question and is asked of it elsewhere.
- */
+
 @WebMvcTest(StartRunsController)
 @ImportAutoConfiguration(ApiErrorAutoConfiguration)
-@Import([StartRuns, GroupRoles, RunTree, RunEngine, RunSnapshots, EngineWrites, EngineExecutor, EngineCalls,
+@TestPropertySource(properties = ["lilradish.files.maximum-size=100B", "lilradish.files.maximum-total-size=100B"])
+@Import([StartRuns, GroupRoles, RunTree, RunEngine, RunSnapshots, org.lilradish.lite.app.search.SearchWays, EngineWrites, EngineExecutor, EngineCalls,
         org.lilradish.lite.app.run.EngineCodes, org.lilradish.lite.app.run.CeilingReach,
-        org.lilradish.lite.app.run.OneProcess, org.lilradish.lite.testutil.run.EngineCodeSteps, EngineModels, Store])
+        org.lilradish.lite.app.run.OneProcess, org.lilradish.lite.app.run.RunConfiguration,
+        org.lilradish.lite.testutil.run.EngineCodeSteps, EngineModels, Store])
 class StartRunsControllerIntegrationSpec extends Specification {
 
     static final String GROUP = "00000003-0000-4000-8000-000000001701"
 
     static final String OTHER_GROUP = "00000003-0000-4000-8000-000000001702"
 
-    /** An operator here, and in no role in the other group. */
+
     static final String ANN = "00000002-0000-4000-8000-000000001701"
 
     static final UserId ANN_USER = new UserId("001701")
 
-    /** An overseer here, reading every run of the group rather than only those she started. */
+
     static final String BEA = "00000002-0000-4000-8000-000000001702"
 
     static final UserId BEA_USER = new UserId("001702")
@@ -74,8 +81,12 @@ class StartRunsControllerIntegrationSpec extends Specification {
 
     static final String CLAIM_VERSION = "00000007-0000-4000-8000-000000001701"
 
-    /** Takes one letter of up to two million characters. */
+
     static final String LETTER_VERSION = "00000007-0000-4000-8000-000000001703"
+
+    static final String FILE_VERSION = "00000007-0000-4000-8000-000000001711"
+
+    static final String FILE_PAIR_VERSION = "00000007-0000-4000-8000-000000001712"
 
     static final String RETIRED_VERSION = "00000007-0000-4000-8000-000000001704"
 
@@ -130,7 +141,7 @@ class StartRunsControllerIntegrationSpec extends Specification {
                 .content(body)).andReturn()
     }
 
-    /** A start whose declared length is {@code length}, whatever its content holds. */
+
     private static MockHttpServletRequest declaring(ServletContext servletContext, long length) {
         new MockHttpServletRequest(servletContext, "POST", RUNS) {
             @Override
@@ -163,6 +174,34 @@ class StartRunsControllerIntegrationSpec extends Specification {
         store.count("select count(*) from runs")
     }
 
+    def "a line break for a one-line input is refused on arrival at its field without starting a run"() {
+        given:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.session.sql("update declaration_fields set text_lines = 'one' where entry_version_id = ?::uuid and name = 'complaint'")
+                .params(CLAIM_VERSION).update()
+        def before = runsWritten()
+        def values = JSON.readTree(FILLED)
+        values.put("complaint", Character.toString(codePoint))
+
+        when:
+        def answered = starting("Demo Sample", CLAIM_VERSION, JSON.writeValueAsString(values))
+
+        then:
+        answered.response.status == 400
+        documentOf(answered).get("code").asString() == "VALUE_DOES_NOT_FIT"
+        documentOf(answered).get("problems") == JSON.readTree('[{"path":["complaint"],"reason":"line_break"}]')
+        documentOf(answered).get("problemsFound").asInt() == 1
+        runsWritten() == before
+
+        cleanup:
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.session.sql("update declaration_fields set text_lines = null where entry_version_id = ?::uuid and name = 'complaint'")
+                .params(CLAIM_VERSION).update()
+
+        where:
+        codePoint << [0x0D, 0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029]
+    }
+
     def "a run started is answered as created, with its address, its number and that its starter may read it: #role"() {
         given:
         given(identification.identify(any(HttpServletRequest))).willReturn(Optional.of(caller))
@@ -180,6 +219,7 @@ class StartRunsControllerIntegrationSpec extends Specification {
         documentOf(answered).get("number").asInt() == before + 1
         documentOf(answered).get("readable").isBoolean()
         documentOf(answered).get("readable").asBoolean()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select name from runs where run_id = ?::uuid", run) == ["Kettle arrived broken"]
         runsWritten() == before + 1
 
@@ -187,6 +227,72 @@ class StartRunsControllerIntegrationSpec extends Specification {
         caller   | role
         ANN_USER | "an operator, reading the runs they started"
         BEA_USER | "an overseer, reading every run"
+    }
+
+    def "a multipart start keeps the uploaded file inside its new run"() {
+        given:
+        String json = JSON.writeValueAsString([name: 'Picture', versionId: FILE_VERSION,
+                                               values: [photo: [upload: 0, name: 'actual.png']]])
+        String wire = '--Aa\r\nContent-Disposition: form-data; name="document"\r\n\r\n' + json +
+                '\r\n--Aa\r\nContent-Disposition: form-data; name="upload0"; filename="ignored.txt"\r\n' +
+                'Content-Type: image/png\r\n\r\nabc\r\n--Aa--\r\n'
+        def before = runsWritten()
+
+        when:
+        def answered = mockMvc.perform(post(RUNS)
+                .header('Sec-Fetch-Site', 'same-origin')
+                .contentType('multipart/form-data; boundary=Aa')
+                .content(wire.getBytes(UTF_8))).andReturn()
+
+        then:
+        answered.response.status == 201
+        runsWritten() == before + 1
+        def run = documentOf(answered).get('runId').asString()
+        store.texts('select original_name from stored_files') == ['actual.png']
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
+        store.texts('select file_id::text from run_file_holders where run_id = ?::uuid', run).size() == 1
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid.
+        store.texts('select started_with::text from runs where run_id = ?::uuid', run).first().contains('actual.png')
+    }
+
+    def "an HTTP multipart start accepts exactly the total and rolls back every row one byte over"() {
+        given:
+        def beforeRuns = runsWritten()
+        def beforeStored = store.count('select count(*) from stored_files')
+        def beforeContents = store.count('select count(*) from file_contents')
+        def beforeHolders = store.count('select count(*) from run_file_holders')
+        String json = JSON.writeValueAsString([name: 'Two pictures', versionId: FILE_PAIR_VERSION,
+                                               values: [photo: [upload: 0, name: 'one.png'],
+                                                        copy : [upload: 1, name: 'two.png']]])
+        Closure<MvcResult> start = { String second ->
+            String wire = '--Aa\r\nContent-Disposition: form-data; name="document"\r\n\r\n' + json +
+                    '\r\n--Aa\r\nContent-Disposition: form-data; name="upload0"; filename="one.png"\r\n' +
+                    'Content-Type: image/png\r\n\r\n' + ('a' * 50) + '\r\n' +
+                    '--Aa\r\nContent-Disposition: form-data; name="upload1"; filename="two.png"\r\n' +
+                    'Content-Type: image/png\r\n\r\n' + second + '\r\n--Aa--\r\n'
+            mockMvc.perform(post(RUNS)
+                    .header('Sec-Fetch-Site', 'same-origin')
+                    .contentType('multipart/form-data; boundary=Aa')
+                    .content(wire.getBytes(UTF_8))).andReturn()
+        }
+
+        when:
+        def exact = start('b' * 50)
+        def over = start('b' * 51)
+
+        then:
+        exact.response.status == 201
+        over.response.status == 400
+        documentOf(over).get('code').asString() == 'BODY_UNUSABLE'
+        runsWritten() == beforeRuns + 1
+        store.count('select count(*) from stored_files') == beforeStored + 2
+        store.count('select count(*) from file_contents') == beforeContents + 2
+        store.count('select count(*) from run_file_holders') == beforeHolders + 2
+        def run = documentOf(exact).get('runId').asString()
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+        store.texts('select original_name from stored_files where file_id in ' +
+                '(select file_id from run_file_holders where run_id = ?::uuid) order by original_name', run) ==
+                ['one.png', 'two.png']
     }
 
     def "a name of 128 characters is taken whole"() {
@@ -199,12 +305,13 @@ class StartRunsControllerIntegrationSpec extends Specification {
 
         then:
         answered.response.status == 201
+        // DB-SPECIFIC: PostgreSQL :: casts to uuid.
         store.texts("select name from runs where run_id = ?::uuid", documentOf(answered).get("runId").asString()) ==
                 [name]
         runsWritten() == before + 1
     }
 
-    /** A group the caller holds nothing in, one nobody holds, and an address that is no identifier. */
+
     def "every way of naming no group in view is answered alike, writing nothing"() {
         given:
         def before = runsWritten()
@@ -295,7 +402,7 @@ class StartRunsControllerIntegrationSpec extends Specification {
         "129 characters"     | "k" * 129
     }
 
-    /** No answer tells a version another group holds from one nobody holds, or from one the group has stopped. */
+
     def "a version the group does not offer is refused alike however it fails, writing nothing"() {
         given:
         def before = runsWritten()
@@ -345,6 +452,7 @@ class StartRunsControllerIntegrationSpec extends Specification {
 
         then:
         answered.response.status == 201
+        // DB-SPECIFIC: PostgreSQL :: casts to text, uuid; JSON ->> operator.
         store.texts("select (started_with ->> 'letter' = ?)::text from runs where run_id = ?::uuid",
                 letter, documentOf(answered).get("runId").asString()) == ["true"]
         runsWritten() == before + 1
@@ -365,6 +473,7 @@ class StartRunsControllerIntegrationSpec extends Specification {
     }
 
     @TestConfiguration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(FileDeployment)
     static class Store {
 
         @Bean(destroyMethod = "close")
@@ -388,6 +497,21 @@ class StartRunsControllerIntegrationSpec extends Specification {
             TakingWorkflow.workflow(store, "00000006-0000-4000-8000-000000001703", LETTER_VERSION, GROUP,
                     "Read a letter")
             TakingWorkflow.field(store, LETTER_VERSION, 1, "letter", "text", [textLimit: 2_000_000])
+            TakingWorkflow.workflow(store, "00000006-0000-4000-8000-000000001711", FILE_VERSION, GROUP,
+                    "Take a picture")
+            def photo = TakingWorkflow.field(store, FILE_VERSION, 1, "photo", "file", [mustBeGiven: true])
+            // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+            store.session.sql("update declaration_fields set file_types = array['image/png'], file_maximum_bytes = 100 " +
+                    "where declaration_field_id = ?::uuid").params(photo).update()
+            TakingWorkflow.workflow(store, "00000006-0000-4000-8000-000000001712", FILE_PAIR_VERSION, GROUP,
+                    "Take two pictures")
+            ['photo', 'copy'].eachWithIndex { name, index ->
+                def pairField = TakingWorkflow.field(store, FILE_PAIR_VERSION, index + 1, name, "file",
+                        [mustBeGiven: true])
+                // DB-SPECIFIC: PostgreSQL :: casts to uuid.
+                store.session.sql("update declaration_fields set file_types = array['image/png'], file_maximum_bytes = 100 " +
+                        "where declaration_field_id = ?::uuid").params(pairField).update()
+            }
             store.entry("00000006-0000-4000-8000-000000001704", GROUP, "workflow", "Retired")
             store.seeded(RETIRED_VERSION, "00000006-0000-4000-8000-000000001704", 1, true)
             store.content(RETIRED_VERSION, "workflow")
@@ -407,8 +531,19 @@ class StartRunsControllerIntegrationSpec extends Specification {
         }
 
         @Bean
+        RunFiles runFiles(LibraryStore store, FileDeployment deployment) {
+            new RunFiles(store.session, new DatabaseFileContentStore(store.database), deployment,
+                    Mockito.mock(ObjectProvider))
+        }
+
+        @Bean
         TransactionOperations transactions(LibraryStore store) {
             store.transactions()
+        }
+
+        @Bean
+        ToolModelCalls toolModelCalls() {
+            EngineWiring.withoutTools()
         }
     }
 }
