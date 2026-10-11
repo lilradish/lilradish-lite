@@ -46,7 +46,7 @@ export type Drawing =
       readonly leftOut: number;
     };
 
-/** The `texts` of one value, every one as often as it stands in it, drawn as one. */
+/** Each occurrence of a value's texts counts toward their shared marker budget. */
 export function drawingOf(texts: readonly string[]): Drawing {
   const pieces = new Map<string, readonly Piece[]>();
   let markersLeft = MOST_MARKERS;
@@ -75,7 +75,7 @@ export function withoutMarkedIn(text: string): {
 } {
   const kept: string[] = [];
   let leftOut = 0;
-  walk(
+  walkText(
     text,
     (from, to) => kept.push(text.slice(from, to)),
     (_codePoint, count) => {
@@ -87,14 +87,14 @@ export function withoutMarkedIn(text: string): {
 }
 
 /**
- * The text cut where each character that would go unseen stands, in order, a run of one such character a piece of
- * its own, or null where that needs more than `most` markers: the cut stops one past them. Read by code point: half
- * a pair standing alone is drawn as it is.
+ * Cuts unseen characters in order, each run of the same character a separate piece.
+ * Returns null if more than `most` markers are needed, stopping one past them.
+ * Reads code points; a lone half of a pair is drawn as it is.
  */
 function piecesWithin(text: string, most: number): Piece[] | null {
   const pieces: Piece[] = [];
   let markers = 0;
-  walk(
+  walkText(
     text,
     (from, to) => pieces.push({ text: text.slice(from, to) }),
     (codePoint, count) => {
@@ -128,10 +128,10 @@ function withoutMarkedAcross(texts: readonly string[]): Drawing {
  * Walks the text as `piecesWithin` cuts it, handing `plain` where each stretch drawn as it is starts and ends and
  * `marked` each run of one character to mark, in order; it stops where `marked` returns false.
  */
-function walk(
+export function walkText(
   text: string,
   plain: (from: number, to: number) => void,
-  marked: (codePoint: number, count: number) => boolean,
+  marked: (codePoint: number, count: number, unseen: Unseen) => boolean,
 ): void {
   let plainFrom = 0;
   let at = 0;
@@ -152,7 +152,9 @@ function walk(
         }
         for (let joining = at; joining < end;) {
           const same = sameRunEnd(text, joining, 1, end);
-          if (!marked(text.charCodeAt(joining), same - joining)) {
+          if (
+            !marked(text.charCodeAt(joining), same - joining, "shows_nothing")
+          ) {
             return;
           }
           joining = same;
@@ -176,7 +178,13 @@ function walk(
     if (codePoint === CARRIAGE_RETURN && text.charCodeAt(end) === LINE_FEED) {
       end -= 1;
     }
-    if (!marked(codePoint, (end - at) / width)) {
+    if (
+      !marked(
+        codePoint,
+        (end - at) / width,
+        turnsOrder(codePoint) ? "turns_order" : "shows_nothing",
+      )
+    ) {
       return;
     }
     plainFrom = end;
@@ -208,8 +216,7 @@ function sameRunEnd(
 }
 
 /**
- * Whether the character at `at`, no joiner, is drawn as its code point: what Unicode lets show nothing, a line or a
- * paragraph separator, and every control but a tab, a line feed, and a carriage return ending a line with one.
+ * The character at `at` must not be a joiner.
  */
 function shownAsCode(text: string, at: number, codePoint: number): boolean {
   if (codePoint === TAB || codePoint === LINE_FEED) {

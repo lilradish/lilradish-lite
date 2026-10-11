@@ -19,8 +19,8 @@ import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
 import { SPACED_ABOVE_SX } from "../../../lib/layout/parts";
-import { useAction } from "../../../lib/request/useAction";
 import { STEP_ACT_RULES } from "../actRules";
+import { stepOffers, useStepActValidity, useStepAction } from "./stepActs";
 import { useRunReadAccess } from "../RunReadAccess";
 import { actedFirstSaid, movedOnNotice, staleFor } from "./movedOn";
 
@@ -46,17 +46,29 @@ export function AskAgainButton({
   readonly onShown: (answer: StepAnswer) => void;
 }) {
   const noticeId = useId();
-  const reloadStanding = useStandingRead().reload;
+  const standingRead = useStandingRead();
+  const reloadStanding = standingRead.reload;
+  const standing = standingRead.value;
   const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const [sentFor, setSentFor] = useState<number | null>(null);
   const [readAgainAt, setReadAgainAt] = useState<number | null>(null);
   const [firstSaid, setFirstSaid] = useState<string | null>(null);
   const next = step.next;
+  const validity = useStepActValidity(
+    step,
+    "ask_again",
+    standing,
+    groupId,
+    runId,
+  );
+  const requestVersion = useRef<number | null>(null);
   const stale = staleFor(step, sentFor, readAgainAt);
 
-  const rereading = useAction<StepAnswer>(
+  const rereading = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = noticeId;
       setReadAgainAt(answer.step.next?.number ?? null);
       setFirstSaid(actedFirstSaid(answer, sentFor));
@@ -67,12 +79,15 @@ export function AskAgainButton({
     },
   );
 
-  const asking = useAction<StepAnswer>(
+  const asking = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = landsOn;
       onShown(answer);
     },
     (problem) => {
+      if (!validity.still(requestVersion.current)) return;
       if (movesTheReader(problem)) {
         reloadStanding();
       }
@@ -116,13 +131,15 @@ export function AskAgainButton({
 
   return (
     <>
-      {!step.acts.includes("ask_again") || next === undefined ? null : (
+      {!stepOffers(step, "ask_again", standing, groupId) ||
+      next === undefined ? null : (
         <Box sx={SPACED_ABOVE_SX}>
           <ActButton
-            variant="contained"
+            tier="secondary"
             action={asking}
             waiting={rereading.running || held}
             act={(signal) => {
+              requestVersion.current = validity.begin();
               setSentFor(next.number);
               setFirstSaid(null);
               return askAgain(groupId, runId, step.stepId, next.number, signal);
@@ -133,7 +150,7 @@ export function AskAgainButton({
           {/* Said once beside both: Answer it here says it wherever it is drawn. */}
           {!next.beyond ||
           step.tries === undefined ||
-          step.acts.includes("answer") ? null : (
+          stepOffers(step, "answer", standing, groupId) ? null : (
             <Typography variant="body2">
               {say("step.nextBeyond", {
                 number: next.number,

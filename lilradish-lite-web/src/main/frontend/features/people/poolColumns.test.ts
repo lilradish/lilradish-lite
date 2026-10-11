@@ -56,12 +56,12 @@ describe("poolColumns", () => {
       "000140",
       "Glinn Havven",
       `${setApart("Steward")}, ${setApart("Watcher")}`,
-      2,
+      "2",
     ]);
   });
 
   it("shows nothing where no name or no role is held, and a count of none", () => {
-    expect(cellsOf(NAMELESS)).toEqual(["000130", "", "", 0]);
+    expect(cellsOf(NAMELESS)).toEqual(["000130", "", "", "0"]);
   });
 
   /** Spelt by whoever published it, so it is set apart like any word that arrived. */

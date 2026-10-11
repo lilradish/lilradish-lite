@@ -2,11 +2,10 @@
 create type run_ceiling_change_outcome as enum ('approved', 'refused', 'withdrawn_by_requester', 'superseded_by_change');
 create type run_step_kind as enum ('question', 'workflow', 'code_step', 'route', 'search');
 create type run_step_hold_reason as enum ('entry_stopped', 'too_long', 'turned_away', 'code_step_not_held', 'search_way_not_held');
-create type run_step_failure_reason as enum ('uncuttable_length', 'unclaimed_value', 'model_not_deployed', 'too_deep', 'tool_not_offered', 'source_no_longer_matches', 'source_list_not_here');
+create type run_step_failure_reason as enum ('uncuttable_length', 'unclaimed_value', 'model_not_deployed', 'too_deep', 'tool_not_offered', 'source_no_longer_matches', 'source_list_not_here', 'search_question_no_longer_matches');
 create type model_call_purpose as enum ('produce', 'review', 'help');
 create type review_unbuilt_reason as enum ('list_not_here', 'takes_no_longer_declared', 'no_longer_declared', 'holds_a_file');
 
--- ---------------------------------------------------------------- runs
 
 -- DB-SPECIFIC: ::, jsonb, jsonb_typeof(), length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz,
 -- now() and uuid use PostgreSQL's syntax and semantics.
@@ -141,7 +140,6 @@ create table run_steps (
     created_at        timestamptz   not null default now(),
     created_by        uuid          not null,
     created_by_kind   subject_kind  not null default 'system',
-
     constraint run_steps_pk primary key (run_step_id),
     constraint run_steps_run_fk foreign key (run_id, entry_version_id) references runs (run_id, entry_version_id),
     constraint run_steps_workflow_step_fk foreign key (workflow_step_id, entry_version_id)
@@ -152,7 +150,6 @@ create table run_steps (
         references workflow_steps (workflow_step_id, pinned_version_id, pinned_kind),
     -- For the reason workflow_steps_pinned_together gives: it keeps run_steps_pinned_fk awake.
     constraint run_steps_pinned_together check ((pinned_version_id is null) = (pinned_kind is null)),
-    constraint run_steps_pinned_exactly_for_entry check ((step_kind = 'entry') = (pinned_version_id is not null)),
     constraint run_steps_producer_fk foreign key (workflow_step_id, producer, reviewed_by_model, tries)
         references workflow_steps (workflow_step_id, producer, reviewed_by_model, tries),
     -- For the same reason, this and run_steps_producer_together keep run_steps_producer_fk awake.
@@ -168,7 +165,9 @@ create table run_steps (
     constraint run_steps_pinned_unique unique (run_step_id, pinned_version_id),
     constraint run_steps_author_system_fk foreign key (created_by, created_by_kind)
         references subjects (subject_id, kind),
-    constraint run_steps_author_is_system check (created_by_kind = 'system')
+    constraint run_steps_author_is_system check (created_by_kind = 'system'),
+    constraint run_steps_pinned_exactly_for_entry_or_search
+        check ((step_kind in ('entry', 'search')) = (pinned_version_id is not null))
 );
 
 alter table runs add constraint runs_parent_step_fk
@@ -182,7 +181,6 @@ alter table runs add constraint runs_parent_route_case_fk
 alter table runs add constraint runs_parent_pinned_version_fk
     foreign key (parent_run_step_id, parent_pinned_version_id) references run_steps (run_step_id, pinned_version_id);
 
--- ---------------------------------------------------------------- stops and ceilings
 
 -- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table run_stops (
@@ -292,9 +290,9 @@ create table run_ceiling_changes (
 create unique index run_ceiling_changes_one_awaiting
     on run_ceiling_changes (run_id) where awaits_approval and outcome is null;
 
--- ---------------------------------------------------------------- what happens to a step
 
 -- DB-SPECIFIC: generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: ::, num_nonnulls(), generated always and uuid use PostgreSQL's syntax and semantics.
 create table run_step_holds (
     run_step_hold_id         uuid                 not null default uuidv7(),
     run_step_id              uuid                 not null,
@@ -320,7 +318,12 @@ create table run_step_holds (
     released_by              uuid,
     -- Unchecked while released_by is null, for the reason pool_members gives.
     released_by_kind         subject_kind         not null default 'system',
-
+    root_run_id              uuid,
+    source_run_id            uuid,
+    source_run_step_id       uuid,
+    source_workflow_step_id  uuid,
+    source_run_step_kind     run_step_kind        generated always as
+        (case when source_run_step_id is not null then 'code_step'::run_step_kind end) stored,
     constraint run_step_holds_pk primary key (run_step_hold_id),
     constraint run_step_holds_step_fk foreign key (run_id, run_step_id, run_step_kind, calls_a_model)
         references run_steps (run_id, run_step_id, kind, calls_a_model),
@@ -328,8 +331,6 @@ create table run_step_holds (
         check (reason not in ('too_long', 'turned_away') or calls_a_model),
     constraint run_step_holds_attempt_exactly_for_too_long_or_turned_away
         check ((reason in ('too_long', 'turned_away')) = (run_step_send_attempt_id is not null)),
-    constraint run_step_holds_code_step_not_held_only_for_code_step
-        check (reason <> 'code_step_not_held' or run_step_kind = 'code_step'),
     constraint run_step_holds_search_way_not_held_only_for_search
         check (reason <> 'search_way_not_held' or run_step_kind = 'search'),
     constraint run_step_holds_attempt_is_produce check (attempt_purpose = 'produce'),
@@ -342,8 +343,31 @@ create table run_step_holds (
     constraint run_step_holds_released_together check ((released_at is null) = (released_by is null)),
     constraint run_step_holds_released_after_created check (released_at is null or released_at >= created_at),
     -- A foreign key target, at the cost subjects_kind_unique gives.
-    constraint run_step_holds_run_reason_unique unique (run_step_hold_id, run_id, reason)
+    constraint run_step_holds_run_reason_unique unique (run_step_hold_id, run_id, reason),
+    constraint run_step_holds_source_together check
+        (num_nonnulls(root_run_id, source_run_id, source_run_step_id, source_workflow_step_id) in (0, 4)),
+    constraint run_step_holds_source_only_for_code_step_not_held check
+        (source_run_step_id is null or (reason = 'code_step_not_held' and calls_a_model)),
+    constraint run_step_holds_root_fk foreign key (root_run_id, run_id)
+        references runs (root_run_id, run_id),
+    constraint run_step_holds_source_root_fk foreign key (root_run_id, source_run_id)
+        references runs (root_run_id, run_id),
+    constraint run_step_holds_source_step_fk foreign key
+        (source_run_id, source_run_step_id, source_run_step_kind, source_workflow_step_id)
+        references run_steps (run_id, run_step_id, kind, workflow_step_id),
+    constraint run_step_holds_code_step_not_held_for_current_or_source_code check
+        (reason <> 'code_step_not_held' or run_step_kind = 'code_step' or source_run_step_id is not null)
 );
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index run_step_holds_by_source_run
+    on run_step_holds (source_run_id) where source_run_id is not null;
+
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index run_step_holds_by_root
+    on run_step_holds (root_run_id) where root_run_id is not null;
+
 
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index run_step_holds_one_unreleased on run_step_holds (run_step_id) where released_at is null;
@@ -386,8 +410,6 @@ create table run_step_send_attempts (
     -- Why what a review would send could not be built; none where it was built.
     unbuilt_reason           review_unbuilt_reason,
     payload                  text,
-    -- What a search was asked, as payload holds it; a repeat holds none, as it holds no payload.
-    search_question          text,
     -- The attempt holding the payload this one would send again.
     repeats_attempt_id       uuid,
     -- Only a row holding its payload is reached by a repeat, so a repeat names that row and never another repeat.
@@ -402,7 +424,6 @@ create table run_step_send_attempts (
     created_at               timestamptz        not null default now(),
     created_by               uuid               not null,
     created_by_kind          subject_kind       not null default 'person',
-
     constraint run_step_send_attempts_pk primary key (run_step_send_attempt_id),
     constraint run_step_send_attempts_step_fk foreign key (run_id, run_step_id, run_step_kind, workflow_step_id)
         references run_steps (run_id, run_step_id, kind, workflow_step_id),
@@ -424,10 +445,6 @@ create table run_step_send_attempts (
     -- JSON text: C0 stands raw only as whitespace between tokens, while DEL and C1 may stand raw in a string.
     constraint run_step_send_attempts_payload_is_json check (payload is json),
     constraint run_step_send_attempts_payload_bounded check (length(payload) <= 8388608),
-    constraint run_step_send_attempts_search_question_exactly_for_search
-        check ((search_question is not null) = (run_step_kind = 'search' and purpose = 'produce' and payload is not null)),
-    constraint run_step_send_attempts_search_question_not_empty check (length(search_question) > 0),
-    constraint run_step_send_attempts_search_question_bounded check (length(search_question) <= 8388608),
     constraint run_step_send_attempts_repeats_fk
         foreign key (repeats_attempt_id, payload_scope_id, purpose, repeated_holds_payload)
         references run_step_send_attempts (run_step_send_attempt_id, payload_scope_id, purpose, holds_payload),
@@ -451,7 +468,6 @@ create table run_step_send_attempts (
         unique (run_step_send_attempt_id, payload_scope_id, purpose, holds_payload)
 );
 
--- At most one unbuilt review is held per try.
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create unique index run_step_send_attempts_one_too_long_review
     on run_step_send_attempts (reviewed_production_id) where too_long;
@@ -472,11 +488,13 @@ create index run_step_send_attempts_by_produced_production
 create index run_step_send_attempts_by_reviewed_production
     on run_step_send_attempts (reviewed_production_id) where reviewed_production_id is not null;
 
--- A failure has ended exactly when an attempt answers it, and only an attempt on its try, for its purpose, can; one
--- on no try never ends.
+-- A sending failure ends when an attempt on its try, for its purpose, answers it.
+-- A search_question_no_longer_matches failure ends when a person sets resolved_at and resolved_by.
 -- DB-SPECIFIC: length(), text, ~, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now(),
 -- uuid and uuidv7() use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: ::, length(), num_nonnulls(), text, ~, generated always and uuid use PostgreSQL's syntax and semantics.
 create table run_step_failures (
+    -- DB-SPECIFIC: PostgreSQL native subject_kind enum values supply this table's author and resolver defaults.
     run_step_failure_id    uuid                    not null default uuidv7(),
     run_step_id            uuid                    not null,
     run_id                 uuid                    not null,
@@ -503,7 +521,16 @@ create table run_step_failures (
     created_at             timestamptz             not null default now(),
     created_by             uuid                    not null,
     created_by_kind        subject_kind            not null default 'system',
-
+    root_run_id              uuid,
+    source_run_id            uuid,
+    source_run_step_id       uuid,
+    source_workflow_step_id  uuid,
+    source_field             text,
+    source_run_step_kind     run_step_kind         generated always as (
+        case when source_run_step_id is not null then 'code_step'::run_step_kind end) stored,
+    resolved_at              timestamptz,
+    resolved_by              uuid,
+    resolved_by_kind         subject_kind          not null default 'person',
     constraint run_step_failures_pk primary key (run_step_failure_id),
     constraint run_step_failures_step_fk foreign key (run_id, run_step_id, run_step_kind, calls_a_model)
         references run_steps (run_id, run_step_id, kind, calls_a_model),
@@ -519,12 +546,6 @@ create table run_step_failures (
     constraint run_step_failures_detail_for_length_or_undeployed
         check (reason not in ('uncuttable_length', 'model_not_deployed') or detail is not null),
     constraint run_step_failures_no_detail_for_too_deep check (reason <> 'too_deep' or detail is null),
-    constraint run_step_failures_sending_failure_only_for_calls_a_model
-        check (reason not in ('uncuttable_length', 'model_not_deployed', 'tool_not_offered') or calls_a_model),
-    -- Try sending sends the try the step was on, so a failure it answers has one; one on no try has none to send.
-    constraint run_step_failures_production_exactly_for_a_sending_failure
-        check ((reason in ('uncuttable_length', 'model_not_deployed', 'tool_not_offered'))
-            = (production_id is not null)),
     constraint run_step_failures_purpose_together check ((production_id is null) = (purpose is null)),
     constraint run_step_failures_purpose_is_produce_or_review check (purpose in ('produce', 'review')),
     -- A review too long to send waits on a person instead, and never fails its step.
@@ -541,8 +562,52 @@ create table run_step_failures (
         length(detail) > 0 and detail !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'),
     constraint run_step_failures_detail_bounded check (length(detail) <= 2048),
     -- A foreign key target, at the cost subjects_kind_unique gives.
-    constraint run_step_failures_production_purpose_unique unique (run_step_failure_id, production_id, purpose)
+    constraint run_step_failures_production_purpose_unique unique (run_step_failure_id, production_id, purpose),
+    constraint run_step_failures_source_together check (
+        num_nonnulls(root_run_id, source_run_id, source_run_step_id, source_workflow_step_id, source_field) in (0, 5)),
+    constraint run_step_failures_source_exactly_for_a_source_failure check (
+        (reason in ('source_no_longer_matches', 'source_list_not_here')) = (source_run_step_id is not null)),
+    constraint run_step_failures_source_only_for_produce check (
+        reason not in ('source_no_longer_matches', 'source_list_not_here') or coalesce(purpose = 'produce', false)),
+    constraint run_step_failures_source_field_shape check (
+        source_field ~ '^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})*$'),
+    constraint run_step_failures_source_field_bounded check (length(source_field) <= 1023),
+    constraint run_step_failures_root_fk foreign key (root_run_id, run_id)
+        references runs (root_run_id, run_id),
+    constraint run_step_failures_source_root_fk foreign key (root_run_id, source_run_id)
+        references runs (root_run_id, run_id),
+    constraint run_step_failures_source_step_fk foreign key (
+        source_run_id, source_run_step_id, source_run_step_kind, source_workflow_step_id)
+        references run_steps (run_id, run_step_id, kind, workflow_step_id),
+    constraint run_step_failures_sending_failure_only_for_calls_a_model check (
+        reason not in ('uncuttable_length', 'model_not_deployed', 'tool_not_offered', 'source_no_longer_matches', 'source_list_not_here')
+        or calls_a_model),
+    constraint run_step_failures_production_exactly_for_a_sending_failure check (
+        (reason in ('uncuttable_length', 'model_not_deployed', 'tool_not_offered', 'source_no_longer_matches', 'source_list_not_here'))
+        = (production_id is not null)),
+    constraint run_step_failures_search_question_only_for_search
+        check (reason::text <> 'search_question_no_longer_matches'
+            or (run_step_kind = 'search' and production_id is null and purpose is null and detail is not null)),
+    constraint run_step_failures_resolved_together
+        check ((resolved_at is null) = (resolved_by is null)),
+    constraint run_step_failures_resolved_only_for_search_question
+        check (resolved_at is null or reason::text = 'search_question_no_longer_matches'),
+    constraint run_step_failures_resolved_not_before_failure
+        check (resolved_at >= created_at),
+    constraint run_step_failures_resolver_is_person check (resolved_by_kind = 'person'),
+    constraint run_step_failures_resolver_person_fk foreign key (resolved_by, resolved_by_kind)
+        references subjects (subject_id, kind)
 );
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index run_step_failures_by_source_run
+    on run_step_failures (source_run_id) where source_run_id is not null;
+
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index run_step_failures_by_root
+    on run_step_failures (root_run_id) where root_run_id is not null;
+
 
 create index run_step_failures_by_run on run_step_failures (run_id, created_at);
 

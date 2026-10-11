@@ -2,14 +2,14 @@
 create type step_kind as enum ('entry', 'code_step', 'route', 'search');
 create type step_producer as enum ('model', 'person', 'code');
 create type declaration_side as enum ('takes', 'gives');
-create type field_kind as enum ('text', 'number', 'date', 'moment', 'yes_no', 'term', 'fields');
+create type field_kind as enum ('text', 'number', 'date', 'moment', 'yes_no', 'term', 'fields', 'file');
 create type field_standing as enum ('always', 'never', 'above_confidence');
 
--- ---------------------------------------------------------------- steps
 
 -- Null is what nobody has chosen yet, which a draft may hold; each rule here refuses only a combination
 -- no step could ever be finished from.
 -- DB-SPECIFIC: deferrable, text, ~, generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: text, length(), !~ and Unicode escapes in regular expressions use PostgreSQL's syntax and semantics.
 create table workflow_steps (
     workflow_step_id    uuid          not null default uuidv7(),
     entry_version_id    uuid          not null,
@@ -40,7 +40,7 @@ create table workflow_steps (
     updated_by          uuid,
     -- Unchecked while updated_by is null, for the reason pool_members gives.
     updated_by_kind     subject_kind  not null default 'person',
-
+    label               text,
     constraint workflow_steps_pk primary key (workflow_step_id),
     constraint workflow_steps_version_fk foreign key (entry_version_id)
         references workflow_versions (entry_version_id),
@@ -62,8 +62,6 @@ create table workflow_steps (
     constraint workflow_steps_pinned_together check ((pinned_version_id is null) = (pinned_kind is null)),
     constraint workflow_steps_pinned_is_question_or_workflow
         check (pinned_kind is null or pinned_kind in ('question', 'workflow')),
-    constraint workflow_steps_pinned_only_for_entry
-        check (pinned_version_id is null or coalesce(kind = 'entry', false)),
     constraint workflow_steps_not_own_version
         check (pinned_version_id is null or pinned_version_id <> entry_version_id),
     constraint workflow_steps_code_step_only_for_code_step
@@ -103,69 +101,19 @@ create table workflow_steps (
         references subjects (subject_id, kind),
     constraint workflow_steps_editor_is_person check (updated_by_kind = 'person'),
     constraint workflow_steps_updated_together check ((updated_at is null) = (updated_by is null)),
-    constraint workflow_steps_updated_after_created check (updated_at is null or updated_at >= created_at)
+    constraint workflow_steps_updated_after_created check (updated_at is null or updated_at >= created_at),
+    constraint workflow_steps_label_visible check (
+        label is null or (length(label) > 0 and label !~ '[\u0000-\u001f\u007f-\u009f]')),
+    constraint workflow_steps_label_bounded check (length(label) <= 128),
+    constraint workflow_steps_pinned_only_for_entry_or_search
+        check (pinned_version_id is null or coalesce(kind in ('entry', 'search'), false)),
+    constraint workflow_steps_search_pins_question
+        check (kind <> 'search' or pinned_kind is null or pinned_kind = 'question')
 );
 
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index workflow_steps_by_pinned_version
     on workflow_steps (pinned_version_id) where pinned_version_id is not null;
-
--- DB-SPECIFIC: deferrable, length(), text, !~, ~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
-create table search_question_parts (
-    search_question_part_id uuid         not null default uuidv7(),
-    entry_version_id       uuid         not null,
-    workflow_step_id       uuid         not null,
-    step_kind              step_kind    not null default 'search',
-    position               integer      not null,
-    literal_text           text,
-    source_step_id         uuid,
-    source_path            text,
-    created_at             timestamptz  not null default now(),
-    created_by             uuid         not null,
-    updated_at             timestamptz,
-    updated_by             uuid,
-    updated_by_kind        subject_kind not null default 'person',
-
-    constraint search_question_parts_pk primary key (search_question_part_id),
-    constraint search_question_parts_step_fk foreign key (workflow_step_id, entry_version_id)
-        references workflow_steps (workflow_step_id, entry_version_id),
-    constraint search_question_parts_search_fk foreign key (workflow_step_id, step_kind)
-        references workflow_steps (workflow_step_id, kind),
-    constraint search_question_parts_step_kind_is_search check (step_kind = 'search'),
-    -- A foreign key target, at the cost subjects_kind_unique gives.
-    constraint search_question_parts_step_unique unique (search_question_part_id, workflow_step_id),
-    constraint search_question_parts_position_unique unique (workflow_step_id, position)
-        deferrable initially deferred,
-    constraint search_question_parts_position_not_negative check (position >= 0),
-    constraint search_question_parts_position_bounded check (position < 256),
-    -- Written text, or a path into this workflow's input or into a step.
-    constraint search_question_parts_exactly_one_source check (
-        (literal_text is null) = (source_path is not null) and (literal_text is null or source_step_id is null)),
-    -- Prose, for the reason reference_list_versions_note_visible gives.
-    constraint search_question_parts_literal_visible check (
-        literal_text is null
-            or (length(literal_text) > 0 and literal_text !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
-    constraint search_question_parts_literal_bounded check (length(literal_text) <= 8192),
-    constraint search_question_parts_source_step_fk foreign key (source_step_id, entry_version_id)
-        references workflow_steps (workflow_step_id, entry_version_id),
-    constraint search_question_parts_not_from_itself check (
-        source_step_id is null or source_step_id <> workflow_step_id),
-    constraint search_question_parts_source_path_shape check (
-        source_path ~ '^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})*$'),
-    constraint search_question_parts_source_path_bounded check (length(source_path) <= 1023),
-    constraint search_question_parts_author_fk foreign key (created_by) references subjects (subject_id),
-    constraint search_question_parts_editor_person_fk foreign key (updated_by, updated_by_kind)
-        references subjects (subject_id, kind),
-    constraint search_question_parts_editor_is_person check (updated_by_kind = 'person'),
-    constraint search_question_parts_updated_together check ((updated_at is null) = (updated_by is null)),
-    constraint search_question_parts_updated_after_created check (updated_at is null or updated_at >= created_at)
-);
-
-create index search_question_parts_by_version on search_question_parts (entry_version_id);
-
--- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
-create index search_question_parts_by_source_step
-    on search_question_parts (source_step_id) where source_step_id is not null;
 
 -- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table route_cases (
@@ -220,10 +168,22 @@ create index route_cases_by_step on route_cases (workflow_step_id);
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index route_cases_by_target on route_cases (target_version_id) where target_version_id is not null;
 
--- ---------------------------------------------------------------- declarations
+
+-- DB-SPECIFIC: text[], unnest(), bool_and(), immutable, strict, language sql, text and ~ use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: PostgreSQL dollar quoting delimits this SQL function body.
+create function valid_file_extensions(names text[]) returns boolean
+language sql immutable strict as $$
+    select cardinality(names) > 0
+           and count(*) = count(distinct name)
+           and coalesce(bool_and(name = lower(name)
+               and length(name) between 2 and 33
+               and name ~ '^[.][a-z0-9]+([.][a-z0-9]+)*$'), false)
+      from unnest(names) as extension(name)
+$$;
 
 -- DB-SPECIFIC: deferrable, nulls not distinct, length(), num_nonnulls(), text, ~, !~, four-digit Unicode escapes in regular expressions,
 -- generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: text[], :: and text use PostgreSQL's syntax and semantics.
 create table declaration_fields (
     declaration_field_id uuid             not null default uuidv7(),
     entry_version_id     uuid,
@@ -258,7 +218,8 @@ create table declaration_fields (
     updated_by           uuid,
     -- Unchecked while updated_by is null, for the reason pool_members gives.
     updated_by_kind      subject_kind     not null default 'person',
-
+    file_types           text[],
+    file_maximum_bytes   bigint,
     constraint declaration_fields_pk primary key (declaration_field_id),
     constraint declaration_fields_exactly_one_owner
         check (num_nonnulls(entry_version_id, workflow_step_id) = 1),
@@ -276,7 +237,6 @@ create table declaration_fields (
     constraint declaration_fields_parent_key_unique unique (declaration_field_id, owner_id, side, kind),
     constraint declaration_fields_standing_unique unique (declaration_field_id, owner_id, standing),
     constraint declaration_fields_threshold_unique unique (declaration_field_id, standing_threshold),
-    -- A parent has the same owner and side and holds fields.
     constraint declaration_fields_parent_fk foreign key (parent_field_id, owner_id, side, parent_kind)
         references declaration_fields (declaration_field_id, owner_id, side, kind),
     constraint declaration_fields_parent_is_fields check (parent_kind = 'fields'),
@@ -318,7 +278,15 @@ create table declaration_fields (
         references subjects (subject_id, kind),
     constraint declaration_fields_editor_is_person check (updated_by_kind = 'person'),
     constraint declaration_fields_updated_together check ((updated_at is null) = (updated_by is null)),
-    constraint declaration_fields_updated_after_created check (updated_at is null or updated_at >= created_at)
+    constraint declaration_fields_updated_after_created check (updated_at is null or updated_at >= created_at),
+    constraint declaration_fields_file_types_only_for_file
+        check (file_types is null or kind::text = 'file'),
+    constraint declaration_fields_file_types_valid
+        check (file_types is null or valid_file_extensions(file_types)),
+    constraint declaration_fields_file_maximum_only_for_file
+        check (file_maximum_bytes is null or kind::text = 'file'),
+    constraint declaration_fields_file_maximum_positive
+        check (file_maximum_bytes > 0)
 );
 
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
@@ -333,7 +301,6 @@ create index declaration_fields_by_parent
 create index declaration_fields_by_term_list
     on declaration_fields (term_list_version_id) where term_list_version_id is not null;
 
--- ---------------------------------------------------------------- bindings
 
 -- A path names fields and never a place among many.
 -- DB-SPECIFIC: ::, jsonb, length(), num_nonnulls(), text, ~, generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
@@ -386,7 +353,6 @@ create table bindings (
     constraint bindings_source_path_shape
         check (source_path ~ '^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})*$'),
     constraint bindings_source_path_bounded check (length(source_path) <= 1023),
-    -- At most 1048576 characters as written out, whatever it holds.
     constraint bindings_constant_bounded check (constant is null or length(constant::text) <= 1048576),
     -- Foreign key targets, at the cost subjects_kind_unique gives.
     constraint bindings_consumer_source_unique

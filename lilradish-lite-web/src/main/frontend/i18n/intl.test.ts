@@ -33,15 +33,55 @@ describe("intl", () => {
     const { intl: underJapanese } = await forReaderIn("ja-JP");
 
     expect(
-      underJapanese.formatMessage({ id: "version.pinCount" }, { count: 1 }),
-    ).toBe("One version in service pins it.");
+      underJapanese.formatMessage(
+        { id: "version.pinnedByCount" },
+        { count: 1 },
+      ),
+    ).toBe("1 version:");
     expect(
-      underJapanese.formatMessage({ id: "version.pinCount" }, { count: 2 }),
-    ).toBe("2 versions in service pin it.");
+      underJapanese.formatMessage(
+        { id: "version.pinnedByCount" },
+        { count: 2 },
+      ),
+    ).toBe("2 versions:");
   });
 });
 
 describe("readersIntl", () => {
+  it("formats every digit of a plain decimal string in the reader's locale", async () => {
+    const { decimalSaid } = await forReaderIn("de-DE");
+    expect(decimalSaid("900719925474099312345.125678")).toBe(
+      "900.719.925.474.099.312.345,125678",
+    );
+    expect(decimalSaid("1234567.8900")).toBe("1.234.567,8900");
+    expect(decimalSaid("-0.0000000000000000000000000000000000001")).toBe(
+      "-0,0000000000000000000000000000000000001",
+    );
+  });
+  it("formats plain and plural message numbers for the reader while retaining English grammar", async () => {
+    const { intl } = await forReaderIn("de-DE");
+    expect(
+      intl.formatMessage(
+        { id: "declaration.longestSaid" },
+        { longest: 262144 },
+      ),
+    ).toBe("At most 262.144 characters");
+    expect(
+      intl.formatMessage({ id: "version.pinnedByCount" }, { count: 2000 }),
+    ).toBe("2.000 versions:");
+    expect(
+      intl.formatMessage({ id: "version.pinnedByCount" }, { count: 1 }),
+    ).toBe("1 version:");
+  });
+
+  it("keeps arbitrary bigint digits exact in numeric messages without routing them through a plural operand", async () => {
+    const { intl, readersIntl } = await forReaderIn("de-DE");
+    const value = 900719925474099312345n;
+    expect(
+      intl.formatMessage({ id: "step.orderOf" }, { order: value, of: value }),
+    ).toBe("900.719.925.474.099.312.345 of 900.719.925.474.099.312.345");
+    expect(readersIntl.formatNumber(value)).toBe("900.719.925.474.099.312.345");
+  });
   it("groups a number the reader's own way, not the catalogue's", async () => {
     const { intl: sentences, readersIntl } = await forReaderIn("de-DE");
 

@@ -9,12 +9,15 @@ import {
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
+import { MEMBERS_ITEM } from "../../app/destinations";
+import { RequireGroup } from "../../app/standing/RequireGroup";
 import { StandingProvider } from "../../app/standing/StandingContext";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
 import { firstSight } from "../../testutil/firstSight";
+import { namingGroupsByKeyAlone } from "../../testutil/groupAddresses";
 import { appearancesOf } from "../../testutil/heard";
 import { laidOutAt } from "../../testutil/layout";
 import { answered, inGroup } from "../../testutil/standingRead";
@@ -33,7 +36,9 @@ const OTHER_GROUP = "00000003-0000-4000-8000-0000000009e4";
 
 const OTHER_LIST = `/api/groups/${OTHER_GROUP}/members`;
 
-const PAGE = `/groups/${GROUP}/members`;
+const KEY = "PAYROLL";
+
+const PAGE = `/groups/${KEY}/members`;
 
 const LIST = `/api/groups/${GROUP}/members`;
 
@@ -119,6 +124,15 @@ interface Opening {
  * with the standing it would be handed — whose reading again the test counts —
  * and only the server stood in for.
  */
+function keptExpanded() {
+  const kept = localStorage.getItem("lilradish.panel.row");
+  localStorage.setItem("lilradish.panel.row", "expanded");
+  onTestFinished(() => {
+    if (kept === null) localStorage.removeItem("lilradish.panel.row");
+    else localStorage.setItem("lilradish.panel.row", kept);
+  });
+}
+
 function opening(
   address: string,
   {
@@ -131,9 +145,7 @@ function opening(
   laidOutAt(width, VIEWPORT);
   const sent = serving({
     [`GET ${CURRENCY}`]: [
-      permissions.includes("change_membership")
-        ? [JSON.stringify({ chosen: "EUR", offered: ["EUR", "JPY"] }), 200]
-        : [JSON.stringify({ chosen: "EUR" }), 200],
+      [JSON.stringify({ chosen: "EUR", offered: ["EUR", "JPY"] }), 200],
     ],
     [`GET ${LIST}`]: [AVO_AND_GLINN],
     [`GET ${memberAt(AVO)}`]: [panelOf(AVO, ["owner"], ["owner"])],
@@ -143,17 +155,22 @@ function opening(
   const router = createMemoryRouter(
     [
       {
-        path: "/groups/:groupId/members/:subjectId?",
-        element: <MembersPage />,
+        path: "/groups/:group/members/:subjectId?",
+        element: (
+          <RequireGroup reachedBy={MEMBERS_ITEM.reachedBy}>
+            <MembersPage />
+          </RequireGroup>
+        ),
       },
     ],
     { initialEntries: [address] },
   );
+  namingGroupsByKeyAlone(router, [GROUP, OTHER_GROUP]);
   const readAgain = vi.fn();
   const standing = answered(
     [],
     [
-      inGroup(GROUP, "PAYROLL", "Payroll", permissions),
+      inGroup(GROUP, KEY, "Payroll", permissions),
       ...(otherGroup
         ? [inGroup(OTHER_GROUP, "SAMPLE", "Demo Sample", permissions)]
         : []),
@@ -189,6 +206,13 @@ async function listed(): Promise<string[]> {
   const table = screen.getByRole("table", { name: "Members of the group" });
   const [, ...rows] = within(table).getAllByRole<HTMLTableRowElement>("row");
   return rows.map((each) => each.cells[0]!.textContent ?? "");
+}
+
+/** A sole remaining owner is a fact, never a control offering to take that role. */
+async function lastOwner(): Promise<void> {
+  const owner = await within(panel()).findByText("Owner", { selector: "bdi" });
+  expect(owner.closest("li")).toHaveTextContent("OwnerHeld");
+  expect(within(owner.closest("li")!).queryByRole("button")).toBeNull();
 }
 
 function panel(): HTMLElement {
@@ -272,6 +296,58 @@ describe("MembersPage", () => {
     expect(await listed()).toEqual(["0009e1", "0009e2"]);
   });
 
+  it.each(["Close", "Escape", "backdrop"] as const)(
+    "lets the row go when the panel over a narrow list is shut by %s: no panel or strip is left, the address loses the row, and the keyboard is back on its row",
+    async (shutting) => {
+      localStorage.setItem("lilradish.panel.row", "collapsed");
+      onTestFinished(() => localStorage.removeItem("lilradish.panel.row"));
+      const { at } = opening(PAGE, { width: NARROW });
+      await listed();
+      await userEvent.click(screen.getByRole("link", { name: "0009e2" }));
+      const panel = await screen.findByRole("dialog", {
+        name: "Glinn Havven",
+      });
+      expect(at()).toBe(`${PAGE}/${GLINN.subjectId}`);
+
+      if (shutting === "Close")
+        await userEvent.click(
+          within(panel).getByRole("button", { name: "Close" }),
+        );
+      else if (shutting === "Escape") await userEvent.keyboard("{Escape}");
+      else
+        await userEvent.click(
+          document.querySelector<HTMLElement>(".MuiBackdrop-root")!,
+        );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { hidden: true })).toBeNull(),
+      );
+
+      expect(at()).toBe(PAGE);
+      expect(
+        screen.queryAllByRole("button", { name: "Glinn Havven", hidden: true }),
+      ).toEqual([]);
+      expect(screen.queryByRole("region", { name: "Glinn Havven" })).toBeNull();
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: "0009e2" })).toHaveFocus(),
+      );
+    },
+  );
+
+  it("links each member's row to the list with them picked, the group named by its key", async () => {
+    opening(`${PAGE}?filter=a`);
+
+    await listed();
+
+    expect(
+      within(screen.getByRole("table", { name: "Members of the group" }))
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("href")),
+    ).toEqual([
+      `${PAGE}/${AVO.subjectId}?filter=a`,
+      `${PAGE}/${GLINN.subjectId}?filter=a`,
+    ]);
+  });
+
   it.each([
     ["draws", CHANGES, 1],
     ["does not draw", SEES, 0],
@@ -292,13 +368,16 @@ describe("MembersPage", () => {
     ["may change", CHANGES, 1],
     ["may only see", SEES, 0],
   ])(
-    "draws the currency under the title, and Change only where the reader %s",
+    "draws the currency under the title, editable only where the reader %s",
     async (_case, permissions, changes) => {
       opening(PAGE, { permissions });
       await listed();
 
       const title = screen.getByRole("heading", { level: 1 });
-      const summary = await screen.findByText("Currency: EUR — Euro");
+      const summary =
+        changes === 1
+          ? await screen.findByRole("button", { name: "EUR — Euro, editable" })
+          : await screen.findByText("Currency: EUR — Euro");
       const filter = screen.getByRole("searchbox", {
         name: "User number or name",
       });
@@ -311,12 +390,14 @@ describe("MembersPage", () => {
         summary.compareDocumentPosition(filter) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).not.toBe(0);
-      expect(screen.queryAllByRole("button", { name: "Change" })).toHaveLength(
-        changes,
-      );
+      expect(
+        screen.queryAllByRole("button", { name: "EUR — Euro, editable" }),
+      ).toHaveLength(changes);
       expect(screen.queryByRole("combobox", { name: "Currency" })).toBeNull();
       if (changes === 1) {
-        await userEvent.click(screen.getByRole("button", { name: "Change" }));
+        await userEvent.click(
+          screen.getByRole("button", { name: "EUR — Euro, editable" }),
+        );
         expect(
           screen.getByRole("combobox", { name: "Currency" }),
         ).toBeInTheDocument();
@@ -335,7 +416,7 @@ describe("MembersPage", () => {
     await listed();
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Change" }),
+      await screen.findByRole("button", { name: "EUR — Euro, editable" }),
     );
     await userEvent.click(screen.getByRole("combobox", { name: "Currency" }));
     await userEvent.click(
@@ -373,12 +454,12 @@ describe("MembersPage", () => {
     expect(roles).toBeInTheDocument();
     expect(panel()).toHaveAccessibleName("Glinn Havven");
     expect(
-      within(panel()).getByRole("switch", { name: "Overseer" }),
+      within(panel()).getByRole("button", { name: "Grant Overseer" }),
     ).toBeInTheDocument();
   });
 
   /** Read again, list and standing, since a change to the reader's own roles moves what they may do. */
-  it("gives a role, showing the member as the group now holds them and reading the list and the standing again", async () => {
+  it("grants a role, showing the member as the group now holds them and reading the list and the standing again", async () => {
     const { sent, readAgain } = opening(`${PAGE}/${GLINN.subjectId}`, {
       routes: {
         [`PUT ${memberAt(GLINN)}/roles/overseer`]: [
@@ -387,12 +468,12 @@ describe("MembersPage", () => {
       },
     });
     await userEvent.click(
-      await screen.findByRole("switch", { name: "Overseer" }),
+      await screen.findByRole("button", { name: "Grant Overseer" }),
     );
 
     expect(
-      await within(panel()).findByRole("switch", {
-        name: "Overseer",
+      await within(panel()).findByRole("button", {
+        name: "Withdraw Overseer",
       }),
     ).toBeInTheDocument();
     expect(readAgain).toHaveBeenCalled();
@@ -409,12 +490,12 @@ describe("MembersPage", () => {
   it.each(["answer", "refusal"])(
     "keeps the same person's roles in a new group when the former group's change %s arrives late",
     async (ending) => {
-      const otherPage = `/groups/${OTHER_GROUP}/members/${GLINN.subjectId}`;
+      const otherPage = `/groups/SAMPLE/members/${GLINN.subjectId}`;
       const { go, at, readAgain } = opening(`${PAGE}/${GLINN.subjectId}`, {
         otherGroup: true,
         routes: OTHER_READS,
       });
-      await screen.findByRole("switch", { name: "Overseer" });
+      await screen.findByRole("button", { name: "Grant Overseer" });
       const held = deferred<Response>();
       const ordinaryFetch = globalThis.fetch;
       const sent = vi.fn<typeof fetch>((input, init) =>
@@ -426,7 +507,9 @@ describe("MembersPage", () => {
       );
       vi.stubGlobal("fetch", sent);
 
-      await userEvent.click(screen.getByRole("switch", { name: "Overseer" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Grant Overseer" }),
+      );
       expect(
         sent.mock.calls.some(
           ([input, init]) =>
@@ -436,9 +519,7 @@ describe("MembersPage", () => {
       ).toBe(true);
       await go(otherPage);
       await screen.findByRole("heading", { level: 1, name: /Demo Sample/ });
-      expect(
-        within(panel()).getByRole("switch", { name: "Owner" }),
-      ).toBeChecked();
+      await lastOwner();
 
       await act(async () =>
         held.settle(
@@ -455,15 +536,13 @@ describe("MembersPage", () => {
       );
 
       expect(at()).toBe(otherPage);
+      await lastOwner();
       expect(
-        within(panel()).getByRole("switch", { name: "Owner" }),
-      ).toBeChecked();
+        within(panel()).getByRole("button", { name: "Grant Operator" }),
+      ).toBeInTheDocument();
       expect(
-        within(panel()).getByRole("switch", { name: "Operator" }),
-      ).not.toBeChecked();
-      expect(
-        within(panel()).getByRole("switch", { name: "Overseer" }),
-      ).not.toBeChecked();
+        within(panel()).getByRole("button", { name: "Grant Overseer" }),
+      ).toBeInTheDocument();
       expect(screen.queryByRole("alert")).toBeNull();
       expect(readAgain).not.toHaveBeenCalled();
     },
@@ -475,25 +554,21 @@ describe("MembersPage", () => {
       routes: { [`PUT ${memberAt(GLINN)}/roles/overseer`]: [held.promise] },
     });
     await userEvent.click(
-      await screen.findByRole("switch", { name: "Overseer" }),
+      await screen.findByRole("button", { name: "Grant Overseer" }),
     );
     expect(requestsTo(sent)).toContain(`PUT ${memberAt(GLINN)}/roles/overseer`);
 
     await go(`${PAGE}/${AVO.subjectId}`);
-    expect(
-      await within(panel()).findByRole("switch", { name: "Owner" }),
-    ).toBeChecked();
+    await lastOwner();
     await act(async () =>
       held.settle(panelOf(GLINN, ["operator", "overseer"])),
     );
 
     expect(at()).toBe(`${PAGE}/${AVO.subjectId}`);
+    await lastOwner();
     expect(
-      within(panel()).getByRole("switch", { name: "Owner" }),
-    ).toBeChecked();
-    expect(
-      within(panel()).getByRole("switch", { name: "Overseer" }),
-    ).not.toBeChecked();
+      within(panel()).getByRole("button", { name: "Grant Overseer" }),
+    ).toBeInTheDocument();
     expect(readAgain).toHaveBeenCalledOnce();
     await waitFor(() =>
       expect(
@@ -505,7 +580,7 @@ describe("MembersPage", () => {
   });
 
   it("does not close a member in a new group when their old group's removal answers", async () => {
-    const otherPage = `/groups/${OTHER_GROUP}/members/${GLINN.subjectId}`;
+    const otherPage = `/groups/SAMPLE/members/${GLINN.subjectId}`;
     const { go, at, readAgain } = opening(`${PAGE}/${GLINN.subjectId}`, {
       otherGroup: true,
       routes: OTHER_READS,
@@ -527,22 +602,18 @@ describe("MembersPage", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     await go(otherPage);
-    expect(
-      await within(panel()).findByRole("switch", { name: "Owner" }),
-    ).toBeChecked();
+    await lastOwner();
 
     await act(async () => held.settle(new Response(null, { status: 204 })));
 
     expect(at()).toBe(otherPage);
-    expect(
-      within(panel()).getByRole("switch", { name: "Owner" }),
-    ).toBeChecked();
+    await lastOwner();
     expect(screen.queryByText(GLINN_OUT)).toBeNull();
     expect(readAgain).not.toHaveBeenCalled();
   });
 
   it("does not bring somebody into the new group when the former group's answer arrives", async () => {
-    const otherPage = `/groups/${OTHER_GROUP}/members`;
+    const otherPage = "/groups/SAMPLE/members";
     const { go, at, readAgain } = opening(PAGE, {
       otherGroup: true,
       routes: { ...OTHER_READS, ...TAKING_OLIVE_ON },
@@ -588,16 +659,16 @@ describe("MembersPage", () => {
       },
     });
     await userEvent.click(
-      await screen.findByRole("switch", { name: "Operator" }),
+      await screen.findByRole("button", { name: "Withdraw Operator" }),
     );
 
     expect(
       await within(panel()).findByText(
-        "No longer a member of this group. Giving a role here makes them one again.",
+        "No longer a member of this group. Granting a role here makes them one again.",
       ),
     ).toBeInTheDocument();
     expect(
-      within(panel()).getByRole("switch", { name: "Operator" }),
+      within(panel()).getByRole("button", { name: "Grant Operator" }),
     ).toBeInTheDocument();
   });
 
@@ -623,6 +694,7 @@ describe("MembersPage", () => {
 
   /** While the panel covers the list, everything around it is hidden, and a line written then is never heard. */
   it("says somebody is out of the group only once the covering panel they were taken out from has gone", async () => {
+    keptExpanded();
     const view = opening(`${PAGE}/${GLINN.subjectId}`, {
       width: NARROW,
       routes: { [`DELETE ${memberAt(GLINN)}`]: [["", 204]] },
@@ -652,6 +724,7 @@ describe("MembersPage", () => {
    * it; a line said again once the reader shut it would come late and twice.
    */
   it("says somebody brought in over a narrow list is in the group inside the panel that answered it, and never again once it is shut", async () => {
+    keptExpanded();
     opening(PAGE, { width: NARROW, routes: TAKING_OLIVE_ON });
     await listed();
     const appearances = appearancesOf(OLIVE_IN);
@@ -680,24 +753,47 @@ describe("MembersPage", () => {
   });
 
   /** One element whichever way it points, so the control just pressed still has the keyboard after. */
-  it("leaves the keyboard on the control just pressed, which now takes away what it gave", async () => {
-    opening(`${PAGE}/${GLINN.subjectId}`, {
-      routes: {
-        [`PUT ${memberAt(GLINN)}/roles/overseer`]: [
-          panelOf(GLINN, ["operator", "overseer"]),
-        ],
-      },
-    });
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "Overseer" }),
-    );
+  it.each([
+    [
+      "Grant Overseer",
+      `PUT ${memberAt(GLINN)}/roles/overseer`,
+      panelOf(GLINN, ["operator", "overseer"]),
+      "Withdraw Overseer",
+    ],
+    [
+      "Withdraw Operator",
+      `DELETE ${memberAt(GLINN)}/roles/operator`,
+      panelOf(GLINN, []),
+      "Grant Operator",
+    ],
+  ])(
+    "leaves the keyboard on %s, pressed from it, as that control turns the other way",
+    async (pressed, route, answer, becomes) => {
+      const { sent, readAgain } = opening(`${PAGE}/${GLINN.subjectId}`, {
+        routes: { [route]: [answer] },
+      });
+      (await screen.findByRole("button", { name: pressed })).focus();
 
-    const taking = await within(panel()).findByRole("switch", {
-      name: "Overseer",
-    });
+      await userEvent.keyboard("{Enter}");
 
-    expect(document.activeElement).toBe(taking);
-  });
+      const turned = await within(panel()).findByRole("button", {
+        name: becomes,
+      });
+      expect(document.activeElement).toBe(turned);
+      await waitFor(() => expect(readAgain).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          requestsTo(sent).filter((each) => each.startsWith(`GET ${LIST}?`)),
+        ).toHaveLength(2),
+      );
+      expect(document.activeElement).toBe(
+        within(panel()).getByRole("button", { name: becomes }),
+      );
+      expect(document.activeElement).not.toHaveAttribute("aria-disabled");
+      expect(screen.queryByRole("button", { name: pressed })).toBeNull();
+      expect(requestsTo(sent).filter((each) => each === route)).toHaveLength(1);
+    },
+  );
 
   /**
    * Somebody else moved the group since it was read: the list and the member
@@ -706,11 +802,11 @@ describe("MembersPage", () => {
   it.each([
     [
       "a role given to somebody taken out meanwhile",
-      "Overseer",
+      "Grant Overseer",
       `PUT ${memberAt(GLINN)}/roles/overseer`,
       ['{"code":"MEMBER_NOT_IN_VIEW"}', 404] as const,
       ['{"code":"MEMBER_NOT_IN_VIEW"}', 404] as const,
-      "Overseer",
+      "Grant Overseer",
     ],
     [
       "a removal of somebody left the last who may change the membership",
@@ -733,22 +829,16 @@ describe("MembersPage", () => {
         },
       });
       await userEvent.click(
-        await screen.findByRole(
-          _case.startsWith("a role") ? "switch" : "button",
-          { name: control },
-        ),
+        await screen.findByRole("button", { name: control }),
       );
       if (control === "Remove from the group") {
         await userEvent.click(screen.getByRole("button", { name: "Remove" }));
       }
 
       await waitFor(() => {
-        if (gone === "Overseer") {
-          expect(screen.queryByRole("switch", { name: gone })).toBeNull();
-        } else {
-          expect(screen.queryByRole("button", { name: gone })).toBeNull();
-        }
+        expect(screen.queryByRole("button", { name: gone })).toBeNull();
       });
+      expect(screen.queryAllByRole("switch")).toEqual([]);
       expect(membershipAsked(sent)).toEqual([
         `GET ${LIST}?sort=userId`,
         `GET ${memberAt(GLINN)}`,
@@ -770,8 +860,8 @@ describe("MembersPage", () => {
     expect(await screen.findByText(OLIVE_IN)).toBeInTheDocument();
     expect(view.at()).toBe(`${PAGE}/${OLIVE.subjectId}`);
     expect(
-      await within(panel()).findByRole("switch", {
-        name: "Overseer",
+      await within(panel()).findByRole("button", {
+        name: "Withdraw Overseer",
       }),
     ).toBeInTheDocument();
     cleanup();
@@ -823,7 +913,9 @@ describe("MembersPage", () => {
         ],
       },
     });
-    await userEvent.click(await screen.findByRole("switch", { name: "Owner" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Grant Owner" }),
+    );
 
     expect(await within(panel()).findByRole("alert")).toHaveTextContent(
       "A group's membership is changed only by a role in it that may change it.",

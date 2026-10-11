@@ -6,14 +6,17 @@ import { theme } from "../../lib/theme/theme";
 import { whenText } from "../../lib/time/When";
 import { requestsTo, type Reply } from "../../testutil/answering";
 import { deferred } from "../../testutil/deferred";
+import { regionsSaid } from "../../testutil/heard";
 import { accountOpened, stateControl } from "../../testutil/stateAccount";
 import { resolved } from "../../testutil/grounds";
+import { tryReplies } from "../../testutil/tryReplies";
 
 import {
   GROUP,
   RUN_ID,
   ABOVE,
   RAISE,
+  KEY,
   PAGE,
   KEPT_DRAWING_AS,
   RUN,
@@ -53,6 +56,68 @@ afterEach(() => {
 });
 
 describe("RunPage flows", () => {
+  it.each(["fullDetail", "conversation"] as const)(
+    "rereads a renamed then cleared workflow version in %s over the same historical run",
+    async (drawing) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const snapshot = (versionName: string | null) =>
+          reply({ ...CLAIM, workflow: { ...CLAIM.workflow, versionName } });
+        const { sent, router } = opening(
+          {
+            [`GET ${RUN}`]: [
+              snapshot("Earlier name"),
+              snapshot("اسم 📦"),
+              snapshot(null),
+            ],
+            [`GET ${STEPS}`]: [
+              stepsRead({ rereadAfterSeconds: 1 }),
+              stepsRead({ rereadAfterSeconds: 1 }),
+              stepsRead(),
+            ],
+          },
+          PAGE,
+          drawing,
+        );
+        const workflow = () =>
+          within(about()).getByRole("link", { name: /Handle a claim/ });
+        await landing(
+          () => screen.queryByRole("region", { name: "Overview" }) !== null,
+        );
+        expect(said().Workflow).toBe(
+          `Handle a claim \u00b7 Version 3 \u00b7 Earlier name`,
+        );
+        const address = workflow().getAttribute("href");
+        await act(() => vi.advanceTimersByTimeAsync(1000));
+        await landing(() => said().Workflow.endsWith(" · اسم 📦"));
+        expect(workflow().querySelector("bdi ~ bdi")).toHaveTextContent(
+          "اسم 📦",
+        );
+        expect(said().Workflow).not.toContain("Earlier name");
+        expect(workflow()).toHaveAttribute("href", address!);
+        await act(() => vi.advanceTimersByTimeAsync(1000));
+        await landing(
+          () => said().Workflow === `Handle a claim \u00b7 Version 3`,
+        );
+        expect(workflow().querySelector("bdi ~ bdi")).toBeNull();
+        expect(said().Workflow).not.toContain("اسم 📦");
+        expect(workflow()).toHaveAttribute("href", address!);
+        expect(said().Number).toBe("7");
+        expect(router.state.location.pathname).toBe(PAGE);
+        expect(requestsTo(sent)).toEqual([
+          `GET ${RUN}`,
+          `GET ${STEPS}`,
+          `GET ${RUN}`,
+          `GET ${STEPS}`,
+          `GET ${RUN}`,
+          `GET ${STEPS}`,
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   describe("in Full detail", () => {
     function part(name: string): HTMLElement {
       return screen.getByRole("region", { name });
@@ -60,7 +125,7 @@ describe("RunPage flows", () => {
 
     function stepRows(): string[][] {
       const [, ...rows] = within(
-        screen.getByRole("table", { name: "The steps" }),
+        screen.getByRole("table", { name: "Steps" }),
       ).getAllByRole<HTMLTableRowElement>("row");
       return rows.map((row) =>
         [...row.cells].map((cell) => cell.textContent ?? ""),
@@ -73,13 +138,9 @@ describe("RunPage flows", () => {
 
     it("draws each first-rank part of Full detail as its own white card", async () => {
       opening({}, PAGE, "fullDetail");
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
-      const cards = [
-        part("What it was started with"),
-        part("What it gave back"),
-        part("The steps"),
-      ];
+      const cards = [part("Run inputs"), part("Result"), part("Steps")];
       expect(new Set(cards).size).toBe(3);
       expect(
         cards[0]!.compareDocumentPosition(cards[1]!) &
@@ -95,8 +156,8 @@ describe("RunPage flows", () => {
         expect(style.backgroundColor).toBe(
           resolved(theme.palette.background.paper),
         );
-        expect(style.boxShadow).not.toBe("none");
-        expect(style.borderTopWidth).toBe("0px");
+        expect(style.boxShadow).toBe("");
+        expect(style.borderTopWidth).toBe("1px");
       }
     });
     it("offers a declared file started with for download through the run being read", async () => {
@@ -104,42 +165,76 @@ describe("RunPage flows", () => {
         name: "attachment",
         label: "Attachment",
         kind: "file",
-        types: ["application/pdf"],
+        types: [".gz", ".tar.gz"],
         maximumBytes: 12,
         mustBeGiven: true,
       };
       const file = {
         id: "0000000f-0000-4000-8000-000000000c51",
-        name: "Demo Sample.pdf",
-        type: "application/pdf",
+        name: "Imaginary receipts.TAR.GZ",
         size: 5,
       };
-      opening({
+      const { sent } = opening({
         [`GET ${RUN}`]: [
-          reply({ ...STARTED, startedWith: { attachment: file } }),
+          reply({
+            ...STARTED,
+            startedWith: { ...STARTED.startedWith, attachment: file },
+          }),
         ],
         [`GET ${STEPS}`]: [
           stepsRead({
             declarations: {
               ...DECLARATIONS,
-              [VERSION]: { ...DECLARATIONS[VERSION], takes: [attachment] },
+              [VERSION]: {
+                ...DECLARATIONS[VERSION],
+                takes: [...DECLARATIONS[VERSION].takes, attachment],
+              },
             },
           }),
         ],
       });
 
       const started = await screen.findByRole("region", {
-        name: "What it was started with",
+        name: "Run inputs",
       });
       const link = within(started).getByRole("link", {
-        name: /Download.*Demo Sample.pdf/,
+        name: `Download ${setApart("Imaginary receipts.TAR.GZ")}, 5 B`,
       });
+      expect(
+        within(started)
+          .getAllByRole("term")
+          .map((each) => each.textContent),
+      ).toEqual([
+        `${setApart("Ticket")} · ticket`,
+        `${setApart("Due")} · due`,
+        `${setApart("Attachment")} · attachment`,
+      ]);
+      expect(
+        within(started)
+          .getAllByRole("definition")
+          .slice(0, 2)
+          .map((each) => each.textContent),
+      ).toEqual(["Kettle leaks", "Sep 30, 2026"]);
+      expect(stepRows().map((row) => row[2])).toEqual([
+        `${setApart("Text")}${setApart("Ticket")} (run input)`,
+        `${setApart("summary")}${setApart("Summary")} (output of ${setApart("summarise")})`,
+      ]);
       expect(link).toHaveAttribute(
         "href",
         `/api/groups/${GROUP}/runs/${RUN_ID}/files/${file.id}`,
       );
-      expect(started).toHaveTextContent("Size: 5 bytes.");
-      expect(started.querySelector("iframe, embed, object")).toBeNull();
+      expect(started).toHaveTextContent("5 B");
+      expect(link).toHaveAttribute("download");
+      expect(link).toHaveStyle({ display: "block" });
+      expect(
+        [...link.querySelectorAll("bdi")]
+          .filter((each) => each.closest("[hidden]") === null)
+          .map((each) => each.textContent),
+      ).toEqual(["Imaginary receipts.TAR.GZ"]);
+      expect(started.querySelector("iframe, img, embed, object")).toBeNull();
+      expect(within(started).getAllByRole("link")).toHaveLength(1);
+      expect(started).not.toHaveTextContent(file.id);
+      expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
     });
 
     it("draws as its work what it was started with, what it gave back that stands, and every step in order with where each input comes from", async () => {
@@ -149,38 +244,36 @@ describe("RunPage flows", () => {
         "fullDetail",
       );
 
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       expect(
-        within(part("What it was started with"))
+        within(part("Run inputs"))
           .getAllByRole("definition")
           .map((each) => each.textContent),
       ).toEqual(["Kettle leaks", "Sep 30, 2026"]);
-      expect(
-        within(part("What it gave back")).getByRole("term"),
-      ).toHaveTextContent("Summary");
-      expect(
-        within(part("What it gave back")).getByRole("definition"),
-      ).toHaveTextContent("A kettle leaks.");
+      expect(within(part("Result")).getByRole("term")).toHaveTextContent(
+        "Summary",
+      );
+      expect(within(part("Result")).getByRole("definition")).toHaveTextContent(
+        "A kettle leaks.",
+      );
       expect(stepRows()).toEqual([
         [
           "1",
           "summariseQuestion",
-          `${setApart("Text")}: ${setApart("Ticket")}, which the run was started with`,
+          `${setApart("Text")}${setApart("Ticket")} (run input)`,
           "Done",
-          "Nothing: it calls no model.",
+          "None \u2014 no model is used.",
         ],
         [
           "2",
           "file itCode step",
-          `${setApart("summary")}: ${setApart("Summary")}, which ${setApart("summarise")} gave back`,
+          `${setApart("summary")}${setApart("Summary")} (output of ${setApart("summarise")})`,
           "RunningIts code is running.",
-          "Nothing: it calls no model.",
+          "None — no model is used.",
         ],
       ]);
-      expect(
-        screen.queryByText("Nothing it gives back stands yet."),
-      ).toBeNull();
+      expect(screen.queryByText("No accepted result yet.")).toBeNull();
       expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
     });
 
@@ -202,14 +295,14 @@ describe("RunPage flows", () => {
         "fullDetail",
       );
 
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       const [cost, uncalled] = stepRows().map((cells) => cells.at(-1));
       expect(cost).toBe(
-        "1,500 in all: 1,200 sent, 300 came backPart of it is as this system measured it, where a model did not say what it counted.",
+        "1,500 in total: 1,200 sent, 300 receivedPart of this is estimated by this system, where a model did not report its own count.",
       );
       expect(cost).not.toContain("Both as");
-      expect(uncalled).toBe("Nothing: it calls no model.");
+      expect(uncalled).toBe("None — no model is used.");
     });
 
     it("opens each step's own page from its row, keeping the list's address", async () => {
@@ -219,7 +312,7 @@ describe("RunPage flows", () => {
         "fullDetail",
       );
 
-      const table = await screen.findByRole("table", { name: "The steps" });
+      const table = await screen.findByRole("table", { name: "Steps" });
 
       expect(
         within(table)
@@ -235,17 +328,17 @@ describe("RunPage flows", () => {
       [
         "nothing standing yet",
         { declares: "values", standing: [] },
-        "Nothing it gives back stands yet.",
+        "No accepted result yet.",
       ],
       [
         "a workflow that acts rather than answers",
         { declares: "nothing" },
-        "Its workflow gives nothing back: it acts rather than answers.",
+        "This workflow returns no result: it carries out actions rather than giving answers.",
       ],
       [
         "what it declares in a word this build does not know",
         { declares: "later" },
-        "Not something this page can say yet.",
+        "This page can't show this yet.",
       ],
     ])(
       "says so of what it gave back where it has %s, and lists nothing",
@@ -256,12 +349,10 @@ describe("RunPage flows", () => {
           "fullDetail",
         );
 
-        await screen.findByRole("table", { name: "The steps" });
+        await screen.findByRole("table", { name: "Steps" });
 
-        expect(part("What it gave back")).toHaveTextContent(sentence);
-        expect(
-          within(part("What it gave back")).queryByRole("term"),
-        ).toBeNull();
+        expect(part("Result")).toHaveTextContent(sentence);
+        expect(within(part("Result")).queryByRole("term")).toBeNull();
       },
     );
 
@@ -281,12 +372,12 @@ describe("RunPage flows", () => {
             stepName: "route",
           },
         },
-        `${setApart("route")} in run 6 started it, running the workflow ${setApart("Handle a claim")}.`,
+        `Step ${setApart("route")} of run 6 started this run of ${setApart("Handle a claim")}.`,
       ],
       [
         "it takes nothing",
         { ...CLAIM, startedWith: {} },
-        "Its workflow takes nothing, so it was started with nothing.",
+        "This workflow takes no inputs.",
       ],
     ])(
       "says what it was started with in words where %s and no value is there to list",
@@ -304,12 +395,10 @@ describe("RunPage flows", () => {
           "fullDetail",
         );
 
-        await screen.findByRole("table", { name: "The steps" });
+        await screen.findByRole("table", { name: "Steps" });
 
-        expect(part("What it was started with")).toHaveTextContent(sentence);
-        expect(
-          within(part("What it was started with")).queryByRole("term"),
-        ).toBeNull();
+        expect(part("Run inputs")).toHaveTextContent(sentence);
+        expect(within(part("Run inputs")).queryByRole("term")).toBeNull();
       },
     );
 
@@ -341,7 +430,7 @@ describe("RunPage flows", () => {
         `GET ${STEPS}`,
       ]);
       expect(vi.getTimerCount()).toBe(1);
-      expect(screen.queryByText("Still reading…")).toBeNull();
+      expect(screen.queryByText("Loading…")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
@@ -357,7 +446,7 @@ describe("RunPage flows", () => {
         PAGE,
         "fullDetail",
       );
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       await userEvent.click(screen.getByRole("button", { name: "Stop" }));
 
@@ -383,14 +472,17 @@ describe("RunPage flows", () => {
         },
         PAGE,
         "fullDetail",
+        AVO.userId,
       );
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       await userEvent.click(
-        screen.getByRole("button", { name: "Approve the raise" }),
+        screen.getByRole("button", { name: "Approve change" }),
       );
       await waitFor(() => expect(document.activeElement).toBe(ceiling()));
-      ceiling().blur();
+      await act(async () => {
+        ceiling().blur();
+      });
       settle([JSON.stringify({ ...CLAIM, name: "Claim, read again" }), 200]);
 
       await waitFor(() =>
@@ -417,19 +509,20 @@ describe("RunPage flows", () => {
         "fullDetail",
       );
       await landing(() => screen.queryByRole("table") !== null);
-      // The page's own region comes first; the read's own follows it.
-      const news = screen.getAllByRole("status")[0]!;
-      expect(news).toHaveTextContent(/^$/);
+      expect(regionsSaid()).toEqual(["", "", "", ""]);
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
       await landing(() => stepRows()[1]![3] === "Done");
 
-      expect(news).toHaveTextContent(`${setApart("file it")}: now Done.`);
-      expect(news).not.toHaveTextContent("summarise");
-      expect(news).not.toHaveTextContent("Claim from Avo");
+      expect(regionsSaid()).toEqual([
+        "",
+        `${setApart("file it")}: now Done.`,
+        "",
+        "",
+      ]);
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
-      await landing(() => news.textContent === "");
+      await landing(() => regionsSaid().every((each) => each === ""));
       expect(stepRows()[1]![3]).toBe("Done");
     });
 
@@ -450,7 +543,7 @@ describe("RunPage flows", () => {
       );
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        "That run is not in view.",
+        "That run isn't here, or you can't see it.",
       );
       expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
       expect(screen.queryByRole("table")).toBeNull();
@@ -459,7 +552,7 @@ describe("RunPage flows", () => {
     it("draws no conversation, and names no step's message", async () => {
       opening();
 
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       expect(
         screen.queryByRole("list", { name: "The conversation" }),
@@ -467,15 +560,16 @@ describe("RunPage flows", () => {
       expect(document.getElementById(`step-${SUMMARISE}`)).toBeNull();
     });
 
-    it("draws the run in Conversation once the control at the foot of About it asks for it, keeping that on this device, the keyboard staying on that control as it comes to lead back, and reading nothing more of the run", async () => {
+    it("draws the run in Conversation once the View control asks for it, keeping that on this device, the keyboard staying on the selected control, and reading nothing more of the run", async () => {
       const { sent } = opening();
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
       const toConversation = screen.getByRole("button", {
-        name: "Show as a conversation",
+        name: "Conversation",
       });
-      expect(within(about()).getAllByRole("button").at(-1)).toBe(
+      expect(screen.getByRole("group", { name: "View" })).toContainElement(
         toConversation,
       );
+      expect(about()).not.toContainElement(toConversation);
 
       await userEvent.click(toConversation);
 
@@ -483,12 +577,13 @@ describe("RunPage flows", () => {
         await screen.findByRole("list", { name: "The conversation" }),
       ).toBeInTheDocument();
       expect(toConversation).toHaveFocus();
-      expect(toConversation).toHaveTextContent("Show in full detail");
+      expect(toConversation).toHaveTextContent("Conversation");
+      expect(toConversation).toHaveAttribute("aria-pressed", "true");
       expect(localStorage.getItem(KEPT_DRAWING_AS)).toBe("conversation");
-      expect(screen.queryByRole("table", { name: "The steps" })).toBeNull();
+      expect(screen.queryByRole("table", { name: "Steps" })).toBeNull();
       expect(
-        screen.queryByRole("button", { name: "Show as a conversation" }),
-      ).toBeNull();
+        screen.getByRole("button", { name: "Full detail" }),
+      ).toHaveAttribute("aria-pressed", "false");
       expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
     });
   });
@@ -533,17 +628,19 @@ describe("RunPage flows", () => {
         name: "Stopped this run",
       });
       const detailControl = screen.getByRole("button", {
-        name: "Show in full detail",
+        name: "Full detail",
       });
-      act(() => detailControl.focus());
+      await act(async () => {
+        detailControl.focus();
+      });
       expect(said()["Started"]).toContain("today");
-      expect(said()["Where it is"]).toContain("today");
+      expect(said()["Status"]).toContain("today");
       expect(actMessage).toHaveTextContent("today");
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
 
       expect(said()["Started"]).toContain("yesterday");
-      expect(said()["Where it is"]).toContain("yesterday");
+      expect(said()["Status"]).toContain("yesterday");
       expect(actMessage).toHaveTextContent("yesterday");
       expect(detailControl).toHaveFocus();
       expect(router.state.location.search).toBe("?filter=claim&sort=run");
@@ -566,7 +663,7 @@ describe("RunPage flows", () => {
 
       await conversing();
       expect(messages()).toEqual([
-        "What it was started with",
+        "Run inputs",
         setApart("Summarise"),
         setApart("file it"),
       ]);
@@ -615,16 +712,13 @@ describe("RunPage flows", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      expect(messages()).toEqual([
-        "What it was started with",
-        setApart("Summarise"),
-      ]);
+      expect(messages()).toEqual(["Run inputs", setApart("Summarise")]);
       expect(reads(sent)).toHaveLength(4);
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
       await landing(() => messages().includes(setApart("file it")));
       expect(messages()).toEqual([
-        "What it was started with",
+        "Run inputs",
         setApart("Summarise"),
         setApart("file it"),
       ]);
@@ -668,7 +762,7 @@ describe("RunPage flows", () => {
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
       expect(messages()).toEqual([
-        "What it was started with",
+        "Run inputs",
         setApart("Summarise"),
         setApart("file it"),
       ]);
@@ -729,7 +823,7 @@ describe("RunPage flows", () => {
         "Claim from Avo",
       );
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText("Still reading…")).toBeNull();
+      expect(screen.queryByText("Loading…")).toBeNull();
 
       await act(() => vi.advanceTimersByTimeAsync(100));
       await landing(() =>
@@ -776,16 +870,23 @@ describe("RunPage flows", () => {
         stepId,
         order,
         name,
-        runs: { kind: "route" },
+        runs: { versionName: null, kind: "route" },
         state: "not_started",
         takesFrom: [],
         cost: { callsAModel: false },
-        acts: [],
-        withheld: [],
+        stateActs: [],
+        stateRefusals: [],
+        producedByUserId: null,
+        producedByKind: null,
       };
     }
 
     const ANSWERED_TRY = {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 1,
       beyond: false,
       producedBy: { kind: "person", person: AVO },
@@ -797,7 +898,13 @@ describe("RunPage flows", () => {
           decision: { outcome: "assured" },
         },
       ],
-      review: { asked: true, by: { kind: "person", person: GLINN } },
+      review: {
+        asked: true,
+        by: { kind: "person", person: GLINN },
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+      },
       ended: "stands",
       cost: { callsAModel: false },
     };
@@ -809,7 +916,11 @@ describe("RunPage flows", () => {
           field: "summary",
           value: "Kettle.",
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Too short.",
+          },
         },
       ],
       ended: "refused_on_review",
@@ -820,7 +931,7 @@ describe("RunPage flows", () => {
       tries: { current: 2, declared: 2, beyond: false },
     };
 
-    function waitingOnReview(refusal: string) {
+    function waitingOnReview() {
       return {
         ...SUMMARISE_ROW,
         state: "waiting",
@@ -838,17 +949,20 @@ describe("RunPage flows", () => {
             now: "waiting_on_review",
           },
         ],
-        withheld: [{ act: "review", refusal }],
+        stateActs: ["review"],
+        stateRefusals: [],
+        producedByUserId: AVO.userId,
+        producedByKind: "person",
       };
     }
 
     function stepPage(step: object, triesMade: readonly object[]): Reply {
-      return reply({
+      return tryReplies({
         run: RUN_HEADER,
         declarations: DECLARATIONS,
         step,
         triesMade,
-      });
+      }).summary;
     }
 
     function conversation(): HTMLElement {
@@ -880,10 +994,25 @@ describe("RunPage flows", () => {
       const terms = within(part).getAllByRole("term");
       const definitions = within(part).getAllByRole("definition");
       return Object.fromEntries(
-        terms.map((term, at) => [
-          term.textContent ?? "",
-          definitions[at]!.textContent ?? "",
-        ]),
+        terms.map((term, at) => {
+          const definition = definitions[at]!;
+          const card = definition.hasAttribute("data-value-content")
+            ? definition.closest("section")
+            : null;
+          const siblings =
+            card === null ? [] : Array.from(card.parentElement!.children);
+          return [
+            term.textContent ?? "",
+            (definition.textContent ?? "") +
+              (card === null
+                ? ""
+                : siblings
+                    .slice(siblings.indexOf(card) + 1)
+                    .filter((each) => each.tagName !== "SECTION")
+                    .map((each) => each.textContent ?? "")
+                    .join("")),
+          ];
+        }),
       );
     }
 
@@ -903,15 +1032,15 @@ describe("RunPage flows", () => {
 
       expect(said()).toMatchObject({
         Number: "7",
-        "Where it is": `Running, on ${setApart("file it")}1 of 2 steps done`,
-        "What it has cost":
-          "9,007,199,254,741,013 in all: 9,007,199,254,740,993 sent, 20 came back",
-        Ceiling: "9,007,199,254,740,990Change the ceiling",
+        Status: `RunningNow at ${setApart("file it")}1 of 2 steps done`,
+        Usage:
+          "9,007,199,254,741,013 in total: 9,007,199,254,740,993 sent, 20 received",
       });
+      expect(ceiling().textContent).toBe("9,007,199,254,740,990");
       expect(about()).toContainElement(ceiling());
       const runBadge = within(about())
-        .getByRole("heading", { name: "About it" })
-        .parentElement!.querySelector("span")!;
+        .getByText("Status")
+        .nextElementSibling!.querySelector("span")!;
       expect(runBadge).toHaveTextContent("Running");
       expect(runBadge.querySelector("svg")).toHaveAttribute(
         "data-testid",
@@ -922,48 +1051,43 @@ describe("RunPage flows", () => {
       ).toHaveAttribute("aria-valuenow", "50");
 
       expect(
-        within(conversation()).queryByRole("group", { name: "Ceiling" }),
+        within(conversation()).queryByRole("group", { name: "Usage limit" }),
       ).toBeNull();
     });
 
-    it("draws About it alike in either drawing, but for the way to the other at its foot", async () => {
+    it("keeps About it facts and actions alike when the View segment changes the drawing", async () => {
       opening({}, PAGE, "conversation");
       await conversing();
       const facts = said();
       const controls = within(about())
         .getAllByRole("button")
-        .map((each) => each.textContent);
+        .map((each) => each.getAttribute("aria-label") ?? each.textContent);
       const indexControls = within(
-        screen.getByRole("navigation", { name: "The steps so far" }),
+        screen.getByRole("navigation", { name: "Steps so far" }),
       )
         .getAllByRole("button")
         .map((each) => each.textContent);
 
       await userEvent.click(
-        screen.getByRole("button", { name: "Show in full detail" }),
+        screen.getByRole("button", { name: "Full detail" }),
       );
-      await screen.findByRole("table", { name: "The steps" });
+      await screen.findByRole("table", { name: "Steps" });
 
       expect(
-        screen.queryByRole("navigation", { name: "The steps so far" }),
+        screen.queryByRole("navigation", { name: "Steps so far" }),
       ).toBeNull();
       expect(said()).toEqual(facts);
       expect(
         within(about())
           .getAllByRole("button")
-          .map((each) => each.textContent),
-      ).toEqual([
-        ...controls.slice(0, -1 - indexControls.length),
-        "Show as a conversation",
-      ]);
+          .map((each) => each.getAttribute("aria-label") ?? each.textContent),
+      ).toEqual(controls.filter((each) => !indexControls.includes(each)));
 
       expect(controls).toEqual([
-        "Change the ceiling",
+        "Overview",
         "Stop",
-        "Rename",
+        "9,007,199,254,740,990, editable",
         ...indexControls,
-
-        "Show in full detail",
       ]);
     });
 
@@ -982,34 +1106,35 @@ describe("RunPage flows", () => {
       );
       await conversing();
 
-      const cost = said()["What it has cost"];
+      const cost = said()["Usage"];
       expect(cost).toBe(
-        "9,007,199,254,741,013 in all: 9,007,199,254,740,993 sent, 20 came backPart of it is as this system measured it, where a model did not say what it counted.",
+        "9,007,199,254,741,013 in total: 9,007,199,254,740,993 sent, 20 receivedPart of this is estimated by this system, where a model did not report its own count.",
       );
       expect(cost).not.toContain("Both as");
     });
 
-    it("draws the run in Full detail once the control at the foot of About it asks for it, keeping that on this device, the keyboard staying on that control as it comes to lead back, and reading nothing more of the run", async () => {
+    it("draws the run in Full detail once the View control asks for it, keeping that on this device, the keyboard staying on the selected control, and reading nothing more of the run", async () => {
       const { sent } = opening({}, PAGE, "conversation");
       await conversing();
       const toFullDetail = screen.getByRole("button", {
-        name: "Show in full detail",
+        name: "Full detail",
       });
 
       await userEvent.click(toFullDetail);
 
       expect(
-        await screen.findByRole("table", { name: "The steps" }),
+        await screen.findByRole("table", { name: "Steps" }),
       ).toBeInTheDocument();
       expect(toFullDetail).toHaveFocus();
-      expect(toFullDetail).toHaveTextContent("Show as a conversation");
+      expect(toFullDetail).toHaveTextContent("Full detail");
+      expect(toFullDetail).toHaveAttribute("aria-pressed", "true");
       expect(localStorage.getItem(KEPT_DRAWING_AS)).toBe("fullDetail");
       expect(
         screen.queryByRole("list", { name: "The conversation" }),
       ).toBeNull();
       expect(
-        screen.queryByRole("button", { name: "Show in full detail" }),
-      ).toBeNull();
+        screen.getByRole("button", { name: "Conversation" }),
+      ).toHaveAttribute("aria-pressed", "false");
 
       expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
     });
@@ -1032,7 +1157,7 @@ describe("RunPage flows", () => {
       await userEvent.click(screen.getByRole("button", { name: "Stop" }));
 
       expect(
-        await screen.findByRole("button", { name: "Open again" }),
+        await screen.findByRole("button", { name: "Resume" }),
       ).toBeInTheDocument();
       await waitFor(() => expect(messages().at(-1)).toMatch(/^Stopped by /));
       const asked = requestsTo(sent);
@@ -1064,7 +1189,7 @@ describe("RunPage flows", () => {
       await userEvent.click(screen.getByRole("button", { name: "Stop" }));
 
       expect(
-        await screen.findByRole("button", { name: "Open again" }),
+        await screen.findByRole("button", { name: "Resume" }),
       ).toBeInTheDocument();
       expect(
         requestsTo(sent).filter((each) => each === `PUT ${RUN}/stop`),
@@ -1087,7 +1212,7 @@ describe("RunPage flows", () => {
         {
           [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
           [`PUT ${RUN}/stop`]: [
-            reply({ ...STOPPED, acts: ["rename", "change_ceiling"] }),
+            reply({ ...STOPPED, stateActs: ["rename", "change_ceiling"] }),
           ],
         },
         PAGE,
@@ -1100,7 +1225,7 @@ describe("RunPage flows", () => {
       await waitFor(() => expect(document.activeElement).toBe(ceiling()));
       expect(screen.getByRole("heading", { level: 1 })).not.toHaveFocus();
       expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Open again" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
     });
 
     it("draws what it was started with first, then one message per step reached in the order they run, each named by its title, and indexes every step in About it", async () => {
@@ -1123,12 +1248,12 @@ describe("RunPage flows", () => {
       await conversing();
 
       expect(messages()).toEqual([
-        "What it was started with",
+        "Run inputs",
         setApart("Summarise"),
         setApart("file it"),
       ]);
       const index = screen.getByRole("navigation", {
-        name: "The steps so far",
+        name: "Steps so far",
       });
       expect(within(index).getAllByRole("listitem")).toHaveLength(4);
       expect(
@@ -1147,21 +1272,48 @@ describe("RunPage flows", () => {
       opening({ [`GET ${RUN}`]: [reply(STARTED)] }, PAGE, "conversation");
       await conversing();
 
-      const first = message("What it was started with");
+      const first = message("Run inputs");
 
       expect(first).toHaveTextContent(
-        `${setApart("Avo Lumerace")} started it, running the workflow ${setApart("Handle a claim")}.`,
+        `${setApart("Avo Lumerace")} started this run of ${setApart("Handle a claim")}.`,
       );
       expect(first).not.toHaveTextContent("version 3");
       expect(first).not.toHaveTextContent(whenText(STARTED.startedAt));
       expect(labelled(first)).toEqual({
-        Ticket: "Kettle leaks",
-        Due: "Sep 30, 2026",
+        [`${setApart("Ticket")} · ticket`]: "Kettle leaks",
+        [`${setApart("Due")} · due`]: "Sep 30, 2026",
       });
-      expect(within(first).queryByRole("button")).toBeNull();
+      expect(
+        within(first).getAllByRole("button", { name: "Copy" }),
+      ).toHaveLength(2);
     });
 
     it("shuts a long text it was started with until it is opened, saying whether it is open", async () => {
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+        function (this: HTMLElement) {
+          return this.hasAttribute("data-value-content") ? 192 : 0;
+        },
+      );
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+        function (this: HTMLElement) {
+          return this.hasAttribute("data-value-content") &&
+            this.textContent?.includes("Kettle leaks.")
+            ? 384
+            : 0;
+        },
+      );
+      vi.spyOn(
+        HTMLElement.prototype,
+        "getBoundingClientRect",
+      ).mockImplementation(function (this: HTMLElement) {
+        return DOMRect.fromRect({
+          height:
+            this.parentElement?.hasAttribute("data-value-content") &&
+            this.textContent?.includes("Kettle leaks.")
+              ? 384
+              : 0,
+        });
+      });
       opening(
         {
           [`GET ${RUN}`]: [
@@ -1178,13 +1330,14 @@ describe("RunPage flows", () => {
         "conversation",
       );
       await conversing();
-      const first = message("What it was started with");
+      const first = message("Run inputs");
       const control = within(first).getByRole("button", {
-        name: `${setApart("Ticket")}, in full`,
+        name: "Show all",
       });
       expect(control).toHaveAttribute("aria-expanded", "false");
-      expect(within(first).queryByText(/It leaked again/)).toBeNull();
-      expect(labelled(first).Due).toBe("None");
+      expect(getComputedStyle(controlled(control)).maxHeight).toBe("192px");
+      expect(getComputedStyle(controlled(control)).overflow).toBe("hidden");
+      expect(labelled(first)[`${setApart("Due")} · due`]).toBe("None");
 
       await userEvent.click(control);
 
@@ -1192,7 +1345,8 @@ describe("RunPage flows", () => {
       expect(controlled(control)).toHaveTextContent(
         "Kettle leaks. It leaked again.",
       );
-      expect(within(first).getAllByRole("button")).toHaveLength(1);
+      expect(control).toHaveAccessibleName("Show less");
+      expect(getComputedStyle(controlled(control)).maxHeight).not.toBe("192px");
     });
 
     it("says in its first message which run above started it, with which workflow, leaving the way to that run About it, and lists nothing it was started with", async () => {
@@ -1210,7 +1364,7 @@ describe("RunPage flows", () => {
                 stepId: FILE_IT,
                 stepName: "route",
               },
-              acts: [],
+              stateActs: [],
             }),
           ],
         },
@@ -1219,23 +1373,29 @@ describe("RunPage flows", () => {
       );
       await conversing();
 
-      const first = message("What it was started with");
+      const first = message("Run inputs");
 
       expect(first).toHaveTextContent(
-        `${setApart("route")} in run 6 started it, running the workflow ${setApart("Handle a claim")}.`,
+        `Step ${setApart("route")} of run 6 started this run of ${setApart("Handle a claim")}.`,
       );
       expect(first).not.toHaveTextContent("version 3");
       expect(within(first).queryAllByRole("link")).toEqual([]);
       expect(
         within(about()).getByRole("link", { name: "Open run 6" }),
-      ).toHaveAttribute("href", `/groups/${GROUP}/work/${ABOVE}?sort=run`);
+      ).toHaveAttribute("href", `/groups/${KEY}/work/${ABOVE}?sort=run`);
+      expect(
+        within(about()).getByText("Part of", { selector: "dt" }),
+      ).toBeVisible();
+      expect(
+        within(about()).queryByText("Sub-run", { selector: "dt" }),
+      ).toBeNull();
       expect(
         within(about()).getByRole("link", {
           name: "Open the step that started it",
         }),
       ).toHaveAttribute(
         "href",
-        `/groups/${GROUP}/work/${ABOVE}/steps/${FILE_IT}?sort=run`,
+        `/groups/${KEY}/work/${ABOVE}/steps/${FILE_IT}?sort=run`,
       );
       expect(within(first).queryByRole("term")).toBeNull();
     });
@@ -1244,11 +1404,11 @@ describe("RunPage flows", () => {
       opening({}, `${PAGE}?sort=run`, "conversation");
       await conversing();
 
-      const first = message("What it was started with");
+      const first = message("Run inputs");
       expect(first).toHaveTextContent(
-        `${setApart("Avo Lumerace")} started it, running the workflow ${setApart("Handle a claim")}.`,
+        `${setApart("Avo Lumerace")} started this run of ${setApart("Handle a claim")}.`,
       );
-      expect(within(first).queryByRole("link", { name: "Beneath" })).toBeNull();
+      expect(within(first).queryByRole("link", { name: "Part of" })).toBeNull();
       expect(
         within(first).queryByRole("link", {
           name: "Open the step that started it",
@@ -1261,10 +1421,10 @@ describe("RunPage flows", () => {
       opening({ [`GET ${RUN}`]: [reply(unstarted)] }, PAGE, "conversation");
       await conversing();
 
-      const first = message("What it was started with");
+      const first = message("Run inputs");
 
       expect(first).toHaveTextContent(
-        `Somebody who can no longer be found started it, running the workflow ${setApart("Handle a claim")}.`,
+        `Someone no longer in this system started this run of ${setApart("Handle a claim")}.`,
       );
       expect(first).not.toHaveTextContent("Avo Lumerace");
     });
@@ -1284,14 +1444,14 @@ describe("RunPage flows", () => {
         );
         await conversing();
 
-        const first = message("What it was started with");
+        const first = message("Run inputs");
 
         expect(getComputedStyle(first).marginInlineStart === "auto").toBe(
           trailing,
         );
-        expect(getComputedStyle(first).maxWidth === "85%").toBe(trailing);
+        expect(getComputedStyle(first).maxWidth).toBe("960px");
         expect(first).toHaveTextContent(
-          `${setApart("Avo Lumerace")} started it, running the workflow ${setApart("Handle a claim")}.`,
+          `${setApart("Avo Lumerace")} started this run of ${setApart("Handle a claim")}.`,
         );
         expect(
           getComputedStyle(message(setApart("Summarise"))).marginInlineStart,
@@ -1307,9 +1467,11 @@ describe("RunPage flows", () => {
       async (_case, reader, trailing) => {
         opening(
           {
-            [`GET ${RUN}`]: [reply({ ...STOPPED, acts: [] })],
+            [`GET ${RUN}`]: [reply({ ...STOPPED, stateActs: [] })],
             [`GET ${STEPS}`]: [
-              stepsRead({ run: { ...RUN_HEADER, state: "stopped", acts: [] } }),
+              stepsRead({
+                run: { ...RUN_HEADER, state: "stopped", stateActs: [] },
+              }),
             ],
           },
           PAGE,
@@ -1327,8 +1489,7 @@ describe("RunPage flows", () => {
           new RegExp(`^Stopped by ${setApart("Glinn Havven")}, `),
         );
         expect(
-          getComputedStyle(message("What it was started with"))
-            .marginInlineStart === "auto",
+          getComputedStyle(message("Run inputs")).marginInlineStart === "auto",
         ).toBe(!trailing);
       },
     );
@@ -1358,11 +1519,11 @@ describe("RunPage flows", () => {
         const { sent } = opening(
           {
             [`GET ${RUN}`]: [
-              reply({ ...CLAIM, ...stopped, state: "failed", acts: [] }),
+              reply({ ...CLAIM, ...stopped, state: "failed", stateActs: [] }),
             ],
             [`GET ${STEPS}`]: [
               stepsRead({
-                run: { ...RUN_HEADER, state: "failed", acts: [] },
+                run: { ...RUN_HEADER, state: "failed", stateActs: [] },
                 steps: [
                   SUMMARISE_ROW,
                   {
@@ -1383,8 +1544,8 @@ describe("RunPage flows", () => {
         const last = conversation().lastElementChild as HTMLElement;
         expect(last).toBe(message("Failed"));
         expect(getComputedStyle(last).marginInlineStart).not.toBe("auto");
-        expect(getComputedStyle(last).maxWidth).not.toBe("85%");
-        expect(last).toHaveTextContent(`It failed at ${setApart("file it")}.`);
+        expect(getComputedStyle(last).maxWidth).toBe("960px");
+        expect(last).toHaveTextContent(`Failed at ${setApart("file it")}.`);
         if (stoppedEarlier) {
           const historical = message("Stopped this run");
           expect(historical).toHaveTextContent(setApart("Glinn Havven"));
@@ -1434,7 +1595,9 @@ describe("RunPage flows", () => {
                       value: "Kettle leaks",
                     },
                   ],
-                  acts: ["review"],
+                  stateActs: ["review"],
+                  producedByUserId: AVO.userId,
+                  producedByKind: "person",
                 },
                 {
                   ...FILE_IT_ROW,
@@ -1451,6 +1614,8 @@ describe("RunPage flows", () => {
         },
         PAGE,
         "conversation",
+        GLINN.userId,
+        ["read_own_runs", "review_at_gate"],
       );
       await conversing();
 
@@ -1463,15 +1628,19 @@ describe("RunPage flows", () => {
 
       expect(headings).toEqual([
         [1, setApart("Claim from Avo")],
-        [2, "What it was started with"],
+        [2, "Run inputs"],
         [2, setApart("Summarise")],
-        [3, "What went in"],
-        [3, "Your review"],
+        [3, "Inputs"],
+        [3, `${setApart("Text")} · text`],
+        [3, "Needs your review"],
+        [3, `${setApart("Summary")} · summary`],
         [2, setApart("file it")],
         [2, "Failed"],
-        [3, "What stood by then"],
-        [2, "About it"],
-        [3, "The steps so far"],
+        [3, "Result so far"],
+        [3, `${setApart("Summary")} · summary`],
+        [2, "Overview"],
+        [3, "Usage limit"],
+        [3, "Steps so far"],
       ]);
       expect(
         headings.every(
@@ -1491,10 +1660,10 @@ describe("RunPage flows", () => {
         "aria-expanded",
         "false",
       );
-      expect(summarise).not.toHaveTextContent("Try 1 of the 2 it allows");
+      expect(summarise).not.toHaveTextContent("Attempt 1 of 2");
 
       expect(labelled(summarise)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.It stands.",
+        [`${setApart("Summary")} · summary`]: "A kettle leaks.",
       });
       expect(
         within(summarise).getByRole("button", { name: "Details" }),
@@ -1502,10 +1671,10 @@ describe("RunPage flows", () => {
       expect(within(summarise).queryByText("Produced by")).toBeNull();
       expect(within(summarise).queryByRole("link")).toBeNull();
       expect(
-        within(summarise).queryByRole("button", { name: "Earlier try" }),
+        within(summarise).queryByRole("button", { name: "Previous attempt" }),
       ).toBeNull();
       expect(accountOpened(summarise, "Done")).toHaveTextContent(
-        "Try 1 of the 2 it allows",
+        "Attempt 1 of 2",
       );
       expect(within(summarise).queryByText("Produced by")).toBeNull();
       expect(stateControl(fileIt, "Running")).toHaveAttribute(
@@ -1518,7 +1687,7 @@ describe("RunPage flows", () => {
       expect(accountOpened(fileIt, "Running")).toHaveTextContent(
         "Its code is running.",
       );
-      expect(fileIt).toHaveTextContent("Try 1 of the 1 it allows");
+      expect(fileIt).toHaveTextContent("Attempt 1 of 1");
 
       expect(within(summarise).queryByText("Produced by")).toBeNull();
       expect(reads(sent)).toEqual([`GET ${RUN}`, `GET ${STEPS}`]);
@@ -1544,9 +1713,16 @@ describe("RunPage flows", () => {
       ).toHaveAccessibleDescription(setApart("file it"));
       expect(
         within(summarise)
-          .getAllByRole("button")
+          .getAllByRole("button", {
+            name: /^(Done|Details|Previous attempt|Next attempt|Copy step)$/,
+          })
           .map((each) => each.getAttribute("aria-describedby")),
-      ).toEqual(Array(4).fill(within(summarise).getByRole("heading").id));
+      ).toEqual(
+        Array(5).fill(within(summarise).getByRole("heading", { level: 2 }).id),
+      );
+      expect(
+        within(summarise).getByRole("button", { name: "Copy" }),
+      ).toHaveAccessibleDescription(`${setApart("Summary")} · summary`);
     });
 
     it("reads the step's own page as Details opens, drawing who produced its newest try, who reviewed it, where each input comes from, and the way to its page", async () => {
@@ -1571,13 +1747,26 @@ describe("RunPage flows", () => {
       const opened = controlled(details);
       await within(opened).findByText("Produced by");
       expect(labelled(opened)).toEqual({
-        "Asked for by": "The run itself",
+        "Requested by": "The run itself",
         "Produced by": setApart("Avo Lumerace"),
         "Reviewed by": setApart("Glinn Havven"),
-        "How it ended": "It stands.",
-        "What the review said": `${setApart("Summary")}: Assured.`,
-        "Takes from": `${setApart("Text")}: ${setApart("Ticket")}, which the run was started with`,
+        Outcome: "Accepted.",
+        Usage: "None \u2014 no model is used.",
       });
+      const review = within(opened).getByRole("table", {
+        name: "Review decision",
+      });
+      expect(
+        within(review).getByRole("rowheader", { name: setApart("Summary") }),
+      ).toBeVisible();
+      expect(within(review).getByRole("cell")).toHaveTextContent("Accepted.");
+      const inputs = within(opened).getByRole("table", { name: "Inputs" });
+      expect(
+        within(inputs).getByRole("rowheader", { name: setApart("Text") }),
+      ).toBeVisible();
+      expect(within(inputs).getByRole("cell")).toHaveTextContent(
+        `${setApart("Ticket")} (run input)`,
+      );
       expect(
         within(opened).getByRole("link", { name: "Open this step's page" }),
       ).toHaveAttribute("href", `${PAGE}/steps/${SUMMARISE}?sort=run`);
@@ -1593,7 +1782,7 @@ describe("RunPage flows", () => {
       expect(within(opened).queryByText("Produced by")).toBeNull();
     });
 
-    it("says in Details how sure a model was of each value it said so of, after who produced it, and nothing of a value it did not", async () => {
+    it("says in Details how sure a model was of each value it said so of, a quieter line each under who produced it, and nothing of a value it did not", async () => {
       const model = { kind: "model", model: "small", mode: "careful" };
       const spend = {
         callsAModel: true,
@@ -1669,16 +1858,24 @@ describe("RunPage flows", () => {
       await userEvent.click(details);
 
       const opened = controlled(details);
-      await within(opened).findByText("How sure");
+      await within(opened).findByText(`${setApart("Summary")}: 87%`);
       const fields = labelled(opened);
-      expect(fields["How sure"]).toBe(
-        `${setApart("Summary")}: 87%${setApart("Tone")}: 40%`,
+      expect(fields["Produced by"]).toBe(
+        `small in careful${setApart("Summary")}: 87%${setApart("Tone")}: 40%`,
       );
+      const produced = within(opened).getByText("Produced by", {
+        selector: "dt",
+      }).nextElementSibling!;
+      expect(
+        [...produced.querySelectorAll("p")].map((line) => line.textContent),
+      ).toEqual([`${setApart("Summary")}: 87%`, `${setApart("Tone")}: 40%`]);
+      expect(produced).not.toHaveTextContent(setApart("Reply"));
       expect(Object.keys(fields).slice(0, 3)).toEqual([
-        "Asked for by",
+        "Requested by",
         "Produced by",
-        "How sure",
+        "Usage",
       ]);
+      expect(Object.keys(fields)).not.toContain("Confidence");
     });
 
     it("says nothing in Details of how sure where no value carries it, as none of a person's try does", async () => {
@@ -1701,7 +1898,7 @@ describe("RunPage flows", () => {
 
       const opened = controlled(details);
       await within(opened).findByText("Produced by");
-      expect(within(opened).queryByText("How sure")).toBeNull();
+      expect(within(opened).queryByText("Confidence")).toBeNull();
       expect(opened).not.toHaveTextContent(/\d+%/);
     });
 
@@ -1722,38 +1919,44 @@ describe("RunPage flows", () => {
       await conversing();
       const summarise = message(setApart("Summarise"));
       const earlier = within(summarise).getByRole("button", {
-        name: "Earlier try",
+        name: "Previous attempt",
       });
       const later = within(summarise).getByRole("button", {
-        name: "Later try",
+        name: "Next attempt",
       });
-      expect(summarise).not.toHaveTextContent("Try 2 of the 2 it allows");
+      expect(summarise).not.toHaveTextContent("Attempt 2 of 2");
       const account = accountOpened(summarise, "Done");
-      expect(account).toHaveTextContent("Try 2 of the 2 it allows");
+      expect(account).toHaveTextContent("Attempt 2 of 2");
       expect(summarise).not.toHaveTextContent("Try 0");
-      expect(later).toBeDisabled();
+      expect(later).toHaveAttribute("aria-disabled", "true");
 
       await userEvent.click(earlier);
 
       await waitFor(() =>
         expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]: "Kettle.Refused on review.Refused: Too short.",
+          [`${setApart("Summary")} · summary`]: "Kettle.",
         }),
       );
-      within(summarise).getByText("Too short.", { selector: "bdi" });
-      expect(account).toHaveTextContent("Try 1 of the 2 it allows");
-      expect(earlier).toBeDisabled();
+      expect(summarise).toHaveTextContent("Rejected in review");
+      expect(summarise).toHaveTextContent("Rejected:");
+      expect(
+        within(summarise)
+          .getByText("Too short.", { selector: "p" })
+          .closest('[dir="auto"]'),
+      ).toBeInTheDocument();
+      expect(account).toHaveTextContent("Attempt 1 of 2");
+      expect(earlier).toHaveAttribute("aria-disabled", "true");
       expect(later).toBeEnabled();
       expect(document.activeElement).toBe(later);
 
       await userEvent.click(later);
 
       expect(labelled(summarise)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.It stands.",
+        [`${setApart("Summary")} · summary`]: "A kettle leaks.",
       });
-      expect(account).toHaveTextContent("Try 2 of the 2 it allows");
+      expect(account).toHaveTextContent("Attempt 2 of 2");
       expect(summarise).not.toHaveTextContent("Try 0");
-      expect(later).toBeDisabled();
+      expect(later).toHaveAttribute("aria-disabled", "true");
       expect(document.activeElement).toBe(earlier);
       expect(reads(sent)).toEqual([
         `GET ${RUN}`,
@@ -1770,7 +1973,16 @@ describe("RunPage flows", () => {
             field: "summary",
             value: "Kettle.",
             now: "refused_for_length",
-            decision: { outcome: "assured" },
+            decision: {
+              outcome: "refused",
+              lengthUnits: "10",
+              excessUnits: "1",
+              lengthHeld: {
+                run: { runId: RUN_ID, number: 1 },
+                stepId: FILE_IT,
+                stepName: "file_it",
+              },
+            },
           },
         ],
         ended: "refused_for_length",
@@ -1792,15 +2004,31 @@ describe("RunPage flows", () => {
       const summarise = message(setApart("Summarise"));
 
       await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
+        within(summarise).getByRole("button", { name: "Previous attempt" }),
       );
 
       await waitFor(() =>
         expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]: "Kettle.Refused for its length.",
+          [`${setApart("Summary")} · summary`]: "Kettle.",
         }),
       );
-      expect(summarise).not.toHaveTextContent("Assured.");
+      expect(summarise).toHaveTextContent("Rejected for length");
+      expect(summarise).toHaveTextContent(
+        `${setApart("Summary")}: made the request from ${setApart("file it")} in run 1 too long to send.`,
+      );
+      expect(summarise).toHaveTextContent(
+        `${setApart("Summary")}: about 10 unitsToo long by: about 1 unit`,
+      );
+      expect(summarise).not.toHaveTextContent("Accepted.");
+      expect(summarise).not.toHaveTextContent("Rejected in review");
+      expect(
+        within(summarise).getByRole("link", {
+          name: `Open ${setApart("file it")}`,
+        }),
+      ).toHaveAttribute(
+        "href",
+        `/groups/CLAIMS/work/${RUN_ID}/steps/${FILE_IT}`,
+      );
     });
 
     /** A model's try: a person's is never lost, and one of theirs giving nothing back is never followed by another. */
@@ -1843,15 +2071,15 @@ describe("RunPage flows", () => {
       const summarise = message(setApart("Summarise"));
 
       await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
+        within(summarise).getByRole("button", { name: "Previous attempt" }),
       );
 
       expect(
-        await within(summarise).findByText("Nothing came back."),
+        await within(summarise).findByText("No response came back."),
       ).toBeInTheDocument();
-      expect(summarise).not.toHaveTextContent("Try 1 of the 2 it allows");
+      expect(summarise).not.toHaveTextContent("Attempt 1 of 2");
       expect(accountOpened(summarise, "Done")).toHaveTextContent(
-        "Try 1 of the 2 it allows",
+        "Attempt 1 of 2",
       );
       expect(within(summarise).queryByRole("term")).toBeNull();
       expect(summarise).not.toHaveTextContent("A kettle leaks.");
@@ -1884,11 +2112,11 @@ describe("RunPage flows", () => {
       const summarise = message(setApart("Summarise"));
 
       await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
+        within(summarise).getByRole("button", { name: "Previous attempt" }),
       );
 
       const ended = await within(summarise).findByText(
-        "What came back did not fit what was declared.",
+        "The answer did not match the expected format.",
       );
       expect(ended.nextElementSibling).toHaveTextContent(
         "The answer left out a value it was asked for.",
@@ -1960,12 +2188,12 @@ describe("RunPage flows", () => {
       const filing = message(setApart("file it"));
 
       await userEvent.click(
-        within(filing).getByRole("button", { name: "Earlier try" }),
+        within(filing).getByRole("button", { name: "Previous attempt" }),
       );
 
-      const ended = await within(filing).findByText("It went wrong.");
+      const ended = await within(filing).findByText("An error occurred.");
       expect(ended.nextElementSibling).toHaveTextContent(
-        `What its code gave back as ${setApart("Claim reference")} no longer matched what this workflow was to give back as ${setApart("Summary")}.`,
+        `The code's output ${setApart("Claim reference")} no longer matched this workflow's output ${setApart("Summary")}.`,
       );
       expect(filing).not.toHaveTextContent(/gives_otherwise|summary/);
     });
@@ -1987,14 +2215,16 @@ describe("RunPage flows", () => {
                     reason: "tries_spent",
                     waitsOn: "answer_step",
                   },
-                  withheld: [
+                  stateRefusals: [
                     {
                       act: "answer",
                       refusal: "CODE_STEP_GIVES_OTHERWISE",
-                      field: "reference",
-                      readBy: { step: NOTIFY },
                     },
                   ],
+                  givesOtherwise: {
+                    field: "reference",
+                    readBy: { step: NOTIFY },
+                  },
                 },
                 notify,
               ],
@@ -2003,6 +2233,8 @@ describe("RunPage flows", () => {
         },
         PAGE,
         "conversation",
+        GLINN.userId,
+        ["read_own_runs", "answer_step"],
       );
       await conversing();
 
@@ -2010,7 +2242,7 @@ describe("RunPage flows", () => {
 
       expect(filing).not.toHaveTextContent("no longer matches");
       expect(accountOpened(filing, "Failed")).toHaveTextContent(
-        `What its code gives back as ${setApart("Claim reference")} no longer matches what ${setApart("notify them")} reads from it.`,
+        `This code step's output ${setApart("Claim reference")} no longer matches what ${setApart("notify them")} expects from it.`,
       );
       expect(filing).not.toHaveTextContent(/a later step|notify_them/);
       expect(filing).not.toHaveTextContent(NOTIFY);
@@ -2019,28 +2251,28 @@ describe("RunPage flows", () => {
     it.each([
       [
         "unsent",
-        "It waits on a model's review, which this system sends by itself.",
+        "Waiting for the model's review, which the system will request automatically.",
       ],
-      ["out", "It waits on a model's review; the call asking for it is out."],
+      ["out", "Waiting for the model's review — request in progress."],
       [
         "turned_away",
-        "It waits on a model's review, which could not be sent: the model would not take it.",
+        "Waiting for the model's review, which could not be sent: the model service turned the request away.",
       ],
       [
         "too_long",
-        "What its review would send is longer than the model that reviews it takes, so it was not sent, and somebody who may review it does so instead.",
+        "The review request would be too long for the reviewing model, so it was not sent. Someone who can review does it instead.",
       ],
       [
         "list_not_here",
-        "This could not be put to the model that reviews it: a reference list it names is not here, so a person reviews it instead.",
+        "This couldn't go to the reviewing model: a reference list it uses isn't available here, so a person reviews it instead.",
       ],
       [
         "takes_no_longer_declared",
-        "This could not be put to the model that reviews it: the release no longer declares what this step takes, so a person reviews it instead.",
+        "This couldn't go to the reviewing model: the installed version of this code step no longer defines its inputs, so a person reviews it instead.",
       ],
       [
         "no_longer_declared",
-        "This could not be put to the model that reviews it: the release no longer declares what this step gave back, so a person reviews it instead.",
+        "This couldn't go to the reviewing model: the installed version of this code step no longer defines its outputs, so a person reviews it instead.",
       ],
     ])(
       "draws a model review that is %s as waiting in Conversation",
@@ -2075,9 +2307,11 @@ describe("RunPage flows", () => {
         );
         expect(shown).not.toHaveTextContent(sentence);
         expect(accountOpened(shown, "Waiting")).toHaveTextContent(sentence);
-        expect(shown).not.toHaveTextContent("Held back");
+        expect(shown).not.toHaveTextContent("Blocked");
         expect(
-          within(shown).queryByText("The model it names would not take it."),
+          within(shown).queryByText(
+            "The model service turned the request away.",
+          ),
         ).toBeNull();
       },
     );
@@ -2117,9 +2351,9 @@ describe("RunPage flows", () => {
       await conversing();
       const summarise = message(setApart("Summarise"));
       expect(summarise).not.toHaveTextContent(/Turned away/);
-      accountOpened(summarise, "Held back");
+      accountOpened(summarise, "Blocked");
       const holding = within(summarise).getByText(
-        "The model it names would not take it.",
+        "The model service turned the request away.",
       );
       const turned = within(summarise).getByText(
         `Turned away ${whenText("2026-09-24T08:04:00Z")}.`,
@@ -2137,15 +2371,13 @@ describe("RunPage flows", () => {
         within(summarise).getByRole("button", { name: "Details" }),
       );
 
-      await within(summarise).findByText("No try has been made yet.");
+      await within(summarise).findByText("No attempts yet.");
       expect(summarise).not.toHaveTextContent("Try 0");
       expect(within(summarise).queryByText("Produced by")).toBeNull();
-      expect(
-        within(summarise).queryByText("Try 1 of the 2 it allows"),
-      ).toBeNull();
+      expect(within(summarise).queryByText("Attempt 1 of 2")).toBeNull();
       expect(within(summarise).getAllByText(/^Turned away/)).toEqual([turned]);
       expect(
-        within(summarise).queryByText("Times the model would not take it"),
+        within(summarise).queryByText("Times the model service turned it away"),
       ).toBeNull();
     });
 
@@ -2208,13 +2440,13 @@ describe("RunPage flows", () => {
       await conversing();
       const summarise = message(setApart("Summarise"));
       await userEvent.click(
-        within(summarise).getByRole("button", { name: "Earlier try" }),
+        within(summarise).getByRole("button", { name: "Previous attempt" }),
       );
       await userEvent.click(
         within(summarise).getByRole("button", { name: "Details" }),
       );
 
-      expect(within(summarise).getAllByText("Still reading…")).toHaveLength(1);
+      expect(within(summarise).getAllByText("Loading…")).toHaveLength(1);
 
       await act(async () => {
         settle([JSON.stringify({ code: "STEP_NOT_IN_VIEW" }), 404]);
@@ -2223,8 +2455,10 @@ describe("RunPage flows", () => {
 
       const refused = within(summarise).getAllByRole("alert");
       expect(refused).toHaveLength(1);
-      expect(refused[0]).toHaveTextContent("That step is not in view.");
-      expect(within(summarise).queryByText("Still reading…")).toBeNull();
+      expect(refused[0]).toHaveTextContent(
+        "That step isn't here, or you can't see it.",
+      );
+      expect(within(summarise).queryByText("Loading…")).toBeNull();
       expect(within(summarise).queryByText("Produced by")).toBeNull();
     });
 
@@ -2256,7 +2490,9 @@ describe("RunPage flows", () => {
       );
       const summarise = message(setApart("Summarise"));
       act(() =>
-        within(summarise).getByRole("button", { name: "Earlier try" }).click(),
+        within(summarise)
+          .getByRole("button", { name: "Previous attempt" })
+          .click(),
       );
       await landing(() => (summarise.textContent ?? "").includes("Kettle."));
 
@@ -2278,7 +2514,7 @@ describe("RunPage flows", () => {
 
     it("refreshes opened Details when its step changes and stops when the run no longer runs", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const done = { ...CLAIM, state: "done", acts: [] };
+      const done = { ...CLAIM, state: "done", stateActs: [] };
       const { sent } = opening(
         {
           [`GET ${RUN}`]: [reply(CLAIM), reply(CLAIM), reply(done)],
@@ -2286,7 +2522,7 @@ describe("RunPage flows", () => {
             stepsRead({ rereadAfterSeconds: 2 }),
             stepsRead({ rereadAfterSeconds: 2 }),
             stepsRead(
-              { run: { ...RUN_HEADER, state: "done", acts: [] } },
+              { run: { ...RUN_HEADER, state: "done", stateActs: [] } },
               { state: "done", where: undefined },
             ),
           ],
@@ -2329,12 +2565,12 @@ describe("RunPage flows", () => {
       [
         "the reader gave it",
         "REVIEW_OWN_PRODUCTION",
-        "You gave this, so somebody else reviews it.",
+        "You produced this, so someone else must review it.",
       ],
       [
         "the reader's roles reach no review",
         "ACT_NOT_PERMITTED",
-        "You may not review it.",
+        "You don't have permission to review it.",
       ],
     ])(
       "says a value waiting on review is not the reader's to review where %s, whom it waits on and since when, and offers nothing to review it with",
@@ -2342,11 +2578,15 @@ describe("RunPage flows", () => {
         opening(
           {
             [`GET ${STEPS}`]: [
-              stepsRead({ steps: [waitingOnReview(refusal), FILE_IT_ROW] }),
+              stepsRead({ steps: [waitingOnReview(), FILE_IT_ROW] }),
             ],
           },
           PAGE,
           "conversation",
+          refusal === "REVIEW_OWN_PRODUCTION" ? AVO.userId : undefined,
+          refusal === "REVIEW_OWN_PRODUCTION"
+            ? ["read_own_runs", "review_at_gate"]
+            : ["read_own_runs"],
         );
         await conversing();
 
@@ -2359,18 +2599,19 @@ describe("RunPage flows", () => {
         expect(summarise).not.toHaveTextContent(sentence);
         const account = accountOpened(summarise, "Waiting");
         expect(account).toHaveTextContent(
-          `${setApart("Summary")} is not reviewed yet.It waits on somebody who may review it.`,
+          `${setApart("Summary")} has not been reviewed yet.Waiting for a reviewer.`,
         );
         expect(account).toHaveTextContent(/Since /);
-        expect(summarise).toHaveTextContent("Try 1 of the 2 it allows");
+        expect(summarise).toHaveTextContent("Attempt 1 of 2");
 
         expect(account).toHaveTextContent(sentence);
+        expect(within(summarise).getByText("Waiting for review")).toBeVisible();
         expect(labelled(summarise)).toEqual({
-          [setApart("Summary")]: "A kettle leaks.It waits on review.",
+          [`${setApart("Summary")} · summary`]: "A kettle leaks.",
         });
         expect(
           within(summarise)
-            .getAllByRole("button")
+            .getAllByRole("button", { name: /^(Waiting|Details)$/ })
             .map((each) => each.textContent),
         ).toEqual(["Waiting", "Details"]);
         expect(summarise).not.toHaveTextContent(refusal);
@@ -2405,7 +2646,7 @@ describe("RunPage flows", () => {
                   gaveBack: [
                     { field: "summary", value: "Kettle.", now: "refused" },
                   ],
-                  withheld: [{ act: "answer", refusal: "ENTRY_STOPPED" }],
+                  stateRefusals: [{ act: "answer", refusal: "ENTRY_STOPPED" }],
                 },
                 notReached(FILE_IT, 2, "file_it"),
               ],
@@ -2419,7 +2660,7 @@ describe("RunPage flows", () => {
 
       const summarise = message(setApart("Summarise"));
 
-      expect(accountOpened(summarise, "Held back")).toHaveTextContent(
+      expect(accountOpened(summarise, "Blocked")).toHaveTextContent(
         `Stopped by ${setApart("Glinn Havven")}, `,
       );
       expect(summarise).not.toHaveTextContent(/Since /);
@@ -2451,7 +2692,9 @@ describe("RunPage flows", () => {
                     stopped: { what: "entry", by: GLINN, at: stoppedAt },
                     waitsOn: "starter",
                   },
-                  withheld: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
+                  stateRefusals: [
+                    { act: "try_sending", refusal: "ENTRY_STOPPED" },
+                  ],
                 },
                 notReached(FILE_IT, 2, "file_it"),
               ],
@@ -2474,20 +2717,20 @@ describe("RunPage flows", () => {
     });
 
     it.each([
-      ["done, with what it gave back", CLAIM, {}, "Done", /^What it gave back/],
+      ["done, with what it gave back", CLAIM, {}, "Done", /^Result/],
       [
         "done, as one that acts rather than answers",
         CLAIM,
         { gaveBack: { declares: "nothing" } },
         "Done",
-        /^Its workflow gives nothing back: it acts rather than answers\.$/,
+        /^This workflow returns no result: it carries out actions rather than giving answers\.$/,
       ],
       [
         "stopped, by whom, with what stood by then",
         STOPPED,
         {},
         new RegExp(`^Stopped by ${setApart("Glinn Havven")}, `),
-        /^What stood by then/,
+        /^Result so far/,
       ],
     ])(
       "ends with its last message where it is %s",
@@ -2495,10 +2738,10 @@ describe("RunPage flows", () => {
         const state = run === STOPPED ? "stopped" : "done";
         opening(
           {
-            [`GET ${RUN}`]: [reply({ ...run, state, acts: [] })],
+            [`GET ${RUN}`]: [reply({ ...run, state, stateActs: [] })],
             [`GET ${STEPS}`]: [
               stepsRead(
-                { run: { ...RUN_HEADER, state, acts: [] }, ...changed },
+                { run: { ...RUN_HEADER, state, stateActs: [] }, ...changed },
                 // A run whose every step is done is done, stopped or not: a stopped one is left a step short.
                 state === "stopped" ? {} : { state: "done", where: undefined },
               ),
@@ -2520,7 +2763,9 @@ describe("RunPage flows", () => {
           within(last)
             .queryAllByRole("term")
             .map((term) => term.textContent),
-        ).toEqual("gaveBack" in changed ? [] : [setApart("Summary")]);
+        ).toEqual(
+          "gaveBack" in changed ? [] : [`${setApart("Summary")} · summary`],
+        );
       },
     );
 
@@ -2550,11 +2795,11 @@ describe("RunPage flows", () => {
       const last = message("Failed");
 
       expect(last).toHaveTextContent(
-        `It failed at ${setApart("file it")}.Every try it allows has been made, and none of them stands.`,
+        `Failed at ${setApart("file it")}.All allowed attempts are used up, and none was accepted.`,
       );
-      expect(last).toHaveTextContent("What stood by then");
+      expect(last).toHaveTextContent("Result so far");
       expect(labelled(last)).toEqual({
-        [setApart("Summary")]: "A kettle leaks.",
+        [`${setApart("Summary")} · summary`]: "A kettle leaks.",
       });
       expect(messages().at(-1)).toBe("Failed");
     });
@@ -2579,7 +2824,9 @@ describe("RunPage flows", () => {
         "button",
         { name: "Details" },
       );
-      details.focus();
+      await act(async () => {
+        details.focus();
+      });
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
       await landing(() =>
@@ -2587,9 +2834,16 @@ describe("RunPage flows", () => {
       );
 
       expect(document.activeElement).toBe(details);
-      expect(screen.getAllByRole("status")[0]).toHaveTextContent(
+      expect(regionsSaid()).toEqual([
+        "",
         `${setApart("file it")}: now Done.`,
-      );
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]);
       expect(message(setApart("file it"))).not.toHaveTextContent("Running");
     });
 
@@ -2613,7 +2867,9 @@ describe("RunPage flows", () => {
 
       await act(() => vi.advanceTimersByTimeAsync(1000));
       await landing(
-        () => screen.queryByText("That run is not in view.") !== null,
+        () =>
+          screen.queryByText("That run isn't here, or you can't see it.") !==
+          null,
       );
 
       expect(
@@ -2670,7 +2926,9 @@ describe("RunPage flows", () => {
           later.settle([JSON.stringify({ code: "RUN_NOT_IN_VIEW" }), 404]),
         );
 
-        expect(screen.getByText("That run is not in view.")).toBeVisible();
+        expect(
+          screen.getByText("That run isn't here, or you can't see it."),
+        ).toBeVisible();
         expect(screen.queryByText("A kettle leaks.")).toBeNull();
         expect(
           screen.queryByRole("list", { name: "The conversation" }),
@@ -2694,7 +2952,9 @@ describe("RunPage flows", () => {
         }),
       );
 
-      expect(await screen.findByText("That run is not in view.")).toBeVisible();
+      expect(
+        await screen.findByText("That run isn't here, or you can't see it."),
+      ).toBeVisible();
       expect(
         screen.queryByRole("list", { name: "The conversation" }),
       ).toBeNull();
@@ -2721,7 +2981,9 @@ describe("RunPage flows", () => {
           .click(),
       );
       await landing(
-        () => screen.queryByText("That run is not in view.") !== null,
+        () =>
+          screen.queryByText("That run isn't here, or you can't see it.") !==
+          null,
       );
       const runCount = runReads(sent);
       const stepsCount = requestsTo(sent).filter(
@@ -2748,7 +3010,7 @@ describe("RunPage flows", () => {
           [`GET ${STEPS}`]: [
             stepsRead({
               rereadAfterSeconds: 1,
-              steps: [waitingOnReview("ACT_NOT_PERMITTED"), FILE_IT_ROW],
+              steps: [waitingOnReview(), FILE_IT_ROW],
             }),
             stepsRead(),
           ],
@@ -2765,9 +3027,16 @@ describe("RunPage flows", () => {
         (message(setApart("Summarise")).textContent ?? "").includes("Done"),
       );
 
-      expect(screen.getAllByRole("status")[0]!.textContent).toBe(
+      expect(regionsSaid()).toEqual([
+        "",
         `${setApart("Summarise")}: now Done.`,
-      );
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]);
     });
 
     /** Timeouts are faked, as where each step is kept up is. */
@@ -2796,7 +3065,9 @@ describe("RunPage flows", () => {
         `${PAGE}?filter=claim`,
       );
 
-      aimed.blur();
+      await act(async () => {
+        aimed.blur();
+      });
       await act(() => vi.advanceTimersByTimeAsync(1000));
       await landing(() => reads(sent).length === 4);
 

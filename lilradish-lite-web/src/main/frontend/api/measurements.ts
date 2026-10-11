@@ -3,7 +3,7 @@ import { get } from "../lib/request/http";
 
 const MEASUREMENTS = "/api/measurements";
 
-/** One model in one mode, or run as it is; its name is as its calls named it, held or not. */
+/** Its name is as its calls named it, held or not. */
 export interface ModelMeasured {
   readonly model: string;
   /** Null where it ran as it is. */

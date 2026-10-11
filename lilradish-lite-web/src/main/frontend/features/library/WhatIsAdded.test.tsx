@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -26,11 +26,13 @@ describe("WhatIsAdded", () => {
       "The instructions and answer schema, exactly as sent to the model.",
     );
     expect(part().querySelector("pre")).toBeNull();
-    screen
-      .getByRole("button", {
-        name: /What is sent to the model on top of the instruction/,
-      })
-      .focus();
+    await act(async () => {
+      screen
+        .getByRole("button", {
+          name: "About what is added when it runs",
+        })
+        .focus();
+    });
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Nobody edits it",
     );

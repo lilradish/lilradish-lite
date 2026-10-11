@@ -28,7 +28,7 @@ const REFUSED: Problem = { status: 404, code: "PERSON_NOT_IN_VIEW" };
 const NOT_IN_VIEW = "That person is not in the pool.";
 
 /** `theme.palette.text.secondary`, as a resolved colour is reported back. */
-const QUIET_COLOUR = "rgb(89, 89, 89)";
+const QUIET_COLOUR = "rgb(88, 102, 108)";
 
 function themed({ children }: { children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
@@ -115,7 +115,7 @@ describe("Async", () => {
   it("says nothing about emptiness while the answer is still out", () => {
     showing(read({ loading: true }));
 
-    expect(screen.getByText("Still reading…")).toBeVisible();
+    expect(screen.getByText("Loading…")).toBeVisible();
     expect(screen.queryByText(NOTHING)).toBeNull();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
   });
@@ -133,7 +133,7 @@ describe("Async", () => {
     expect(
       screen.getAllByRole("listitem").map((row) => row.textContent),
     ).toEqual(["Invoice 4417", "Invoice 4418"]);
-    expect(screen.queryByText("Still reading…")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 
   /**
@@ -151,7 +151,7 @@ describe("Async", () => {
   it("sets the line standing in for an answer apart from an answer while the read is still out", () => {
     showing(read({ loading: true }));
 
-    expect(getComputedStyle(screen.getByText("Still reading…")).color).toBe(
+    expect(getComputedStyle(screen.getByText("Loading…")).color).toBe(
       QUIET_COLOUR,
     );
   });
@@ -196,7 +196,7 @@ describe("Async", () => {
 
     expect(before).toBe("");
     expect(screen.getByRole("status")).toBe(region);
-    expect(region).toHaveTextContent("Still reading…");
+    expect(region).toHaveTextContent("Loading…");
     expect(titles()).toEqual(["Invoice 4417", "Invoice 4418"]);
   });
 
@@ -208,7 +208,7 @@ describe("Async", () => {
     await queue.answer(WAITING);
 
     expect(screen.getByRole("status")).toHaveTextContent("");
-    expect(screen.queryByText("Still reading…")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 
   /**
@@ -221,7 +221,7 @@ describe("Async", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Read another" }));
 
-    expect(screen.getByText("Still reading…")).toBeVisible();
+    expect(screen.getByText("Loading…")).toBeVisible();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
     expect(screen.queryByRole("button", { name: "Read again" })).toBeNull();
   });
@@ -235,7 +235,7 @@ describe("Async", () => {
 
     expect(screen.getByText(NOT_IN_VIEW)).toBeVisible();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
-    expect(screen.queryByText("Still reading…")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 });
 

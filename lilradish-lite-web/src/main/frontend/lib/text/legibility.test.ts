@@ -10,7 +10,6 @@ import {
   nameFits,
   noteRefused,
   oneLineWithin,
-  proseFits,
   proseCharactersRefused,
   proseRefused,
   reasonRefused,
@@ -31,7 +30,6 @@ interface Case {
   readonly accepted: boolean;
 }
 
-/** A prose case, which names why the server refuses it as well. */
 interface ProseCase extends Case {
   readonly refused: ProseRefusal | TermRefusal | null;
 }
@@ -57,6 +55,18 @@ function typedIn(each: Case): string {
 }
 
 describe("nameFits", () => {
+  it.each(["\u115f", "\u034f", "\ufe0f", "\u3164", "\u200d"])(
+    "requires a visible character beyond default-ignorable %j",
+    (invisible) => {
+      expect(nameFits(invisible)).toBe(false);
+      expect(lineFits(invisible)).toBe(false);
+      expect(showsInProse(invisible)).toBe(false);
+      expect(nameFits(`Visible${invisible}`)).toBe(true);
+      expect(lineFits(`Visible${invisible}`)).toBe(true);
+      expect(showsInProse(`Visible${invisible}`)).toBe(true);
+    },
+  );
+
   it("holds cases to judge, an empty table agreeing with anything", () => {
     expect(CASES.name.length).toBeGreaterThan(0);
   });
@@ -95,24 +105,17 @@ describe("labelFits", () => {
   );
 });
 
-describe("proseFits", () => {
+describe("proseRefused", () => {
   it("holds cases to judge, an empty table agreeing with anything", () => {
     expect(CASES.prose.length).toBeGreaterThan(0);
   });
 
-  it.each(CASES.prose as readonly Case[])(
-    "judges %j as the server's instruction does",
-    (each) => {
-      expect(proseFits(typedIn(each))).toBe(each.accepted);
-    },
-  );
-});
-
-describe("proseRefused", () => {
   it.each(CASES.prose as readonly ProseCase[])(
-    "names %j refused for the reason the server's instruction names",
+    "judges %j and names the refusal as the server's instruction does",
     (each) => {
-      expect(proseRefused(typedIn(each))).toBe(each.refused);
+      const refused = proseRefused(typedIn(each));
+      expect(refused === null).toBe(each.accepted);
+      expect(refused).toBe(each.refused);
     },
   );
 });
@@ -211,8 +214,8 @@ describe("oneLineWithin", () => {
     ["a format character alone", String.fromCodePoint(0x200b), 2, true],
     ["a line feed", "a\nb", 3, false],
     ["a control past the C0 block", "a\u0085b", 3, false],
-    ["a line separator", "a b", 3, false],
-    ["a paragraph separator", "a b", 3, false],
+    ["a line separator", "a\u2028b", 3, false],
+    ["a paragraph separator", "a\u2029b", 3, false],
     ["a lone surrogate", "a\ud800b", 3, false],
   ] as const)(
     "judges %s, typed %j, as one line within %i: %s",

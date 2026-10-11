@@ -6,7 +6,7 @@ create table people (
     display_name_folded text generated always as (search_fold(display_name)) stored,
 
     constraint people_pk primary key (user_id),
-    -- The floors subjects puts on the same two values, for the reasons given there.
+    -- These floors mirror subjects' checks on the same values; change both together.
     constraint people_user_id_visible check (
         length(user_id) > 0 and user_id !~ '[\u0000-\u001f\u007f-\u009f]'),
     constraint people_user_id_bounded check (length(user_id) <= 256),

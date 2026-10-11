@@ -7,10 +7,10 @@ import {
   textFrom,
 } from "../lib/request/document";
 import type { VersionStanding } from "./groups/{groupId}/{kind}";
+import { isVersionName } from "./groups/{groupId}/{kind}";
 
 /**
- * What a field may be, spelt the way the server spells it, and held level
- * with the server's list for the reason `SurfaceAct` gives.
+ * Field kinds use the server's spelling, held level as `SurfaceAct` is.
  */
 export type FieldKind =
   "text" | "number" | "date" | "moment" | "yes_no" | "term" | "fields" | "file";
@@ -44,6 +44,7 @@ const KNOWN_STANDINGS = {
 
 /** One version of a reference list, by the number a member reads it by. */
 export interface ListVersion {
+  readonly versionName: string | null;
   /** Shown isolated wherever it is shown, for the reason `EntryRow` gives. */
   readonly name: string;
   readonly versionId: string;
@@ -56,15 +57,19 @@ export interface ListVersion {
  */
 export interface PinnedList extends ListVersion {
   readonly standing: VersionStanding | (string & {});
-  readonly newer?: { readonly versionId: string; readonly number: number };
+  readonly newer?: {
+    readonly versionId: string;
+    readonly number: number;
+    readonly versionName: string | null;
+  };
 }
 
 /**
- * One field as the server reads it. Whatever a draft has not chosen yet is
- * absent, and so is whatever its kind, its half or its depth does not take.
+ * Whatever a draft has not chosen yet is absent, as is whatever its kind,
+ * half or depth does not take.
  */
 export interface DeclaredField {
-  /** The key it is stored under, which changes each time its half is written. */
+  /** The key it is stored under; a full rewrite of its declaration half replaces it. */
   readonly fieldId: string;
   readonly name: string;
   readonly label?: string;
@@ -114,8 +119,7 @@ const KINDS: ReadonlySet<string> = new Set(Object.keys(KNOWN_KINDS));
 const STANDINGS: ReadonlySet<string> = new Set(Object.keys(KNOWN_STANDINGS));
 
 /**
- * Built member by member; a field of a kind or a standing this build does not
- * know is not one it can draw or send back, so the document is refused.
+ * An unknown kind or standing cannot be drawn or sent back, so refuses the document.
  */
 export function declaredFrom(body: unknown): DeclaredField | null {
   if (!isUnchecked(body)) {
@@ -192,9 +196,15 @@ export function listVersionFrom(body: unknown): ListVersion | null {
   const { name, versionId, number } = body;
   return typeof name === "string" &&
     typeof versionId === "string" &&
+    isVersionName(body.versionName) &&
     Number.isSafeInteger(number) &&
     (number as number) > 0
-    ? { name, versionId, number: number as number }
+    ? {
+        name,
+        versionId,
+        number: number as number,
+        versionName: body.versionName,
+      }
     : null;
 }
 
@@ -207,9 +217,14 @@ export function pinnedFrom(body: unknown): PinnedList | null {
   const newer = optional(body, "newer", (said) =>
     isUnchecked(said) &&
     typeof said.versionId === "string" &&
+    isVersionName(said.versionName) &&
     Number.isSafeInteger(said.number) &&
     (said.number as number) > 0
-      ? { versionId: said.versionId, number: said.number as number }
+      ? {
+          versionId: said.versionId,
+          number: said.number as number,
+          versionName: said.versionName,
+        }
       : null,
   );
   if (typeof body.standing !== "string" || newer === null) {
@@ -217,6 +232,20 @@ export function pinnedFrom(body: unknown): PinnedList | null {
   }
   const pinned = { ...listed, standing: body.standing };
   return newer === undefined ? pinned : { ...pinned, newer };
+}
+
+/** Each list's terms in server order, shared by content reads and independent pin details. */
+export function termsFrom(
+  body: unknown,
+): Map<string, readonly string[]> | null {
+  if (!isUnchecked(body)) return null;
+  const terms = new Map<string, readonly string[]>();
+  for (const [list, offered] of Object.entries(body)) {
+    const read = listOf(offered, textFrom);
+    if (read === null) return null;
+    terms.set(list, read);
+  }
+  return terms;
 }
 
 function standingFrom(said: unknown): FieldStanding | null {
@@ -227,11 +256,10 @@ function standingFrom(said: unknown): FieldStanding | null {
 
 export const MOST_FILE_TYPES = 64;
 
-const FILE_TYPE =
-  /^[a-z0-9][a-z0-9!#$&.^_+-]{0,126}\/[a-z0-9][a-z0-9!#$&.^_+-]{0,126}$/;
+const FILE_TYPE = /^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/;
 
 export function fileTypeFits(type: string): boolean {
-  return FILE_TYPE.test(type);
+  return type.length <= 33 && FILE_TYPE.exec(type)?.[0] === type;
 }
 
 function fileTypesFrom(body: unknown): readonly string[] | null {

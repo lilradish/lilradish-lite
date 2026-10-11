@@ -3,15 +3,14 @@ import { useCallback, type ReactNode } from "react";
 import type { EntryKind, Version } from "../../api/groups/{groupId}/{kind}";
 import type { ReferenceListVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import type { Problem } from "../../api/problem";
+import { useStanding } from "../../app/standing/StandingContext";
+import { versionOffers } from "./actRules";
 import { contentOf, type ReadContent } from "./ContentProblems";
 import { QuestionContent } from "./QuestionContent";
 import { ReferenceListContent } from "./ReferenceListContent";
 import { WorkflowContent } from "./WorkflowContent";
 
-/**
- * The version picked, drawn by its kind's editor. Drawn afresh for every version picked,
- * so nothing typed into one is carried to the next.
- */
+/** Drawn afresh for every version picked, so nothing typed into one is carried to the next. */
 export function VersionContent({
   kind,
   groupId,
@@ -37,6 +36,8 @@ export function VersionContent({
   /** The document around the content; a workflow's panel stands outside it. */
   readonly wrapDocument?: (content: ReactNode) => ReactNode;
 }) {
+  const standing = useStanding();
+  const editable = versionOffers(version, "write", standing, groupId);
   const listShown = useCallback(
     (list: ReferenceListVersion | null) =>
       onShown(list === null ? null : contentOf(list)),
@@ -52,6 +53,7 @@ export function VersionContent({
           groupId={groupId}
           entryId={entryId}
           version={version}
+          editable={editable}
           readCount={readCount}
           onRefused={onRefused}
           onWritten={onWritten}
@@ -66,6 +68,7 @@ export function VersionContent({
           groupId={groupId}
           entryId={entryId}
           version={version}
+          editable={editable}
           readCount={readCount}
           onRefused={onRefused}
           onWritten={onWritten}
@@ -79,6 +82,7 @@ export function VersionContent({
           groupId={groupId}
           entryId={entryId}
           version={version}
+          editable={editable}
           readCount={readCount}
           onRefused={onRefused}
           onWritten={onWritten}

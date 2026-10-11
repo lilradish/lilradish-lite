@@ -43,8 +43,7 @@ const WITHHELD_SX = { listStyleType: "none", m: 0, p: 0 };
  * in its box, which here is the search. A match the caller will not offer is no
  * option at all, so is said in words beside the choice rather than disabled in it.
  *
- * There is no paging: the server sends the first of the matches and says
- * whether there are more, and more is answered by typing more.
+ * There is no paging: more is answered by typing more.
  *
  * A pick outlives a refusal of whatever it was picked for, and goes as soon as
  * a different search is sent. The same search sent again after it was refused
@@ -73,13 +72,11 @@ export function FindOne<T>({
   readonly title: (row: T) => ReactNode;
   /**
    * Why a match is not offered, or null where it is. Never empty: that is a
-   * match drawn, dead and silent. Shown as given, so a name in it arrives
-   * isolated by `isolatedInText`.
+   * match drawn, dead and silent. Shown as given, so the caller must isolate names in it.
    */
   readonly whyNot?: (row: T) => string | null;
   readonly picked: T | null;
   readonly onPick: (row: T | null) => void;
-  /** Said where a settled, unrefused search found nothing. */
   readonly empty: string;
   /** A refused search, said in the caller's words; there are none for it here. */
   readonly refusal: (problem: Problem) => ReactNode;
@@ -124,8 +121,8 @@ export function FindOne<T>({
   }
 
   const count = found.value.items.length;
-  // A count is a reading; nothing found, or more than shown, asks the reader
-  // to type something else, which is a hint.
+  // An empty or partial result asks for more typing, so uses a hint notice;
+  // a complete result only reports its count.
   const status =
     searched === null || found.problem !== null ? null : found.loading ? (
       <Typography variant="body2" sx={STATUS_SX}>

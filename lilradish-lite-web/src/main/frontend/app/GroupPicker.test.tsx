@@ -75,6 +75,37 @@ describe("GroupPicker", () => {
     expect(box()).toHaveAttribute("dir", "auto");
   });
 
+  it("describes the selected key only while the actual input holds the selected name", async () => {
+    const onPick = picking(FINANCE);
+    expect(box()).toHaveAccessibleDescription("BOOKS");
+    const keyId = box().getAttribute("aria-describedby")!;
+    expect(document.getElementById(keyId)).toHaveTextContent("BOOKS");
+
+    await userEvent.clear(box());
+    await userEvent.type(box(), "pay");
+    expect(box()).not.toHaveAttribute("aria-describedby");
+    expect(document.getElementById(keyId)).toBeNull();
+    expect(onPick).not.toHaveBeenCalled();
+
+    await userEvent.clear(box());
+    await userEvent.type(box(), "Finance");
+    expect(box()).toHaveAccessibleDescription("BOOKS");
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("shows a matching group name and key only once in the input and option", async () => {
+    const group = { ...PAYROLL, name: "PAY" };
+    render(
+      <ThemeProvider theme={theme}>
+        <GroupPicker groups={[group]} group={group} onPick={vi.fn()} />
+      </ThemeProvider>,
+    );
+    expect(box()).toHaveValue("PAY");
+    expect(box()).not.toHaveAttribute("aria-describedby");
+    await userEvent.click(box());
+    expect(offered()).toEqual(["PAY"]);
+  });
+
   it("lists every group of the reader's once opened, each by its name with its key beside it", async () => {
     picking();
 

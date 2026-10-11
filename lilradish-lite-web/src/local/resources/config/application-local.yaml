@@ -1,0 +1,89 @@
+# Under config/: this file is on the test classpath too, whose root must carry neither application-local.yaml nor application-dev.yaml.
+# Prices and the characters per unit are quoted: unquoted, a decimal passes through a double on its way in.
+lilradish:
+  deployed:
+    models:
+      - name: sample_model
+        modes: [research, careful_research]
+        sent-per-call-limit: 200000
+        characters-per-unit: "4"
+        came-back-per-call-limit: 8192
+        prices-per-million:
+          - currency: USD
+            sent-per-million: "7"
+            came-back-per-million: "21"
+          - currency: EUR
+            sent-per-million: "6"
+            came-back-per-million: "19"
+        tools:
+          - name: web_search
+            kind: web_search
+            max-uses-per-call: 3
+            prices-per-use:
+              - currency: USD
+                per-use: "0.01"
+              - currency: EUR
+                per-use: "0.02"
+          - name: evidence_search
+            kind: web_search
+            max-uses-per-call: 3
+            prices-per-use:
+              - currency: USD
+                per-use: "0.03"
+              - currency: EUR
+                per-use: "0.04"
+      - name: sample_reader
+        modes: [research, careful_research]
+        sent-per-call-limit: 200000
+        characters-per-unit: "4"
+        came-back-per-call-limit: 8192
+        prices-per-million:
+          - currency: USD
+            sent-per-million: "8"
+            came-back-per-million: "23"
+          - currency: EUR
+            sent-per-million: "5"
+            came-back-per-million: "17"
+        tools:
+          - name: web_search
+            kind: web_search
+            max-uses-per-call: 3
+            prices-per-use:
+              - currency: USD
+                per-use: "0.05"
+              - currency: EUR
+                per-use: "0.06"
+          - name: evidence_search
+            kind: web_search
+            max-uses-per-call: 3
+            prices-per-use:
+              - currency: USD
+                per-use: "0.07"
+              - currency: EUR
+                per-use: "0.08"
+  development-model-calls:
+    routes:
+      - model: sample_model
+        tools: [web_search]
+        outbound: development_search
+        inbound: development_search
+      - model: sample_model
+        tools: [evidence_search]
+        outbound: development_search
+        inbound: development_search
+      - model: sample_model
+        tools: [web_search, evidence_search]
+        outbound: development_search
+        inbound: development_search
+      - model: sample_reader
+        tools: [web_search]
+        outbound: development_search
+        inbound: development_search
+      - model: sample_reader
+        tools: [evidence_search]
+        outbound: development_search
+        inbound: development_search
+      - model: sample_reader
+        tools: [web_search, evidence_search]
+        outbound: development_search
+        inbound: development_search

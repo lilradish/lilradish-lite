@@ -60,6 +60,26 @@ async function disclose() {
 }
 
 describe("ProblemView", () => {
+  it("uses the caller's known search only in the refusal sentence, preserving the original disclosure", () => {
+    const problem = {
+      status: 400,
+      code: "SEARCH_WAY_NOT_HELD",
+      detail: "Technical detail from the response",
+      extensions: { searchWay: "forged" },
+    };
+    render(<ProblemView problem={problem} searchWay="web" />, {
+      wrapper: themed,
+    });
+    expect(screen.getByRole("alert").textContent).toBe(
+      String.fromCodePoint(0x2068) +
+        "web" +
+        String.fromCodePoint(0x2069) +
+        " is no longer available here. Choose another search, or turn off For searching.",
+    );
+    expect(screen.getByText(problem.detail)).not.toBeVisible();
+    expect(screen.queryByText("forged")).toBeNull();
+  });
+
   it("says an unreadable successful response as an answer rather than a refusal", () => {
     view({ status: 200, code: NOT_A_PROBLEM_DOCUMENT });
 

@@ -1,0 +1,27 @@
+package com.lilradish.lite.domain.run;
+
+import static java.util.Objects.requireNonNull;
+
+import com.lilradish.lite.domain.wire.JsonValue;
+import org.jspecify.annotations.Nullable;
+import org.libprunus.core.log.annotation.DoNotLog;
+
+/**
+ * @param field the name of the first-level field it is the value of
+ * @param value what it holds, none as {@link JsonValue.JsonNull}
+ * @param confidence how sure a model was, only where a model produced it and it stands above a confidence
+ * @param needsReview whether it stands only once a review assures it, as the store works it out
+ */
+public record ValueRecord(
+        ProductionValueId id,
+        String field,
+        @DoNotLog JsonValue value,
+        @Nullable Integer confidence,
+        boolean needsReview) {
+
+    public ValueRecord {
+        requireNonNull(id, "ValueRecord id must not be null");
+        requireNonNull(field, "ValueRecord field must not be null");
+        requireNonNull(value, "ValueRecord value must not be null");
+    }
+}

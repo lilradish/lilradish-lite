@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { answering, refusalOf } from "../../../../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT, NOT_AN_ADDRESS } from "../../../../../problem";
+import { tryDetailsFrom } from "../../../../../stepTries";
+import { readTry } from "./{stepId}/tries/{number}";
 import { readStep, stepAnswerFrom } from "./{stepId}";
 
 const GROUP = "00000003-0000-4000-8000-000000000c81";
@@ -20,6 +22,7 @@ const SUMMARY = {
 };
 
 const HEADER = {
+  stateActs: null,
   runId: RUN,
   number: 3,
   versionId: VERSION,
@@ -28,20 +31,33 @@ const HEADER = {
 };
 
 const ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: STEP,
   order: 1,
   name: "summarise",
-  runs: { kind: "question", name: "Summarise", version: 2, versionId: VERSION },
+  runs: {
+    versionName: null,
+    kind: "question",
+    name: "Summarise",
+    version: 2,
+    versionId: VERSION,
+  },
   producer: { kind: "person" },
   reviewer: { kind: "person" },
   state: "waiting",
   takesFrom: [{ input: "text", from: { kind: "run_input", path: "ticket" } }],
   cost: { callsAModel: false },
-  acts: ["answer"],
-  withheld: [],
+  stateActs: ["answer"],
+  stateRefusals: [],
 };
 
 const REFUSED_TRY = {
+  wentWrongPresent: false,
+  returnedPresent: false,
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 1,
   beyond: false,
   askedBy: { userId: "000c81", displayName: "Avo" },
@@ -52,16 +68,27 @@ const REFUSED_TRY = {
       field: "summary",
       value: "A fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Too short." },
+      decision: { outcome: "refused", why: "Too short.", whyLines: "several" },
     },
   ],
-  review: { asked: true, by: { kind: "person", person: { userId: "000c83" } } },
+  review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
+    asked: true,
+    by: { kind: "person", person: { userId: "000c83" } },
+  },
   ended: "refused_on_review",
   cost: { callsAModel: false },
 };
 
 /** What a model said and why its reviewer refused it, both withheld from this reader, and the review gone wrong. */
 const WITHHELD_TRY = {
+  wentWrongPresent: true,
+  returnedPresent: false,
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 2,
   beyond: true,
   producedBy: { kind: "model", model: "small" },
@@ -74,6 +101,9 @@ const WITHHELD_TRY = {
     },
   ],
   review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
     asked: true,
     by: { kind: "model", model: "judge" },
     wentWrong: true,
@@ -91,6 +121,11 @@ const WITHHELD_TRY = {
 
 /** A model's try as a reader who may read what it said reads it: how sure it was of each value it was asked of. */
 const SURE_TRY = {
+  wentWrongPresent: false,
+  returnedPresent: false,
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 1,
   beyond: false,
   producedBy: { kind: "model", model: "small", mode: "careful" },
@@ -98,7 +133,12 @@ const SURE_TRY = {
     { field: "summary", value: "A fire.", now: "stands", confidence: 87 },
     { field: "reply", value: "Sorry.", now: "stands" },
   ],
-  review: { asked: false },
+  review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
+    asked: false,
+  },
   ended: "stands",
   cost: {
     callsAModel: true,
@@ -114,11 +154,21 @@ const SURE_TRY = {
  * once saying why, cut, and once saying nothing; what its call spent this system measured.
  */
 const MISFIT_TRY = {
+  wentWrongPresent: false,
+  returnedPresent: false,
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 1,
   beyond: false,
   producedBy: { kind: "model", model: "small" },
   values: [],
-  review: { asked: false },
+  review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
+    asked: false,
+  },
   ended: "did_not_fit",
   didNotFit: "cut_off",
   turnedAway: [
@@ -140,16 +190,30 @@ const MISFIT_TRY = {
   },
 };
 
-/** A code step's try whose code gave back what did not fit, kept as it came back. */
+const ERRORED_MATERIAL = {
+  number: 1,
+  wentWrong: { detail: "The reference it gave back is not text.", cut: false },
+  returned: '{"reference": 7}',
+};
+
+/** The summary retains presence facts while code evidence is read from the numbered GET. */
 const ERRORED_TRY = {
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 1,
   beyond: false,
   producedBy: { kind: "code" },
   values: [],
-  review: { asked: false },
+  review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
+    asked: false,
+  },
   ended: "errored",
-  wentWrong: { detail: "The reference it gave back is not text.", cut: false },
-  returned: '{"reference": 7}',
+  wentWrongPresent: true,
+  returnedPresent: true,
   cost: { callsAModel: false },
 };
 
@@ -159,7 +223,8 @@ const CHECKING_STEP = "0000000a-0000-4000-8000-000000000c81";
 const MISREAD_TRY = {
   ...ERRORED_TRY,
   wentWrong: undefined,
-  returned: undefined,
+  returnedPresent: false,
+  wentWrongPresent: false,
   erroredFor: {
     reason: "gives_otherwise",
     field: "receipt.total",
@@ -215,7 +280,11 @@ const ANSWERING = {
         field: "summary",
         value: "A fire.",
         now: "refused",
-        decision: { outcome: "refused", why: "Too short." },
+        decision: {
+          outcome: "refused",
+          why: "Too short.",
+          whyLines: "several",
+        },
       },
       {
         field: "priority",
@@ -237,6 +306,11 @@ const NOT_STARTED = {
 
 /** Try 1 of a code step whose release has changed since: each value given as it was kept, the reference refused. */
 const KEPT_TRY = {
+  wentWrongPresent: false,
+  returnedPresent: false,
+  declinedPresent: false,
+  unreadableResponsePresent: false,
+  modelReplyPresent: false,
   number: 1,
   beyond: false,
   producedBy: { kind: "code" },
@@ -245,7 +319,11 @@ const KEPT_TRY = {
       field: "reference",
       value: JSON.stringify("R-7"),
       now: "refused",
-      decision: { outcome: "refused", why: "Not a reference." },
+      decision: {
+        outcome: "refused",
+        why: "Not a reference.",
+        whyLines: "several",
+      },
       earlierShape: true,
     },
     {
@@ -256,7 +334,13 @@ const KEPT_TRY = {
       earlierShape: true,
     },
   ],
-  review: { asked: true, by: { kind: "person", person: { userId: "000c83" } } },
+  review: {
+    declinedPresent: false,
+    unreadableResponsePresent: false,
+    modelReplyPresent: false,
+    asked: true,
+    by: { kind: "person", person: { userId: "000c83" } },
+  },
   ended: "refused_on_review",
   cost: { callsAModel: false },
 };
@@ -270,7 +354,7 @@ const KEPT_PAGE = {
   declarations: { [VERSION]: { takes: [], gives: [SUMMARY] } },
   step: {
     ...ROW,
-    runs: { kind: "code_step", codeStep: "file_claim" },
+    runs: { versionName: null, kind: "code_step", codeStep: "file_claim" },
     producer: { kind: "code" },
   },
   wentIn: [
@@ -305,7 +389,11 @@ const KEPT_VALUES = [
     field: "reference",
     asKept: '"R-7"',
     now: "refused",
-    decision: { outcome: "refused", why: "Not a reference." },
+    decision: {
+      outcome: "refused",
+      why: "Not a reference.",
+      whyLines: "several",
+    },
   },
   {
     field: "folder",
@@ -335,50 +423,54 @@ describe("a model declining in production or review", () => {
     ...SURE_TRY,
     didNotFit: "model_declined",
     review: {
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       asked: true,
       by: { kind: "model", model: "judge" },
       didNotFit: "model_declined",
     },
   };
   const pageWith = (producer: unknown, reviewer: unknown) => ({
-    ...PAGE,
-    triesMade: [
-      {
-        ...modelTry,
-        declined: producer,
-        review: { ...modelTry.review, declined: reviewer },
-      },
-    ],
+    number: modelTry.number,
+    declined: producer,
+    review: { declined: reviewer },
   });
 
   it("keeps the two sources and both exact text blocks independent", () => {
-    const answer = stepAnswerFrom(
-      pageWith({ words: WORDS, content: CONTENT }, { content: WORDS }),
+    const answer = tryDetailsFrom(
+      pageWith(
+        { words: WORDS, wordsLines: "several", content: CONTENT },
+        { content: WORDS },
+      ),
     );
-    expect(answer?.triesMade[0]?.declined).toEqual({
-      words: WORDS,
+    expect(answer?.declined).toEqual({
+      words: { ...WORDS, lines: "several" },
       content: CONTENT,
     });
-    expect(answer?.triesMade[0]?.review.declined).toEqual({ content: WORDS });
+    expect(answer?.review?.declined).toEqual({ content: WORDS });
   });
 
   it("accepts a single block, withheld content, and an omitted record", () => {
     expect(
-      stepAnswerFrom(pageWith({ words: WORDS }, { withheld: true }))
-        ?.triesMade[0],
+      tryDetailsFrom(
+        pageWith({ words: WORDS, wordsLines: "several" }, { withheld: true }),
+      ),
     ).toMatchObject({
-      declined: { words: WORDS },
+      declined: { words: { ...WORDS, lines: "several" } },
       review: { declined: { withheld: true } },
     });
     expect(
-      stepAnswerFrom(
-        pageWith({ words: { ...WORDS, text: " " } }, { withheld: true }),
-      )?.triesMade[0]?.declined,
+      tryDetailsFrom(
+        pageWith(
+          { words: { ...WORDS, text: " " }, wordsLines: "several" },
+          { withheld: true },
+        ),
+      )?.declined,
     ).toEqual({
-      words: { ...WORDS, text: " " },
+      words: { ...WORDS, text: " ", lines: "several" },
     });
-    const absent = stepAnswerFrom({ ...PAGE, triesMade: [modelTry] })
-      ?.triesMade[0];
+    const absent = tryDetailsFrom({ number: modelTry.number, review: {} });
     expect(absent).not.toHaveProperty("declined");
     expect(absent?.review).not.toHaveProperty("declined");
   });
@@ -386,39 +478,44 @@ describe("a model declining in production or review", () => {
   it.each([
     {},
     { withheld: false },
-    { withheld: true, words: WORDS },
-    { words: null },
-    { words: { ...WORDS, text: "" } },
-    { words: { ...WORDS, altered: undefined } },
+    { withheld: true, words: WORDS, wordsLines: "several" },
+    { words: null, wordsLines: "several" },
+    { words: { ...WORDS, text: "" }, wordsLines: "several" },
+    { words: { ...WORDS, altered: undefined }, wordsLines: "several" },
     { content: { ...CONTENT, truncated: "false" } },
-    { words: "raw" },
+    { words: "raw", wordsLines: "several" },
+    { words: WORDS },
+    { words: WORDS, wordsLines: "one" },
+    { words: WORDS, wordsLines: false },
+    { wordsLines: "several" },
+    { withheld: true, wordsLines: "several" },
+    { content: { ...CONTENT, lines: "several" } },
+    { content: { ...CONTENT, stopped: false } },
   ])(
     "refuses the whole answer when a declined record cannot be read: %j",
     (bad) => {
-      expect(stepAnswerFrom(pageWith(bad, { content: CONTENT }))).toBeNull();
-      expect(stepAnswerFrom(pageWith({ words: WORDS }, bad))).toBeNull();
+      expect(tryDetailsFrom(pageWith(bad, { content: CONTENT }))).toBeNull();
+      expect(
+        tryDetailsFrom(pageWith({ words: WORDS, wordsLines: "several" }, bad)),
+      ).toBeNull();
     },
   );
 });
 
 describe("an unreadable model response", () => {
+  const production = { ...WORDS, stopped: true };
+  const review = { ...CONTENT, stopped: false };
   const pageWith = (producer: unknown, reviewer: unknown) => ({
-    ...PAGE,
-    triesMade: [
-      {
-        ...SURE_TRY,
-        unreadableResponse: producer,
-        review: { ...SURE_TRY.review, unreadableResponse: reviewer },
-      },
-    ],
+    number: SURE_TRY.number,
+    unreadableResponse: producer,
+    review: { unreadableResponse: reviewer },
   });
 
   it("keeps production and review text and flags independently", () => {
-    const answer = stepAnswerFrom(pageWith(WORDS, CONTENT));
-    expect(answer?.triesMade[0]?.unreadableResponse).toEqual(WORDS);
-    expect(answer?.triesMade[0]?.review.unreadableResponse).toEqual(CONTENT);
-    const absent = stepAnswerFrom({ ...PAGE, triesMade: [SURE_TRY] })
-      ?.triesMade[0];
+    const answer = tryDetailsFrom(pageWith(production, review));
+    expect(answer?.unreadableResponse).toEqual(production);
+    expect(answer?.review?.unreadableResponse).toEqual(review);
+    const absent = tryDetailsFrom({ number: SURE_TRY.number, review: {} });
     expect(absent).not.toHaveProperty("unreadableResponse");
     expect(absent?.review).not.toHaveProperty("unreadableResponse");
   });
@@ -426,15 +523,20 @@ describe("an unreadable model response", () => {
   it.each([
     null,
     {},
-    { ...WORDS, text: "" },
-    { ...WORDS, altered: undefined },
-    { ...WORDS, truncated: "false" },
-    { ...WORDS, extra: true },
+    WORDS,
+    { ...production, text: "" },
+    { ...production, altered: undefined },
+    { ...production, truncated: "false" },
+    { ...production, stopped: undefined },
+    { ...production, stopped: null },
+    { ...production, stopped: "false" },
+    { ...production, stopped: 0 },
+    { ...production, extra: true },
   ])(
     "refuses an unreadable response of bad shape from either source: %j",
     (bad) => {
-      expect(stepAnswerFrom(pageWith(bad, CONTENT))).toBeNull();
-      expect(stepAnswerFrom(pageWith(WORDS, bad))).toBeNull();
+      expect(tryDetailsFrom(pageWith(bad, review))).toBeNull();
+      expect(tryDetailsFrom(pageWith(production, bad))).toBeNull();
     },
   );
 });
@@ -464,6 +566,45 @@ describe("a held source on a step's page", () => {
     name: "tidy_it",
     codeStep: "tidy",
   };
+
+  it("keeps the held source step's display name beside its UUID, machine name and code key", () => {
+    const where = {
+      kind: "held_back",
+      reason: "code_step_not_held",
+      source: { ...source, label: "整える\u202e" },
+    };
+
+    expect(
+      stepAnswerFrom({ ...PAGE, step: { ...ROW, state: "held_back", where } })
+        ?.step.where,
+    ).toEqual(where);
+    expect(
+      stepAnswerFrom({
+        ...PAGE,
+        step: { ...ROW, state: "held_back", where: { ...where, source } },
+      })?.step.where,
+    ).toEqual({ ...where, source });
+  });
+
+  it.each([null, 7, false, [], { value: "Shown" }])(
+    "refuses a malformed held source display name instead of discarding it: %j",
+    (label) => {
+      expect(
+        stepAnswerFrom({
+          ...PAGE,
+          step: {
+            ...ROW,
+            state: "held_back",
+            where: {
+              kind: "held_back",
+              reason: "code_step_not_held",
+              source: { ...source, label },
+            },
+          },
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("reads the code source in another run", () => {
     const where = { kind: "held_back", reason: "code_step_not_held", source };
@@ -622,7 +763,7 @@ describe("readStep", () => {
       ...PAGE,
       run: HEADER,
       declarations: new Map([[VERSION, { takes: [], gives: [SUMMARY] }]]),
-      step: { ...ROW, cost: {} },
+      step: { ...ROW, stateActs: new Set(["answer"]), cost: {} },
       cameOut: [
         { field: "summary", now: "refused" },
         { field: "reply", standing: { value: null }, now: "stands" },
@@ -666,6 +807,9 @@ describe("readStep", () => {
     "reads a review lost as %s separately from how its production ended",
     async (lost) => {
       const review = {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
         asked: true,
         by: { kind: "model", model: "small" },
         wentWrong: true,
@@ -695,6 +839,43 @@ describe("readStep", () => {
     expect(withheld!.values[0]!.decision).not.toHaveProperty("why");
   });
 
+  it.each([
+    { outcome: "refused", why: "**Imaginary missing evidence**" },
+    {
+      outcome: "refused",
+      why: "**Imaginary missing evidence**",
+      whyLines: "one",
+    },
+    {
+      outcome: "refused",
+      why: "**Imaginary missing evidence**",
+      whyLines: false,
+    },
+    { outcome: "refused", whyLines: "several" },
+    { outcome: "refused", withheld: true, whyLines: "several" },
+    {
+      outcome: "refused",
+      withheld: true,
+      why: "Imaginary reason",
+      whyLines: "several",
+    },
+  ])(
+    "rejects absent, wrong or disclosed withheld refusal facts: %j",
+    (decision) => {
+      expect(
+        stepAnswerFrom({
+          ...PAGE,
+          triesMade: [
+            {
+              ...REFUSED_TRY,
+              values: [{ ...REFUSED_TRY.values[0], decision }],
+            },
+          ],
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("reads how sure a model was of each value it was asked of, leaving it out of a value it was not asked of", async () => {
     const [sure] = (await reading({ ...PAGE, triesMade: [SURE_TRY] }).read)
       .triesMade;
@@ -721,7 +902,12 @@ describe("readStep", () => {
     ).triesMade;
 
     expect(errored).toEqual({ ...ERRORED_TRY, cost: {} });
-    expect(errored!.returned).toBe('{"reference": 7}');
+    expect(errored!.returnedPresent).toBe(true);
+    answering([JSON.stringify(ERRORED_MATERIAL), 200]);
+    expect(
+      (await readTry(GROUP, RUN, STEP, 1, new AbortController().signal))
+        .returned,
+    ).toBe('{"reference": 7}');
   });
 
   it("reads line break outcomes beside the retained model and code evidence", async () => {
@@ -736,7 +922,12 @@ describe("readStep", () => {
     expect(triesMade[0]?.didNotFit).toBe("line_break");
     expect(triesMade[0]?.values).toEqual([]);
     expect(triesMade[1]?.erroredFor).toEqual(code.erroredFor);
-    expect(triesMade[1]?.returned).toBe(code.returned);
+    expect(triesMade[1]?.returnedPresent).toBe(code.returnedPresent);
+    answering([JSON.stringify(ERRORED_MATERIAL), 200]);
+    expect(
+      (await readTry(GROUP, RUN, STEP, 1, new AbortController().signal))
+        .returned,
+    ).toBe(ERRORED_MATERIAL.returned);
     expect(triesMade[1]).not.toHaveProperty("didNotFit");
   });
 
@@ -746,7 +937,6 @@ describe("readStep", () => {
         path: "attachments[2]",
         id: "11111111-1111-4111-8111-111111111111",
         name: "kept.txt",
-        type: "text/plain",
         size: 7,
       },
     ];
@@ -756,7 +946,12 @@ describe("readStep", () => {
     ).triesMade;
 
     expect(errored!.keptFiles).toEqual(keptFiles);
-    expect(errored!.returned).toBe('{"reference": 7}');
+    expect(errored!.returnedPresent).toBe(true);
+    answering([JSON.stringify(ERRORED_MATERIAL), 200]);
+    expect(
+      (await readTry(GROUP, RUN, STEP, 1, new AbortController().signal))
+        .returned,
+    ).toBe('{"reference": 7}');
   });
 
   it.each([
@@ -770,7 +965,6 @@ describe("readStep", () => {
         path: "attachments[0]",
         id: "11111111-1111-4111-8111-111111111111",
         name: "Demo Sample.txt",
-        type: "text/plain",
         size: 7,
         ...changed,
       };
@@ -793,7 +987,8 @@ describe("readStep", () => {
     expect(misread).toEqual({
       ...ERRORED_TRY,
       wentWrong: undefined,
-      returned: undefined,
+      returnedPresent: false,
+      wentWrongPresent: false,
       erroredFor: {
         reason: "gives_otherwise",
         field: "receipt.total",
@@ -1002,7 +1197,7 @@ describe("readStep", () => {
       field: "summary",
       value: "A fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Too short." },
+      decision: { outcome: "refused", why: "Too short.", whyLines: "several" },
     });
   });
 
@@ -1145,15 +1340,39 @@ describe("readStep", () => {
     ["a review saying nothing of being asked", withTry({ review: {} })],
     [
       "a review lost in no text",
-      withTry({ review: { asked: true, lost: true } }),
+      withTry({
+        review: {
+          declinedPresent: false,
+          unreadableResponsePresent: false,
+          modelReplyPresent: false,
+          asked: true,
+          lost: true,
+        },
+      }),
     ],
     [
       "a review misfit in no text",
-      withTry({ review: { asked: true, didNotFit: 2 } }),
+      withTry({
+        review: {
+          declinedPresent: false,
+          unreadableResponsePresent: false,
+          modelReplyPresent: false,
+          asked: true,
+          didNotFit: 2,
+        },
+      }),
     ],
     [
       "a review gone wrong said in text",
-      withTry({ review: { asked: true, wentWrong: "yes" } }),
+      withTry({
+        review: {
+          declinedPresent: false,
+          unreadableResponsePresent: false,
+          modelReplyPresent: false,
+          asked: true,
+          wentWrong: "yes",
+        },
+      }),
     ],
     ["a try saying nothing of its cost", withTry({ cost: undefined })],
     ["a try numbered in text", withTry({ number: "1" })],
@@ -1430,6 +1649,7 @@ describe("searching tries and answering", () => {
   const SEARCH_STEP = {
     ...ROW,
     runs: {
+      versionName: null,
       kind: "search",
       searchWay: "sample_web_search",
       tool: "web_search",
@@ -1438,7 +1658,6 @@ describe("searching tries and answering", () => {
   const FEE = { currency: "USD", perUse: "0.0100", amount: "0.0200" };
   const COUNTED = { uses: "2", usesCounted: "said", fee: FEE };
   const SAID = {
-    question: "Find Demo Sample  ",
     searches: [
       { searchedFor: "Demo Sample", found: "Found.\n" },
       { found: "Elsewhere" },
@@ -1457,11 +1676,15 @@ describe("searching tries and answering", () => {
     triesMade: [{ ...SURE_TRY, producedBy, search }],
   });
 
-  it("reads the question and record exactly as they came beside decimal count and fee", () => {
-    const page = stepAnswerFrom(pageWith(SAID));
-    expect(page?.triesMade[0]?.search).toEqual({
+  const materialWith = (search: unknown) => ({
+    number: SURE_TRY.number,
+    search,
+  });
+
+  it("reads the record exactly as it came beside decimal count and fee", () => {
+    const page = tryDetailsFrom(materialWith(SAID));
+    expect(page?.search).toEqual({
       said: {
-        question: SAID.question,
         searches: SAID.searches,
         searchesCut: true,
         searchesNotAsItCame: true,
@@ -1469,33 +1692,45 @@ describe("searching tries and answering", () => {
       },
       counted: COUNTED,
     });
-    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("withheld");
-    expect(page?.triesMade[0]?.search?.counted).not.toHaveProperty("noFee");
+    expect(page?.search?.said).not.toHaveProperty("withheld");
+    expect(page?.search?.counted).not.toHaveProperty("noFee");
   });
 
+  it.each([
+    { question: "**Imaginary query**" },
+    { question: "**Imaginary query**", lines: "one" },
+    { question: "**Imaginary query**", lines: false },
+    { lines: "several" },
+    { withheld: true, lines: "several" },
+  ])(
+    "rejects missing, wrong or unaccompanied search drawing facts: %j",
+    (search) => {
+      expect(tryDetailsFrom(materialWith(search))).toBeNull();
+    },
+  );
+
   it("keeps counts and money beside a withheld record and drops unknown members", () => {
-    const page = stepAnswerFrom(
-      pageWith({ withheld: true, ...COUNTED, later: "not read" }),
+    const page = tryDetailsFrom(
+      materialWith({ withheld: true, ...COUNTED, later: "not read" }),
     );
-    expect(page?.triesMade[0]?.search).toEqual({
+    expect(page?.search).toEqual({
       said: { withheld: true },
       counted: COUNTED,
     });
-    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("question");
-    expect(page?.triesMade[0]?.search?.said).not.toHaveProperty("searches");
+    expect(page?.search?.said).not.toHaveProperty("question");
+    expect(page?.search?.said).not.toHaveProperty("searches");
   });
 
   it.each([
     [
       {
-        question: "Find",
         searchesUnsaid: true,
         uses: "0",
         usesCounted: "said",
         noFee: { reason: "no_price" },
       },
       {
-        said: { question: "Find", searchesUnsaid: true },
+        said: { searchesUnsaid: true },
         counted: {
           uses: "0",
           usesCounted: "said",
@@ -1505,13 +1740,12 @@ describe("searching tries and answering", () => {
     ],
     [
       {
-        question: "Find",
         uses: "9007199254740993",
         usesCounted: "at_most",
         noFee: { reason: "many_currencies" },
       },
       {
-        said: { question: "Find" },
+        said: {},
         counted: {
           uses: "9007199254740993",
           usesCounted: "at_most",
@@ -1535,29 +1769,28 @@ describe("searching tries and answering", () => {
         },
       },
     ],
-    [{ question: "Find" }, { said: { question: "Find" } }],
+    [{}, { said: {} }],
     [{ withheld: true }, { said: { withheld: true } }],
   ])(
     "reads accepted counts or an open uncounted call: %j",
     (search, expected) => {
-      expect(stepAnswerFrom(pageWith(search))?.triesMade[0]?.search).toEqual(
-        expected,
-      );
+      expect(tryDetailsFrom(materialWith(search))?.search).toEqual(expected);
     },
   );
 
   it("keeps an explicitly empty half, but not an empty record", () => {
     expect(
-      stepAnswerFrom(
-        pageWith({
-          question: "Find",
+      tryDetailsFrom(
+        materialWith({
           searches: [{ searchedFor: "", found: "" }],
         }),
-      )?.triesMade[0]?.search,
+      )?.search,
     ).toEqual({
-      said: { question: "Find", searches: [{ searchedFor: "", found: "" }] },
+      said: {
+        searches: [{ searchedFor: "", found: "" }],
+      },
     });
-    expect(stepAnswerFrom(pageWith({ searches: [{}] }))).toBeNull();
+    expect(tryDetailsFrom(materialWith({ searches: [{}] }))).toBeNull();
   });
 
   it.each([
@@ -1611,73 +1844,79 @@ describe("searching tries and answering", () => {
   ])("refuses incomplete or contradictory search facts: %j", (search) => {
     const given =
       typeof search === "object" && search !== null && !("withheld" in search)
-        ? { question: "Find", ...search }
+        ? { searches: [{ found: "Found" }], ...search }
         : search;
-    expect(stepAnswerFrom(pageWith(given))).toBeNull();
+    expect(tryDetailsFrom(materialWith(given))).toBeNull();
   });
 
-  it.each([null, [], {}, { ...COUNTED }])(
-    "refuses a missing question or non-object search: %j",
-    (search) => {
-      expect(stepAnswerFrom(pageWith(search))).toBeNull();
-    },
-  );
+  it.each([null, []])("refuses a non-object search: %j", (search) => {
+    expect(tryDetailsFrom(materialWith(search))).toBeNull();
+  });
 
   it("refuses a record on a person-produced try or on a step that does not search", () => {
-    expect(stepAnswerFrom(pageWith(SAID, { kind: "person" }))).toBeNull();
-    expect(stepAnswerFrom({ ...pageWith(SAID), step: ROW })).toBeNull();
+    expect(stepAnswerFrom(pageWith(COUNTED, { kind: "person" }))).toBeNull();
+    expect(stepAnswerFrom({ ...pageWith(COUNTED), step: ROW })).toBeNull();
     expect(
       stepAnswerFrom({ ...PAGE, step: SEARCH_STEP })?.triesMade[0],
     ).not.toHaveProperty("search");
   });
 
-  it.each([true, false])(
-    "reads whether the answering question was sent: %s",
-    (searchQuestionSent) => {
-      const answering = {
-        number: 3,
-        beyond: false,
-        gives: [SUMMARY],
-        searchQuestion: "Find Demo Sample  ",
-        searchQuestionSent,
-      };
-      const page = stepAnswerFrom({ ...PAGE, step: SEARCH_STEP, answering });
-      expect(page?.answering).toEqual({
-        number: 3,
-        beyond: false,
-        gives: [SUMMARY],
-        searchQuestion: {
-          text: "Find Demo Sample  ",
-          sent: searchQuestionSent,
-        },
-      });
-      expect(page?.answering?.searchQuestion).not.toHaveProperty("withheld");
-    },
-  );
-
-  it("withholds the answering question without inventing whether it was sent", () => {
-    const answering = {
-      number: 3,
-      beyond: false,
-      gives: [SUMMARY],
-      searchQuestionWithheld: true,
-    };
+  it("reads a search answer through ordinary declared fields without an assembled preview", () => {
+    const answering = { number: 3, beyond: false, gives: [SUMMARY] };
     const page = stepAnswerFrom({ ...PAGE, step: SEARCH_STEP, answering });
-    expect(page?.answering).toEqual({
-      number: 3,
-      beyond: false,
-      gives: [SUMMARY],
-      searchQuestion: { withheld: true },
-    });
-    expect(page?.answering?.searchQuestion).not.toHaveProperty("text");
-    expect(page?.answering?.searchQuestion).not.toHaveProperty("sent");
+    expect(page?.answering).toEqual(answering);
+    expect(page?.answering).not.toHaveProperty("searchQuestion");
   });
 
   it.each([
-    { searchQuestion: "Find" },
-    { searchQuestionSent: false },
-    { searchQuestion: "Find", searchQuestionSent: "true" },
     {
+      searchQuestionLines: "several",
+      searchQuestion: "Find",
+      searchQuestionSent: true,
+    },
+    {
+      searchQuestionLines: "several",
+      searchQuestion: "Find",
+      searchQuestionSent: false,
+    },
+    { searchQuestionWithheld: true },
+  ])("rejects an assembled answering preview: %j", (preview) => {
+    expect(
+      stepAnswerFrom({
+        ...PAGE,
+        step: SEARCH_STEP,
+        answering: {
+          number: 3,
+          beyond: false,
+          gives: [SUMMARY],
+          ...preview,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { searchQuestionLines: "several", searchQuestion: "Find" },
+    { searchQuestion: "Find", searchQuestionSent: true },
+    {
+      searchQuestion: "Find",
+      searchQuestionSent: true,
+      searchQuestionLines: "one",
+    },
+    {
+      searchQuestion: "Find",
+      searchQuestionSent: true,
+      searchQuestionLines: false,
+    },
+    { searchQuestionLines: "several", searchQuestionWithheld: true },
+    { searchQuestionSent: false },
+    {
+      searchQuestionLines: "several",
+      searchQuestion: "Find",
+      searchQuestionSent: "true",
+    },
+    {
+      searchQuestionLines: "several",
       searchQuestion: "Find",
       searchQuestionSent: true,
       searchQuestionWithheld: true,

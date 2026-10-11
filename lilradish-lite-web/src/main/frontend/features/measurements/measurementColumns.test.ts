@@ -1,3 +1,4 @@
+import { expectConsoleErrors } from "../../testutil/consoleErrors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ModelMeasured, SystemMeasured } from "../../api/measurements";
@@ -109,12 +110,10 @@ describe("modelColumns", () => {
   );
 
   it("reports no missing word for a mode the catalogue has none for", () => {
-    const complaints = vi.spyOn(console, "error");
-
     const mode = modelColumns()[1].cell(SORTER_CAREFUL);
 
     expect(mode).toBe("careful");
-    expect(complaints).not.toHaveBeenCalled();
+    expectConsoleErrors();
   });
 });
 

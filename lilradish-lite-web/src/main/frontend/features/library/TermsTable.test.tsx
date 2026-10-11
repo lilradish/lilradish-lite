@@ -285,7 +285,7 @@ describe("TermsTable", () => {
   });
 
   /** Words on every row would outweigh the terms; each icon's name still says which term it acts on. */
-  it("draws each move and removal as an icon alone, named with its term, and only a removal in the warning colour", () => {
+  it("draws each move and removal as ordinary icons, named with their term", () => {
     editing(LIST);
 
     const icons = {
@@ -319,12 +319,14 @@ describe("TermsTable", () => {
           button.classList.contains(iconButtonClasses.colorWarning),
         )
         .map(({ act }) => act),
-    ).toEqual(LIST.map(() => "Remove"));
+    ).toEqual([]);
   });
 
   it("says a move's words as a tip once it holds the keyboard", async () => {
     editing(LIST);
-    meaningBox(2).focus();
+    await act(async () => {
+      meaningBox(2).focus();
+    });
 
     await userEvent.tab();
 
@@ -335,7 +337,9 @@ describe("TermsTable", () => {
   /** A list may hold hundreds of terms, and each keystroke redrawing every row of them is felt as typing lags. */
   it("redraws only the row typed in", async () => {
     editing(LIST);
-    termBox(2).focus();
+    await act(async () => {
+      termBox(2).focus();
+    });
     rowsNamed.terms = [];
 
     await userEvent.keyboard("s");
@@ -373,6 +377,25 @@ describe("TermsTable", () => {
     expect(
       within(table()).getAllByRole("button", { name: /^Remove/ }),
     ).toHaveLength(LIST.length);
+  });
+
+  it("stands the new term and what it means under labels above their boxes, none floating inside one, the term as wide as it needs and the meaning taking the rest of the row", () => {
+    editing(LIST);
+
+    const fields = [
+      within(part()).getByRole("textbox", { name: "New term" }),
+      within(part()).getByRole("textbox", { name: "What the new term means" }),
+    ].map((box) => box.closest(".MuiInputBase-root")!);
+    const [term, meaning] = fields.map((field) =>
+      getComputedStyle(field.closest(".MuiFormControl-root")!),
+    );
+
+    expect(
+      fields.map((field) => field.previousElementSibling?.textContent),
+    ).toEqual(["New term", "What the new term means"]);
+    expect(part().querySelectorAll(".MuiInputLabel-root")).toHaveLength(0);
+    expect([meaning!.flexGrow, term!.flexGrow]).toEqual(["1", "0"]);
+    expect(term!.width).toBe("fit-content");
   });
 
   it("adds a term as typed after the last, and empties the boxes it was typed in", async () => {
@@ -432,7 +455,7 @@ describe("TermsTable", () => {
       "a meaning the server would refuse",
       "Returns",
       `Sent ${String.fromCodePoint(0x202e)}back`,
-      "What was written holds a direction control, which text sent to a model may not hold.",
+      "What you wrote contains a text-direction character, which can't be sent to a model.",
       ["warning"],
     ],
   ] as const)(
@@ -451,7 +474,9 @@ describe("TermsTable", () => {
       await userEvent.paste(meaning);
       const add = within(part()).getByRole("button", { name: "Add the term" });
 
-      add.focus();
+      await act(async () => {
+        add.focus();
+      });
       await userEvent.keyboard("{Enter}");
       expect(add).toHaveAttribute("aria-disabled", "true");
       expect(add).toHaveAccessibleDescription(why);
@@ -474,11 +499,11 @@ describe("TermsTable", () => {
     "holds adding to a list of %i terms for the reason beside the control, a full list's as a warning, and sends nothing",
     async (count, why, severities) => {
       const { changes } = editing(termsNumbering(count));
-      const add = within(part()).getByText("Add the term", {
-        selector: "button",
-      });
+      const add = within(part()).getByRole("button", { name: "Add the term" });
 
-      add.focus();
+      await act(async () => {
+        add.focus();
+      });
       await userEvent.keyboard("{Enter}");
 
       expect(add).toHaveAccessibleName("Add the term");
@@ -489,7 +514,6 @@ describe("TermsTable", () => {
       );
       expect(changes.add).not.toHaveBeenCalled();
     },
-    // Some 256 rows of text boxes take seconds to draw under jsdom.
     15_000,
   );
 
@@ -498,7 +522,9 @@ describe("TermsTable", () => {
     await typingNewTerm();
     const add = within(part()).getByRole("button", { name: "Add the term" });
 
-    add.focus();
+    await act(async () => {
+      add.focus();
+    });
     await userEvent.keyboard("{Enter}");
 
     expect(await within(part()).findByRole("alert")).toHaveTextContent(
@@ -547,7 +573,9 @@ describe("TermsTable", () => {
     await userEvent.type(termBox(1), " ");
     const save = onTerm("Save", "Billing");
 
-    save.focus();
+    await act(async () => {
+      save.focus();
+    });
     await userEvent.keyboard("{Enter}");
 
     const why =
@@ -585,10 +613,12 @@ describe("TermsTable", () => {
     ["Move down", [BILLING, REFUNDS, DELIVERY]],
   ] as const)(
     "keeps the keyboard on %s once the term has moved",
-    async (act, after) => {
+    async (action, after) => {
       editing(LIST);
-      const pressed = onTerm(act, "Delivery");
-      pressed.focus();
+      const pressed = onTerm(action, "Delivery");
+      await act(async () => {
+        pressed.focus();
+      });
 
       await userEvent.keyboard("{Enter}");
 
@@ -598,7 +628,7 @@ describe("TermsTable", () => {
         ),
       );
       expect(pressed).toHaveFocus();
-      expect(onTerm(act, "Delivery")).toBe(pressed);
+      expect(onTerm(action, "Delivery")).toBe(pressed);
     },
   );
 
@@ -707,13 +737,13 @@ describe("TermsTable", () => {
     expect(readAfresh).not.toHaveBeenCalled();
   });
 
-  it("reads the list afresh where it was written since it was read only once Reload is pressed", async () => {
+  it("reads the list afresh where it was written since it was read only once Load the saved draft is pressed", async () => {
     const { readAfresh } = editing(LIST, {
       refusing: "DRAFT_WRITTEN_SINCE_READ",
     });
     await userEvent.click(onTerm("Move down", "Billing"));
     const reload = await within(part()).findByRole("button", {
-      name: "Reload",
+      name: "Load the saved draft",
     });
     expect(readAfresh).not.toHaveBeenCalled();
 
@@ -833,7 +863,9 @@ describe("TermsTable", () => {
     ];
 
     for (const control of held) {
-      control.focus();
+      await act(async () => {
+        control.focus();
+      });
       await userEvent.keyboard("{Enter}");
     }
 
@@ -847,7 +879,7 @@ describe("TermsTable", () => {
   });
 
   /** The page may read the version again after a refusal and find it no longer written here. */
-  it("keeps a refused change said once the terms may no longer be written, offering nothing to write or reload", async () => {
+  it("keeps a refused change said once the terms may no longer be written, offering nothing to write or load", async () => {
     editing(LIST, {
       refusing: "VERSION_STANDING_REFUSES",
       closeOnRefusal: true,
@@ -859,7 +891,9 @@ describe("TermsTable", () => {
       "That version's standing does not admit this.",
     );
     expect(within(part()).queryByRole("textbox")).toBeNull();
-    expect(within(part()).queryByRole("button", { name: "Reload" })).toBeNull();
+    expect(
+      within(part()).queryByRole("button", { name: "Load the saved draft" }),
+    ).toBeNull();
   });
 
   it("puts the keyboard on the heading once a refusal leaves the terms no longer to be written", async () => {

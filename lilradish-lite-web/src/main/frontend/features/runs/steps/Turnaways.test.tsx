@@ -2,7 +2,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Turnaway } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { Turnaway } from "../../../api/stepTries";
 import { theme } from "../../../lib/theme/theme";
 import { requestsTo, serving } from "../../../testutil/answering";
 import { Turnaways } from "./Turnaways";
@@ -50,7 +50,7 @@ describe("Turnaways", () => {
         sentAgain: false,
       });
       const marker = screen.getByRole("img", {
-        name: "A character that would turn the order text is shown in is here, drawn instead of obeyed: U+200E.",
+        name: "A text-direction character is here, shown instead of applied: U+200E.",
       });
 
       expect(drawn.querySelector("li > p")?.textContent).toBe(said);
@@ -73,7 +73,7 @@ describe("Turnaways", () => {
     const drawn = drawing({ at: AT, withheld: true, sentAgain: false });
 
     expect(drawn.querySelector("li > p")?.textContent).toBe(
-      "What the model said is withheld from you.",
+      "You don't have permission to see what the model said.",
     );
     expect(drawn.querySelector("bdi")).toBeNull();
     expect(screen.queryByRole("img")).toBeNull();

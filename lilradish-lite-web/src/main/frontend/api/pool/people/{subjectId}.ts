@@ -24,9 +24,8 @@ export function takeOut(subjectId: string, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Whether taking somebody out was refused for what still holds them in the
- * pool. The refusal does not say what that is; reading them again does. The
- * status is read before the code, as `Problem` requires.
+ * The refusal does not name what still holds them; reading them again does.
+ * Read status before code, as `Problem` requires.
  */
 export function refusedForWhatStillHolds(problem: Problem): boolean {
   return problem.status === 409 && STILL_HELD.has(problem.code);

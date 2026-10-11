@@ -1,5 +1,4 @@
 import {
-  isBareMediaType,
   isFileValue,
   pathKey,
   type FileValue,
@@ -33,14 +32,12 @@ export type FileDraft =
   | null;
 
 export type FileIssue =
-  "name" | "type_missing" | "type_malformed" | "type_not_taken" | "too_large";
+  "name" | "type_missing" | "type_not_taken" | "too_large";
 
 export type OneDraft = string | MomentDraft | LevelDraft | FileDraft;
 
-/** One value, or many where the field holds many. */
 export type FieldDraft = OneDraft | readonly OneDraft[];
 
-/** Every field of one level by name. */
 export interface LevelDraft {
   readonly [name: string]: FieldDraft;
 }
@@ -54,10 +51,7 @@ interface DraftRead {
   readonly problems: readonly FillProblem[];
 }
 
-/**
- * Reads a draft as `draftReader` says. A place keyed in `unreadable` holds what the browser was given and could
- * not read, which is not nothing, and so does not fit.
- */
+/** A place keyed in `unreadable` holds what the browser was given and could not read, which is not nothing, and so does not fit. */
 export type DraftReader = (
   fields: readonly FillField[],
   draft: LevelDraft,
@@ -73,7 +67,6 @@ interface Verdict {
   readonly reason: FillReason | null;
 }
 
-/** Everything a reader carries from one reading to the next. */
 interface Reading {
   readonly unreadable: ReadonlySet<string>;
   readonly allowKept: boolean;
@@ -88,9 +81,6 @@ const HOURS_AND_MINUTES = /^[0-9]{2}:[0-9]{2}$/;
 const DAY = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 
 const TIME = /^([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?/;
-
-const MIME_PARAMETERS =
-  /^(?:[ \t]*;[ \t]*[!#$%&'*+.^_`|~A-Za-z0-9-]+=(?:[!#$%&'*+.^_`|~A-Za-z0-9-]+|"(?:[\t !#-[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))*[ \t]*$/;
 
 /** Every field as nothing has been filled yet: many hold none, and fields hold their own fields empty. */
 export function draftOf(fields: readonly FillField[]): LevelDraft {
@@ -206,7 +196,6 @@ export function draftReader(allowKept = false): DraftReader {
   };
 }
 
-/** The offset a moment is written with: the one chosen, or the reader's own at the date and time chosen. */
 export function offsetOf(moment: MomentDraft): string {
   return moment.offset ?? ownOffsetAt(moment.date, moment.time);
 }
@@ -342,6 +331,7 @@ function element(
     if (
       reading.allowKept &&
       isFileValue(kept) &&
+      fileIssueOf(field, kept) === null &&
       typeof originalIndex === "number" &&
       Number.isSafeInteger(originalIndex) &&
       originalIndex >= 0
@@ -388,30 +378,19 @@ function judged(field: FillField, held: OneDraft): Verdict {
   return { field, held, read: typed, reason };
 }
 
-function mediaTypeEssence(type: string): string | null {
-  const separator = type.indexOf(";");
-  const bare = (separator < 0 ? type : type.slice(0, separator)).replace(
-    /^[ \t]+|[ \t]+$/g,
-    "",
-  );
-  const parameters = separator < 0 ? "" : type.slice(separator);
-  return isBareMediaType(bare) && MIME_PARAMETERS.test(parameters)
-    ? bare.toLowerCase()
-    : null;
-}
-
-export function fileIssueOf(field: FillField, file: File): FileIssue | null {
+export function fileIssueOf(
+  field: FillField,
+  file: Pick<File, "name" | "size">,
+): FileIssue | null {
   if (!oneLineWithin(file.name, 255) || !showsInProse(file.name)) {
     return "name";
   }
-  if (file.type === "") {
+  const point = file.name.lastIndexOf(".");
+  if (point < 0 || point === file.name.length - 1) {
     return "type_missing";
   }
-  const essence = mediaTypeEssence(file.type);
-  if (essence === null) {
-    return "type_malformed";
-  }
-  if (!field.types?.some((type) => type.toLowerCase() === essence)) {
+  const name = file.name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  if (!field.types?.some((extension) => name.endsWith(extension))) {
     return "type_not_taken";
   }
   return file.size > (field.maximumBytes ?? 0) ? "too_large" : null;
@@ -450,7 +429,6 @@ function momentWritten(moment: MomentDraft): string | null {
   return `${moment.date}T${time}${offsetOf(moment)}`;
 }
 
-/** The reader's own offset at a date and time on their clock, or at this moment where either is not chosen. */
 function ownOffsetAt(date: string, time: string): string {
   const at = onTheClock(date, time) ?? new Date();
   // An offset kept to the second, as some zones kept one before standard time, is written to the minute.

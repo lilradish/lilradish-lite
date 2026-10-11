@@ -1,0 +1,54 @@
+package com.lilradish.lite.app.run
+
+import com.lilradish.lite.domain.inference.ModelCallPurpose
+import com.lilradish.lite.domain.run.ModelCallId
+import com.lilradish.lite.domain.run.ProductionId
+import com.lilradish.lite.domain.run.RunStepSendAttemptId
+import spock.lang.Specification
+
+/**
+ * A call a stopped system left unended was out, and may have been taken up, unless it was waiting to be sent again
+ * after its newest turnaway: only the newest turnaway says, whatever came before it.
+ */
+class UnendedCallSpec extends Specification {
+
+    def "a call left unended without its call or purpose is refused"() {
+        when:
+        new UnendedCall(callId, purpose, null, null, false, false)
+
+        then:
+        def refused = thrown(NullPointerException)
+        refused.message == message
+
+        where:
+        callId                            | purpose                  || message
+        null                              | ModelCallPurpose.PRODUCE || "UnendedCall call must not be null"
+        new ModelCallId(UUID.randomUUID()) | null                     || "UnendedCall purpose must not be null"
+    }
+
+    def "a call said to be sent again after no turnaway is refused"() {
+        when:
+        call(false, true)
+
+        then:
+        def refused = thrown(IllegalArgumentException)
+        refused.message == "UnendedCall was sent again after no turnaway"
+    }
+
+    def "a call left unended was out unless it waits to be sent again after its newest turnaway"() {
+        expect:
+        call(turnedAwayBefore, resent).wasOut() == out
+
+        where:
+        turnedAwayBefore | resent || out
+        false            | false  || true
+        true             | true   || true
+        true             | false  || false
+    }
+
+    private static UnendedCall call(boolean turnedAwayBefore, boolean resent) {
+        new UnendedCall(new ModelCallId(UUID.randomUUID()), ModelCallPurpose.PRODUCE,
+                new ProductionId(UUID.randomUUID()), new RunStepSendAttemptId(UUID.randomUUID()), turnedAwayBefore,
+                resent)
+    }
+}

@@ -1,0 +1,219 @@
+package com.lilradish.lite.app.run
+
+import static com.lilradish.lite.app.run.fixture.CodeWorkflow.receipt
+import static com.lilradish.lite.app.run.fixture.CodeWorkflow.scripted
+import static com.lilradish.lite.testutil.library.LibraryStore.groupId
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import com.lilradish.lite.app.run.fixture.CodeWorkflow
+import com.lilradish.lite.app.run.fixture.TicketWorkflow
+import com.lilradish.lite.domain.inference.CallOutcome
+import com.lilradish.lite.domain.run.RunId
+import com.lilradish.lite.testsupport.TestPostgres
+import com.lilradish.lite.testutil.SnapshottingAppender
+import com.lilradish.lite.testutil.codestep.CodeStepsHeld
+import com.lilradish.lite.testutil.codestep.ScriptedCodeStep
+import com.lilradish.lite.testutil.inference.Pause
+import com.lilradish.lite.testutil.inference.ScriptedModelCalls
+import com.lilradish.lite.testutil.library.LibraryStore
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.slf4j.LoggerFactory
+import spock.lang.AutoCleanup
+import spock.lang.Shared
+import spock.lang.Specification
+
+class EngineCrashIntegrationSpec extends Specification {
+
+    static final String SAID = '{"values":{"summary":"invoice 4471 is on fire."},"confidences":{}}'
+
+    static final String FITS = '{"values":{"summary":"A printer fire."},"confidences":{}}'
+
+    static final List<Logger> LATE_LOGGERS = [EngineCalls, EngineCodes, RunEngine, EngineExecutor].collect {
+        LoggerFactory.getLogger(it) as Logger
+    }
+
+    @Shared
+    @AutoCleanup
+    TestPostgres server = TestPostgres.worker()
+
+    @Shared
+    int databasesMade = 0
+
+    LibraryStore store
+
+    EngineWiring killed
+
+    ScriptedModelCalls killedModel
+
+    ScriptedCodeStep killedCode
+
+    Pause callOut
+
+    CountDownLatch codeRunning
+
+    EngineWiring started
+
+    ScriptedModelCalls startedModel
+
+    ScriptedCodeStep startedCode
+
+    def setupSpec() {
+        LibraryStore.prepareBaseline(server)
+    }
+
+    def setup() {
+        store = LibraryStore.forCase(server, "engine_crash_" + (++databasesMade))
+        TicketWorkflow.seed(store)
+        // DB-SPECIFIC: PostgreSQL ::uuid casts.
+        store.session.sql("""
+                update workflow_steps set producer = 'model', producer_model = 'general', producer_mode = 'ordinary'
+                 where workflow_step_id = ?::uuid""").params(TicketWorkflow.SUMMARISE).update()
+        CodeWorkflow.seed(store, 2)
+    }
+
+    def cleanup() {
+        killed?.closing()
+        callOut?.release()
+        codeRunning?.countDown()
+        killed?.executor?.destroy()
+        started?.executor?.destroy()
+    }
+
+    private void killedAndStartedAgain() {
+        callOut = new Pause()
+        codeRunning = new CountDownLatch(1)
+        killedModel = new ScriptedModelCalls().pausing(callOut, [], cameBack(SAID))
+        killedCode = scripted(true, { receipt("invoice 4471") }, codeRunning)
+        killed = new EngineWiring(store, killedModel, CodeStepsHeld.of(killedCode))
+        store.transactions().executeWithoutResult {
+            TicketWorkflow.run(store)
+            killed.engine.planStarted(killed.tree.lock(groupId(TicketWorkflow.GROUP), ticketRun()).orElseThrow())
+        }
+        store.transactions().executeWithoutResult {
+            CodeWorkflow.run(store)
+            killed.engine.planStarted(killed.tree.lock(groupId(CodeWorkflow.GROUP), codeRun()).orElseThrow())
+        }
+        callOut.awaitReached()
+        until("the killed process's code was running") { killedCode.runs.get() == 1 }
+
+        startedModel = new ScriptedModelCalls().answering(cameBack(FITS))
+        startedCode = scripted(true, { receipt("R-2") })
+        started = new EngineWiring(store, startedModel, CodeStepsHeld.of(startedCode))
+        started.started()
+        until("both runs went on") {
+            store.count("select count(*) from model_calls where outcome = 'came_back'") == 1 &&
+                    triesOf(CodeWorkflow.CHECK).size() == 1
+        }
+        started.drained()
+    }
+
+    private static CallOutcome.CameBack cameBack(String answer) {
+        new CallOutcome.CameBack(answer, 321, 12, true, false, null, null)
+    }
+
+    private static RunId ticketRun() {
+        new RunId(UUID.fromString(TicketWorkflow.RUN))
+    }
+
+    private static RunId codeRun() {
+        new RunId(UUID.fromString(CodeWorkflow.RUN))
+    }
+
+    private static void until(String what, Closure<Boolean> reached) {
+        def deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (!reached()) {
+            assert System.nanoTime() < deadline: "never ${what}"
+            Thread.sleep(10)
+        }
+    }
+
+    private List<String> triesOf(String step) {
+        // DB-SPECIFIC: PostgreSQL ::text/::uuid casts; || converts non-string operands to text.
+        store.texts("""
+                select try.try_number || ' ' || try.producer || ' ' || try.created_by_kind || ' '
+                       || case when try.ended_at is null then 'open'
+                               else coalesce(try.lost_reason::text, 'yielded') end
+                  from productions try join run_steps held on held.run_step_id = try.run_step_id
+                 where held.workflow_step_id = ?::uuid order by try.try_number
+                """, step)
+    }
+
+    private List<String> callRows() {
+        // DB-SPECIFIC: PostgreSQL ::text casts; || converts non-string operands to text.
+        store.texts("""
+                select try.try_number || ' ' || call.outcome || ' ' || call.sent_count || ' '
+                       || coalesce(call.came_back_count::text, '-') || ' ' || coalesce(call.answer, '-')
+                  from model_calls call join productions try on try.production_id = call.production_id
+                 order by try.try_number
+                """)
+    }
+
+    private String runRows() {
+        store.contents()
+    }
+
+    def "a process started after one killed settles what the killed one had out, and goes on from there"() {
+        when:
+        killedAndStartedAgain()
+
+        then: "each try the killed process had out spent, and the next made by the process started after it"
+        triesOf(TicketWorkflow.SUMMARISE) == ["1 model system nothing_came_back", "2 model system yielded"]
+        triesOf(CodeWorkflow.SEND) == ["1 code system nothing_came_back", "2 code system yielded"]
+
+        and: "what was sent counted for both calls, the killed one's as measured and nothing as come back"
+        def measured = killedModel.requests[0].model().unitsOf(killedModel.requests[0].sent().characters())
+        callRows() == ["1 nothing_came_back ${measured} - -" as String, "2 came_back 321 12 ${FITS}" as String]
+
+        and: "the killed process's call and code never made again"
+        killedModel.requests.size() == 1
+        startedModel.requests.size() == 1
+        killedCode.runs.get() == 1
+        startedCode.runs.get() == 1
+    }
+
+    def "what the killed process says when it wakes changes nothing, and is said by its keys alone"() {
+        given:
+        killedAndStartedAgain()
+        def before = runRows()
+        def logged = new SnapshottingAppender()
+        logged.start()
+        LATE_LOGGERS.each { it.addAppender(logged) }
+
+        when: "a killed process drives nothing more, so it wakes stopping"
+        killed.closing()
+        callOut.release()
+        codeRunning.countDown()
+        killed.drained()
+
+        then:
+        runRows() == before
+
+        and:
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def call = store.texts("""
+                select call.model_call_id::text from model_calls call where call.outcome = 'nothing_came_back'""")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def modelTry = store.texts("""
+                select production_id::text from productions where producer = 'model' and try_number = 1""")[0]
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        def codeTry = store.texts("""
+                select production_id::text from productions where producer = 'code' and try_number = 1""")[0]
+        logged.list*.formattedMessage.sort() == [
+                "Call ${call} of try ${modelTry} of run ${TicketWorkflow.RUN} had ended already; how it ended now is"
+                        + " dropped" as String,
+                "Try ${codeTry} of run ${CodeWorkflow.RUN} was ended before its code came back; what it came to is"
+                        + " dropped" as String].sort()
+        logged.list.every { it.level == Level.WARN && it.throwableProxy == null }
+
+        and: "nothing either came back with said, nor any value it gave"
+        logged.list.every { !it.formattedMessage.contains("4471") }
+        store.count("select count(*) from model_calls where answer like '%4471%'") == 0
+        // DB-SPECIFIC: PostgreSQL ::text casts.
+        store.count("select count(*) from production_values where value::text like '%4471%'") == 0
+
+        cleanup:
+        LATE_LOGGERS.each { it.detachAppender(logged) }
+    }
+}

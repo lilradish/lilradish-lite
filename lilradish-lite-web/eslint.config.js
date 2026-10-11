@@ -82,4 +82,27 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // Disjoint from the block above, so neither one's `no-restricted-syntax` replaces the other's; any other selector
+    // under that rule reaching these files would share the per-file count kept in eslint-suppressions.json.
+    files: [
+      "src/main/frontend/**/*.test.{ts,tsx}",
+      "src/main/frontend/testSetup.ts",
+      "src/main/frontend/testutil/**",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: [
+            "Literal[raw=/[^\\x00-\\x7F]/]",
+            "TemplateElement[value.raw=/[^\\x00-\\x7F]/]",
+            "JSXText[raw=/[^\\x00-\\x7F]/]",
+          ].join(", "),
+          message:
+            "Spell a non-ASCII character in test text as a \\uXXXX escape so it can be seen and reviewed.",
+        },
+      ],
+    },
+  },
 ]);

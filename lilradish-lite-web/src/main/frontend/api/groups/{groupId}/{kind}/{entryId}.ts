@@ -45,7 +45,6 @@ export function readEntry(
   );
 }
 
-/** Its name and what it is for, as one change; built member by member. */
 export function editEntry(
   groupId: string,
   kind: EntryKind,
@@ -60,9 +59,8 @@ export function editEntry(
 }
 
 /**
- * Whether a change was refused for how the entry stands now, which somebody
- * else moved since the page read it: reading it again is what shows why. The
- * status is read before the code, as `Problem` requires.
+ * Somebody moved the entry since it was read; reading again shows why the change
+ * was refused. Read status before code, as `Problem` requires.
  */
 export function refusedForWhatMoved(problem: Problem): boolean {
   return servedAmong(problem, MOVED);

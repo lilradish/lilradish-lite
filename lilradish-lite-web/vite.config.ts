@@ -1,12 +1,17 @@
 import react from "@vitejs/plugin-react";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+
+import { checkStylePolicy } from "./src/main/frontend/lib/theme/stylePolicy.ts";
+import { checkTokenCss } from "./src/main/frontend/lib/theme/tokenCss.ts";
 
 /** The keys Vite puts in the resolved env itself; any other came from a `.env` file or a `VITE_*` variable. */
 const VITE_OWN_ENV = new Set(["BASE_URL", "MODE", "DEV", "PROD"]);
 
-// Vite's own switches, which loadEnv copies in with the rest (vite@8.3.0 src/node/env.ts:67-68,96-101);
-// read by Vite alone: utils.ts:178, utils.ts:1310, config.ts:1856, config.ts:2611.
+// Vite's own switches are copied into the resolved env by loadEnv but configure Vite, not client code.
 const VITE_READ_ENV = new Set([
   "VITE_DEBUG_FILTER",
   "VITE_DEPRECATION_TRACE",
@@ -38,6 +43,44 @@ function inliningNothing(): Plugin {
   };
 }
 
+function tokenStyles(): Plugin {
+  let frontend = "";
+  return {
+    name: "token-styles",
+    apply: "build",
+    configResolved(config) {
+      frontend = config.root;
+    },
+    buildStart() {
+      const files: Record<string, string> = {};
+      function read(directory: string) {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const path = join(directory, entry.name);
+          if (entry.isDirectory()) {
+            read(path);
+            continue;
+          }
+          if (!entry.isFile() || !/\.(?:ts|tsx|css)$/.test(entry.name))
+            continue;
+          const name = relative(frontend, path).split("\\").join("/");
+          if (
+            /\.test\.tsx?$|^testutil\/|^testSetup\.ts$/.test(name) ||
+            name === "lib/theme/tokens.generated.css"
+          )
+            continue;
+          files[name] = readFileSync(path, "utf8");
+        }
+      }
+      read(frontend);
+      checkTokenCss(
+        files["lib/theme/tokens.ts"],
+        readFileSync(join(frontend, "lib/theme/tokens.generated.css"), "utf8"),
+      );
+      checkStylePolicy(files);
+    },
+  };
+}
+
 export default defineConfig({
   // Vitest resolves both `include` and `coverage.include` against this, so it
   // has to be the root of the tree it is meant to cover.
@@ -46,7 +89,27 @@ export default defineConfig({
   // source tree. It must also stay out of build/frontend: Gradle registers that
   // whole directory as a resource source, so anything under it reaches the jar.
   cacheDir: "../../../build/frontend-cache",
-  plugins: [react(), inliningNothing()],
+  plugins: [react(), inliningNothing(), tokenStyles()],
+  worker: {
+    plugins: () => [
+      {
+        name: "worker-character-references",
+        enforce: "pre",
+        resolveId(source) {
+          // This package's public default and worker exports use its character table, rather than a DOM element.
+          return source === "decode-named-character-reference"
+            ? fileURLToPath(import.meta.resolve(source))
+            : undefined;
+        },
+      },
+    ],
+    rolldownOptions: {
+      output: {
+        hashCharacters: "base64",
+        comments: { legal: true, annotation: false, jsdoc: false },
+      },
+    },
+  },
   build: {
     // `static` is not decoration: the whole directory above it is a Gradle
     // resource source, so this is the path inside the archive, and Spring Boot

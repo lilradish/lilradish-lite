@@ -29,7 +29,15 @@ const OLIVE_TAKEN_ON = {
   removable: true,
 };
 
-const FOUND: Reply = [JSON.stringify({ items: [OLIVE], more: false }), 200];
+const OLIVER = {
+  subjectId: "00000002-0000-4000-8000-0000000009d2",
+  userId: "0009d2",
+  displayName: "Oliver Out",
+};
+const FOUND: Reply = [
+  JSON.stringify({ items: [OLIVE, OLIVER], more: false }),
+  200,
+];
 
 function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
@@ -115,6 +123,7 @@ describe("BringSomebodyIn", () => {
     const offered = await screen.findAllByRole("radio");
     expect(offered.map((each) => each.closest("label")?.textContent)).toEqual([
       "0009d1 Olive Out",
+      "0009d2 Oliver Out",
     ]);
     expect(requestsTo(sent)).toEqual([
       `GET /api/groups/${GROUP}/pool/search?search=ol`,
@@ -149,7 +158,9 @@ describe("BringSomebodyIn", () => {
     expect(takeOn()).toHaveAccessibleDescription("Pick somebody first.");
 
     await searchedFor("ol");
-    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(
+      await screen.findByRole("radio", { name: "0009d1 Olive Out" }),
+    );
 
     expect(takeOn()).toHaveAttribute("aria-disabled", "true");
     expect(takeOn()).toHaveAccessibleDescription(
@@ -170,7 +181,9 @@ describe("BringSomebodyIn", () => {
     });
     await opened();
     await searchedFor("ol");
-    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(
+      await screen.findByRole("radio", { name: "0009d1 Olive Out" }),
+    );
     await userEvent.click(screen.getByRole("checkbox", { name: "Owner" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Overseer" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Overseer" }));
@@ -202,7 +215,9 @@ describe("BringSomebodyIn", () => {
     });
     const dialog = await opened();
     await searchedFor("ol");
-    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(
+      await screen.findByRole("radio", { name: "0009d1 Olive Out" }),
+    );
     await userEvent.click(screen.getByRole("checkbox", { name: "Operator" }));
 
     await userEvent.click(takeOn());

@@ -1,14 +1,15 @@
 import { useEffect, useMemo } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate } from "react-router";
 
 import {
   libraryLoader,
   type Entry,
   type EntryRow,
 } from "../../api/groups/{groupId}/{kind}";
-import { mayIn } from "../../api/standing";
+import { mayIn, type GroupStanding } from "../../api/standing";
 import { ProblemView } from "../../app/ProblemView";
 import { movesTheReader } from "../../app/refusal";
+import { useGroup } from "../../app/standing/RequireGroup";
 import { useStandingRead } from "../../app/standing/StandingContext";
 import { say } from "../../i18n/app";
 import { FilterField } from "../../lib/collection/FilterField";
@@ -36,19 +37,27 @@ import { NewEntry } from "./NewEntry";
  * page off whatever it no longer reaches.
  */
 export function LibraryPage({ of }: { readonly of: LibraryKind }) {
-  const { groupId = "" } = useParams();
-  return <LibraryForGroup key={`${groupId}:${of.kind}`} of={of} />;
+  const group = useGroup();
+  return (
+    <LibraryForGroup
+      key={`${group.groupId}:${of.kind}`}
+      group={group}
+      of={of}
+    />
+  );
 }
 
-function LibraryForGroup({ of }: { readonly of: LibraryKind }) {
-  const standingRead = useStandingRead();
-  const reloadStanding = standingRead.reload;
-  const { groupId = "" } = useParams();
+function LibraryForGroup({
+  group,
+  of,
+}: {
+  readonly group: GroupStanding;
+  readonly of: LibraryKind;
+}) {
+  const reloadStanding = useStandingRead().reload;
+  const { groupId } = group;
   const navigate = useNavigate();
-  const group = standingRead.value.groups.find(
-    (each) => each.groupId === groupId,
-  );
-  const mayMake = group !== undefined && mayIn(group, "author_entry");
+  const mayMake = mayIn(group, "author_entry");
   const { filter, order, sort, onFilter, onOrder } = useListAddress(
     LIBRARY_SORTABLE,
     BY_NAME,
@@ -69,7 +78,7 @@ function LibraryForGroup({ of }: { readonly of: LibraryKind }) {
 
   const making = useAction<Entry>(
     (made) =>
-      navigate(entryHref(groupId, of, made.entryId), {
+      navigate(entryHref(group, of, made.entryId), {
         state: JUST_MADE,
       }),
     (problem) => {
@@ -82,11 +91,7 @@ function LibraryForGroup({ of }: { readonly of: LibraryKind }) {
   return (
     <>
       <PageHeading
-        title={
-          group === undefined
-            ? say(of.item.label)
-            : say(of.heading, { group: isolatedInText(group.name) })
-        }
+        title={say(of.heading, { group: isolatedInText(group.name) })}
         actions={
           mayMake ? (
             <NewEntry groupId={groupId} of={of} making={making} />
@@ -107,7 +112,7 @@ function LibraryForGroup({ of }: { readonly of: LibraryKind }) {
         page={page}
         keyOf={entryIdOf}
         picked={null}
-        hrefOf={(row) => entryHref(groupId, of, row.entryId)}
+        hrefOf={(row) => entryHref(group, of, row.entryId)}
         linkNameOf={(row) => row.name}
         linkDescriptionOf={(row) => row.purpose ?? say("entry.saysNothing")}
         empty={say(filter === "" ? of.empty : "library.noMatch")}

@@ -1,45 +1,44 @@
+import type { NumberedRun } from "../../api/runFacts";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlinedIcon from "@mui/icons-material/ErrorOutlined";
 import PauseCircleOutlinedIcon from "@mui/icons-material/PauseCircleOutlined";
 import type SvgIcon from "@mui/material/SvgIcon";
 
-import type {
-  NumberedRun,
-  Run,
-  RunState,
-} from "../../api/groups/{groupId}/runs/{runId}";
+import type { Run, RunState } from "../../api/groups/{groupId}/runs/{runId}";
 import { say, type MessageId } from "../../i18n/app";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { nameOrNumber } from "../../lib/text/names";
+import type { StateToneName } from "../../lib/theme/tokens";
 import { whenText } from "../../lib/time/When";
+import { countSaid } from "./spend";
 
 const STATES = {
   running: {
     words: "runState.running",
-    colour: "info.main",
+    tone: "running",
     icon: AutorenewIcon,
   },
   stopped: {
     words: "runState.stopped",
-    colour: "text.secondary",
+    tone: "stopped",
     icon: PauseCircleOutlinedIcon,
   },
   failed: {
     words: "runState.failed",
-    colour: "error.main",
+    tone: "failed",
     icon: ErrorOutlinedIcon,
   },
   done: {
     words: "runState.done",
-    colour: "success.main",
+    tone: "done",
     icon: CheckCircleIcon,
   },
 } as const satisfies Record<
   RunState,
   {
     readonly words: MessageId;
-    readonly colour: string;
+    readonly tone: StateToneName;
     readonly icon: typeof SvgIcon;
   }
 >;
@@ -59,7 +58,6 @@ export function stateWorded(state: string): string | null {
   return mark === null ? null : say(mark.words);
 }
 
-/** The current state, with who or which ceiling stopped it only while it remains stopped. */
 export function runWhereSaid(run: Run, now = new Date()): string {
   if (run.state !== "stopped") {
     return stateSaid(run.state);
@@ -95,14 +93,14 @@ export function stoppedByCeilingsSaid(
   }
   if (!own && others.length === 1) {
     return say("run.stoppedByCeilingOf", {
-      number: others[0]!.number,
+      number: countSaid(String(others[0]!.number)),
       when,
     });
   }
   const numbers = new Intl.ListFormat("en", {
     style: "long",
     type: "conjunction",
-  }).format(others.map(({ number }) => String(number)));
+  }).format(others.map(({ number }) => countSaid(String(number))));
   return own
     ? say("run.stoppedByOwnAndOtherCeilings", {
         count: others.length,

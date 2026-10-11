@@ -33,8 +33,8 @@ export function searchPool(
 }
 
 /**
- * Built member by member; one match that cannot be read refuses the whole
- * answer. Every search of the pool is answered in this shape, wherever from.
+ * One unreadable match refuses the whole answer.
+ * Every pool search shares this shape, wherever from.
  */
 export function foundFrom(body: unknown): FoundInPool | null {
   if (

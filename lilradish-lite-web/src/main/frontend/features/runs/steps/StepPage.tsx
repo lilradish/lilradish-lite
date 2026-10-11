@@ -1,5 +1,5 @@
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
+import { VersionLabel } from "../../../lib/text/VersionLabel";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import {
@@ -27,15 +27,19 @@ import {
   type StepAnswer,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import { readRun, type Run } from "../../../api/groups/{groupId}/runs/{runId}";
+import type { GroupStanding } from "../../../api/standing";
+import type { Problem } from "../../../api/problem";
 import { Async } from "../../../app/Async";
 import { ProblemView } from "../../../app/ProblemView";
 import { movesTheReader } from "../../../app/refusal";
+import { useGroup } from "../../../app/standing/RequireGroup";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
+import { visible } from "../../../i18n/visible";
+import { Press } from "../../../lib/action/Press";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import { Field, Fields } from "../../../lib/form/Fields";
 import { PageHeading } from "../../../lib/heading/PageHeading";
-import { BESIDE_FROM } from "../../../lib/collection/RowPanel";
 import { QUIET_SX, SPACED_FAR_ABOVE_SX } from "../../../lib/layout/parts";
 import { TwoColumns } from "../../../lib/layout/TwoColumns";
 import { useCalendarNow } from "../../../lib/time/When";
@@ -47,6 +51,7 @@ import { LIBRARY_KINDS } from "../../library/libraryKinds";
 import { StepKindTag } from "../../library/StepKindTag";
 import { CurrentFileRunContext } from "../fill/CurrentFileRun";
 import { FilledValue } from "../fill/FilledValue";
+import { ValueStatusChip } from "../fill/ValueCard";
 import {
   listQuery,
   PICKED_TRY,
@@ -61,23 +66,24 @@ import { RunReadAccess, useRunReadAccess } from "../RunReadAccess";
 import { stateWorded } from "../runStates";
 import { CostDrawn } from "../spend";
 import { AnswerHere } from "./AnswerHere";
+import { LengthPanel } from "./LengthPanel";
 import { BeneathLinks } from "./BeneathLinks";
 import { AskAgainButton } from "./AskAgainButton";
 import { declaredFor, fieldAt, labelAt, type Declaring } from "./declared";
 import { ReviewControls, searchWaitingOnReader } from "./ReviewControls";
-import { SearchReviewTry, SearchText } from "./SearchRecord";
+import { SearchReviewTry } from "./SearchRecord";
+import { ProseScope } from "../../../lib/text/ModelProse";
+import { StateNote } from "../../../lib/text/StateNote";
 import { StateNews, type Stated } from "./StateNews";
+import { withheldSaid } from "./stepActs";
+import { whoSaid } from "./stepProducersAndReviewers";
 import { StepStateBadge } from "./StepStateBadge";
-import {
-  tryBeyondVisible,
-  standingSaid,
-  stepStateWorded,
-  whereSaid,
-  whoSaid,
-  withheldSaid,
-} from "./stepStates";
+import { stepStateWorded } from "./stepStates";
 import { spokenName, stepTitle } from "./stepTitle";
+import { tryBeyondVisible, standingSaid } from "./stepTries";
+import { whereSaid } from "./stepWhereabouts";
 import { TriesList } from "./TriesList";
+import { TryRead } from "./TryRead";
 import { TrySendingButton } from "./TrySendingButton";
 import { Turnaways } from "./Turnaways";
 import { useKeptUp } from "./useRunRead";
@@ -87,7 +93,6 @@ function waitOfStep(page: StepAnswer): number | undefined {
   return page.rereadAfterSeconds;
 }
 
-/** The run by the name the step's page gives it, then the step by its heading. */
 function statesOfStep({ run, step }: StepAnswer): Stated[] {
   return [
     {
@@ -105,26 +110,29 @@ function statesOfStep({ run, step }: StepAnswer): Stated[] {
 
 /** A step's act answer stays shown while an older read is set aside and a fresh read begins. */
 export function StepPage() {
-  const { groupId = "", runId = "", stepId = "" } = useParams();
+  const group = useGroup();
+  const { runId = "", stepId = "" } = useParams();
   return (
-    <RunReadAccess key={`${groupId}/${runId}`}>
-      <StepPageWithin groupId={groupId} runId={runId} stepId={stepId} />
+    <RunReadAccess key={`${group.groupId}/${runId}`}>
+      <StepPageWithin group={group} runId={runId} stepId={stepId} />
     </RunReadAccess>
   );
 }
 
 function StepPageWithin({
-  groupId,
+  group,
   runId,
   stepId,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly runId: string;
   readonly stepId: string;
 }) {
+  const { groupId } = group;
   const access = useRunReadAccess();
   const guardRead = access.read;
-  const reloadStanding = useStandingRead().reload;
+  const standingRead = useStandingRead();
+  const reloadStanding = standingRead.reload;
   const load = useCallback(
     (signal: AbortSignal): Promise<StepAnswer | null> =>
       guardRead(signal, () => readStep(groupId, runId, stepId, signal)),
@@ -137,7 +145,6 @@ function StepPageWithin({
     [groupId, runId, guardRead],
   );
   const listed = useResource(loadSteps, null);
-  // Read once for the way back alone, which names every run above it: the step's own read names none of them.
   const loadRun = useCallback(
     (signal: AbortSignal): Promise<Run | null> =>
       guardRead(signal, () => readRun(groupId, runId, signal)),
@@ -192,7 +199,7 @@ function StepPageWithin({
               value={{ groupId, runId: page.run.runId }}
             >
               <StepDrawn
-                groupId={groupId}
+                group={group}
                 page={page}
                 steps={
                   listed.problem === null
@@ -211,31 +218,34 @@ function StepPageWithin({
 }
 
 function StepDrawn({
-  groupId,
+  group,
   page,
   steps,
   focusOnArrival,
   onShown,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly page: StepAnswer;
   readonly steps: readonly StepRow[] | undefined;
   readonly focusOnArrival: boolean;
   readonly onShown: (answer: StepAnswer) => void;
 }) {
+  const { groupId } = group;
+  const standing = useStandingRead().value;
   const now = useCalendarNow();
   const { search } = useLocation();
   const cameOutId = useId();
   const [askOut, setAskOut] = useState(false);
   const [answerOut, setAnswerOut] = useState(false);
+  const [lengthRefusal, setLengthRefusal] = useState<Problem | null>(null);
   const { run, step } = page;
   const [parameters] = useSearchParams();
-  const searchTry = searchWaitingOnReader(step, page);
+  const searchTry = searchWaitingOnReader(step, page, standing, groupId);
   const pickedSearch =
     searchTry !== undefined &&
     searchTry.number === Number(parameters.get(PICKED_TRY) ?? Number.NaN);
   const declared = declaredFor(step, page.declarations);
-  const [, ...why] = whereSaid(step, declared?.gives, groupId, now, search);
+  const [, ...why] = whereSaid(step, declared?.gives, group, now, search);
   const heldBack = step.state === "held_back" && why.length > 0;
   const declaring: Declaring = {
     runId: run.runId,
@@ -251,189 +261,208 @@ function StepDrawn({
         focusOnArrival={focusOnArrival}
         title={isolatedInText(stepTitle(step))}
       />
-      <SearchReviewTry.Provider
-        value={pickedSearch ? null : (searchTry?.number ?? null)}
+      <TryRead
+        group={group}
+        runId={run.runId}
+        stepId={step.stepId}
+        shown={page.triesMade.find(
+          (aTry) =>
+            aTry.number === Number(parameters.get(PICKED_TRY) ?? Number.NaN),
+        )}
+        waiting={searchTry}
       >
-        <TwoColumns
-          wideAtLeast={BESIDE_FROM}
-          wide={
-            <>
-              {heldBack ? (
-                <Notice severity="warning">
-                  {why.map((line, at) => (
-                    <Fragment key={at}>
-                      {at === 0 ? null : " "}
-                      {line}
-                    </Fragment>
-                  ))}
-                  {turnedAway === undefined ? null : (
-                    <Turnaways turnedAway={turnedAway} />
-                  )}
-                  {step.runs.kind !== "search" ||
-                  (step.where?.reason !== "too_long" &&
-                    step.where?.reason !== "turned_away") ? null : step.where
-                      .searchQuestionWithheld === true ? (
-                    <Typography variant="body2">
-                      {say("step.searchWithheld")}
-                    </Typography>
-                  ) : step.where.searchQuestion === undefined ? null : (
-                    <Fields>
-                      <Field
-                        label={say(
-                          step.where.reason === "too_long"
-                            ? "step.heldSearchQuestionUnsent"
-                            : "step.heldSearchQuestionTurnedAway",
-                        )}
-                      >
-                        <SearchText text={step.where.searchQuestion} />
-                      </Field>
-                    </Fields>
-                  )}
-                </Notice>
-              ) : null}
-              {withheldSaid(step, declaring).map((line) => (
-                <Typography key={line} variant="body2">
-                  {line}
-                </Typography>
-              ))}
-              <TrySendingButton
-                groupId={groupId}
-                runId={run.runId}
-                step={step}
-                onShown={onShown}
-              />
-              <AskAgainButton
-                groupId={groupId}
-                runId={run.runId}
-                step={step}
-                held={answerOut}
-                onRunning={setAskOut}
-                landsOn={cameOutId}
-                onShown={onShown}
-              />
-              <AnswerHere
-                groupId={groupId}
-                runId={run.runId}
-                step={step}
-                inHand={page}
-                held={askOut}
-                onRunning={setAnswerOut}
-                declaring={declaring}
-                wentInDrawn
-                heading="h2"
-                landsOn={cameOutId}
-                onShown={onShown}
-              />
-              <WentIn page={page} declaring={declaring} />
-              <ReviewControls
-                groupId={groupId}
-                runId={run.runId}
-                step={step}
-                inHand={page}
-                searchDrawn={pickedSearch}
-                declaring={declaring}
-                heading="h2"
-                landsOn={cameOutId}
-                onShown={onShown}
-              />
-              <CameOut
-                page={page}
-                declaring={declaring}
-                headingId={cameOutId}
-              />
-            </>
-          }
-          narrow={
-            <AboutIt
-              facts={
-                <>
-                  <Field label={say("work.run")}>
-                    {say("run.title", { number: run.number })}
-                  </Field>
-                  <Field label={say("step.order")}>
-                    {say("step.orderOf", {
-                      order: step.order,
-                      of: run.progress.of,
-                    })}
-                  </Field>
-                  <Field label={say("step.runs")}>
-                    {runsSaid(groupId, step.runs)}
-                  </Field>
-                  {step.runs.kind === "workflow" ||
-                  step.runs.kind === "route" ? null : (
-                    <>
-                      <Field label={say("step.producedBy")}>
-                        {step.producer === undefined
-                          ? say("step.producesNothing")
-                          : whoSaid(step.producer)}
-                      </Field>
-                      <Field label={say("step.reviewedBy")}>
-                        {reviewerSaid(step)}
-                      </Field>
-                    </>
-                  )}
-                  {step.beneath === undefined ? null : (
-                    <Field label={say("run.above")}>
-                      <BeneathLinks groupId={groupId} beneath={step.beneath} />
-                    </Field>
-                  )}
-                  <Field label={say("run.where")}>
-                    <StepStateBadge state={step.state} />
-
-                    {(heldBack ? [] : why).map((line, at) => (
-                      <Typography key={at} variant="body2" sx={QUIET_SX}>
-                        {line}
-                      </Typography>
+        <SearchReviewTry.Provider
+          value={pickedSearch ? null : (searchTry?.number ?? null)}
+        >
+          <TwoColumns
+            panelTitle={say("run.aboutIt")}
+            wideAtLeast={640}
+            wide={
+              <>
+                {heldBack ? (
+                  <Notice severity="warning">
+                    {why.map((line, at) => (
+                      <Fragment key={at}>
+                        {at === 0 ? null : " "} {line}
+                      </Fragment>
                     ))}
-                  </Field>
-                  {step.tries === undefined || step.tries.current < 1 ? null : (
-                    <Field label={say("step.tries")}>
-                      {step.tries.beyond
-                        ? tryBeyondVisible(
-                            step.tries.current,
-                            step.tries.declared,
-                          )
-                        : say("step.tryOf", {
-                            number: step.tries.current,
-                            allowed: step.tries.declared,
-                          })}
+                    {turnedAway === undefined ? null : (
+                      <Turnaways turnedAway={turnedAway} />
+                    )}
+                  </Notice>
+                ) : null}
+                {lengthRefusal === null ? null : (
+                  <ProblemView problem={lengthRefusal} />
+                )}
+                {step.length === undefined ? null : (
+                  <LengthPanel
+                    length={step.length}
+                    group={group}
+                    declaring={declaring}
+                    stepId={step.stepId}
+                    onShown={onShown}
+                    onRefused={setLengthRefusal}
+                  />
+                )}
+                {withheldSaid(step, declaring, standing, groupId).map(
+                  (line) => (
+                    <Typography key={line} variant="body2">
+                      {line}
+                    </Typography>
+                  ),
+                )}
+                <TrySendingButton
+                  groupId={groupId}
+                  runId={run.runId}
+                  step={step}
+                  onShown={onShown}
+                />
+                <AskAgainButton
+                  groupId={groupId}
+                  runId={run.runId}
+                  step={step}
+                  held={answerOut}
+                  onRunning={setAskOut}
+                  landsOn={cameOutId}
+                  onShown={onShown}
+                />
+                <AnswerHere
+                  groupId={groupId}
+                  runId={run.runId}
+                  step={step}
+                  inHand={page}
+                  held={askOut}
+                  onRunning={setAnswerOut}
+                  declaring={declaring}
+                  wentInDrawn
+                  heading="h2"
+                  landsOn={cameOutId}
+                  onShown={onShown}
+                />
+                <WentIn page={page} declaring={declaring} />
+                <ReviewControls
+                  groupId={groupId}
+                  runId={run.runId}
+                  step={step}
+                  inHand={page}
+                  searchDrawn={pickedSearch}
+                  declaring={declaring}
+                  heading="h2"
+                  landsOn={cameOutId}
+                  onShown={onShown}
+                />
+                <CameOut
+                  page={page}
+                  declaring={declaring}
+                  headingId={cameOutId}
+                />
+              </>
+            }
+            narrow={
+              <AboutIt
+                status={
+                  <>
+                    <StepStateBadge state={step.state} />
+                    {(heldBack ? [] : why).map((line, at) => (
+                      <StateNote key={at}>{line}</StateNote>
+                    ))}
+                  </>
+                }
+                facts={
+                  <>
+                    <Field label={say("work.run")}>
+                      {say("run.title", { number: run.number })}
                     </Field>
-                  )}
-                  <Field label={say("step.cost")}>
-                    <CostDrawn cost={step.cost} />
-                  </Field>
-                </>
-              }
-            />
-          }
-        />
-      </SearchReviewTry.Provider>
+                    <Field label={say("step.order")}>
+                      {say("step.orderOf", {
+                        order: step.order,
+                        of: run.progress.of,
+                      })}
+                    </Field>
+                    <Field label={say("step.runs")}>
+                      {runsSaid(group, step.runs)}
+                    </Field>
+                    {step.runs.kind === "workflow" ||
+                    step.runs.kind === "route" ? null : (
+                      <>
+                        <Field label={say("step.producedBy")}>
+                          {step.producer === undefined
+                            ? say("step.producesNothing")
+                            : whoSaid(step.producer)}
+                        </Field>
+                        <Field label={say("step.reviewedBy")}>
+                          {reviewerSaid(step)}
+                        </Field>
+                      </>
+                    )}
+                    {step.beneath === undefined ? null : (
+                      <Field label={say("step.subRun")}>
+                        <BeneathLinks group={group} beneath={step.beneath} />
+                      </Field>
+                    )}
+                    {step.tries === undefined ||
+                    step.tries.current < 1 ? null : (
+                      <Field label={say("step.tries")}>
+                        {step.tries.beyond
+                          ? tryBeyondVisible(
+                              step.tries.current,
+                              step.tries.declared,
+                            )
+                          : say("step.tryOf", {
+                              number: step.tries.current,
+                              allowed: step.tries.declared,
+                            })}
+                      </Field>
+                    )}
+                    <Field label={say("run.usage")}>
+                      <CostDrawn cost={step.cost} />
+                    </Field>
+                  </>
+                }
+              />
+            }
+          />
+        </SearchReviewTry.Provider>
+      </TryRead>
     </>
   );
 }
 
-/** The kind beside the pinned question or workflow version, or the code step's name. */
-function runsSaid(groupId: string, runs: StepRuns): ReactNode {
+function runsSaid(group: GroupStanding, runs: StepRuns): ReactNode {
   const { kind, entryId, name, version, versionId, codeStep } = runs;
-  if (kind === "search" && runs.searchWay !== undefined) {
-    return say("step.runsSearch", {
-      way: isolatedInText(spokenName(runs.searchWay)),
-    });
-  }
   if (
-    (kind === "question" || kind === "workflow") &&
+    (kind === "question" || kind === "workflow" || kind === "search") &&
     entryId !== undefined &&
     name !== undefined &&
     version !== undefined
   ) {
     return (
       <>
-        <StepKindTag kind={kind} />{" "}
+        {kind === "search" && runs.searchWay !== undefined ? (
+          say("step.runsSearch", {
+            way: isolatedInText(spokenName(runs.searchWay)),
+          })
+        ) : (
+          <StepKindTag kind={kind} />
+        )}{" "}
         <Link
           component={RouterLink}
-          to={entryHref(groupId, LIBRARY_KINDS[kind], entryId, versionId)}
+          to={entryHref(
+            group,
+            LIBRARY_KINDS[kind === "search" ? "question" : kind],
+            entryId,
+            versionId,
+          )}
         >
-          {say("run.workflowVersion", { name: isolatedInText(name), version })}
+          {visible("run.workflowVersion", {
+            label: (
+              <VersionLabel
+                entry={name}
+                number={version}
+                name={runs.versionName}
+              />
+            ),
+          })}
         </Link>
       </>
     );
@@ -459,7 +488,6 @@ function reviewerSaid(step: StepRow): string {
     : whoSaid(reviewer);
 }
 
-/** Every input, where it came from, and what it was given; or what it would be given, where nothing is sent yet. */
 function WentIn({
   page,
   declaring,
@@ -503,10 +531,7 @@ function WentIn({
   );
 }
 
-/**
- * Each value it gives back and where it stands, then every try of the one picked, the first until another is. The
- * value and the try picked are held in the address, so a link to the page opens them again.
- */
+/** The picked value and try live in the URL so a link can reopen them. */
 function CameOut({
   page,
   declaring,
@@ -517,7 +542,7 @@ function CameOut({
   /** Where the keyboard goes once a review it asked for is answered. */
   readonly headingId: string;
 }) {
-  const { groupId = "" } = useParams();
+  const group = useGroup();
   const { search } = useLocation();
   const triesId = useId();
   const [parameters, setParameters] = useSearchParams();
@@ -560,54 +585,67 @@ function CameOut({
         <Typography id={headingId} tabIndex={-1} variant="h2">
           {say("step.cameOut")}
         </Typography>
-        {cameOut === undefined ? (
-          <Typography variant="body2">
-            {say(
-              step.state === "not_started"
-                ? "step.nothingYet"
-                : "step.producedNothing",
-            )}
-          </Typography>
-        ) : (
-          <Fields>
-            {cameOut.map((each) => (
-              <Field key={each.field} label={labelAt(gives, each.field)}>
-                {each.standing === undefined ? null : (
-                  <FilledValue
-                    field={fieldAt(gives, each.field)}
-                    label={labelAt(gives, each.field)}
-                    shown={each.standing}
-                    shut={false}
-                  />
-                )}
-                <Typography variant="body2" sx={QUIET_SX}>
-                  {standingSaid(each.now)}
-                </Typography>
-                {each.fromRun === undefined ? null : (
-                  <Link
-                    component={RouterLink}
-                    to={`${runHref(groupId, each.fromRun.runId)}${listQuery(search)}`}
-                  >
-                    {say("run.title", { number: each.fromRun.number })}
-                  </Link>
-                )}
-                {cameOut.length > 1 ? (
-                  <Button
-                    variant="outlined"
-                    color="inherit"
-                    size="small"
-                    aria-pressed={each.field === field}
-                    onClick={() => picking(each.field, null)}
-                  >
-                    {say("step.seeTries", {
-                      field: labelAt(gives, each.field),
-                    })}
-                  </Button>
-                ) : null}
-              </Field>
-            ))}
-          </Fields>
-        )}
+        <ProseScope>
+          {cameOut === undefined ? (
+            <Typography variant="body2">
+              {say(
+                step.state === "not_started"
+                  ? "step.nothingYet"
+                  : "step.producedNothing",
+              )}
+            </Typography>
+          ) : (
+            <Fields>
+              {cameOut.map((each) => (
+                <Field key={each.field} label={labelAt(gives, each.field)}>
+                  {each.standing === undefined ? (
+                    <ValueStatusChip status={each.now} />
+                  ) : (
+                    <FilledValue
+                      cards
+                      field={fieldAt(gives, each.field)}
+                      label={labelAt(gives, each.field)}
+                      shown={each.standing}
+                      shut={false}
+                      status={each.now}
+                      foot={
+                        each.now === "none" ? (
+                          <Typography variant="body2">
+                            {standingSaid(each.now)}
+                          </Typography>
+                        ) : undefined
+                      }
+                    />
+                  )}
+                  {each.standing === undefined && each.now === "none" ? (
+                    <Typography variant="body2">
+                      {standingSaid(each.now)}
+                    </Typography>
+                  ) : null}
+                  {each.fromRun === undefined ? null : (
+                    <Link
+                      component={RouterLink}
+                      to={`${runHref(group, each.fromRun.runId)}${listQuery(search)}`}
+                    >
+                      {say("run.title", { number: each.fromRun.number })}
+                    </Link>
+                  )}
+                  {cameOut.length > 1 ? (
+                    <Press
+                      tier="quiet"
+                      aria-pressed={each.field === field}
+                      onPress={() => picking(each.field, null)}
+                    >
+                      {say("step.seeTries", {
+                        field: labelAt(gives, each.field),
+                      })}
+                    </Press>
+                  ) : null}
+                </Field>
+              ))}
+            </Fields>
+          )}
+        </ProseScope>
       </Box>
       <Box
         component="section"
@@ -621,6 +659,7 @@ function CameOut({
         </Typography>
         <TriesList
           key={field}
+          group={group}
           tries={page.triesMade}
           allowed={step.tries?.declared}
           field={field}

@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import { declaredFrom, listVersionFrom, MOST_FILE_TYPES } from "./declaration";
 
 const PINNED = {
+  versionName: null,
   name: "Categories",
   versionId: "v1",
   number: 1,
   standing: "in_service",
-  newer: { versionId: "v2", number: 2 },
+  newer: { versionName: null, versionId: "v2", number: 2 },
 };
 
 const CATEGORY = {
@@ -44,7 +45,7 @@ const SENDER = {
 
 const FILE_TYPES_64 = Array.from(
   { length: MOST_FILE_TYPES },
-  (_, index) => `application/x${index}`,
+  (_, index) => `.x${index}`,
 );
 
 describe("declaredFrom", () => {
@@ -66,7 +67,7 @@ describe("declaredFrom", () => {
       fieldId: "f4",
       name: "documents",
       kind: "file",
-      types: ["application/pdf", "image/png"],
+      types: [".pdf", ".png"],
       maximumBytes: 1048576,
       many: true,
       most: 3,
@@ -74,6 +75,44 @@ describe("declaredFrom", () => {
     };
     expect(declaredFrom(declared)).toEqual(declared);
   });
+
+  it.each([
+    ["the shortest extension", ".a", true],
+    ["thirty-two characters after the first dot", `.${"a".repeat(32)}`, true],
+    [
+      "thirty-three characters after the first dot",
+      `.${"a".repeat(33)}`,
+      false,
+    ],
+    [
+      "an internal dot within the same thirty-two characters",
+      `.${"a".repeat(30)}.b`,
+      true,
+    ],
+    [
+      "an internal dot exceeding those thirty-two characters",
+      `.${"a".repeat(31)}.b`,
+      false,
+    ],
+    ["a compound extension", ".tar.gz", true],
+    ["an empty internal segment", ".tar..gz", false],
+    ["a trailing dot", ".tar.", false],
+    ["a non-ASCII letter", ".péf", false],
+  ])(
+    "reads file extensions with %s only when they fit",
+    (_case, extension, fits) => {
+      const file = {
+        fieldId: "f4",
+        name: "documents",
+        kind: "file",
+        types: [extension],
+        maximumBytes: 8,
+        many: false,
+        mustBeGiven: false,
+      };
+      expect(declaredFrom(file)).toEqual(fits ? file : null);
+    },
+  );
 
   it("reads exactly sixty-four types and the largest exact byte count, and refuses either one past", () => {
     const file = {
@@ -88,7 +127,7 @@ describe("declaredFrom", () => {
 
     expect(declaredFrom(JSON.parse(JSON.stringify(file)))).toEqual(file);
     expect(
-      declaredFrom({ ...file, types: [...FILE_TYPES_64, "application/extra"] }),
+      declaredFrom({ ...file, types: [...FILE_TYPES_64, ".extra"] }),
     ).toBeNull();
     expect(
       declaredFrom({ ...file, maximumBytes: Number.MAX_SAFE_INTEGER + 1 }),
@@ -100,7 +139,7 @@ describe("declaredFrom", () => {
       fieldId: "f4",
       name: "documents",
       kind: "file",
-      types: ["application/pdf"],
+      types: [".pdf", ".txt"],
       many: false,
       mustBeGiven: false,
     };
@@ -122,15 +161,12 @@ describe("declaredFrom", () => {
   it.each([
     ["missing types", { maximumBytes: 1048576 }],
     ["empty types", { types: [], maximumBytes: 1048576 }],
-    [
-      "duplicate types",
-      { types: ["image/png", "image/png"], maximumBytes: 1048576 },
-    ],
+    ["duplicate types", { types: [".png", ".png"], maximumBytes: 1048576 }],
     [
       "parameterized type",
       { types: ["image/png; charset=utf-8"], maximumBytes: 1048576 },
     ],
-    ["zero size", { types: ["image/png"], maximumBytes: 0 }],
+    ["zero size", { types: [".png"], maximumBytes: 0 }],
   ])("refuses a file field with %s", (_case, limits) => {
     expect(
       declaredFrom({
@@ -196,6 +232,7 @@ describe("declaredFrom", () => {
 describe("listVersionFrom", () => {
   it("reads a list version by its name, identifier and number, or nothing of one short of any", () => {
     const list = {
+      versionName: null,
       name: "Categories",
       versionId: "v1",
       number: 1,
@@ -214,7 +251,10 @@ describe("listVersionFrom", () => {
     expect(
       declaredFrom({
         ...CATEGORY,
-        list: { ...PINNED, newer: { versionId: "v2", number: 0 } },
+        list: {
+          ...PINNED,
+          newer: { versionName: null, versionId: "v2", number: 0 },
+        },
       }),
     ).toBeNull();
   });

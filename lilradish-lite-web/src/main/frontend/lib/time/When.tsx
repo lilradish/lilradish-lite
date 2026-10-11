@@ -58,7 +58,7 @@ function daySnapshot(): number {
   return day;
 }
 
-/** The reader's current calendar date, shared by every time on this page. */
+/** One midnight subscription keeps every relative time current when the reader's day changes. */
 export function useCalendarNow(): Date {
   useSyncExternalStore(subscribeDay, daySnapshot, daySnapshot);
   return new Date();
@@ -68,17 +68,12 @@ function midnight(at: Date): number {
   return new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
 }
 
-/**
- * The reader's calendar days before `now` that `at` falls on, where a reader names that day: today or yesterday.
- * Null for any other, a later day included, which a reader dates instead.
- */
 export function namedDay(at: Date, now: Date): 0 | 1 | null {
   // Round, not floor: a DST day is 23 or 25 hours.
   const days = Math.round((midnight(now) - midnight(at)) / DAY_MILLIS);
   return days === 0 || days === 1 ? days : null;
 }
 
-/** Named by the day it falls on where `namedDay` names one: it is the day a reader is naming. */
 function spoken(at: Date, now: Date): string {
   const time = readersIntl.formatTime(at, {
     hour: "2-digit",
@@ -98,12 +93,8 @@ function spoken(at: Date, now: Date): string {
 }
 
 /**
- * The same wall clock as a bare string, for the places that can hold no
- * element — a breadcrumb's label, which is also its key.
- *
- * `iso` must be ISO 8601. `new Date` parses far more than that, "March 5, 2026"
- * included, and anything it accepts but the spec does not becomes an invalid
- * `datetime` on the element below.
+ * `iso` must be ISO 8601: `new Date` accepts other formats that would be invalid
+ * in the `datetime` of the element below.
  */
 export function whenText(iso: string, now = new Date()): string {
   const at = new Date(iso);
@@ -111,12 +102,7 @@ export function whenText(iso: string, now = new Date()): string {
 }
 
 /**
- * An instant as a person keeps time, with the exact one a hover away.
- *
- * The ISO string is the truth and is unreadable at a glance; "09:00 yesterday"
- * is readable and stops being true once the day turns. Both are here, which is
- * what the `time` element is for — the machine reads `dateTime`, the reader
- * reads the text.
+ * ISO preserves the exact instant; readable text becomes stale when the day turns.
  */
 export function When({ iso }: { readonly iso: string }) {
   const now = useCalendarNow();

@@ -9,8 +9,8 @@ import type {
 } from "../../api/groups/{groupId}/{kind}";
 import { say } from "../../i18n/app";
 import type { Ordering } from "../../lib/collection/ordering";
+import { VersionLabel } from "../../lib/text/VersionLabel";
 
-/** Every column a group's entries can be sorted by, closed over the union in both directions. */
 export const LIBRARY_SORTABLE = {
   name: true,
   inService: true,
@@ -23,7 +23,7 @@ export const BY_NAME: Ordering<LibrarySortColumn> = {
   descending: false,
 };
 
-/** One row per entry, the first cell the link that opens it; every cell a fact, none left empty. */
+/** One row per entry, the first cell the link that opens it. */
 export function libraryColumns() {
   return [
     {
@@ -48,11 +48,20 @@ export function libraryColumns() {
       cell: (row: EntryRow) =>
         row.inService === undefined
           ? say("entry.noneInService")
-          : say("entry.inServiceVersion", { number: row.inService }),
+          : row.versionName === null
+            ? say("entry.inServiceVersion", { number: row.inService })
+            : createElement(VersionLabel, {
+                number: row.inService,
+                name: row.versionName,
+                numberLabel: say("entry.inServiceVersion", {
+                  number: row.inService,
+                }),
+              }),
       sortKey: "inService",
     },
     {
       label: say("library.status"),
+      compact: true,
       cell: (row: EntryRow) =>
         row.submitted || row.stopped
           ? createElement(
@@ -75,7 +84,7 @@ export function libraryColumns() {
                   })
                 : null,
             )
-          : "—",
+          : null,
       sortKey: "status",
     },
   ] as const;

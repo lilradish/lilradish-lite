@@ -3,7 +3,6 @@ import { say, type MessageId } from "../../i18n/app";
 import { intl, readersIntl } from "../../i18n/intl";
 import type { Ordering } from "../../lib/collection/ordering";
 
-/** A figure's own name, which is the column it is shown in and sorted by. */
 export type ModelColumn = keyof ModelMeasured;
 
 export type SystemColumn = keyof SystemMeasured;
@@ -99,7 +98,6 @@ function modeSaid(mode: string): string {
   return Object.hasOwn(intl.messages, id) ? intl.formatMessage({ id }) : mode;
 }
 
-/** Grouped in the reader's own way. */
 function countColumn<T>(label: MessageId, key: CountOf<T>) {
   return {
     label: say(label),

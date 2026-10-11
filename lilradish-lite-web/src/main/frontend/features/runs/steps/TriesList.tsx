@@ -1,4 +1,4 @@
-import Link from "@mui/material/Link";
+import Button from "@mui/material/Button";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -8,16 +8,13 @@ import Typography from "@mui/material/Typography";
 
 import type { Declared } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import type { Declaring } from "./declared";
-import type { Try } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
+import type { Try } from "../../../api/stepTries";
+import type { GroupStanding } from "../../../api/standing";
 import { say } from "../../../i18n/app";
 import { RowPanel } from "../../../lib/collection/RowPanel";
 import { CostDrawn } from "../spend";
-import {
-  tryBeyondVisible,
-  tryResultVisible,
-  reviewVisible,
-  whoSaid,
-} from "./stepStates";
+import { whoSaid } from "./stepProducersAndReviewers";
+import { tryBeyondVisible, tryResultVisible, reviewVisible } from "./stepTries";
 import { TryPanel } from "./TryPanel";
 
 /** One row per try, oldest first, which is the order they happened in, so nothing sorts it. */
@@ -27,19 +24,18 @@ export function TriesList({
   field,
   declared,
   declaring,
+  group,
   labelledBy,
   picked,
   onPick,
 }: {
   readonly tries: readonly Try[];
-  /** How many tries the step allows, where it makes any. */
   readonly allowed: number | undefined;
-  /** The value whose part in each try is drawn; none where the step gives nothing back. */
   readonly field: string | undefined;
   readonly declared: Declared | undefined;
   readonly declaring: Declaring;
+  readonly group: GroupStanding;
   readonly labelledBy: string;
-  /** The number of the try open, if any is. */
   readonly picked: number | null;
   readonly onPick: (number: number | null) => void;
 }) {
@@ -51,19 +47,21 @@ export function TriesList({
     <Table size="small" aria-labelledby={labelledBy}>
       <TableHead>
         <TableRow>
-          <TableCell>{say("step.try")}</TableCell>
-          <TableCell>{say("step.producedBy")}</TableCell>
-          <TableCell>{say("step.reviewedBy")}</TableCell>
+          <TableCell data-compact="true">{say("step.try")}</TableCell>
+          <TableCell data-compact="true">{say("step.producedBy")}</TableCell>
+          <TableCell data-compact="true">{say("step.reviewedBy")}</TableCell>
           <TableCell>{say("step.howItEnded")}</TableCell>
-          <TableCell>{say("step.cost")}</TableCell>
+          <TableCell data-compact="true">{say("run.usage")}</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
         {tries.map((each) => (
           <TableRow key={each.number} selected={each.number === picked}>
-            <TableCell component="th" scope="row">
-              <Link
-                component="button"
+            <TableCell component="th" scope="row" data-compact="true">
+              <Button
+                variant="text"
+                color="inherit"
+                size="small"
                 type="button"
                 aria-current={each.number === picked || undefined}
                 onClick={() => onPick(each.number)}
@@ -71,12 +69,16 @@ export function TriesList({
                 {each.beyond && allowed !== undefined
                   ? tryBeyondVisible(each.number, allowed)
                   : trySaid(each, allowed)}
-              </Link>
+              </Button>
             </TableCell>
-            <TableCell>{whoSaid(each.producedBy)}</TableCell>
-            <TableCell>{reviewVisible(each.review)}</TableCell>
+            <TableCell data-compact="true">
+              {whoSaid(each.producedBy)}
+            </TableCell>
+            <TableCell data-compact="true">
+              {reviewVisible(each.review)}
+            </TableCell>
             <TableCell>{tryResultVisible(each, field)}</TableCell>
-            <TableCell>
+            <TableCell data-compact="true">
               <CostDrawn cost={each.cost} />
             </TableCell>
           </TableRow>
@@ -86,6 +88,7 @@ export function TriesList({
   );
   return (
     <RowPanel
+      over
       open={shown !== undefined}
       onClose={() => onPick(null)}
       title={shown === undefined ? "" : trySaid(shown, allowed)}
@@ -104,13 +107,13 @@ export function TriesList({
           field={field}
           declared={declared}
           declaring={declaring}
+          group={group}
         />
       )}
     </RowPanel>
   );
 }
 
-/** Which one of how many the step allows. */
 function trySaid(aTry: Try, allowed: number | undefined): string {
   if (allowed === undefined) {
     return say("step.tryNumber", { number: aTry.number });

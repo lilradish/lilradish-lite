@@ -1,3 +1,6 @@
+import { ThemeProvider } from "@mui/material/styles";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,23 +9,246 @@ import {
   NOT_AN_ADDRESS,
   NOT_REACHED,
   STOPPED_HERE,
+  requestFailed,
 } from "../api/problem";
 import {
+  asksToSendAgain,
   movesTheReader,
   refusalSentence,
   refusesTheAct,
   refusesTheGroup,
 } from "./refusal";
 
+import { theme } from "../lib/theme/theme";
+import { ProblemView } from "./ProblemView";
+
 const UNWORDED = "The server refused this request.";
 
 describe("refusalSentence", () => {
+  it("explains an unusable version name without trusting the server's detail", () => {
+    const sentence = refusalSentence({
+      status: 400,
+      code: "VERSION_NAME_UNUSABLE",
+      detail: "must-not-be-displayed",
+    });
+    expect(sentence).toBe(
+      "A version name is up to 64 characters on one line, with single spaces between words, none at the start or end, and something in it that shows. Leave it empty for none.",
+    );
+    expect(sentence).not.toBe(UNWORDED);
+    expect(sentence).not.toContain("must-not-be-displayed");
+  });
+
+  it.each(["INSTRUCTION_NAMES_UNKNOWN", "INPUT_STILL_MENTIONED"])(
+    "keeps %s generic without admitted input-name facts",
+    (code) => {
+      expect(refusalSentence({ status: 400, code })).toBe(UNWORDED);
+      expect(
+        refusalSentence({
+          status: 400,
+          code,
+          detail: "must-not-be-displayed",
+        }),
+      ).toBe(UNWORDED);
+      expect(
+        refusalSentence({
+          status: 400,
+          code,
+          extensions: { count: 1, names: "{{forged}}" },
+        }),
+      ).toBe(UNWORDED);
+      expect(refusalSentence({ code })).toBe(
+        "The server could not be reached.",
+      );
+    },
+  );
+
+  it.each([
+    [
+      "INSTRUCTION_NAMES_UNKNOWN",
+      ["complaint"],
+      "\u2068{{complaint}}\u2069 isn't an input of this question.",
+    ],
+    [
+      "INSTRUCTION_NAMES_UNKNOWN",
+      ["sender.name", "", "<b>"],
+      "\u2068{{sender.name}}\u2069, \u2068{{}}\u2069, and \u2068{{<b>}}\u2069 aren't inputs of this question.",
+    ],
+    [
+      "INPUT_STILL_MENTIONED",
+      ["complaint"],
+      "\u2068{{complaint}}\u2069 is still mentioned in the instruction or how it is drawn; remove those mentions first.",
+    ],
+    [
+      "INPUT_STILL_MENTIONED",
+      ["zeta", "alpha"],
+      "\u2068{{zeta}}\u2069 and \u2068{{alpha}}\u2069 are still mentioned in the instruction or how it is drawn; remove those mentions first.",
+    ],
+  ] as const)(
+    "names the checked references in %s in the accessible refusal",
+    async (code, names, sentence) => {
+      const { problem } = await requestFailed(
+        new Response(
+          JSON.stringify({ code, names, detail: "must-not-be-displayed" }),
+          { status: 400 },
+        ),
+      );
+      const { container } = render(
+        createElement(ThemeProvider, {
+          theme,
+          children: createElement(ProblemView, { problem }),
+        }),
+      );
+      expect(screen.getByRole("alert").textContent).toBe(sentence);
+      expect(screen.getByRole("alert")).toBeVisible();
+      expect(container.querySelector("b")).toBeNull();
+      expect(refusalSentence({ code, names })).toBe(
+        "The server could not be reached.",
+      );
+    },
+  );
+
+  it.each([null, [], "{{forged}}", ["valid", null]])(
+    "keeps a served reference refusal generic when names are malformed: %j",
+    async (names) => {
+      const { problem } = await requestFailed(
+        new Response(
+          JSON.stringify({ code: "INSTRUCTION_NAMES_UNKNOWN", names }),
+          { status: 400 },
+        ),
+      );
+      expect(refusalSentence(problem)).toBe(UNWORDED);
+    },
+  );
+
+  it("names only the admitted question and version in a search-shape refusal", () => {
+    const extensions = {
+      searchWay: "web_search",
+      questionName: "Fictional finder",
+      questionNumber: 3,
+      versionId: "must-not-be-displayed",
+    };
+    const named = refusalSentence({
+      status: 400,
+      code: "SEARCH_QUESTION_DOES_NOT_MATCH",
+      detail: "must-not-be-displayed",
+      extensions,
+    });
+    expect(named).toBe(
+      "\u2068Fictional finder\u2069 \u00b7 Version 3 can't be used to search with \u2068web_search\u2069: its answer isn't exactly what \u2068web_search\u2069 gives back. Pick a version set for searching with \u2068web_search\u2069.",
+    );
+    expect(named).not.toContain("must-not-be-displayed");
+    expect(
+      refusalSentence({
+        status: 400,
+        code: "SEARCH_QUESTION_DOES_NOT_MATCH",
+        extensions: { searchWay: "web_search" },
+      }),
+    ).toBe(
+      "That question can't be used to search with \u2068web_search\u2069: its answer isn't exactly what \u2068web_search\u2069 gives back. Pick a version set for searching with \u2068web_search\u2069.",
+    );
+    expect(
+      refusalSentence({
+        code: "SEARCH_QUESTION_DOES_NOT_MATCH",
+        extensions,
+      }),
+    ).toBe("The server could not be reached.");
+  });
+
+  it.each([
+    undefined,
+    {},
+    { searchWay: null },
+    { searchWay: [] },
+    { searchWay: "<img>" },
+    { searchWay: "web_search", questionName: "Finder" },
+    { searchWay: "web_search", questionNumber: 1 },
+    { searchWay: "web_search", questionName: null, questionNumber: 1 },
+    { searchWay: "web_search", questionName: " Finder", questionNumber: 1 },
+    { searchWay: "web_search", questionName: "", questionNumber: 1 },
+    { searchWay: "web_search", questionName: "Finder", questionNumber: "1" },
+    { searchWay: "web_search", questionName: "Finder", questionNumber: 0 },
+    { searchWay: "web_search", questionName: "Finder", questionNumber: 1.5 },
+    {
+      searchWay: "web_search",
+      questionName: "Finder",
+      questionNumber: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])(
+    "does not turn malformed search-refusal facts into a named disclosure: %j",
+    (extensions) => {
+      expect(
+        refusalSentence({
+          status: 400,
+          code: "SEARCH_QUESTION_DOES_NOT_MATCH",
+          detail: "Never use this detail",
+          extensions,
+        }),
+      ).toBe(UNWORDED);
+    },
+  );
+
+  it.each([
+    [
+      "SEARCH_QUESTION_SHAPE_LOCKED",
+      "The answer is set by web while For searching is on; only how sure each field must be can change. Turn off For searching to change the rest.",
+    ],
+    [
+      "SEARCH_WAY_NOT_HELD",
+      "web is no longer available here. Choose another search, or turn off For searching.",
+    ],
+  ])(
+    "names the known search in %s without reading detail or unchecked extensions",
+    (code, sentence) => {
+      const problem = {
+        status: 400,
+        code,
+        detail: "another sentence",
+        extensions: { searchWay: "forged" },
+      };
+      expect(
+        refusalSentence(problem, undefined, "web")
+          .replaceAll(String.fromCodePoint(0x2068), "")
+          .replaceAll(String.fromCodePoint(0x2069), ""),
+      ).toBe(sentence);
+      expect(problem.extensions.searchWay).toBe("forged");
+      expect(refusalSentence({ code }, undefined, "web")).toBe(
+        "The server could not be reached.",
+      );
+    },
+  );
+
+  it.each([undefined, "", " ", "<img>", "web".repeat(22)])(
+    "never leaks a placeholder or unchecked name when the search is %s",
+    (way) => {
+      expect(
+        refusalSentence(
+          {
+            status: 400,
+            code: "SEARCH_WAY_NOT_HELD",
+            extensions: { searchWay: "forged" },
+          },
+          undefined,
+          way,
+        ),
+      ).toBe(
+        "The search this question was set for is no longer available here. Choose another search, or turn off For searching.",
+      );
+      expect(
+        refusalSentence(
+          { status: 400, code: "SEARCH_QUESTION_SHAPE_LOCKED" },
+          undefined,
+          way,
+        ),
+      ).toBe(UNWORDED);
+    },
+  );
+
   it("tells a request stopped from this screen, one never sent, one that never came back, and this side's own fault apart", () => {
     expect(refusalSentence({ code: STOPPED_HERE })).toBe(
-      "The request was stopped from this screen.",
+      "The request was cancelled from this page.",
     );
     expect(refusalSentence({ code: NOT_AN_ADDRESS })).toBe(
-      "That address does not name anybody here.",
+      "That address doesn't point to anything here.",
     );
     expect(refusalSentence({ code: NOT_REACHED })).toBe(
       "The server could not be reached.",
@@ -44,7 +270,7 @@ describe("refusalSentence", () => {
     });
 
     expect(unreadable).toBe(
-      "The server refused this, in a way this side cannot read.",
+      "The server refused this, and this page couldn't read why.",
     );
     expect(unreadable).not.toBe(
       refusalSentence({ code: NOT_A_PROBLEM_DOCUMENT }),
@@ -83,7 +309,7 @@ describe("refusalSentence", () => {
 
   it.each([
     ["NOT_SIGNED_IN", "You are not signed in."],
-    ["ACT_NOT_PERMITTED", "This is done only by a role that reaches it."],
+    ["ACT_NOT_PERMITTED", "You don't have permission to do this."],
     [
       "ORIGIN_UNVERIFIED",
       "A change is only accepted from this application's own pages.",
@@ -226,4 +452,40 @@ describe("refusesTheGroup", () => {
   ])("takes %s for something else", (_case, problem) => {
     expect(refusesTheGroup(problem)).toBe(false);
   });
+});
+
+describe("asksToSendAgain", () => {
+  it.each([
+    ["a body sent too slowly", { status: 408, code: "BODY_SENT_TOO_SLOWLY" }],
+    ["a busy service", { status: 503, code: "SERVICE_BUSY" }],
+    [
+      "a success nobody could read",
+      { status: 200, code: NOT_A_PROBLEM_DOCUMENT },
+    ],
+  ])(
+    "takes %s as asking for the write again, as its words do",
+    (_case, problem) => {
+      expect(asksToSendAgain(problem)).toBe(true);
+      expect(refusalSentence(problem)).toMatch(/again/);
+    },
+  );
+
+  it.each([
+    [
+      "a draft written since it was read",
+      { status: 409, code: "DRAFT_WRITTEN_SINCE_READ" },
+    ],
+    ["a busy service that never answered", { code: "SERVICE_BUSY" }],
+    [
+      "a failure nobody could read",
+      { status: 502, code: NOT_A_PROBLEM_DOCUMENT },
+    ],
+    ["a refusal of the act", { status: 403, code: "ACT_NOT_PERMITTED" }],
+  ])(
+    "takes %s as not asking for it again, nor do its words",
+    (_case, problem) => {
+      expect(asksToSendAgain(problem)).toBe(false);
+      expect(refusalSentence(problem)).not.toMatch(/again/);
+    },
+  );
 });

@@ -12,36 +12,40 @@ import type {
 import { StandingProvider } from "../../../app/standing/StandingContext";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import { theme } from "../../../lib/theme/theme";
-import { answered } from "../../../testutil/standingRead";
+import { answered, inGroup } from "../../../testutil/standingRead";
 import { requestsTo, serving } from "../../../testutil/answering";
 import { RunConversation } from "./RunConversation";
 import { RunReadAccess } from "../RunReadAccess";
 
 const GROUP = "00000003-0000-4000-8000-000000000e41";
+const CLAIMS = inGroup(GROUP, "CLAIMS", "Claims", []);
 const RUN_ID = "00000008-0000-4000-8000-000000000e41";
 const AVO = { userId: "reader", displayName: "Avo" };
 
 const FIRST: StepRow = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: "step-1",
   order: 1,
   name: "first_step",
-  runs: { kind: "question", name: "First question" },
+  runs: { versionName: null, kind: "question", name: "First question" },
   state: "done",
   takesFrom: [],
   cost: {},
-  acts: [],
-  withheld: [],
+  stateActs: new Set([]),
+  stateRefusals: [],
 };
 const SECOND: StepRow = {
   ...FIRST,
   stepId: "step-2",
   order: 2,
   name: "second_step",
-  runs: { kind: "question", name: "Second question" },
+  runs: { versionName: null, kind: "question", name: "Second question" },
   state: "not_started",
 };
 const STEPS: RunSteps = {
   run: {
+    stateActs: null,
     runId: RUN_ID,
     number: 7,
     versionId: "version",
@@ -57,18 +61,24 @@ async function drawn(
   events: Run["conversationEvents"],
   steps: RunSteps = STEPS,
   changed: Partial<Run> = {},
+  permissions: readonly string[] = [],
 ) {
   const run: Run = {
     runId: RUN_ID,
     number: 7,
     runsAbove: [],
-    workflow: { entryId: "workflow", name: "Handle a claim", version: 1 },
+    workflow: {
+      versionName: null,
+      entryId: "workflow",
+      name: "Handle a claim",
+      version: 1,
+    },
     startedBy: AVO,
     startedAt: "2026-09-25T08:00:00Z",
     state: "running",
     spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
     ceiling: { raiseNeedsApproval: false },
-    acts: new Set(),
+    stateActs: new Set(),
     conversationEvents: events,
     ...changed,
   };
@@ -78,7 +88,7 @@ async function drawn(
         path: "/",
         element: (
           <RunConversation
-            groupId={GROUP}
+            group={CLAIMS}
             reading={{ run, steps }}
             onShown={vi.fn()}
           />
@@ -90,7 +100,13 @@ async function drawn(
   await act(async () => {
     render(
       <ThemeProvider theme={theme}>
-        <StandingProvider read={answered([], [], AVO.userId)}>
+        <StandingProvider
+          read={answered(
+            [],
+            [inGroup(GROUP, "CLAIMS", "Claims", permissions)],
+            AVO.userId,
+          )}
+        >
           <RunReadAccess>
             <RouterProvider router={router} />
           </RunReadAccess>
@@ -110,6 +126,145 @@ async function drawn(
 }
 
 describe("RunConversation", () => {
+  it.each([
+    [[], "Waiting for the person who started the run."],
+    [
+      [{ runId: "parent", number: 6 }],
+      "Waiting for the person who started the top-level run.",
+    ],
+    [
+      [
+        { runId: "top", number: 5 },
+        { runId: "parent", number: 6 },
+      ],
+      "Waiting for the person who started the top-level run.",
+    ],
+  ] as const)(
+    "uses the full run hierarchy for a starter wait beneath %j",
+    async (runsAbove, sentence) => {
+      const sent = serving({});
+      const step: StepRow = {
+        ...FIRST,
+        state: "waiting",
+        reviewer: { kind: "model", model: "small" },
+        where: {
+          kind: "waiting_on_review",
+          number: 1,
+          since: "2026-09-24T08:05:00Z",
+          review: "turned_away",
+          values: [{ field: "summary" }],
+          waitsOn: "starter",
+        },
+        stateActs: new Set(["try_sending"]),
+        waitsOnStarter: runsAbove.length === 0 ? "this_run" : "top_level_run",
+      };
+      await drawn(
+        [
+          {
+            id: "step:1",
+            kind: "step_reached",
+            at: "2026-09-25T08:01:00Z",
+            stepId: FIRST.stepId,
+            run: { runId: RUN_ID, number: 7 },
+          },
+        ],
+        { ...STEPS, steps: [step] },
+        {
+          above: runsAbove.at(-1)?.runId,
+          runsAbove,
+          ...(runsAbove.length === 0
+            ? {}
+            : {
+                startedBy: undefined,
+                from: {
+                  runId: "parent",
+                  number: 6,
+                  stepId: "parent-step",
+                  stepName: "handle_claim",
+                },
+              }),
+        },
+        ["start_run"],
+      );
+      const control = screen.getByRole("button", { name: "Waiting" });
+      const message = control.closest("li")!;
+      expect(message).not.toHaveTextContent(sentence);
+
+      await userEvent.click(control);
+
+      expect(message).toHaveTextContent(sentence);
+      expect(message).toHaveTextContent(
+        "Waiting for the model's review, which could not be sent: the model service turned the request away.",
+      );
+      expect(message).toHaveTextContent(
+        "Someone who can start runs can try sending it.",
+      );
+      expect(
+        within(message).getByRole("button", { name: "Try sending" }),
+      ).toBeEnabled();
+      expect(message).toHaveTextContent("has not been reviewed yet.");
+      expect(message).not.toHaveTextContent(
+        runsAbove.length === 0
+          ? "Waiting for the person who started the top-level run."
+          : "Waiting for the person who started the run.",
+      );
+      expect(requestsTo(sent)).toEqual([]);
+    },
+  );
+
+  it.each([undefined, "parent"])(
+    "keeps a failed run's final account complete with parent %s",
+    async (above) => {
+      const sent = serving({});
+      await drawn(
+        [],
+        {
+          ...STEPS,
+          run: { ...STEPS.run, state: "failed" },
+          steps: [
+            {
+              ...FIRST,
+              state: "failed",
+              where: {
+                kind: "failed",
+                reason: "tries_spent",
+                waitsOn: "starter",
+              },
+            },
+          ],
+        },
+        {
+          state: "failed",
+          above,
+          runsAbove: above === undefined ? [] : [{ runId: above, number: 6 }],
+          ...(above === undefined
+            ? {}
+            : {
+                startedBy: undefined,
+                from: {
+                  runId: above,
+                  number: 6,
+                  stepId: "parent-step",
+                  stepName: "handle_claim",
+                },
+              }),
+        },
+      );
+
+      const message = screen
+        .getByRole("heading", { name: "Failed", level: 2 })
+        .closest("li")!;
+      expect(message).toHaveTextContent("First question");
+      expect(message).toHaveTextContent(
+        "All allowed attempts are used up, and none was accepted.",
+      );
+      expect(message).toHaveTextContent(
+        "Someone who can answer steps can make another attempt.",
+      );
+      expect(message).not.toHaveTextContent("person who started");
+      expect(requestsTo(sent)).toEqual([]);
+    },
+  );
   it("updates the stopped run's day at midnight without reading or moving the message", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-03T21:59:30Z"));
@@ -182,10 +337,10 @@ describe("RunConversation", () => {
     ]);
 
     expect(titles).toEqual([
-      "What it was started with",
+      "Run inputs",
       isolatedInText("First question"),
       "Answered by hand",
-      "Changed the ceiling",
+      "Changed the usage limit",
     ]);
     expect(titles).not.toContain("Second question");
     expect(document.body).not.toHaveTextContent("Not reached yet:");
@@ -207,11 +362,21 @@ describe("RunConversation", () => {
             declarations: {},
             step,
             triesMade: [1, 3].map((number) => ({
+              wentWrongPresent: false,
+              returnedPresent: false,
+              declinedPresent: false,
+              unreadableResponsePresent: false,
+              modelReplyPresent: false,
               number,
               beyond: false,
               producedBy: { kind: "model", model: "small" },
               values: [],
-              review: { asked: false },
+              review: {
+                asked: false,
+                declinedPresent: false,
+                unreadableResponsePresent: false,
+                modelReplyPresent: false,
+              },
               ended: "stands",
               cost: {
                 callsAModel: true,
@@ -252,24 +417,22 @@ describe("RunConversation", () => {
       name: isolatedInText("First question"),
     });
     const earlier = within(message).getByRole("button", {
-      name: "Earlier try",
+      name: "Previous attempt",
     });
-    const later = within(message).getByRole("button", { name: "Later try" });
+    const later = within(message).getByRole("button", { name: "Next attempt" });
     expect(screen.getAllByText("Answered by hand")).toHaveLength(1);
-    expect(later).toBeDisabled();
+    expect(later).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(
       within(message).getByRole("button", { name: "Done" }),
     );
-    expect(within(message).getByText("Try 3 of the 3 it allows")).toBeVisible();
+    expect(within(message).getByText("Attempt 3 of 3")).toBeVisible();
 
     await userEvent.click(earlier);
-    expect(
-      await within(message).findByText("Try 1 of the 3 it allows"),
-    ).toBeVisible();
-    expect(earlier).toBeDisabled();
+    expect(await within(message).findByText("Attempt 1 of 3")).toBeVisible();
+    expect(earlier).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(later);
-    expect(within(message).getByText("Try 3 of the 3 it allows")).toBeVisible();
-    expect(later).toBeDisabled();
+    expect(within(message).getByText("Attempt 3 of 3")).toBeVisible();
+    expect(later).toHaveAttribute("aria-disabled", "true");
     expect(requestsTo(sent)).toEqual([`GET ${path}`]);
     expect(requestsTo(sent)).not.toContain(`GET ${path}/tries/2`);
   });

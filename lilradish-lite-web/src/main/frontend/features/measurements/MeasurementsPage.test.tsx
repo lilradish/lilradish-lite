@@ -198,7 +198,7 @@ describe("MeasurementsPage", () => {
     const answer = deferred<readonly [string, number]>();
     opening([answer.promise]);
 
-    expect(await screen.findByText("Still reading…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
 
     answer.settle(MEASURED);

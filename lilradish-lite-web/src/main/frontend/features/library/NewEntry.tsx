@@ -30,7 +30,7 @@ export function NewEntry({
   return (
     <>
       <Press
-        variant="contained"
+        tier="primary"
         unavailable={making.running}
         onPress={() => {
           setOpening((count) => count + 1);

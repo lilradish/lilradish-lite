@@ -18,15 +18,84 @@ import { vi } from "vitest";
  * it would ship code that no report counts.
  */
 export function laidOutAt(frame: number, viewport: number) {
+  vi.stubGlobal("innerWidth", viewport);
   let width = frame;
-  const live = new Set<StandIn>();
+  return measuredBy(
+    (box) =>
+      box === document.documentElement || box === document.body
+        ? viewport
+        : box.parentElement?.parentElement === document.body
+          ? width
+          : 0,
+    (next) => {
+      width = next;
+    },
+  );
+}
 
-  const widthOf = (box: Element) =>
-    box === document.documentElement || box === document.body
-      ? viewport
-      : box.parentElement?.parentElement === document.body
-        ? width
-        : 0;
+/**
+ * A whole page laid out `page` wide, as `laidOutAt` measures and observes it:
+ * every box is as wide as the page, less the cards and side panels around it.
+ * A box takes the room a panel standing beside its list leaves, with the gap
+ * between them, and less the padding and border of each box it is inside.
+ */
+export function pageLaidOutAt(page: number, viewport: number) {
+  vi.stubGlobal("innerWidth", viewport);
+  let width = page;
+  const besidePanelOf = (list: Element) => {
+    const frame = list.parentElement;
+    if (frame === null || getComputedStyle(list).flexGrow !== "1") return null;
+    return (
+      [...frame.children].find(
+        (child) =>
+          child !== list &&
+          child.tagName === "SECTION" &&
+          !(child as HTMLElement).hidden &&
+          getComputedStyle(child).flexShrink === "0",
+      ) ?? null
+    );
+  };
+  const insetOf = (box: Element) => {
+    const drawn = getComputedStyle(box);
+    return [
+      drawn.paddingLeft,
+      drawn.paddingRight,
+      drawn.borderLeftWidth,
+      drawn.borderRightWidth,
+    ]
+      .map((side) => Number.parseFloat(side))
+      .filter(Number.isFinite)
+      .reduce((sum, side) => sum + side, 0);
+  };
+  const widthOf = (box: Element) => {
+    if (box === document.documentElement || box === document.body)
+      return viewport;
+    let room = width;
+    let inset = 0;
+    let above = box.parentElement;
+    while (above !== null) {
+      const panel = besidePanelOf(above);
+      if (panel !== null) {
+        const panelWidth = Number.parseFloat(getComputedStyle(panel).width);
+        room -= inset + (Number.isFinite(panelWidth) ? panelWidth + 24 : 0);
+        inset = 0;
+      } else {
+        inset += insetOf(above);
+      }
+      above = above.parentElement;
+    }
+    return Math.max(0, room);
+  };
+  return measuredBy(widthOf, (next) => {
+    width = next;
+  });
+}
+
+function measuredBy(
+  widthOf: (box: Element) => number,
+  widen: (next: number) => void,
+) {
+  const live = new Set<StandIn>();
 
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
     function (this: Element) {
@@ -86,7 +155,7 @@ export function laidOutAt(frame: number, viewport: number) {
 
   /** The frame takes the new width, and each observer of it hears so. */
   return async function resizeTo(next: number) {
-    width = next;
+    widen(next);
     await act(async () => {
       for (const observer of live) {
         observer.deliver();

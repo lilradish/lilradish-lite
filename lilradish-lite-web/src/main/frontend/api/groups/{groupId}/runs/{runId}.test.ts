@@ -4,7 +4,6 @@ import { answering, refusalOf } from "../../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT, NOT_AN_ADDRESS } from "../../../problem";
 import {
   atRun,
-  offers,
   readRun,
   refusedForWhatMoved,
   renameRun,
@@ -24,6 +23,7 @@ const EVERYTHING = {
   number: 7,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c11",
     name: "Handle a claim",
     version: 3,
@@ -56,7 +56,7 @@ const EVERYTHING = {
       askedAt: "2026-09-25T08:02:00Z",
     },
   },
-  acts: ["open_again", "withdraw_raise"],
+  stateActs: ["open_again", "withdraw_raise"],
 };
 
 /** Beneath another, stopped by a ceiling, held to the one at the top, and carrying nothing it may leave out. */
@@ -72,6 +72,7 @@ const BARE = {
     stepName: "route",
   },
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c11",
     name: "Handle a claim",
     version: 3,
@@ -85,7 +86,7 @@ const BARE = {
   },
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { heldBy: { runId: ABOVE, number: 7 } },
-  acts: [],
+  stateActs: [],
 };
 
 describe("atRun", () => {
@@ -118,7 +119,7 @@ describe("readRun", () => {
     expect(sent.mock.calls[0]![0]).toBe(`/api/groups/${GROUP}/runs/${RUN}`);
     expect(read).toEqual({
       ...EVERYTHING,
-      acts: new Set(["open_again", "withdraw_raise"]),
+      stateActs: new Set(["open_again", "withdraw_raise"]),
     });
   });
 
@@ -127,7 +128,7 @@ describe("readRun", () => {
 
     const read = await readRun(GROUP, RUN, new AbortController().signal);
 
-    expect(read).toEqual({ ...BARE, acts: new Set() });
+    expect(read).toEqual({ ...BARE, stateActs: new Set() });
     expect(read.above).toBe(ABOVE);
     expect(read.from?.runId).toBe(ABOVE);
   });
@@ -165,7 +166,7 @@ describe("readRun", () => {
   });
 
   it("refuses a run it cannot draw, as a document this side cannot read", async () => {
-    answering([JSON.stringify({ ...EVERYTHING, acts: undefined }), 200]);
+    answering([JSON.stringify({ ...EVERYTHING, stateActs: undefined }), 200]);
 
     const failure = await refusalOf(
       readRun(GROUP, RUN, new AbortController().signal),
@@ -199,14 +200,14 @@ describe("renameRun", () => {
   });
 });
 
-describe("offers", () => {
+describe("run state facts", () => {
   it.each([
     ["open_again", true],
     ["withdraw_raise", true],
     ["stop", false],
     ["approve_raise", false],
   ] as const)("says whether the server offers %s", (act, offered) => {
-    expect(offers(runFrom(EVERYTHING)!, act)).toBe(offered);
+    expect(runFrom(EVERYTHING)!.stateActs?.has(act)).toBe(offered);
   });
 });
 
@@ -237,6 +238,86 @@ describe("refusedForWhatMoved", () => {
 });
 
 describe("runFrom", () => {
+  it.each([null, []])(
+    "keeps mandatory nullable state acts %j distinct",
+    (stateActs) => {
+      expect(runFrom({ ...EVERYTHING, stateActs })?.stateActs).toEqual(
+        stateActs === null ? null : new Set(),
+      );
+    },
+  );
+
+  it.each([undefined, "stop", {}, ["stop", 7]])(
+    "rejects malformed run state acts %j",
+    (stateActs) => {
+      expect(runFrom({ ...EVERYTHING, stateActs })).toBeNull();
+    },
+  );
+
+  it("keeps unknown resource state words without granting a known control", () => {
+    expect(
+      runFrom({ ...EVERYTHING, stateActs: ["future_action"] })?.stateActs,
+    ).toEqual(new Set(["future_action"]));
+  });
+
+  it("keeps parent and current display names beside their distinct machine identifiers", () => {
+    const { stopped: _stopped, ...moving } = BARE;
+    const body = {
+      ...moving,
+      state: "running",
+      from: { ...BARE.from, label: "Parent 元\u202e" },
+      at: { stepId: "current-step", name: "file_claim", label: "Current 元" },
+    };
+
+    const run = runFrom(body);
+
+    expect(run?.from).toEqual({
+      runId: ABOVE,
+      number: 7,
+      stepId: BARE.from.stepId,
+      stepName: "route",
+      label: "Parent 元\u202e",
+    });
+    expect(run?.at).toEqual({
+      stepId: "current-step",
+      name: "file_claim",
+      label: "Current 元",
+    });
+    expect(runFrom(BARE)?.from).toEqual(BARE.from);
+    expect(Object.hasOwn(runFrom(BARE)!.from!, "label")).toBe(false);
+  });
+
+  it.each([null, 7, false, [], { value: "Shown" }])(
+    "refuses malformed parent or current step display metadata: %j",
+    (label) => {
+      const { stopped: _stopped, ...moving } = BARE;
+      expect(runFrom({ ...BARE, from: { ...BARE.from, label } })).toBeNull();
+      expect(
+        runFrom({
+          ...moving,
+          state: "running",
+          at: { stepId: "current-step", name: "file_claim", label },
+        }),
+      ).toBeNull();
+    },
+  );
+  it("refuses parent or current display text without its machine name", () => {
+    const { stopped: _stopped, ...moving } = BARE;
+
+    expect(
+      runFrom({
+        ...BARE,
+        from: { ...BARE.from, stepName: undefined, label: "Parent 元" },
+      }),
+    ).toBeNull();
+    expect(
+      runFrom({
+        ...moving,
+        state: "running",
+        at: { stepId: "current-step", label: "Current 元" },
+      }),
+    ).toBeNull();
+  });
   it("refuses a run whose conversation facts are absent", () => {
     const { conversationEvents: _missing, ...withoutEvents } = EVERYTHING;
 
@@ -272,7 +353,12 @@ describe("runFrom", () => {
         number: 2,
         decisions: [
           { field: "first", outcome: "assured" },
-          { field: "second", outcome: "refused", why: "Too little detail" },
+          {
+            field: "second",
+            outcome: "refused",
+            why: "Too little detail",
+            whyLines: "several",
+          },
         ],
         run: { runId: RUN, number: 7 },
       },
@@ -305,7 +391,16 @@ describe("runFrom", () => {
       stepId: "step-1",
       by: AVO,
       number: 1,
-      decisions: [{ field: "answer", outcome: "refused", why: "Too long" }],
+      decisions: [
+        {
+          field: "answer",
+          outcome: "refused",
+          why: "Too long",
+          whyLines: "several",
+          lengthUnits: "10",
+          excessUnits: "1",
+        },
+      ],
       run: { runId: RUN, number: 7 },
       held: {
         run: { runId: ABOVE, number: 8 },
@@ -395,7 +490,14 @@ describe("runFrom", () => {
         conversationEvents: [
           {
             ...review,
-            decisions: [{ field: "answer", outcome: "refused", why: "  " }],
+            decisions: [
+              {
+                field: "answer",
+                outcome: "refused",
+                why: "  ",
+                whyLines: "several",
+              },
+            ],
           },
         ],
       }),
@@ -480,7 +582,7 @@ describe("runFrom", () => {
   it("reads a run leaving out what it may, and adds nothing in its place", () => {
     const read = runFrom(BARE);
 
-    expect(read).toEqual({ ...BARE, acts: new Set() });
+    expect(read).toEqual({ ...BARE, stateActs: new Set() });
     expect(Object.keys(read!).toSorted()).toEqual(Object.keys(BARE).toSorted());
     expect(read!.spend).not.toHaveProperty("measuredHere");
   });
@@ -663,7 +765,6 @@ describe("runFrom child reading", () => {
     const file = {
       id: "0000000f-0000-4000-8000-000000000001",
       name: "Demo Sample.pdf",
-      type: "application/pdf",
       size: 5,
     };
     const sources = [
@@ -774,12 +875,17 @@ describe("runFrom child reading", () => {
       },
     ],
     [
-      "a constant posing as a run value",
+      "a constant posing as a step value",
       {
         sources: [
           {
             targetPath: "name",
-            from: { kind: "constant", runId: ABOVE, runNumber: 7 },
+            from: {
+              kind: "constant",
+              runId: ABOVE,
+              runNumber: 7,
+              stepId: "step-1",
+            },
           },
         ],
       },
@@ -867,7 +973,7 @@ describe("runFrom child reading", () => {
     expect(read?.ceilingsBeneath).toEqual([
       { ...child, acts: new Set(["change_ceiling"]) },
     ]);
-    expect(read?.acts.has("change_ceiling")).toBe(false);
+    expect(read?.stateActs?.has("change_ceiling")).toBe(false);
     expect(
       runFrom({
         ...EVERYTHING,

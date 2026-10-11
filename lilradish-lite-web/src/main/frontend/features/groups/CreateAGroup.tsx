@@ -45,7 +45,7 @@ export function CreateAGroup({
   return (
     <>
       <Press
-        variant="contained"
+        tier="primary"
         unavailable={changing.running}
         onPress={() => {
           setOpening((count) => count + 1);
@@ -159,7 +159,6 @@ function Creating({
   );
 }
 
-/** The first thing still missing, in the order the dialog asks for them. */
 function heldFor(
   nameHolds: boolean,
   keyHolds: boolean,

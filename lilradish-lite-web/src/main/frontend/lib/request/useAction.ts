@@ -50,7 +50,7 @@ export function useAction<T>(
       }
       if (inFlight.current === controller) {
         inFlight.current = null;
-        // Never an abandoned signal: the check above is what turns those away.
+        // The in-flight identity check turns abandoned acts away before asProblem.
         const refused = asProblem(failure, controller.signal);
         setProblem(refused);
         setRunning(false);

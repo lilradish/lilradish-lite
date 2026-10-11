@@ -10,6 +10,7 @@ import type { Theme } from "@mui/material/styles";
 import type { RunsKind } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say, type MessageId } from "../../i18n/app";
 import { MARKED_WORDS_SX } from "../../lib/layout/parts";
+import { TOKENS } from "../../lib/theme/tokens";
 
 const KINDS = {
   question: { words: "stepKind.question", Icon: QuestionAnswerIcon },
@@ -24,14 +25,18 @@ const KINDS = {
 
 const TAG_SX = {
   ...MARKED_WORDS_SX,
-  typography: "tag",
+  typography: "kindBadge",
   px: 0.75,
   py: 0.25,
-  borderRadius: 1,
+  borderRadius: TOKENS.shape.chipRadius,
 };
 
 export function isKnownKind(kind: string): kind is RunsKind {
   return Object.hasOwn(KINDS, kind);
+}
+
+export function stepKindTone(kind: RunsKind) {
+  return kind === "code_step" ? "codeStep" : kind;
 }
 
 /** The kind a step runs, set apart in its own colour; a kind this build has no words for, said so plainly. */
@@ -45,8 +50,9 @@ export function StepKindTag({ kind }: { readonly kind: string }) {
       component="span"
       sx={{
         ...TAG_SX,
-        color: (given: Theme) => given.palette.stepKind[kind].main,
-        bgcolor: (given: Theme) => given.palette.stepKind[kind].ground,
+        color: (given: Theme) => given.palette.kind[stepKindTone(kind)].text,
+        bgcolor: (given: Theme) =>
+          given.palette.kind[stepKindTone(kind)].ground,
       }}
     >
       <Icon fontSize="inherit" />

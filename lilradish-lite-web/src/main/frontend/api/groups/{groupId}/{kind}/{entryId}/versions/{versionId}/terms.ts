@@ -2,13 +2,12 @@ import { post } from "../../../../../../../lib/request/http";
 import { atVersion } from "../../versions";
 import { referenceListFrom, type ReferenceListVersion } from "../{versionId}";
 
-/** A term and what it means, as they are written to a list. */
 export interface Worded {
   readonly term: string;
   readonly meaning: string;
 }
 
-/** A term added after the last a draft holds, over the revision the page read; answered with the list as it then reads. */
+/** Appends after the draft's last term, guarded by the revision read; returns the list as it then reads. */
 export function addTerm(
   groupId: string,
   entryId: string,

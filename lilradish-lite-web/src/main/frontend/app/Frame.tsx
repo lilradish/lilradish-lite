@@ -10,19 +10,12 @@ import { StandingProvider } from "./standing/StandingContext";
 import { useGroupInForce } from "./useGroupInForce";
 
 /**
- * The frame every screen is shown inside, and the one place this side learns
- * who is reading.
+ * Provides the one standing read around both navigation and screens:
+ * separate answers could offer a door that its screen refuses.
  *
- * The read is provided around the whole frame rather than around the screen,
- * because the navigation is filtered by it too — a sidebar built from one
- * answer and a screen guarded by another would offer a door that refuses.
- *
- * What is provided is the read and not its answer, and nothing here waits on
- * it. While it is still out the reader has no standing, so the navigation is
- * empty — the safe direction, and the alternative is drawing destinations
- * before anything has said they are this reader's. The screens that cannot be
- * drawn without an answer wait for it themselves, and the one every reader may
- * be on is drawn at once.
+ * Nothing here waits. Pending standing grants no destinations, avoiding links
+ * whose authority is unknown. Screens needing standing wait themselves;
+ * the universally reachable screen renders at once.
  */
 export function Frame() {
   const standing = useStandingResource();
@@ -38,9 +31,8 @@ export function Frame() {
         utility={null}
         at={at}
       >
-        {/* A refusal of this read is a refusal of the frame: it is who the
-            reader is that could not be learnt, and no screen under here is
-            truthful without that. */}
+        {/* A refused identity read refuses the frame: no screen beneath it
+            is truthful without knowing the reader. */}
         {standing.problem === null ? (
           <Outlet />
         ) : (

@@ -10,12 +10,15 @@ function wordFrom(row: unknown): string | null {
 
 describe("cursorLoader", () => {
   it("asks the first page without a cursor or an unrequested query", async () => {
-    const sent = answering([JSON.stringify({ items: ["Demo Sample"] }), 200]);
+    const sent = answering([
+      JSON.stringify({ items: ["Imaginary ledger", "Imaginary dispatch"] }),
+      200,
+    ]);
     const signal = new AbortController().signal;
 
     const page = await cursorLoader("/api/offered", wordFrom)(null, signal);
 
-    expect(page).toEqual({ items: ["Demo Sample"] });
+    expect(page).toEqual({ items: ["Imaginary ledger", "Imaginary dispatch"] });
     expect(sent.mock.calls).toHaveLength(1);
     expect(sent.mock.calls[0]?.[0]).toBe("/api/offered");
     expect(sent.mock.calls[0]?.[1]).toMatchObject({ signal });

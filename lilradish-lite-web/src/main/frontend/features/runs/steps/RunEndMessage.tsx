@@ -15,8 +15,8 @@ import { runWhereSaid, stateSaid } from "../runStates";
 import { declaredFor } from "./declared";
 import { GaveBackPart } from "./GaveBackPart";
 import { Message } from "./Message";
-import { whereSaid } from "./stepStates";
 import { stepTitle } from "./stepTitle";
+import { whereSaid } from "./stepWhereabouts";
 
 export function RunEndMessage({
   run,
@@ -71,7 +71,6 @@ export function RunEndMessage({
   );
 }
 
-/** The step that failed, by its message's title, and why it goes no further. */
 function FailedAt({
   step,
   reading,
@@ -86,6 +85,7 @@ function FailedAt({
     declaredFor(step, reading.declarations)?.gives,
     undefined,
     now,
+    "",
   );
   return (
     <>

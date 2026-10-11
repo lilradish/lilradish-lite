@@ -1,22 +1,29 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import type { GroupStanding } from "../api/standing";
 import { theme } from "../lib/theme/theme";
 import { answered, inGroup } from "../testutil/standingRead";
 import { Nav } from "./Nav";
+import { AppShell } from "./AppShell";
 import { StandingProvider, useStanding } from "./standing/StandingContext";
 import { useGroupInForce } from "./useGroupInForce";
 
 /** `theme.palette.primary.main`, as a resolved colour is reported back. */
-const CURRENT_COLOUR = "rgb(11, 87, 208)";
+const CURRENT_COLOUR = "rgb(28, 91, 129)";
 
-/** `action.active`, which `theme.ts` leaves at Material's own value. */
-const RESTING_COLOUR = "rgba(0, 0, 0, 0.54)";
+const RESTING_COLOUR = "rgb(62, 74, 79)";
 
 /**
  * What the server sends a reader who may do every gated thing the sidebar
@@ -41,23 +48,21 @@ const OFFERS_SOUNDNESS_AND_MEASUREMENTS = [
   "read_measurements",
 ];
 
-const PAYROLL = "00000003-0000-4000-8000-000000000941";
-const TRIAGE = "00000003-0000-4000-8000-000000000942";
-const FINANCE = "00000003-0000-4000-8000-000000000943";
+const PAYROLL_ID = "00000003-0000-4000-8000-000000000941";
+const TRIAGE_ID = "00000003-0000-4000-8000-000000000942";
+const FINANCE_ID = "00000003-0000-4000-8000-000000000943";
 
-/** A group whose members this reader may see, and one where they may not. */
-const SEES_MEMBERS = inGroup(PAYROLL, "PAYROLL", "Payroll", [
+const SEES_MEMBERS = inGroup(PAYROLL_ID, "PAYROLL", "Payroll", [
   "read_membership",
   "start_run",
 ]);
-const SEES_NO_MEMBERS = inGroup(TRIAGE, "TRIAGE", "Triage", ["start_run"]);
-const ALSO_SEES_MEMBERS = inGroup(FINANCE, "FINANCE", "Finance", [
+const SEES_NO_MEMBERS = inGroup(TRIAGE_ID, "TRIAGE", "Triage", ["start_run"]);
+const ALSO_SEES_MEMBERS = inGroup(FINANCE_ID, "FINANCE", "Finance", [
   "read_membership",
 ]);
 
 const MINE = [SEES_MEMBERS, SEES_NO_MEMBERS, ALSO_SEES_MEMBERS];
 
-/** The whole of a group's pages, and all of them but the one a permission gates. */
 const EVERY_GROUP_PAGE = [
   "Work",
   "Workflows",
@@ -67,7 +72,6 @@ const EVERY_GROUP_PAGE = [
 ];
 const EVERY_GROUP_PAGE_BUT_MEMBERS = EVERY_GROUP_PAGE.slice(0, 4);
 
-/** Where the router says the reader is, drawn where a spec can read it. */
 function Address() {
   return <output aria-label="address">{useLocation().pathname}</output>;
 }
@@ -81,28 +85,37 @@ function at(
   path: string,
   standing: Iterable<string> = EVERYTHING,
   groups: readonly GroupStanding[] = [],
+  inShell = false,
 ) {
-  return render(<Sidebar />, {
-    wrapper: ({ children }: { readonly children: ReactNode }) => (
-      <MemoryRouter initialEntries={[path]}>
-        {/* The router is what marks an entry current; the palette is what turns
-            the mark into a colour, and an unresolved one is silently dropped. */}
-        <ThemeProvider theme={theme}>
-          <StandingProvider read={answered(standing, groups)}>
-            {children}
-            <Address />
-          </StandingProvider>
-        </ThemeProvider>
-      </MemoryRouter>
+  return render(
+    inShell ? (
+      <AppShell brand={null} utility={null} navigation={<Sidebar />}>
+        <p>The work</p>
+      </AppShell>
+    ) : (
+      <Sidebar />
     ),
-  });
+    {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <MemoryRouter initialEntries={[path]}>
+          {/* The router is what marks an entry current; the palette is what turns
+            the mark into a colour, and an unresolved one is silently dropped. */}
+          <ThemeProvider theme={theme}>
+            <StandingProvider read={answered(standing, groups)}>
+              {children}
+              <Address />
+            </StandingProvider>
+          </ThemeProvider>
+        </MemoryRouter>
+      ),
+    },
+  );
 }
 
 function labels(): string[] {
   return screen.queryAllByRole("link").map((link) => link.textContent ?? "");
 }
 
-/** What a screen reader is told is the current place, in the order rendered. */
 function current(): string[] {
   return screen
     .getAllByRole("link")
@@ -110,7 +123,6 @@ function current(): string[] {
     .map((link) => link.textContent ?? "");
 }
 
-/** What a list holds, found by its accessible name. */
 function itemsUnder(heading: string): string[] {
   return within(screen.getByRole("list", { name: heading }))
     .getAllByRole("listitem")
@@ -140,6 +152,29 @@ async function picking(group: GroupStanding) {
 
 function address(): string {
   return screen.getByRole("status", { name: "address" }).textContent ?? "";
+}
+
+function foldedRail() {
+  const key = "lilradish.navigation.sidebar";
+  const previous = localStorage.getItem(key);
+  localStorage.setItem(key, "collapsed");
+  onTestFinished(() => {
+    if (previous === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, previous);
+  });
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("min-width"),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+
+  at(
+    `/groups/${SEES_NO_MEMBERS.key}/work`,
+    OFFERS_PEOPLE_AND_GROUPS,
+    [SEES_NO_MEMBERS],
+    true,
+  );
 }
 
 describe("Nav", () => {
@@ -252,6 +287,105 @@ describe("Nav", () => {
     expect(iconColour("People")).toBe(RESTING_COLOUR);
   });
 
+  it("keeps the allowed destinations as named icon links in a folded rail, with only the current one marked", () => {
+    foldedRail();
+
+    const navigation = screen.getByRole("navigation", { name: "Site" });
+    const links = within(navigation).getAllByRole("link");
+    const names = [
+      "My work",
+      ...EVERY_GROUP_PAGE_BUT_MEMBERS,
+      "People",
+      "Groups",
+    ];
+    expect(links).toHaveLength(names.length);
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(names);
+    for (const link of links) {
+      expect(link).toBeVisible();
+      expect(link).toHaveAttribute("title", link.getAttribute("aria-label"));
+      expect(link.querySelector("svg")).not.toBeNull();
+      expect(link.querySelector("[data-navigation-label]")).not.toBeVisible();
+      expect(getComputedStyle(link).width).toBe("40px");
+    }
+    expect(screen.queryByRole("combobox", { name: "Group" })).toBeNull();
+    expect(current()).toEqual(["Work"]);
+    expect(
+      getComputedStyle(screen.getByRole("link", { name: "Work" }))
+        .backgroundColor,
+    ).toBe("rgb(218, 235, 247)");
+    expect(screen.queryByRole("link", { name: "Members" })).toBeNull();
+  });
+
+  it("shows a folded destination's name when reached by Tab without changing the route", async () => {
+    foldedRail();
+    render(<input aria-label="Keyboard start" />);
+    const start = screen.getByRole("textbox", { name: "Keyboard start" });
+    const link = screen.getByRole("link", { name: "Groups" });
+    const matches = link.matches.bind(link);
+    // jsdom leaves this anchor's focus-visible false after Tab; supply only that browser predicate.
+    const focusVisible = vi
+      .spyOn(link, "matches")
+      .mockImplementation((selector) =>
+        selector === ":focus-visible"
+          ? document.activeElement === link
+          : matches(selector),
+      );
+    onTestFinished(() => focusVisible.mockRestore());
+    await act(async () => {
+      start.focus();
+    });
+    expect(start.matches(":focus-visible")).toBe(true);
+
+    await userEvent.tab({ shift: true });
+
+    expect(link).toHaveFocus();
+    expect(link.matches(":focus-visible")).toBe(true);
+    const tip = await screen.findByRole("tooltip", { name: "Groups" });
+    expect(tip).toBeVisible();
+    expect(link).toHaveAccessibleName("Groups");
+    expect(link).toHaveAttribute("aria-describedby", tip.id);
+    expect(link).not.toHaveAttribute("title");
+    expect(address()).toBe(`/groups/${SEES_NO_MEMBERS.key}/work`);
+    expect(getComputedStyle(link).width).toBe("40px");
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(tip).not.toBeInTheDocument());
+    expect(link).toHaveFocus();
+    expect(link).toHaveAttribute("title", "Groups");
+  });
+
+  it("shows a folded destination's name on a long touch without following its link", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    foldedRail();
+    const link = screen.getByRole("link", { name: "Work" });
+
+    fireEvent.touchStart(link, { touches: [{ clientX: 0, clientY: 0 }] });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+
+    const tip = screen.getByRole("tooltip", { name: "Work" });
+    expect(tip).toBeVisible();
+    expect(link).toHaveAccessibleName("Work");
+    expect(link).toHaveAttribute("aria-describedby", tip.id);
+    expect(link).not.toHaveAttribute("title");
+    expect(address()).toBe(`/groups/${SEES_NO_MEMBERS.key}/work`);
+
+    fireEvent.touchEnd(link);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(tip).not.toBeInTheDocument();
+    expect(link).toHaveAttribute("title", "Work");
+  });
+
   /** The order a reader's day runs in, with administration last at both levels. */
   it("draws what waits on the reader, then the group in force and its pages, then the estate's", () => {
     at("/", OFFERS_PEOPLE_AND_GROUPS, [SEES_MEMBERS, SEES_NO_MEMBERS]);
@@ -277,7 +411,7 @@ describe("Nav", () => {
   ])(
     "draws for a reader who %s exactly the pages that reaches",
     (_case, inForce, other, drawn) => {
-      at(`/groups/${inForce.groupId}/work`, [], [other, inForce]);
+      at(`/groups/${inForce.key}/work`, [], [other, inForce]);
 
       expect(itemsUnder(inForce.name)).toEqual(drawn);
       expect(labels()).toEqual(["My work", ...drawn]);
@@ -292,11 +426,11 @@ describe("Nav", () => {
         .getAllByRole("link")
         .map((link) => link.getAttribute("href")),
     ).toEqual([
-      `/groups/${PAYROLL}/work`,
-      `/groups/${PAYROLL}/workflows`,
-      `/groups/${PAYROLL}/questions`,
-      `/groups/${PAYROLL}/reference-lists`,
-      `/groups/${PAYROLL}/members`,
+      `/groups/${SEES_MEMBERS.key}/work`,
+      `/groups/${SEES_MEMBERS.key}/workflows`,
+      `/groups/${SEES_MEMBERS.key}/questions`,
+      `/groups/${SEES_MEMBERS.key}/reference-lists`,
+      `/groups/${SEES_MEMBERS.key}/members`,
     ]);
     expect(screen.getByRole("link", { name: "My work" })).toHaveAttribute(
       "href",
@@ -314,7 +448,11 @@ describe("Nav", () => {
   });
 
   it("names the group the address is in, rather than the first", () => {
-    at(`/groups/${TRIAGE}/workflows`, [], [SEES_MEMBERS, SEES_NO_MEMBERS]);
+    at(
+      `/groups/${SEES_NO_MEMBERS.key}/workflows`,
+      [],
+      [SEES_MEMBERS, SEES_NO_MEMBERS],
+    );
 
     expect(picker()).toHaveValue("Triage");
     expect(current()).toEqual(["Workflows"]);
@@ -348,38 +486,38 @@ describe("Nav", () => {
   });
 
   it("opens on a group's page the same page in the group picked", async () => {
-    at(`/groups/${PAYROLL}/workflows`, [], MINE);
+    at(`/groups/${SEES_MEMBERS.key}/workflows`, [], MINE);
 
     await picking(SEES_NO_MEMBERS);
 
-    expect(address()).toBe(`/groups/${TRIAGE}/workflows`);
+    expect(address()).toBe(`/groups/${SEES_NO_MEMBERS.key}/workflows`);
     expect(picker()).toHaveValue("Triage");
     expect(current()).toEqual(["Workflows"]);
   });
 
   it("opens Members in the group picked where the reader may see the members there too", async () => {
-    at(`/groups/${PAYROLL}/members`, [], MINE);
+    at(`/groups/${SEES_MEMBERS.key}/members`, [], MINE);
 
     await picking(ALSO_SEES_MEMBERS);
 
-    expect(address()).toBe(`/groups/${FINANCE}/members`);
+    expect(address()).toBe(`/groups/${ALSO_SEES_MEMBERS.key}/members`);
     expect(current()).toEqual(["Members"]);
   });
 
   /** A move is not a refusal: where Members is not reached, the first page that is opens. */
   it("opens the first page the group picked reaches where it does not reach Members", async () => {
-    at(`/groups/${PAYROLL}/members`, [], MINE);
+    at(`/groups/${SEES_MEMBERS.key}/members`, [], MINE);
 
     await picking(SEES_NO_MEMBERS);
 
-    expect(address()).toBe(`/groups/${TRIAGE}/work`);
+    expect(address()).toBe(`/groups/${SEES_NO_MEMBERS.key}/work`);
     expect(current()).toEqual(["Work"]);
     expect(itemsUnder("Triage")).toEqual(EVERY_GROUP_PAGE_BUT_MEMBERS);
   });
 
   /** Leaving a group's pages for the estate's keeps the group that was in force, not the first. */
   it("keeps the group last in force once the reader leaves its pages", async () => {
-    at(`/groups/${TRIAGE}/work`, OFFERS_PEOPLE_AND_GROUPS, [
+    at(`/groups/${SEES_NO_MEMBERS.key}/work`, OFFERS_PEOPLE_AND_GROUPS, [
       SEES_MEMBERS,
       SEES_NO_MEMBERS,
     ]);

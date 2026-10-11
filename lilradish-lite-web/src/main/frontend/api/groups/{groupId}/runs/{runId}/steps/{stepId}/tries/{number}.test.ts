@@ -4,8 +4,17 @@ import {
   answering,
   refusalOf,
 } from "../../../../../../../../testutil/answering";
-import { NOT_AN_ADDRESS, type Problem } from "../../../../../../../problem";
-import { askAgain, refusedAsChanged, refusedAsMovedOn } from "./{number}";
+import {
+  NOT_AN_ADDRESS,
+  NOT_A_PROBLEM_DOCUMENT,
+  type Problem,
+} from "../../../../../../../problem";
+import {
+  askAgain,
+  readTry,
+  refusedAsChanged,
+  refusedAsMovedOn,
+} from "./{number}";
 
 const GROUP = "00000003-0000-4000-8000-000000000ce1";
 
@@ -17,6 +26,53 @@ const VERSION = "00000007-0000-4000-8000-000000000ce1";
 
 const CAT = { userId: "000ce1", displayName: "Cat" };
 
+describe("readTry", () => {
+  it("reads original material by the exact group/run/step/number address without a body", async () => {
+    const body = {
+      number: 7,
+      returned: "",
+      modelReply: {
+        text: "**Imaginary raw**",
+        altered: false,
+        truncated: false,
+      },
+    };
+    const sent = answering([JSON.stringify(body), 200]);
+    const signal = new AbortController().signal;
+    expect(await readTry(GROUP, RUN, STEP, 7, signal)).toEqual(body);
+    expect(sent).toHaveBeenCalledTimes(1);
+    const [address, options] = sent.mock.calls[0]!;
+    expect(address).toBe(
+      `/api/groups/${GROUP}/runs/${RUN}/steps/${STEP}/tries/7`,
+    );
+    expect(options?.method ?? "GET").toBe("GET");
+    expect(options?.body).toBeUndefined();
+    expect(options?.signal).toBe(signal);
+  });
+
+  it("rejects an otherwise valid response belonging to another number", async () => {
+    answering([JSON.stringify({ number: 8 }), 200]);
+    const failure = await refusalOf(
+      readTry(GROUP, RUN, STEP, 7, new AbortController().signal),
+    );
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
+  it("retains an actual served run refusal rather than inventing empty material", async () => {
+    answering([JSON.stringify({ code: "RUN_NOT_IN_VIEW" }), 404]);
+    expect(
+      (
+        await refusalOf(
+          readTry(GROUP, RUN, STEP, 7, new AbortController().signal),
+        )
+      ).problem,
+    ).toEqual({ status: 404, code: "RUN_NOT_IN_VIEW" });
+  });
+});
+
 /** The step as the server reads it once try 2 was asked of the person it names, who has not answered yet. */
 const ASKED = {
   run: {
@@ -25,7 +81,7 @@ const ASKED = {
     versionId: VERSION,
     state: "running",
     at: { stepId: STEP, name: "summarise" },
-    acts: ["stop"],
+    stateActs: ["stop"],
     progress: { done: 0, of: 1 },
   },
   declarations: {
@@ -37,10 +93,13 @@ const ASKED = {
     },
   },
   step: {
+    producedByUserId: null,
+    producedByKind: null,
     stepId: STEP,
     order: 1,
     name: "summarise",
     runs: {
+      versionName: null,
       kind: "question",
       name: "Summarise",
       version: 2,
@@ -61,12 +120,17 @@ const ASKED = {
     cost: { callsAModel: false },
     gaveBack: [{ field: "summary", value: "A fire.", now: "refused" }],
     next: { number: 2, beyond: false },
-    acts: ["answer"],
-    withheld: [],
+    stateActs: ["answer"],
+    stateRefusals: [],
   },
   cameOut: [{ field: "summary", now: "refused" }],
   triesMade: [
     {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 1,
       beyond: false,
       producedBy: { kind: "person", person: CAT },
@@ -75,20 +139,40 @@ const ASKED = {
           field: "summary",
           value: "A fire.",
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            why: "Too short.",
+            whyLines: "several",
+          },
         },
       ],
-      review: { asked: true, by: { kind: "person" } },
+      review: {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+        asked: true,
+        by: { kind: "person" },
+      },
       ended: "refused_on_review",
       cost: { callsAModel: false },
     },
     {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 2,
       beyond: false,
       askedBy: CAT,
       producedBy: { kind: "person" },
       values: [],
-      review: { asked: false },
+      review: {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+        asked: false,
+      },
       ended: "open",
       cost: { callsAModel: false },
     },
@@ -105,7 +189,11 @@ const ASKED = {
           field: "summary",
           value: "A fire.",
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            why: "Too short.",
+            whyLines: "several",
+          },
         },
       ],
     },
@@ -137,7 +225,7 @@ describe("askAgain", () => {
       "open",
     ]);
     expect(read.triesMade[1]!.askedBy).toEqual(CAT);
-    expect(read.step.acts).toEqual(["answer"]);
+    expect(read.step.stateActs).toEqual(new Set(["answer"]));
     expect(read.answering?.number).toBe(2);
   });
 

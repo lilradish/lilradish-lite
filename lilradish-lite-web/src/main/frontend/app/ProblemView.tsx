@@ -24,7 +24,6 @@ const DISCLOSURE_SX = {
   "& li code": { mr: 0.5 },
 };
 
-/** Where a complaint points, in whichever of the three ways it can say so. */
 function Source({ source }: { readonly source: ProblemError["source"] }) {
   if (source === undefined) {
     return null;
@@ -39,38 +38,29 @@ function Source({ source }: { readonly source: ProblemError["source"] }) {
 }
 
 /**
- * A refusal, said to whoever is looking at it.
+ * Only stable `code` selects the user's sentence; nothing may branch on `detail`.
+ * Developer details stay in a disclosure with the code and debugging context.
  *
- * The document carries two things with two audiences. `code` is the stable one
- * and is what this side turns into a sentence a person can act on; `detail` is
- * written for whoever reads the response — a developer with a log or a terminal
- * — and the contract says outright that nothing may branch on it. Putting that
- * in front of the reader is this screen reading the developer half out loud,
- * so it is one disclosure away, together with the code and the narrow reasons
- * anyone debugging will ask for first.
- *
- * Announced as an alert: it is the live region announced when
- * it is rendered rather than only when its content changes, and a refusal that
- * has replaced what the reader asked for has to be read out either way. The
- * sentence is the whole of what that region holds — the disclosure is a sibling
- * outside it, because `alert` is assertive and atomic, so opening it inside
- * would announce the entire developer half, headline first, at the reader who
- * only wanted to look at it.
+ * An alert announces the refusal on render as well as change. It holds only
+ * the sentence: its assertive, atomic semantics would otherwise announce the
+ * whole developer disclosure when the reader merely opened it.
  */
 export function ProblemView({
   problem,
   rule,
+  searchWay,
 }: {
   readonly problem: Problem;
   /** What the refused request asked, where the caller knows it. */
   readonly rule?: Rule;
+  readonly searchWay?: string;
 }) {
   const errors = problem.errors ?? [];
 
   return (
     <Box sx={{ mb: 2 }}>
       <Notice severity="error" alert>
-        {refusalSentence(problem, rule)}
+        {refusalSentence(problem, rule, searchWay)}
       </Notice>
       <Box component="details" sx={DISCLOSURE_SX}>
         <summary>{say("failure.disclosure")}</summary>

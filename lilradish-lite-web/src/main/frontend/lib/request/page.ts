@@ -1,17 +1,12 @@
 import { isUnchecked } from "./document";
 
 /**
- * One page of a collection, as the server hands it over.
+ * Cursor-paginated without totals or page numbers by design. A total is a
+ * separate query over unseen rows under the reader's momentary authority,
+ * already stale on arrival in a direction nobody can observe.
  *
- * Cursor-paginated, never offset. There is no total and no page number here,
- * and their absence is the design rather than an omission: a count is a second
- * question about rows the reader is not being shown, answered under whatever
- * that reader may reach at that instant, so it is stale as it arrives and stale
- * in a direction nobody can see.
- *
- * The last page is a `nextCursor` that is absent, not one that is null. Absent
- * is what the document omits, so a reader who compares against null instead
- * would find a further page at the end of every collection.
+ * The last page omits `nextCursor`; it is never null. Comparing with null
+ * would invent a next page where the document omitted it.
  */
 export interface Page<T> {
   readonly items: readonly T[];

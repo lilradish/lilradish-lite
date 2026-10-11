@@ -44,6 +44,11 @@ const AVO = {
   userId: "000130",
   displayName: "Avo Lumerace",
 };
+const OLIVE = {
+  subjectId: "00000002-0000-4000-8000-000000000131",
+  userId: "000131",
+  displayName: "Olive Lumerace",
+};
 
 function listOf(...groups: (typeof PAYROLL)[]): readonly [string, number] {
   return [JSON.stringify({ items: groups }), 200];
@@ -54,11 +59,7 @@ function setApart(words: string): string {
   return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
 }
 
-/**
- * The page at an address, under a real router whose history the test reads,
- * with the standing it would be handed — whose reading again the test counts —
- * and only the server stood in for.
- */
+// Keep the real router and standing reload; stand in only for the server.
 function opening(
   address: string,
   routes: Readonly<Record<string, readonly Reply[]>> = {},
@@ -66,7 +67,7 @@ function opening(
   const sent = serving({
     [`GET ${GROUPS}`]: [listOf(EMPTY_ROOM, PAYROLL)],
     "GET /api/pool/search": [
-      [JSON.stringify({ items: [AVO], more: false }), 200],
+      [JSON.stringify({ items: [AVO, OLIVE], more: false }), 200],
     ],
     ...routes,
   });
@@ -107,7 +108,6 @@ function bodyRows(): HTMLTableRowElement[] {
   return rows;
 }
 
-/** Every cell of every row, once the first page has landed. */
 async function listed(): Promise<string[][]> {
   await within(table()).findByText("PAYROLL");
   return bodyRows().map((row) =>
@@ -124,8 +124,8 @@ describe("GroupsPage", () => {
     const { sent } = opening(GROUPS_PAGE);
 
     expect(await listed()).toEqual([
-      ["VOID", "Empty room", "No", "0", "Rename"],
-      ["PAYROLL", "Payroll", "Yes", "2", "Rename"],
+      ["Empty room", "VOID", "No", "0"],
+      ["Payroll", "PAYROLL", "Yes", "2"],
     ]);
     expect(screen.getByRole("columnheader", { name: "Group" })).toHaveAttribute(
       "aria-sort",
@@ -194,21 +194,21 @@ describe("GroupsPage", () => {
     ).not.toHaveAttribute("aria-sort");
   });
 
-  /** The control on a row has no order, so its column offers none. */
-  it("offers no sort on the column holding the row's control", async () => {
+  it("draws the Group column first and makes it sortable", async () => {
     opening(GROUPS_PAGE);
     await listed();
 
     const headings = within(table()).getAllByRole("columnheader");
 
     expect(headings.map((heading) => heading.textContent)).toEqual([
-      "Key",
       "Group",
+      "Key",
       "Can be administered",
       "Members",
-      "",
     ]);
-    expect(within(headings[4]!).queryByRole("button")).toBeNull();
+    expect(
+      within(headings[0]!).getByRole("button", { name: "Group" }),
+    ).toBeVisible();
   });
 
   it("writes what is typed into the filter into the address, and asks for the register it narrows", async () => {
@@ -272,6 +272,12 @@ describe("GroupsPage", () => {
       screen.getByRole("searchbox", { name: "User number or name" }),
       "avo",
     );
+    await screen.findByRole("radio", { name: "000130 Avo Lumerace" });
+    expect(
+      screen
+        .getAllByRole("radio")
+        .map((radio) => radio.closest("label")?.textContent),
+    ).toEqual(["000130 Avo Lumerace", "000131 Olive Lumerace"]);
     await userEvent.click(
       await screen.findByRole("radio", { name: "000130 Avo Lumerace" }),
     );
@@ -324,15 +330,19 @@ describe("GroupsPage", () => {
     const { sent, at } = opening(GROUPS_PAGE);
     await listed();
 
+    const row = within(table()).getByText("Payroll").closest("tr")!;
     await userEvent.click(
-      screen.getByRole("button", { name: `Rename ${setApart("Payroll")}` }),
+      within(row).getByRole("button", { name: /, editable$/ }),
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Rename a group" });
+    const dialog = row;
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue(
       "Payroll",
     );
-    expect(within(dialog).getByRole("definition")).toHaveTextContent("PAYROLL");
+    expect(
+      within(dialog).getByRole("cell", { name: "PAYROLL" }),
+    ).toHaveTextContent("PAYROLL");
     expect(within(dialog).queryByRole("textbox", { name: "Key" })).toBeNull();
     expect(at()).toBe(GROUPS_PAGE);
     expect(requestsTo(sent)).toEqual([`GET ${GROUPS}?sort=name`]);
@@ -348,13 +358,16 @@ describe("GroupsPage", () => {
     });
     await listed();
     await userEvent.click(
-      screen.getByRole("button", { name: `Rename ${setApart("Payroll")}` }),
+      within(within(table()).getByText("Payroll").closest("tr")!).getByRole(
+        "button",
+        { name: /, editable$/ },
+      ),
     );
     const name = screen.getByRole("textbox", { name: "Name" });
     await userEvent.clear(name);
     await userEvent.type(name, "Salaries");
 
-    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(
       await screen.findByText(
@@ -363,7 +376,7 @@ describe("GroupsPage", () => {
     ).toBeInTheDocument();
     await within(table()).findByText("Salaries");
     expect(within(table()).queryByText("Payroll")).toBeNull();
-    expect(bodyRows()[1]!.cells[0]!.textContent).toBe("PAYROLL");
+    expect(bodyRows()[1]!.cells[1]!.textContent).toBe("PAYROLL");
     expect(requestsTo(sent)).toEqual([
       `GET ${GROUPS}?sort=name`,
       `PATCH ${GROUPS}/${PAYROLL.groupId}`,
@@ -372,44 +385,65 @@ describe("GroupsPage", () => {
     expect(readAgain).toHaveBeenCalledOnce();
   });
 
-  it("abandons a rename, changing nothing and reading nothing again", async () => {
-    const { sent, readAgain } = opening(GROUPS_PAGE);
-    const before = await listed();
-    await userEvent.click(
-      screen.getByRole("button", { name: `Rename ${setApart("Payroll")}` }),
-    );
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Name" }),
-      " and wages",
-    );
+  it.each(["Cancel", "Escape"])(
+    "abandons a rename by %s, returning to that group's value without changing or reading again",
+    async (how) => {
+      const { sent, readAgain } = opening(GROUPS_PAGE);
+      const before = await listed();
+      await userEvent.click(
+        within(within(table()).getByText("Payroll").closest("tr")!).getByRole(
+          "button",
+          { name: /, editable$/ },
+        ),
+      );
+      await userEvent.type(
+        screen.getByRole("textbox", { name: "Name" }),
+        " and wages",
+      );
 
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      if (how === "Cancel")
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      else await userEvent.keyboard("{Escape}");
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(await listed()).toEqual(before);
-    expect(screen.queryByText(/is called|is in the register/)).toBeNull();
-    expect(requestsTo(sent)).toEqual([`GET ${GROUPS}?sort=name`]);
-    expect(readAgain).not.toHaveBeenCalled();
-  });
+      await waitFor(() =>
+        expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+      );
+      expect(
+        screen.getByRole("button", { name: "Payroll, editable" }),
+      ).toHaveFocus();
+      expect(await listed()).toEqual(before);
+      expect(screen.queryByText(/is called|is in the register/)).toBeNull();
+      expect(requestsTo(sent)).toEqual([`GET ${GROUPS}?sort=name`]);
+      expect(readAgain).not.toHaveBeenCalled();
+    },
+  );
 
   it("opens each rename afresh on the row it was pressed on", async () => {
     opening(GROUPS_PAGE);
     await listed();
     await userEvent.click(
-      screen.getByRole("button", { name: `Rename ${setApart("Payroll")}` }),
+      within(within(table()).getByText("Payroll").closest("tr")!).getByRole(
+        "button",
+        { name: /, editable$/ },
+      ),
     );
     await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "!");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     await userEvent.click(
-      screen.getByRole("button", { name: `Rename ${setApart("Empty room")}` }),
+      within(within(table()).getByText("Empty room").closest("tr")!).getByRole(
+        "button",
+        { name: /, editable$/ },
+      ),
     );
 
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue(
       "Empty room",
     );
-    expect(screen.getByRole("definition")).toHaveTextContent("VOID");
+    expect(screen.getByRole("cell", { name: "VOID" })).toHaveTextContent(
+      "VOID",
+    );
   });
 
   /** Two changes at once would settle in whichever order they land, so a row's Rename waits for the other. */
@@ -438,10 +472,12 @@ describe("GroupsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
-      screen.getByRole("button", {
-        name: `Rename ${setApart("Payroll")}`,
-        hidden: true,
-      }),
-    ).toHaveAttribute("aria-disabled", "true");
+      within(
+        screen.getByRole("table", {
+          name: "Groups in the register",
+          hidden: true,
+        }),
+      ).getAllByRole("button", { name: /, editable$/, hidden: true })[1]!,
+    ).toBeDisabled();
   });
 });

@@ -1,0 +1,115 @@
+lilradish:
+  deployed:
+    models:
+      - name: "${LILRADISH_MODEL_NAME}"
+        modes: ["${LILRADISH_MODEL_MODE}", "${LILRADISH_MODEL_MODE_2}"]
+        sent-per-call-limit: "${LILRADISH_MODEL_SENT_PER_CALL_LIMIT}"
+        characters-per-unit: "${LILRADISH_MODEL_CHARACTERS_PER_UNIT}"
+        came-back-per-call-limit: "${LILRADISH_MODEL_CAME_BACK_PER_CALL_LIMIT}"
+        prices-per-million:
+          - currency: "${LILRADISH_MODEL_PRICE_CURRENCY}"
+            sent-per-million: "${LILRADISH_MODEL_SENT_PER_MILLION}"
+            came-back-per-million: "${LILRADISH_MODEL_CAME_BACK_PER_MILLION}"
+          - currency: "${LILRADISH_MODEL_PRICE_CURRENCY_2}"
+            sent-per-million: "${LILRADISH_MODEL_SENT_PER_MILLION_2}"
+            came-back-per-million: "${LILRADISH_MODEL_CAME_BACK_PER_MILLION_2}"
+        tools:
+          - name: "${LILRADISH_MODEL_TOOL_NAME}"
+            kind: "${LILRADISH_MODEL_TOOL_KIND}"
+            max-uses-per-call: "${LILRADISH_MODEL_TOOL_MAX_USES}"
+            prices-per-use:
+              - currency: "${LILRADISH_MODEL_TOOL_PRICE_CURRENCY}"
+                per-use: "${LILRADISH_MODEL_TOOL_PRICE_PER_USE}"
+              - currency: "${LILRADISH_MODEL_TOOL_PRICE_CURRENCY_2}"
+                per-use: "${LILRADISH_MODEL_TOOL_PRICE_PER_USE_2}"
+          - name: "${LILRADISH_MODEL_TOOL_2_NAME}"
+            kind: "${LILRADISH_MODEL_TOOL_2_KIND}"
+            max-uses-per-call: "${LILRADISH_MODEL_TOOL_2_MAX_USES}"
+            prices-per-use:
+              - currency: "${LILRADISH_MODEL_TOOL_2_PRICE_CURRENCY}"
+                per-use: "${LILRADISH_MODEL_TOOL_2_PRICE_PER_USE}"
+              - currency: "${LILRADISH_MODEL_TOOL_2_PRICE_CURRENCY_2}"
+                per-use: "${LILRADISH_MODEL_TOOL_2_PRICE_PER_USE_2}"
+      - name: "${LILRADISH_MODEL_2_NAME}"
+        modes: ["${LILRADISH_MODEL_2_MODE}", "${LILRADISH_MODEL_2_MODE_2}"]
+        sent-per-call-limit: "${LILRADISH_MODEL_2_SENT_PER_CALL_LIMIT}"
+        characters-per-unit: "${LILRADISH_MODEL_2_CHARACTERS_PER_UNIT}"
+        came-back-per-call-limit: "${LILRADISH_MODEL_2_CAME_BACK_PER_CALL_LIMIT}"
+        prices-per-million:
+          - currency: "${LILRADISH_MODEL_2_PRICE_CURRENCY}"
+            sent-per-million: "${LILRADISH_MODEL_2_SENT_PER_MILLION}"
+            came-back-per-million: "${LILRADISH_MODEL_2_CAME_BACK_PER_MILLION}"
+          - currency: "${LILRADISH_MODEL_2_PRICE_CURRENCY_2}"
+            sent-per-million: "${LILRADISH_MODEL_2_SENT_PER_MILLION_2}"
+            came-back-per-million: "${LILRADISH_MODEL_2_CAME_BACK_PER_MILLION_2}"
+        tools:
+          - name: "${LILRADISH_MODEL_2_TOOL_NAME}"
+            kind: "${LILRADISH_MODEL_2_TOOL_KIND}"
+            max-uses-per-call: "${LILRADISH_MODEL_2_TOOL_MAX_USES}"
+            prices-per-use:
+              - currency: "${LILRADISH_MODEL_2_TOOL_PRICE_CURRENCY}"
+                per-use: "${LILRADISH_MODEL_2_TOOL_PRICE_PER_USE}"
+              - currency: "${LILRADISH_MODEL_2_TOOL_PRICE_CURRENCY_2}"
+                per-use: "${LILRADISH_MODEL_2_TOOL_PRICE_PER_USE_2}"
+          - name: "${LILRADISH_MODEL_2_TOOL_2_NAME}"
+            kind: "${LILRADISH_MODEL_2_TOOL_2_KIND}"
+            max-uses-per-call: "${LILRADISH_MODEL_2_TOOL_2_MAX_USES}"
+            prices-per-use:
+              - currency: "${LILRADISH_MODEL_2_TOOL_2_PRICE_CURRENCY}"
+                per-use: "${LILRADISH_MODEL_2_TOOL_2_PRICE_PER_USE}"
+              - currency: "${LILRADISH_MODEL_2_TOOL_2_PRICE_CURRENCY_2}"
+                per-use: "${LILRADISH_MODEL_2_TOOL_2_PRICE_PER_USE_2}"
+  model-calls:
+    endpoint:
+      enabled: true
+      connect-timeout: "${LILRADISH_ENDPOINT_CONNECT_TIMEOUT}"
+      read-timeout: "${LILRADISH_ENDPOINT_READ_TIMEOUT}"
+      models:
+        - name: "${LILRADISH_MODEL_NAME}"
+          id: "${LILRADISH_MODEL_ID}"
+          base-url: "${LILRADISH_MODEL_BASE_URL}"
+          api-key-variable: "${LILRADISH_MODEL_API_KEY_VARIABLE}"
+          modes:
+            - mode: "${LILRADISH_MODEL_MODE}"
+              reasoning-effort: "${LILRADISH_MODEL_REASONING_EFFORT}"
+            - mode: "${LILRADISH_MODEL_MODE_2}"
+              reasoning-effort: "${LILRADISH_MODEL_REASONING_EFFORT_2}"
+          calls:
+            - tools: ["${LILRADISH_MODEL_TOOL_NAME}"]
+              path: "${LILRADISH_MODEL_CALL_PATH}"
+              outbound: "${LILRADISH_MODEL_CALL_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_CALL_INBOUND}"
+            - tools: ["${LILRADISH_MODEL_TOOL_2_NAME}"]
+              path: "${LILRADISH_MODEL_CALL_2_PATH}"
+              outbound: "${LILRADISH_MODEL_CALL_2_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_CALL_2_INBOUND}"
+            - tools: ["${LILRADISH_MODEL_TOOL_NAME}", "${LILRADISH_MODEL_TOOL_2_NAME}"]
+              path: "${LILRADISH_MODEL_CALL_PAIR_PATH}"
+              outbound: "${LILRADISH_MODEL_CALL_PAIR_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_CALL_PAIR_INBOUND}"
+        - name: "${LILRADISH_MODEL_2_NAME}"
+          id: "${LILRADISH_MODEL_2_ID}"
+          base-url: "${LILRADISH_MODEL_2_BASE_URL}"
+          api-key-variable: "${LILRADISH_MODEL_2_API_KEY_VARIABLE}"
+          modes:
+            - mode: "${LILRADISH_MODEL_2_MODE}"
+              reasoning-effort: "${LILRADISH_MODEL_2_REASONING_EFFORT}"
+            - mode: "${LILRADISH_MODEL_2_MODE_2}"
+              reasoning-effort: "${LILRADISH_MODEL_2_REASONING_EFFORT_2}"
+          calls:
+            - tools: ["${LILRADISH_MODEL_2_TOOL_NAME}"]
+              path: "${LILRADISH_MODEL_2_CALL_PATH}"
+              outbound: "${LILRADISH_MODEL_2_CALL_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_2_CALL_INBOUND}"
+            - tools: ["${LILRADISH_MODEL_2_TOOL_2_NAME}"]
+              path: "${LILRADISH_MODEL_2_CALL_2_PATH}"
+              outbound: "${LILRADISH_MODEL_2_CALL_2_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_2_CALL_2_INBOUND}"
+            - tools: ["${LILRADISH_MODEL_2_TOOL_NAME}", "${LILRADISH_MODEL_2_TOOL_2_NAME}"]
+              path: "${LILRADISH_MODEL_2_CALL_PAIR_PATH}"
+              outbound: "${LILRADISH_MODEL_2_CALL_PAIR_OUTBOUND}"
+              inbound: "${LILRADISH_MODEL_2_CALL_PAIR_INBOUND}"
+    resend:
+      times: "${LILRADISH_RESEND_TIMES}"
+      first-wait: "${LILRADISH_RESEND_FIRST_WAIT}"
+      longest-wait: "${LILRADISH_RESEND_LONGEST_WAIT}"

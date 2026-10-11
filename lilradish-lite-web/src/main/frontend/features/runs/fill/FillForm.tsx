@@ -1,4 +1,7 @@
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import Checkbox from "@mui/material/Checkbox";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import FormHelperText from "@mui/material/FormHelperText";
@@ -30,9 +33,12 @@ import {
 import { say, type MessageId } from "../../../i18n/app";
 import { visible } from "../../../i18n/visible";
 import { Press } from "../../../lib/action/Press";
+import { IconPress } from "../../../lib/action/IconPress";
+import { FieldName } from "../../../lib/form/FieldName";
 import { isolated, isolatedInText } from "../../../lib/direction/isolated";
 import { drawingOf } from "../../../lib/text/hidden";
 import { SystemHint } from "../../../lib/text/HiddenShownIn";
+import { sizeSaid } from "../../../lib/text/sizeSaid";
 import {
   codePointsIn,
   hasLineBreak,
@@ -41,7 +47,8 @@ import {
   LAST_YEAR,
   MOST_DIGITS,
 } from "../../../lib/filling/writing";
-import { INSET_SX, QUIET_SX } from "../../../lib/layout/parts";
+import { BLOCK_SX, INSET_SX, QUIET_SX } from "../../../lib/layout/parts";
+import { FileCard } from "./FileCard";
 import {
   fileIssueOf,
   offsetOf,
@@ -55,7 +62,6 @@ import {
   type OneDraft,
 } from "./fillDrafts";
 
-/** What the reader is told of each reason a value does not fit, closed over the reasons. */
 const REASONS = {
   missing: "fill.missing",
   malformed: "fill.malformed",
@@ -93,15 +99,22 @@ const TIME_INPUT = {
 };
 
 const DATE_INPUT = {
+  formHelperText: { component: "div" as const },
   inputLabel: { shrink: true },
   htmlInput: { min: FIRST_DAY, max: LAST_DAY },
 };
 
 // Text may run either way, so its box takes its direction from what is typed.
-const TEXT_INPUT = { htmlInput: { dir: "auto" } };
+const TEXT_INPUT = {
+  htmlInput: { dir: "auto" },
+  formHelperText: { component: "div" as const },
+};
 
 // Not decimal: a keyboard for decimals may have no minus key, and a number may start with one.
-const NUMBER_INPUT = { htmlInput: { inputMode: "text", dir: "ltr" } };
+const NUMBER_INPUT = {
+  htmlInput: { inputMode: "text", dir: "ltr" },
+  formHelperText: { component: "div" as const },
+};
 
 const QUARTER_HOUR_OFFSETS: readonly string[] = Array.from(
   { length: (2 * FURTHEST_OFFSET_MINUTES) / OFFSET_STEP_MINUTES + 1 },
@@ -125,7 +138,6 @@ export type Left = (left: FillPath) => void;
 /** Whether the browser holds at a place what was typed and it could not read, which it gives as nothing. */
 export type Unread = (path: FillPath, unreadable: boolean) => void;
 
-/** Where the keyboard goes once many has changed under it. */
 type Landing =
   | { readonly at: "control"; readonly index: number }
   | { readonly at: "takeAway"; readonly key: number }
@@ -146,7 +158,6 @@ interface Placed {
   readonly onUnread: Unread;
 }
 
-/** What a place holding others is handed besides, to say of each why it does not fit. */
 interface Holding extends Placed {
   readonly marks: ReadonlyMap<string, FillReason>;
 }
@@ -160,9 +171,8 @@ export function placeId(formId: string, path: FillPath): string {
 }
 
 /**
- * One control to each field, in declared order, the fields a field holds drawn under it; each says what it is
- * called with its help under it, and why what is in it does not fit where `marks` says so, by where it stands.
- * A control is drawn again only where what it is handed has changed, so every handler has to stay the same.
+ * Fields and nested fields follow declaration order; `marks` identifies problems by path.
+ * Memoised controls require stable handlers to avoid redrawing unchanged values.
  */
 export function FillForm({
   formId,
@@ -221,40 +231,51 @@ function Level({
           path: [...holding.path, field.name],
         };
         const said = beside?.get(field.name);
-        return Array.isArray(held) ? (
-          field.kind === "file" ? (
-            <FileMany
-              key={field.name}
-              field={field}
-              items={held as readonly FileDraft[]}
-              said={said}
-              {...placed}
-            />
-          ) : (
-            <Many
-              key={field.name}
-              field={field}
-              items={held}
-              said={said}
-              {...placed}
-            />
-          )
-        ) : (
-          <Element
-            key={field.name}
-            field={field}
-            label={labelOf(field)}
-            held={held as OneDraft}
-            said={said}
-            {...placed}
-          />
+        return (
+          <Box key={field.name} sx={BLOCK_SX}>
+            {Array.isArray(held) ? (
+              field.kind === "file" ? (
+                <FileMany
+                  key={field.name}
+                  field={field}
+                  items={held as readonly FileDraft[]}
+                  said={said}
+                  {...placed}
+                />
+              ) : field.kind === "term" ? (
+                <TermMany
+                  key={field.name}
+                  field={field}
+                  items={held as readonly string[]}
+                  said={said}
+                  {...placed}
+                />
+              ) : (
+                <Many
+                  key={field.name}
+                  field={field}
+                  items={held}
+                  said={said}
+                  {...placed}
+                />
+              )
+            ) : (
+              <Element
+                key={field.name}
+                field={field}
+                label={labelOf(field)}
+                held={held as OneDraft}
+                said={said}
+                {...placed}
+              />
+            )}
+          </Box>
         );
       })}
     </Stack>
   );
 }
 
-/** One value of a field: fields drawn under it, or one control; `said` is said under either. */
 function Element({
   field,
   label,
@@ -286,7 +307,6 @@ function Element({
   );
 }
 
-/** Many of one field: none at first, one more while it holds fewer than its most, and any one taken away. */
 const Many = memo(function Many({
   field,
   items,
@@ -316,7 +336,7 @@ const Many = memo(function Many({
     const { help: _help, ...rest } = field;
     return { ...rest, mustBeGiven: true };
   }, [field]);
-  // Held anew from outside, as when the form starts again: keyed afresh.
+  // Items replaced from outside with a different count are given fresh keys.
   const shown =
     keys.held.length === items.length ? keys : keysFor(items.length, keys.next);
   if (shown !== keys) {
@@ -335,7 +355,7 @@ const Many = memo(function Many({
         : to.at === "takeAway"
           ? elements.current
               .get(to.key)
-              ?.lastElementChild?.querySelector("button")
+              ?.querySelector<HTMLButtonElement>(":scope > button")
           : document.getElementById(id);
     target?.focus();
   });
@@ -366,7 +386,9 @@ const Many = memo(function Many({
       required={field.mustBeGiven}
     >
       <FormLabel component="legend" id={legendId}>
-        {isolated(label)}
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
       </FormLabel>
       <FormHelperText component="div" id={helperId}>
         <Under
@@ -411,12 +433,14 @@ const Many = memo(function Many({
                 marks={marks}
               />
             </Box>
-            <Press
+            <IconPress
+              icon={<DeleteOutlineIcon />}
+              unavailable={false}
               label={say("fill.takeAwayOne", { element })}
               onPress={() => takeAway(index)}
             >
               {say("fill.takeAway")}
-            </Press>
+            </IconPress>
           </Box>
         );
       })}
@@ -431,7 +455,6 @@ const Many = memo(function Many({
   );
 }, samePlace);
 
-/** One value, by the control its kind asks for. */
 const One = memo(function One({
   field,
   label,
@@ -459,7 +482,8 @@ const One = memo(function One({
   } | null>(null);
   const typed = (next: string) => {
     if (field.kind === "text" && codePointsIn(next) > (field.longest ?? 0)) {
-      setRejected({ held, field, formId, reason: "too_long" });
+      setRejected({ held: next, field, formId, reason: "too_long" });
+      onDraft(path, next);
       return;
     }
     setRejected(null);
@@ -478,7 +502,11 @@ const One = memo(function One({
       return (
         <TextField
           id={id}
-          label={isolated(label)}
+          label={
+            <FieldName name={field.name} label={field.label}>
+              {label}
+            </FieldName>
+          }
           value={held as string}
           onChange={(edit) => typed(edit.target.value)}
           onPaste={(event) => {
@@ -531,7 +559,11 @@ const One = memo(function One({
       return (
         <TextField
           id={id}
-          label={isolated(label)}
+          label={
+            <FieldName name={field.name} label={field.label}>
+              {label}
+            </FieldName>
+          }
           value={held as string}
           onChange={(edit) => typed(edit.target.value)}
           onBlur={left}
@@ -642,7 +674,6 @@ const One = memo(function One({
 const FILE_ISSUE_HINTS = {
   name: "fill.fileNameHint",
   type_missing: "fill.fileTypeMissingHint",
-  type_malformed: "fill.fileTypeMalformedHint",
   type_not_taken: "fill.fileTypeNotTakenHint",
   too_large: "fill.fileTooLargeHint",
   too_many: "fill.fileTooManyHint",
@@ -710,21 +741,6 @@ function fileIssueVisible(
   return fileStatusVisible(name, FILE_ISSUE_HINTS[issue]);
 }
 
-function FileLimits({ field }: { readonly field: FillField }) {
-  return (
-    <>
-      <Box component="span" sx={OWN_LINE_SX}>
-        {say("fill.fileTypes", {
-          types: isolatedInText((field.types ?? []).join(", ")),
-        })}
-      </Box>
-      <Box component="span" sx={OWN_LINE_SX}>
-        {say("fill.fileMaximum", { bytes: field.maximumBytes ?? 0 })}
-      </Box>
-    </>
-  );
-}
-
 const FileOne = memo(function FileOne({
   field,
   label,
@@ -744,10 +760,12 @@ const FileOne = memo(function FileOne({
 }) {
   const id = placeId(formId, path);
   const helperId = useId();
+  const dropId = useId();
   const input = useRef<HTMLInputElement>(null);
+  const chooser = useRef<HTMLButtonElement>(null);
   const [rejected, setRejected] = useState<{
     readonly name: string;
-    readonly issue: FileIssue;
+    readonly issue: FileIssue | "too_many";
   } | null>(null);
   const name = fileNameOf(held);
   const issue =
@@ -759,21 +777,74 @@ const FileOne = memo(function FileOne({
       ? undefined
       : issue !== null
         ? fileIssueVisible(name, issue)
-        : held !== null && "pending" in held
-          ? fileStatusVisible(name, "fill.filePendingHint")
-          : fileStatusVisible(name, "fill.fileKeptHint");
+        : undefined;
+  const describedBy =
+    (held === null && mark !== undefined) ||
+    said !== undefined ||
+    field.help !== undefined ||
+    rejected !== null ||
+    status !== undefined
+      ? `${dropId} ${helperId}`
+      : dropId;
+  const choose = (chosen: readonly File[]) => {
+    const file = chosen[0];
+    if (file === undefined) return;
+    const refused = chosen.length > 1 ? "too_many" : fileIssueOf(field, file);
+    if (refused === null) {
+      setRejected(null);
+      onDraft(path, { pending: file });
+    } else setRejected({ name: file.name, issue: refused });
+    onLeave(path);
+  };
   return (
     <FormControl
       error={mark !== undefined || issue !== null || rejected !== null}
       required={field.mustBeGiven}
+      fullWidth
+      sx={{
+        "&:focus-within": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: 2,
+          borderRadius: 1,
+        },
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        choose(Array.from(event.dataTransfer.files));
+      }}
     >
-      <FormLabel htmlFor={id}>{isolated(label)}</FormLabel>
-      <input
+      <FormLabel htmlFor={`${id}-native`}>
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
+      </FormLabel>
+      <Typography id={dropId} variant="body2" sx={QUIET_SX}>
+        {say("fill.fileDropOne", {
+          endings: isolatedInText((field.types ?? []).join(", ")),
+          size: sizeSaid(field.maximumBytes ?? 0),
+        })}
+      </Typography>
+      <Button
         id={id}
+        ref={chooser}
+        aria-describedby={describedBy}
+        onClick={() => input.current?.click()}
+      >
+        {say("fill.chooseFile")}
+      </Button>
+      <input
+        id={`${id}-native`}
         ref={input}
         type="file"
+        tabIndex={-1}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
         accept={field.types?.join(",")}
-        aria-describedby={helperId}
+        aria-describedby={describedBy}
         aria-invalid={
           mark !== undefined || issue !== null || rejected !== null
             ? true
@@ -781,17 +852,7 @@ const FileOne = memo(function FileOne({
         }
         aria-required={field.mustBeGiven ? true : undefined}
         onChange={(event) => {
-          const chosen = event.currentTarget.files?.[0];
-          if (chosen !== undefined && chosen !== null) {
-            const refused = fileIssueOf(field, chosen);
-            if (refused === null) {
-              setRejected(null);
-              onDraft(path, { pending: chosen });
-            } else {
-              setRejected({ name: chosen.name, issue: refused });
-            }
-            onLeave(path);
-          }
+          choose(Array.from(event.currentTarget.files ?? []));
           event.currentTarget.value = "";
         }}
         onBlur={() => onLeave(path)}
@@ -802,7 +863,6 @@ const FileOne = memo(function FileOne({
           said={said}
           help={field.help}
         />
-        <FileLimits field={field} />
         {rejected === null ? null : (
           <Box component="span" sx={OWN_LINE_SX}>
             {fileIssueVisible(rejected.name, rejected.issue)}
@@ -815,22 +875,27 @@ const FileOne = memo(function FileOne({
         )}
       </FormHelperText>
       {rejected === null ? null : (
-        <Press variant="neutral" onPress={() => setRejected(null)}>
+        <Press
+          tier="neutral"
+          onPress={() => {
+            setRejected(null);
+            chooser.current?.focus();
+          }}
+        >
           {say("fill.fileDismiss")}
         </Press>
       )}
-      {name === undefined ? null : (
-        <Press
-          label={say("fill.takeAwayOne", { element: shownFileName(name) })}
-          onPress={() => {
+      {name === undefined || held === null ? null : (
+        <FileCard
+          file={"pending" in held ? held.pending : held.kept}
+          field={field}
+          onRemove={() => {
             setRejected(null);
             onDraft(path, null);
             onLeave(path);
-            input.current?.focus();
+            chooser.current?.focus();
           }}
-        >
-          {say("fill.takeAway")}
-        </Press>
+        />
       )}
     </FormControl>
   );
@@ -854,67 +919,102 @@ const FileMany = memo(function FileMany({
   const id = placeId(formId, path);
   const legendId = useId();
   const helperId = useId();
+  const dropId = useId();
   const input = useRef<HTMLInputElement>(null);
+  const chooser = useRef<HTMLButtonElement>(null);
   const [rejected, setRejected] = useState<
     readonly { readonly name: string; readonly issue: FileIssue | "too_many" }[]
   >([]);
   const [rejectedFrom, setRejectedFrom] = useState(0);
   const mark = marks.get(pathKey(path));
   const most = field.most ?? 0;
+  const choose = (chosen: readonly File[]) => {
+    const refused = chosen
+      .map((file, index) => ({
+        name: file.name,
+        issue:
+          items.length + index >= most
+            ? ("too_many" as const)
+            : fileIssueOf(field, file),
+      }))
+      .filter(
+        (entry): entry is { name: string; issue: FileIssue | "too_many" } =>
+          entry.issue !== null,
+      );
+    if (refused.length > 0) {
+      setRejected(refused);
+      setRejectedFrom(0);
+      onUnread(path, true);
+    } else if (chosen.length > 0) {
+      setRejected([]);
+      onUnread(path, false);
+      onDraft(path, [...items, ...chosen.map((file) => ({ pending: file }))]);
+    }
+    onLeave(path);
+  };
+
   return (
     <FormControl
       component="fieldset"
+      fullWidth
+      sx={{
+        "&:focus-within": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: 2,
+          borderRadius: 1,
+        },
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        choose(Array.from(event.dataTransfer.files));
+      }}
+
       error={mark !== undefined || rejected.length > 0}
       required={field.mustBeGiven}
       aria-labelledby={legendId}
-      aria-describedby={helperId}
+      aria-describedby={`${dropId} ${helperId}`}
     >
       <FormLabel component="legend" id={legendId}>
-        {isolated(labelOf(field))}
+        <FieldName name={field.name} label={field.label} />
       </FormLabel>
-      <input
+      <Typography id={dropId} variant="body2" sx={QUIET_SX}>
+        {say("fill.fileDropMany", {
+          endings: isolatedInText((field.types ?? []).join(", ")),
+          count: most,
+          size: sizeSaid(field.maximumBytes ?? 0),
+        })}
+      </Typography>
+      <Button
         id={id}
+        ref={chooser}
+        aria-describedby={`${dropId} ${helperId}`}
+        onClick={() => input.current?.click()}
+      >
+        {say("fill.chooseFiles")}
+      </Button>
+      <input
+        id={`${id}-native`}
         ref={input}
         type="file"
+        tabIndex={-1}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
         multiple
         accept={field.types?.join(",")}
         aria-label={say("fill.fileChooseMany", {
           label: isolatedInText(labelOf(field)),
         })}
-        aria-describedby={helperId}
+        aria-describedby={`${dropId} ${helperId}`}
         aria-required={field.mustBeGiven ? true : undefined}
         aria-invalid={
           mark !== undefined || rejected.length > 0 ? true : undefined
         }
         onChange={(event) => {
-          const chosen = Array.from(event.currentTarget.files ?? []);
-          const refused = chosen
-            .map((file, index) => ({
-              name: file.name,
-              issue:
-                items.length + index >= most
-                  ? ("too_many" as const)
-                  : fileIssueOf(field, file),
-            }))
-            .filter(
-              (
-                entry,
-              ): entry is { name: string; issue: FileIssue | "too_many" } =>
-                entry.issue !== null,
-            );
-          if (refused.length > 0) {
-            setRejected(refused);
-            setRejectedFrom(0);
-            onUnread(path, true);
-          } else if (chosen.length > 0) {
-            setRejected([]);
-            onUnread(path, false);
-            onDraft(path, [
-              ...items,
-              ...chosen.map((file) => ({ pending: file })),
-            ]);
-          }
-          onLeave(path);
+          choose(Array.from(event.currentTarget.files ?? []));
           event.currentTarget.value = "";
         }}
         onBlur={() => onLeave(path)}
@@ -926,7 +1026,6 @@ const FileMany = memo(function FileMany({
           help={field.help}
           also={say("fill.count", { count: items.length, most })}
         />
-        <FileLimits field={field} />
         {rejected.length === 0 ? null : (
           <>
             <Box component="span" sx={OWN_LINE_SX}>
@@ -946,7 +1045,7 @@ const FileMany = memo(function FileMany({
             {rejected.length <= REJECTED_PAGE_SIZE ? null : (
               <>
                 <Press
-                  navigation
+                  tier="quiet"
                   unavailable={rejectedFrom === 0}
                   onPress={() =>
                     setRejectedFrom((from) =>
@@ -957,7 +1056,7 @@ const FileMany = memo(function FileMany({
                   {say("fill.fileShowPrevious")}
                 </Press>
                 <Press
-                  navigation
+                  tier="quiet"
                   unavailable={
                     rejectedFrom + REJECTED_PAGE_SIZE >= rejected.length
                   }
@@ -981,40 +1080,53 @@ const FileMany = memo(function FileMany({
           </>
         )}
       </FormHelperText>
-      {items.map((item, index) => {
-        const name = fileNameOf(item);
-        return (
-          <Box key={index} sx={ITEM_SX}>
-            <Typography component="span">
-              {name === undefined
-                ? say("fill.none")
-                : item !== null && "pending" in item
-                  ? fileStatusVisible(name, "fill.filePendingHint")
-                  : fileStatusVisible(name, "fill.fileKeptHint")}
-            </Typography>
-            <Press
-              label={say("fill.takeAwayOne", {
-                element: shownFileName(name ?? labelOf(field)),
-              })}
-              onPress={() => {
-                setRejected([]);
-                onUnread(path, false);
-                onDraft(path, items.toSpliced(index, 1), index);
-                input.current?.focus();
-              }}
-            >
-              {say("fill.takeAway")}
-            </Press>
-          </Box>
-        );
-      })}
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+        {items.map((item, index) => {
+          const name = fileNameOf(item);
+          return (
+            <Box key={index} sx={ITEM_SX}>
+              {item === null ? (
+                <Typography>{say("fill.none")}</Typography>
+              ) : (
+                <FileCard
+                  file={"pending" in item ? item.pending : item.kept}
+                  field={field}
+                  onRemove={() => {
+                    setRejected([]);
+                    onUnread(path, false);
+                    onDraft(path, items.toSpliced(index, 1), index);
+                    chooser.current?.focus();
+                  }}
+                />
+              )}
+              {item !== null ? null : (
+                <IconPress
+                  icon={<DeleteOutlineIcon />}
+                  unavailable={false}
+                  label={say("fill.removeFile", {
+                    name: shownFileName(name ?? labelOf(field)),
+                  })}
+                  onPress={() => {
+                    setRejected([]);
+                    onUnread(path, false);
+                    onDraft(path, items.toSpliced(index, 1), index);
+                    chooser.current?.focus();
+                  }}
+                >
+                  {say("fill.takeAway")}
+                </IconPress>
+              )}
+            </Box>
+          );
+        })}
+      </Box>
       {rejected.length === 0 ? null : (
         <Press
-          variant="neutral"
+          tier="neutral"
           onPress={() => {
             setRejected([]);
             onUnread(path, false);
-            input.current?.focus();
+            chooser.current?.focus();
           }}
         >
           {say("fill.fileDismiss")}
@@ -1024,7 +1136,6 @@ const FileMany = memo(function FileMany({
   );
 }, samePlace);
 
-/** The fields a field holds, drawn under it and named by it. */
 const Fields = memo(function Fields({
   field,
   label,
@@ -1052,7 +1163,9 @@ const Fields = memo(function Fields({
       fullWidth
     >
       <FormLabel component="legend" id={legendId}>
-        {isolated(label)}
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
       </FormLabel>
       <FormHelperText component="div" id={helperId}>
         <Under mark={mark} said={said} help={field.help} />
@@ -1097,7 +1210,11 @@ function DateControl({
     <TextField
       id={id}
       type="date"
-      label={isolated(label)}
+      label={
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
+      }
       value={day}
       inputRef={input}
       onChange={(edit) => onDay(edit.target.value)}
@@ -1166,7 +1283,11 @@ function Moment({
       required={field.mustBeGiven}
       onBlur={leaving}
     >
-      <FormLabel component="legend">{isolated(label)}</FormLabel>
+      <FormLabel component="legend">
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
+      </FormLabel>
       <Box sx={ROW_SX}>
         <TextField
           id={id}
@@ -1235,7 +1356,133 @@ function Moment({
   );
 }
 
-/** One of what is offered, chosen and never typed; a field that need not be given may be left empty. */
+function TermMany({
+  field,
+  items,
+  said,
+  formId,
+  path,
+  onDraft,
+  onLeave,
+  marks,
+}: Holding & {
+  readonly field: FillField;
+  readonly items: readonly string[];
+  readonly said?: ReactNode;
+}) {
+  const id = placeId(formId, path);
+  const labelId = useId();
+  const helpId = useId();
+  const mark = marks.get(pathKey(path));
+  const terms = field.terms?.terms ?? [];
+  const most = field.most ?? 0;
+  const choose = (term: string) => {
+    onDraft(
+      path,
+      items.includes(term)
+        ? items.filter((each) => each !== term)
+        : [...items, term],
+    );
+    onLeave(path);
+  };
+  return (
+    <FormControl
+      component="fieldset"
+      aria-describedby={helpId}
+      fullWidth
+      error={mark !== undefined}
+      required={field.mustBeGiven}
+    >
+      <FormLabel component="legend" id={labelId}>
+        <FieldName name={field.name} label={field.label} />
+      </FormLabel>
+      {field.terms?.note === undefined ? null : (
+        <Typography
+          variant="body2"
+          sx={{ ...QUIET_SX, typography: "systemHint", mt: 1, mb: 2 }}
+        >
+          {isolated(field.terms.note)}
+        </Typography>
+      )}
+      {terms.length > 5 ? (
+        <TextField
+          select
+          id={`${id}-native`}
+          value={items}
+          slotProps={{
+            select: {
+              multiple: true,
+              labelId,
+              SelectDisplayProps: { id },
+              "aria-describedby": helpId,
+              onChange: (event) => {
+                const next = event.target.value;
+                if (
+                  Array.isArray(next) &&
+                  next.every((term): term is string => typeof term === "string")
+                ) {
+                  onDraft(path, next);
+                  onLeave(path);
+                }
+              },
+            },
+          }}
+        >
+          {terms.map(({ term, meaning }) => (
+            <MenuItem
+              key={term}
+              value={term}
+              disabled={!items.includes(term) && items.length >= most}
+            >
+              <Checkbox checked={items.includes(term)} />
+              {isolated(term)} — {isolated(meaning)}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : (
+        <Box sx={ROW_SX}>
+          {terms.map(({ term, meaning }, index) => (
+            <FormControlLabel
+              key={term}
+              sx={{
+                ...BLOCK_SX,
+                m: 0,
+                borderColor: items.includes(term) ? "primary.main" : "divider",
+              }}
+              control={
+                <Checkbox
+                  id={index === 0 ? id : undefined}
+                  checked={items.includes(term)}
+                  disabled={!items.includes(term) && items.length >= most}
+                  onChange={() => choose(term)}
+                />
+              }
+              label={
+                <>
+                  <Typography component="span" sx={OWN_LINE_SX}>
+                    {isolated(term)}
+                  </Typography>
+                  <Typography component="span" variant="body2" sx={MEANING_SX}>
+                    {isolated(meaning)}
+                  </Typography>
+                </>
+              }
+            />
+          ))}
+        </Box>
+      )}
+      <FormHelperText component="div" id={helpId}>
+        <Under
+          mark={mark}
+          said={said}
+          help={field.help}
+          also={say("fill.count", { count: items.length, most })}
+        />
+      </FormHelperText>
+    </FormControl>
+  );
+}
+
 function Choice({
   field,
   label,
@@ -1272,38 +1519,80 @@ function Choice({
       required={field.mustBeGiven}
     >
       <FormLabel component="legend" id={legendId}>
-        {isolated(label)}
+        <FieldName name={field.name} label={field.label}>
+          {label}
+        </FieldName>
       </FormLabel>
       {note === undefined ? null : (
-        <Typography variant="body2" sx={QUIET_SX}>
+        <Typography
+          variant="body2"
+          sx={{ ...QUIET_SX, typography: "systemHint", mt: 1, mb: 2 }}
+        >
           {isolated(note)}
         </Typography>
       )}
-      <RadioGroup
-        value={chosen}
-        onChange={(_event, value) => onChoose(value)}
-        row={row}
-        aria-labelledby={legendId}
-        aria-describedby={helperId}
-        aria-invalid={mark === undefined ? undefined : true}
-        aria-required={field.mustBeGiven ? true : undefined}
-      >
-        {choices.map((choice, index) => (
-          <FormControlLabel
-            key={choice.value}
-            value={choice.value}
-            control={<Radio id={index === 0 ? id : undefined} />}
-            label={choice.words}
-          />
-        ))}
-        {field.mustBeGiven ? null : (
-          <FormControlLabel
-            value=""
-            control={<Radio />}
-            label={say("fill.leaveEmpty")}
-          />
-        )}
-      </RadioGroup>
+      {field.kind === "term" && choices.length > 5 ? (
+        <TextField
+          select
+          id={`${id}-native`}
+          value={chosen}
+          onChange={(event) => onChoose(event.target.value)}
+          slotProps={{
+            select: {
+              labelId: legendId,
+              SelectDisplayProps: { id },
+              "aria-describedby": helperId,
+              "aria-invalid": mark === undefined ? undefined : true,
+            },
+          }}
+        >
+          {field.mustBeGiven ? null : (
+            <MenuItem value="">{say("fill.leaveEmpty")}</MenuItem>
+          )}
+          {choices.map((choice) => (
+            <MenuItem key={choice.value} value={choice.value}>
+              {choice.words}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : (
+        <RadioGroup
+          value={chosen}
+          onChange={(_event, value) => onChoose(value)}
+          row={row}
+          aria-labelledby={legendId}
+          aria-describedby={helperId}
+          aria-invalid={mark === undefined ? undefined : true}
+          aria-required={field.mustBeGiven ? true : undefined}
+        >
+          {choices.map((choice, index) => (
+            <FormControlLabel
+              key={choice.value}
+              value={choice.value}
+              control={<Radio id={index === 0 ? id : undefined} />}
+              label={choice.words}
+              sx={
+                field.kind === "term"
+                  ? {
+                      ...BLOCK_SX,
+                      m: 0,
+                      mt: 1,
+                      borderColor:
+                        chosen === choice.value ? "primary.main" : "divider",
+                    }
+                  : undefined
+              }
+            />
+          ))}
+          {field.mustBeGiven ? null : (
+            <FormControlLabel
+              value=""
+              control={<Radio />}
+              label={say("fill.leaveEmpty")}
+            />
+          )}
+        </RadioGroup>
+      )}
       <FormHelperText component="div" id={helperId}>
         <Under mark={mark} said={said} help={field.help} />
       </FormHelperText>
@@ -1311,10 +1600,6 @@ function Choice({
   );
 }
 
-/**
- * Why it does not fit first, then what its caller says of it, then its help, then what else its kind says of it,
- * each on a line of its own.
- */
 function Under({
   mark,
   said,
@@ -1334,25 +1619,36 @@ function Under({
         </Box>
       )}
       {said === undefined ? null : (
-        <Box component="span" sx={OWN_LINE_SX}>
+        <Box component="div" sx={OWN_LINE_SX}>
           {said}
         </Box>
       )}
-      {help === undefined ? null : (
-        <Box component="span" sx={OWN_LINE_SX}>
-          {isolated(help)}
-        </Box>
-      )}
-      {also === undefined ? null : (
-        <Box component="span" sx={OWN_LINE_SX}>
-          {also}
-        </Box>
-      )}
+      <Box
+        component="span"
+        sx={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 2,
+          alignItems: "baseline",
+          typography: "caption",
+          color: mark === undefined ? "text.secondary" : "warning.main",
+        }}
+      >
+        {help === undefined ? (
+          <span />
+        ) : (
+          <Box component="span">{isolated(help)}</Box>
+        )}{" "}
+        {also === undefined ? null : (
+          <Box component="span" sx={{ flexShrink: 0 }}>
+            {also}
+          </Box>
+        )}
+      </Box>
     </>
   );
 }
 
-/** Whether a control would be drawn as it was: every prop the same, a path by the place it names. */
 function samePlace<Props extends Placed>(before: Props, after: Props): boolean {
   const keys = Object.keys(after) as (keyof Props)[];
   return (
@@ -1372,12 +1668,10 @@ function keysFor(count: number, from: number): ElementKeys {
   };
 }
 
-/** Its label, or its name with each underscore read as a space where it has none. */
 function labelOf(field: FillField): string {
   return field.label ?? field.name.replaceAll("_", " ");
 }
 
-/** Every quarter hour either way as far as an offset goes, and the one standing where it falls between them. */
 function offsetsBeside(standing: string): readonly string[] {
   if (QUARTER_HOUR_OFFSETS.includes(standing)) {
     return QUARTER_HOUR_OFFSETS;

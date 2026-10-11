@@ -50,14 +50,13 @@ const FILE = {
   name: "attachment",
   kind: "file",
   mustBeGiven: true,
-  types: ["application/pdf", "image/png"],
+  types: [".pdf", ".png"],
   maximumBytes: 1048576,
 };
 
 const FILE_VALUE = {
   id: "file-one",
   name: "Demo Sample.pdf",
-  type: "application/pdf",
   size: 42,
 };
 
@@ -113,34 +112,32 @@ describe("fillFieldFrom", () => {
     expect(fillFieldsFrom([FILE, nested])).toEqual([FILE, nested]);
   });
 
-  it("reads a syntactically valid type beyond the common examples", () => {
+  it("reads a compound extension beyond the common examples and three-part file metadata", () => {
     const field = {
       ...FILE,
-      types: ["application/vnd.demo-sample+json"],
+      types: [".tar.gz"],
       maximumBytes: 100_000_000,
       most: 100,
     };
 
     expect(readFieldsFrom([field])).toEqual([field]);
     expect(fillFieldFrom(field)).toEqual(field);
-    expect(isFillValue({ ...FILE_VALUE, type: field.types[0] })).toBe(true);
+    expect(isFillValue({ ...FILE_VALUE, name: "Backup.tar.gz" })).toBe(true);
+    expect(isFillValue({ ...FILE_VALUE, type: "application/pdf" })).toBe(false);
   });
 
   it.each([
     ["no allowed types", { ...FILE, types: undefined }],
     ["empty allowed types", { ...FILE, types: [] }],
-    ["duplicate allowed types", { ...FILE, types: ["image/png", "image/png"] }],
-    [
-      "case-variant duplicate types",
-      { ...FILE, types: ["image/png", "IMAGE/PNG"] },
-    ],
+    ["duplicate allowed types", { ...FILE, types: [".png", ".png"] }],
+    ["case-variant duplicate types", { ...FILE, types: [".png", ".PNG"] }],
     ["media type missing its slash", { ...FILE, types: ["applicationpdf"] }],
     ["media type containing a space", { ...FILE, types: ["application/ pdf"] }],
     [
       "media type beginning with punctuation",
       { ...FILE, types: ["-application/pdf"] },
     ],
-    ["non-text allowed type", { ...FILE, types: ["image/png", 1] }],
+    ["non-text allowed type", { ...FILE, types: [".png", 1] }],
     ["no byte limit", { ...FILE, maximumBytes: undefined }],
     ["zero byte limit", { ...FILE, maximumBytes: 0 }],
     ["zero files allowed", { ...FILE, most: 0 }],
@@ -376,9 +373,9 @@ describe("isFillValue", () => {
   });
 
   it.each([
-    ["missing id", { name: FILE_VALUE.name, type: FILE_VALUE.type, size: 42 }],
-    ["missing name", { id: FILE_VALUE.id, type: FILE_VALUE.type, size: 42 }],
-    ["missing type", { id: FILE_VALUE.id, name: FILE_VALUE.name, size: 42 }],
+    ["missing id", { name: FILE_VALUE.name, size: 42 }],
+    ["missing name", { id: FILE_VALUE.id, size: 42 }],
+    ["an obsolete MIME member", { ...FILE_VALUE, type: "application/pdf" }],
     ["empty id", { ...FILE_VALUE, id: "" }],
     ["empty name", { ...FILE_VALUE, name: "" }],
     ["name on two lines", { ...FILE_VALUE, name: "Demo\nSample.pdf" }],

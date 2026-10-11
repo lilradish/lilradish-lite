@@ -40,7 +40,6 @@ export function holdsNothing(typed: string): boolean {
   );
 }
 
-/** A line break refused by a field taking one line. */
 export function hasLineBreak(typed: string): boolean {
   return /[\n\v\f\r\u0085\u2028\u2029]/u.test(typed);
 }
@@ -88,7 +87,7 @@ export function valueRefused(
   }
 }
 
-/** How many characters text runs to, counted in code points as the server counts. */
+/** Counted in code points as the server counts. */
 export function codePointsIn(typed: string): number {
   let counted = 0;
   for (
@@ -108,7 +107,6 @@ export function numberWrittenPlainly(typed: string): boolean {
   );
 }
 
-/** Plainly, and every digit counted. */
 export function numberWritten(typed: string): boolean {
   return (
     numberWrittenPlainly(typed) &&
@@ -134,7 +132,6 @@ export interface MomentParts extends DayParts {
   readonly minutes: string;
 }
 
-/** A day that is on the calendar, within the years a date may be. */
 export function dated(typed: string): boolean {
   return dayParts(typed) !== null;
 }
@@ -166,7 +163,6 @@ function daysIn(year: number, month: number): number {
   return [4, 6, 9, 11].includes(month) ? 30 : 31;
 }
 
-/** A moment on a day `dated` takes, at an offset one is written at, its fraction of a second bounded. */
 export function momentary(typed: string): boolean {
   return momentParts(typed) !== null;
 }

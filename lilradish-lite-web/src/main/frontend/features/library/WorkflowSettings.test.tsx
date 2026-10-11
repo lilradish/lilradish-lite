@@ -1,11 +1,18 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import type { SentChoice } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
+import { RequestFailed } from "../../api/problem";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
 import { drawnAtDepth, drawnOf } from "../../testutil/depths";
@@ -24,13 +31,10 @@ const WORKFLOW: WorkflowVersion = {
   problems: [],
   sendsPast: [],
   offered: {
-    lists: [],
-    questions: [],
-    workflows: [],
     codeSteps: [],
     searchWays: [],
     models: [
-      { name: "general", modes: ["research"], tools: [] },
+      { name: "general", modes: ["research", "deep_research"], tools: [] },
       { name: "small", modes: [], tools: [] },
     ],
   },
@@ -110,6 +114,29 @@ const HELPED: WorkflowVersion = {
 };
 
 describe("CeilingPart", () => {
+  it("keeps usage-limit explanations above an empty input, with a stable description and a separately named information mark", () => {
+    ceilingAt(WORKFLOW, true);
+    const input = screen.getByRole("textbox", { name: "Usage limit" });
+    expect(input).toHaveValue("");
+    expect(input).not.toHaveAttribute("placeholder");
+    const hint = screen.getByText(
+      "What is sent and what comes back, added together. Leave it empty for no usage limit.",
+    );
+    expect(
+      hint.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(input).toHaveAccessibleDescription(hint.textContent!);
+    expect(
+      screen.getByRole("button", { name: "About run settings" }),
+    ).toHaveAccessibleDescription(
+      "The usage limit for each run of this version, and whether people following a run can ask a model for help.",
+    );
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(
+      input.closest(".MuiTextField-root")!.querySelector(".MuiInputLabel-root"),
+    ).toBeNull();
+  });
+
   it("stands as a block of the version, framed apart from the next", () => {
     ceilingAt(WORKFLOW, false);
 
@@ -123,10 +150,14 @@ describe("CeilingPart", () => {
 
     expect(
       screen.getByText(
-        "Runs of it may spend at most 5000, what is sent and what comes back added together.",
+        "Runs of it may spend at most 5,000, what is sent and what comes back added together.",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/A run beneath another/)).toBeNull();
+    expect(
+      screen.queryByText(
+        /A run beneath another is held|A sub-run can only be changed/,
+      ),
+    ).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: SAVE_CEILING })).toBeNull();
@@ -140,7 +171,7 @@ describe("CeilingPart", () => {
     const saved = ceilingAt(WORKFLOW, true);
 
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Ceiling" }),
+      screen.getByRole("textbox", { name: "Usage limit" }),
       typed,
     );
 
@@ -149,9 +180,9 @@ describe("CeilingPart", () => {
       "true",
     );
     expect(
-      screen.getByRole("textbox", { name: "Ceiling" }),
+      screen.getByRole("textbox", { name: "Usage limit" }),
     ).toHaveAccessibleDescription(
-      "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
+      "What is sent and what comes back, added together. Leave it empty for no usage limit. A usage limit is a whole number from 1 to 9,007,199,254,740,991, or empty for no limit.",
     );
     expect(
       noticesIn(
@@ -161,31 +192,40 @@ describe("CeilingPart", () => {
       {
         severity: "warning",
         words:
-          "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits, or none at all.",
+          "A usage limit is a whole number from 1 to 9,007,199,254,740,991, or empty for no limit.",
       },
     ]);
     expect(saved).not.toHaveBeenCalled();
   });
 
-  it("holds saving a ceiling as it was read in a quiet line, and in no notice", () => {
+  it("draws no Save of a ceiling as it was read, and draws it as the leading button once something is changed", async () => {
     ceilingAt(WORKFLOW, true);
-    const save = screen.getByRole("button", { name: SAVE_CEILING });
 
     expect(screen.queryByText("Unsaved")).toBeNull();
-    expect(save).not.toHaveClass("MuiButton-contained");
-    expect(save).toHaveAccessibleDescription("Change something first.");
+    expect(screen.queryByRole("button", { name: SAVE_CEILING })).toBeNull();
+    expect(screen.queryByText("Change something first.")).toBeNull();
+
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Usage limit" }),
+      "5",
+    );
+
+    const save = screen.getByRole("button", { name: SAVE_CEILING });
+    expect(save).toHaveClass("MuiButton-contained");
+    expect(save).not.toHaveAttribute("aria-disabled", "true");
     expect(noticesIn(save.parentElement!)).toEqual([]);
+    expect(screen.getByText("Unsaved")).toBeVisible();
   });
 
   it("sends no ceiling as none, with both settings as switched", async () => {
     const saved = ceilingAt({ ...WORKFLOW, ceiling: "100" }, true);
-    const before = "At most 100 sent and came back in all · May not be helped";
+    const before = "Usage limit: 100 · May not be helped";
     expect(screen.getByText(before)).toBeVisible();
 
-    await userEvent.clear(screen.getByRole("textbox", { name: "Ceiling" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Usage limit" }));
     await userEvent.click(
       screen.getByRole("switch", {
-        name: "A run beneath another is held to this ceiling as well",
+        name: "When run as a sub-run, it is also held to this usage limit",
       }),
     );
     expect(screen.getByText("Unsaved")).toBeVisible();
@@ -197,14 +237,123 @@ describe("CeilingPart", () => {
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(saved).toHaveBeenCalledWith(null, true, true);
     expect(
-      await screen.findByText("No ceiling · May not be helped"),
+      await screen.findByText("No usage limit · May not be helped"),
     ).toBeVisible();
     expect(screen.queryByText(before)).toBeNull();
     expect(screen.queryByText("Unsaved")).toBeNull();
-    expect(screen.getByRole("button", { name: SAVE_CEILING })).not.toHaveClass(
+    expect(screen.queryByRole("button", { name: SAVE_CEILING })).toBeNull();
+  });
+
+  it("puts the keyboard on the part's title once a Save of a ceiling pressed by keyboard is answered", async () => {
+    const saved = ceilingAt(WORKFLOW, true);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Usage limit" }),
+      "5",
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: SAVE_CEILING }).focus();
+    });
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", { level: 4, name: "What a run may spend" }),
+      ),
+    );
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: SAVE_CEILING })).toBeNull();
+  });
+
+  it("takes the keyboard from a refused Save of a ceiling to the refusal, the Save kept drawn", async () => {
+    const saved = ceilingAt(WORKFLOW, true);
+    saved.mockRejectedValueOnce(
+      new RequestFailed({ status: 409, code: "DRAFT_WRITTEN_SINCE_READ" }),
+    );
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Usage limit" }),
+      "5",
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: SAVE_CEILING }).focus();
+    });
+
+    await userEvent.keyboard("{Enter}");
+
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(document.activeElement).toContainElement(alert));
+    expect(document.activeElement).toHaveAttribute("tabindex", "-1");
+    expect(
+      screen.getByRole("button", { name: SAVE_CEILING }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the Save of a ceiling changed drawn while its write is out and once it is refused", async () => {
+    const saved = ceilingAt(WORKFLOW, true);
+    let refuse!: (reason: unknown) => void;
+    saved.mockImplementationOnce(
+      () =>
+        new Promise<WorkflowVersion>((_resolve, rejects) => {
+          refuse = rejects;
+        }),
+    );
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Usage limit" }),
+      "5",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: SAVE_CEILING }));
+
+    expect(screen.getByRole("button", { name: SAVE_CEILING })).toHaveClass(
       "MuiButton-contained",
     );
+    await act(async () =>
+      refuse(
+        new RequestFailed({ status: 409, code: "DRAFT_WRITTEN_SINCE_READ" }),
+      ),
+    );
+    expect(screen.getByRole("button", { name: SAVE_CEILING })).toHaveClass(
+      "MuiButton-contained",
+    );
+    expect(screen.getByText("Unsaved")).toBeVisible();
   });
+
+  it.each([
+    [
+      "kept, its words asking nothing",
+      { status: 409, code: "DRAFT_WRITTEN_SINCE_READ" },
+      "Somebody changed this draft since it was read; nothing was saved.",
+    ],
+    [
+      "unsaid, its words asking for the write again",
+      { status: 503, code: "SERVICE_BUSY" },
+      null,
+    ],
+  ])(
+    "draws no Save once a refused ceiling is typed back to what is saved, the refusal %s, and lets it go at the next change",
+    async (_case, problem, kept) => {
+      const saved = ceilingAt(WORKFLOW, true);
+      saved.mockRejectedValueOnce(new RequestFailed(problem));
+      const limit = screen.getByRole("textbox", { name: "Usage limit" });
+      await userEvent.type(limit, "5");
+      await userEvent.click(screen.getByRole("button", { name: SAVE_CEILING }));
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+
+      await userEvent.type(limit, "{Backspace}");
+
+      expect(screen.queryByRole("alert")?.textContent ?? null).toBe(kept);
+      expect(screen.queryByText(/again/)).toBeNull();
+      expect(screen.queryByRole("button", { name: SAVE_CEILING })).toBeNull();
+
+      await userEvent.type(limit, "7");
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: SAVE_CEILING }),
+      ).toBeInTheDocument();
+      expect(saved).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("HelpPart", () => {
@@ -261,6 +410,9 @@ describe("HelpPart", () => {
     await userEvent.click(screen.getByRole("combobox", { name: "Model" }));
     await userEvent.click(screen.getByRole("option", { name: "general" }));
     await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["As it is", "research", "deep_research"]);
     await userEvent.click(screen.getByRole("option", { name: "research" }));
     await userEvent.click(screen.getByRole("button", { name: SAVE_HELP }));
 
@@ -269,6 +421,29 @@ describe("HelpPart", () => {
       model: "general",
       mode: "research",
     });
+  });
+
+  it("puts the keyboard on the part's title once a Save of help pressed by keyboard is answered", async () => {
+    const saved = helpAt(WORKFLOW, true);
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Runs may be helped" }),
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: SAVE_HELP }).focus();
+    });
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", {
+          level: 4,
+          name: "Whether a run may be helped",
+        }),
+      ),
+    );
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: SAVE_HELP })).toBeNull();
   });
 
   it("hides the helper's controls while help is switched off", async () => {
@@ -295,10 +470,8 @@ describe("HelpPart", () => {
     expect(screen.getByRole("combobox", { name: "Mode" })).toHaveTextContent(
       "research",
     );
-    expect(screen.getByRole("button", { name: SAVE_HELP })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(screen.queryByRole("button", { name: SAVE_HELP })).toBeNull();
+    expect(screen.queryByText("Unsaved")).toBeNull();
     expect(saved).not.toHaveBeenCalled();
   });
 

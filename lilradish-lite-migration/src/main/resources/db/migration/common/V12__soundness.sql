@@ -1,7 +1,6 @@
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type soundness_check_outcome as enum ('finished', 'cut_short');
 
--- ---------------------------------------------------------------- checks
 
 -- Inserted running, and ended only by an update guarded on outcome is null, run under read committed; once
 -- ended, nothing updates it again.
@@ -27,14 +26,13 @@ create unique index soundness_checks_one_running
     -- Nulls not distinct, or every running check would differ from every other and all of them be admitted.
     on soundness_checks (outcome) nulls not distinct where outcome is null;
 
--- ---------------------------------------------------------------- counts
 
 -- A row for every group there is when the check runs, 0 and 0 for one owning no workflow: a group with no
 -- row in a check was not yet there to be checked, which is never a count of none.
 -- DB-SPECIFIC: uuid uses PostgreSQL's syntax and semantics.
 create table soundness_counts (
     soundness_check_id uuid                    not null,
-    -- Always 'finished', only to match soundness_checks.outcome through soundness_counts_check_fk.
+    -- Only to match soundness_checks.outcome through soundness_counts_check_fk.
     check_outcome      soundness_check_outcome not null default 'finished',
     group_id           uuid                    not null,
     workflows          integer                 not null,

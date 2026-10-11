@@ -2,9 +2,112 @@ import { describe, expect, it } from "vitest";
 
 import { answering, refusalOf } from "../../../../../testutil/answering";
 import { NOT_A_PROBLEM_DOCUMENT } from "../../../../problem";
-import { readSteps, stepRowFrom } from "./steps";
+import { readSteps, runHeaderFrom, stepRowFrom } from "./steps";
 
 const GROUP = "00000003-0000-4000-8000-000000000c71";
+
+describe("resource read facts", () => {
+  it.each([null, []])(
+    "requires and distinguishes a described header offer %j",
+    (stateActs) => {
+      expect(runHeaderFrom({ ...HEADER, stateActs })?.stateActs).toEqual(
+        stateActs === null ? null : new Set(),
+      );
+    },
+  );
+  it.each([undefined, {}, "stop", 7, false])(
+    "refuses malformed or missing header facts %j",
+    (stateActs) => {
+      expect(runHeaderFrom({ ...HEADER, stateActs })).toBeNull();
+    },
+  );
+  it.each(["stateActs", "stateRefusals", "producedByUserId", "producedByKind"])(
+    "refuses a row missing mandatory %s even when reader acts are present",
+    (key) => {
+      const body: Record<string, unknown> = {
+        ...NOTHING_LEFT_IN,
+        acts: ["review"],
+        withheld: [],
+      };
+      delete body[key];
+      expect(stepRowFrom(body)).toBeNull();
+    },
+  );
+  it.each([null, []])(
+    "keeps nullable state acts and refusals distinct %j",
+    (facts) => {
+      const read = stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        stateActs: facts,
+        stateRefusals: facts,
+      });
+      expect(read?.stateActs).toEqual(facts === null ? null : new Set());
+      expect(read?.stateRefusals).toEqual(facts);
+      expect(read?.producedByUserId).toBeNull();
+      expect(read?.producedByKind).toBeNull();
+    },
+  );
+  it.each([
+    { stateActs: {} },
+    { stateActs: false },
+    { stateRefusals: {} },
+    { stateRefusals: false },
+    { stateRefusals: [null] },
+    { stateRefusals: [{ act: "review" }] },
+    { producedByUserId: [] },
+    { producedByUserId: 7 },
+    { producedByKind: {} },
+    { producedByKind: false },
+    { letGoThen: null },
+    { letGoThen: "answer" },
+    { waitsOnStarter: null },
+    { waitsOnStarter: [] },
+  ])("rejects a malformed resource fact %j", (changed) => {
+    expect(stepRowFrom({ ...NOTHING_LEFT_IN, ...changed })).toBeNull();
+  });
+  it("keeps unknown spellings as facts without using reader-specific members", () => {
+    const read = stepRowFrom({
+      ...NOTHING_LEFT_IN,
+      stateActs: ["future_act"],
+      stateRefusals: [{ act: "future_act", refusal: "LATER" }],
+      producedByUserId: "",
+      producedByKind: "future_kind",
+      letGoThen: ["later"],
+      waitsOnStarter: "later",
+      acts: ["review"],
+      withheld: [{ act: "review", refusal: "ACT_NOT_PERMITTED" }],
+    });
+    expect(read?.stateActs).toEqual(new Set(["future_act"]));
+    expect(read?.stateRefusals).toEqual([
+      { act: "future_act", refusal: "LATER" },
+    ]);
+    expect(read?.producedByUserId).toBe("");
+    expect(read?.producedByKind).toBe("future_kind");
+    expect(read?.letGoThen).toEqual(new Set(["later"]));
+    expect(read?.waitsOnStarter).toBe("later");
+    expect(read).not.toHaveProperty("acts");
+    expect(read).not.toHaveProperty("withheld");
+  });
+});
+
+describe("step display metadata", () => {
+  it("keeps a display name separate from a machine name and refuses malformed optional text", () => {
+    expect(stepRowFrom({ ...NOTHING_LEFT_IN, label: "確認する" })).toEqual({
+      ...NOTHING_LEFT_IN,
+      stateActs: new Set(),
+      cost: {},
+      label: "確認する",
+    });
+    expect(stepRowFrom(NOTHING_LEFT_IN)).toEqual({
+      ...NOTHING_LEFT_IN,
+      stateActs: new Set(),
+      cost: {},
+    });
+    for (const label of [null, 2, false, {}, []]) {
+      expect(stepRowFrom({ ...NOTHING_LEFT_IN, label })).toBeNull();
+    }
+  });
+});
 
 const CODE_SOURCE = {
   runId: "00000008-0000-4000-8000-000000000c73",
@@ -40,10 +143,13 @@ const SUMMARY = {
 };
 
 const EVERY_MEMBER = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
   runs: {
+    versionName: null,
     kind: "question",
     entryId: "00000006-0000-4000-8000-000000000c71",
     name: "Summarise",
@@ -79,8 +185,8 @@ const EVERY_MEMBER = {
     },
   ],
   next: { number: 2, beyond: false },
-  acts: ["review"],
-  withheld: [{ act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" }],
+  stateActs: ["review"],
+  stateRefusals: [{ act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" }],
 };
 
 /**
@@ -96,17 +202,40 @@ const EVERY_MEMBER_SENT = {
   wentInFrom: "try",
 };
 
+it("reads a length panel through the actual step row and refuses an incomplete one", () => {
+  const length = {
+    holdId: "hold-1",
+    model: "small",
+    limitUnits: "600",
+    wholeUnits: "601",
+    excessUnits: "1",
+    fixedUnits: "10",
+    tellsWhatHappened: false,
+    values: [],
+  };
+  expect(stepRowFrom({ ...EVERY_MEMBER_SENT, length })?.length).toEqual(length);
+  expect(
+    stepRowFrom({
+      ...EVERY_MEMBER_SENT,
+      length: { ...length, wholeUnits: 601 },
+    }),
+  ).toBeNull();
+  expect(stepRowFrom(EVERY_MEMBER_SENT)?.length).toBeUndefined();
+});
+
 /** A step not started, offering no act and carrying nothing it may leave out. */
 const NOTHING_LEFT_IN = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: "00000009-0000-4000-8000-000000000c72",
   order: 2,
   name: "file_it",
-  runs: { kind: "route" },
+  runs: { versionName: null, kind: "route" },
   state: "not_started",
   takesFrom: [],
   cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
+  stateActs: [],
+  stateRefusals: [],
 };
 
 /**
@@ -114,7 +243,7 @@ const NOTHING_LEFT_IN = {
  * it and what went in are given as each was kept, a reference kept as text, a folder as none, an input as fields.
  */
 const KEPT_EARLIER = {
-  runs: { kind: "code_step", codeStep: "file_claim" },
+  runs: { versionName: null, kind: "code_step", codeStep: "file_claim" },
   producer: { kind: "code" },
   reviewer: { kind: "person" },
   state: "waiting",
@@ -143,7 +272,7 @@ const KEPT_EARLIER = {
     },
   ],
   wentInFrom: "try",
-  acts: ["review"],
+  stateActs: ["review"],
 };
 
 /** Held back on what it runs being stopped, by Avo, while the run was running. */
@@ -185,6 +314,7 @@ const REVIEWER_NOT_HELD = {
 };
 
 const HEADER = {
+  stateActs: null,
   runId: RUN,
   number: 3,
   versionId: VERSION,
@@ -196,7 +326,7 @@ const RUNNING = {
   run: {
     ...HEADER,
     at: { stepId: SUMMARISE, name: "summarise" },
-    acts: ["stop", "rename"],
+    stateActs: ["stop", "rename"],
   },
   declarations: {
     [VERSION]: { takes: [TICKET], gives: [SUMMARY] },
@@ -217,7 +347,7 @@ const DONE = {
     number: 3,
     versionId: VERSION,
     state: "done",
-    acts: [],
+    stateActs: [],
     progress: { done: 1, of: 1 },
   },
   declarations: { [VERSION]: { takes: [], gives: [] } },
@@ -499,7 +629,7 @@ describe("readSteps", () => {
     const { sent, read } = reading(RUNNING);
 
     expect(await read).toEqual({
-      run: HEADER,
+      run: { ...HEADER, stateActs: new Set(["stop", "rename"]) },
       declarations: new Map([
         [VERSION, { takes: [TICKET], gives: [SUMMARY] }],
         [QUESTION_VERSION, { takes: [TICKET], gives: [SUMMARY] }],
@@ -508,6 +638,7 @@ describe("readSteps", () => {
       steps: [
         {
           ...EVERY_MEMBER,
+          stateActs: new Set(["review"]),
           cost: {
             spend: {
               sent: "9007199254740993",
@@ -518,7 +649,7 @@ describe("readSteps", () => {
             },
           },
         },
-        { ...NOTHING_LEFT_IN, cost: {} },
+        { ...NOTHING_LEFT_IN, stateActs: new Set(), cost: {} },
       ],
       rereadAfterSeconds: 5,
     });
@@ -561,12 +692,24 @@ describe("readSteps", () => {
     expect(read.steps[0]?.takesFrom[0]?.from).toEqual(from);
   });
 
-  it("keeps each read part identity when two parts read the same path", async () => {
+  it("keeps a search source's fixed question version alongside its way", async () => {
+    const from = {
+      kind: "step",
+      searchWay: "web",
+      versionId: QUESTION_VERSION,
+    };
+    const read = await reading({
+      ...RUNNING,
+      steps: [{ ...EVERY_MEMBER_SENT, takesFrom: [{ input: "text", from }] }],
+    }).read;
+    expect(read.steps[0]?.takesFrom[0]?.from).toEqual(from);
+  });
+
+  it("keeps two declared targets that read the same source path", async () => {
     const from = { kind: "run_input", path: "ticket" };
-    const parts = [SUMMARISE, QUESTION_VERSION].map((sourcePartId) => ({
-      input: "ticket",
+    const parts = ["first_evidence", "second_evidence"].map((input) => ({
+      input,
       from,
-      sourcePartId,
     }));
     const read = await reading({
       ...RUNNING,
@@ -602,7 +745,6 @@ describe("readSteps", () => {
   it.each([
     { kind: "run_input", searchWay: "web" },
     { kind: "step", searchWay: "web", codeStep: "web" },
-    { kind: "step", searchWay: "web", versionId: RUNNING.run.versionId },
     { kind: "step", searchWay: 3 },
   ])("refuses an inconsistent search origin %#", async (from) => {
     const failure = await refusalOf(
@@ -649,7 +791,6 @@ describe("readSteps", () => {
     const file = {
       id: "0000000f-0000-4000-8000-000000000001",
       name: "Demo Sample.pdf",
-      type: "application/pdf",
       size: 5,
     };
     const value = {
@@ -692,7 +833,7 @@ describe("readSteps", () => {
     expect(Object.keys(read.steps[0]!).toSorted()).toEqual(
       Object.keys(NOTHING_LEFT_IN).toSorted(),
     );
-    expect(read.steps[0]).toMatchObject({ withheld: [] });
+    expect(read.steps[0]).toMatchObject({ stateRefusals: [] });
   });
 
   it("keeps every spelling this build does not know as it came, and passes over members it has never heard of", async () => {
@@ -702,7 +843,12 @@ describe("readSteps", () => {
       steps: [
         {
           ...NOTHING_LEFT_IN,
-          runs: { kind: "committee", entryId: "x", seats: 3 },
+          runs: {
+            versionName: null,
+            kind: "committee",
+            entryId: "x",
+            seats: 3,
+          },
           producer: { kind: "panel", size: 3 },
           state: "paused",
           where: {
@@ -716,8 +862,10 @@ describe("readSteps", () => {
           gaveBack: [
             { field: "a", value: "b", now: "superseded", confidence: 3 },
           ],
-          acts: ["delegate", 4],
-          withheld: [{ act: "delegate", refusal: "LATER", until: "never" }],
+          stateActs: ["delegate", 4],
+          stateRefusals: [
+            { act: "delegate", refusal: "LATER", until: "never" },
+          ],
         },
       ],
     };
@@ -726,7 +874,7 @@ describe("readSteps", () => {
 
     expect(step).toEqual({
       ...NOTHING_LEFT_IN,
-      runs: { kind: "committee", entryId: "x" },
+      runs: { versionName: null, kind: "committee", entryId: "x" },
       producer: { kind: "panel" },
       state: "paused",
       where: {
@@ -738,8 +886,8 @@ describe("readSteps", () => {
       takesFrom: [{ input: "a", from: { kind: "archive" } }],
       cost: {},
       gaveBack: [{ field: "a", value: "b", now: "superseded" }],
-      acts: ["delegate"],
-      withheld: [{ act: "delegate", refusal: "LATER" }],
+      stateActs: new Set(["delegate"]),
+      stateRefusals: [{ act: "delegate", refusal: "LATER" }],
     });
   });
 
@@ -750,7 +898,11 @@ describe("readSteps", () => {
         steps: [
           {
             ...NOTHING_LEFT_IN,
-            runs: { kind: "code_step", codeStep: "file_claim" },
+            runs: {
+              versionName: null,
+              kind: "code_step",
+              codeStep: "file_claim",
+            },
             producer: { kind: "code" },
             reviewer: { kind: "person" },
             state: "running",
@@ -865,25 +1017,25 @@ describe("readSteps", () => {
     expect(step!.where).not.toHaveProperty("reviewing");
   });
 
-  it("reads a search's way, current tool and the question held for sending", () => {
-    const where = {
-      kind: "held_back",
-      reason: "too_long",
-      searchQuestion: "Find Demo Sample  ",
-      waitsOn: "starter",
-    };
-    const row = stepRowFrom({
-      ...NOTHING_LEFT_IN,
-      runs: { kind: "search", searchWay: "web", tool: "web_search" },
-      state: "held_back",
-      where,
-    });
-
-    expect(row?.runs).toEqual({
+  it("reads a search's fixed question, way, current tool and hold", () => {
+    const where = { kind: "held_back", reason: "too_long", waitsOn: "starter" };
+    const runs = {
+      versionName: null,
       kind: "search",
       searchWay: "web",
       tool: "web_search",
+      entryId: QUESTION_VERSION,
+      name: "Find evidence",
+      version: 3,
+      versionId: QUESTION_VERSION,
+    };
+    const row = stepRowFrom({
+      ...NOTHING_LEFT_IN,
+      runs,
+      state: "held_back",
+      where,
     });
+    expect(row?.runs).toEqual(runs);
     expect(row?.where).toEqual(where);
   });
 
@@ -899,37 +1051,59 @@ describe("readSteps", () => {
     expect(row?.where).toEqual(where);
   });
 
-  it("withholds a search question without saying it was empty", () => {
-    const row = stepRowFrom({
-      ...NOTHING_LEFT_IN,
-      state: "held_back",
-      runs: { kind: "search", searchWay: "web" },
-      where: {
-        kind: "held_back",
-        reason: "turned_away",
-        searchQuestionWithheld: true,
-      },
-    });
-    expect(row?.where).toEqual({
-      kind: "held_back",
-      reason: "turned_away",
-      searchQuestionWithheld: true,
-    });
-    expect(row?.where).not.toHaveProperty("searchQuestion");
+  it("refuses a whole-question withheld flag on a held step", () => {
+    expect(
+      stepRowFrom({
+        ...NOTHING_LEFT_IN,
+        state: "held_back",
+        runs: { versionName: null, kind: "search", searchWay: "web" },
+        where: {
+          kind: "held_back",
+          reason: "turned_away",
+          searchQuestionWithheld: true,
+        },
+      }),
+    ).toBeNull();
   });
 
   it.each([
     { kind: "failed", reason: "tool_not_offered" },
+    { kind: "held_back", reason: "turned_away", searchQuestion: "Find" },
+    {
+      kind: "held_back",
+      reason: "turned_away",
+      searchQuestion: "Find",
+      searchQuestionLines: "one",
+    },
+    {
+      kind: "held_back",
+      reason: "turned_away",
+      searchQuestion: "Find",
+      searchQuestionLines: false,
+    },
+    {
+      kind: "held_back",
+      reason: "turned_away",
+      searchQuestionWithheld: true,
+      searchQuestionLines: "several",
+    },
     {
       kind: "held_back",
       reason: "search_way_not_held",
+      searchQuestionLines: "several",
       searchQuestion: "Find",
     },
-    { kind: "failed", reason: "turned_away", searchQuestion: "Find" },
+    {
+      kind: "failed",
+      reason: "turned_away",
+      searchQuestionLines: "several",
+      searchQuestion: "Find",
+    },
     { kind: "failed", reason: "model_not_deployed", tool: "web_search" },
     {
       kind: "held_back",
       reason: "turned_away",
+      searchQuestionLines: "several",
       searchQuestion: "Find",
       searchQuestionWithheld: true,
     },
@@ -984,21 +1158,23 @@ describe("readSteps", () => {
   ])(
     "reads answering a code step held back for the field of what it gives back, and %s, beside an act held back naming neither",
     async (_case, named) => {
-      const withheld = [
-        { act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE", ...named },
+      const stateRefusals = [
+        { act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE" },
         { act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" },
       ];
 
-      const [step] = (await reading(withStep({ withheld })).read).steps;
+      const [step] = (
+        await reading(withStep({ stateRefusals, givesOtherwise: named })).read
+      ).steps;
 
-      expect(step!.withheld).toEqual([
+      expect(step!.stateRefusals).toEqual([
         {
           act: "answer",
           refusal: "CODE_STEP_GIVES_OTHERWISE",
-          givesOtherwise: named,
         },
         { act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" },
       ]);
+      expect(step!.givesOtherwise).toEqual(named);
     },
   );
 
@@ -1150,12 +1326,17 @@ describe("readSteps", () => {
       },
     ],
     [
-      "a constant posing as a run value",
+      "a constant posing as a step value",
       {
         sources: [
           {
             targetPath: "name",
-            from: { kind: "constant", runId: RUN, runNumber: 7 },
+            from: {
+              kind: "constant",
+              runId: RUN,
+              runNumber: 7,
+              stepId: SUMMARISE,
+            },
           },
         ],
       },
@@ -1509,86 +1690,89 @@ describe("readSteps", () => {
     ],
     [
       "a step saying nothing of what it withholds",
-      withStep({ withheld: undefined }),
+      withStep({ stateRefusals: undefined }),
     ],
     [
       "an act withheld for no refusal",
-      withStep({ withheld: [{ act: "review" }] }),
+      withStep({ stateRefusals: [{ act: "review" }] }),
     ],
     [
       "what reads the refused field named without the field",
       withStep({
-        withheld: [
+        stateRefusals: [
           {
             act: "answer",
             refusal: "CODE_STEP_GIVES_OTHERWISE",
-            readBy: { step: SUMMARISE },
           },
         ],
+        givesOtherwise: { readBy: { step: SUMMARISE } },
       }),
     ],
     [
       "answering refused for what code gives back without naming any field",
       withStep({
-        withheld: [{ act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE" }],
+        stateRefusals: [
+          { act: "answer", refusal: "CODE_STEP_GIVES_OTHERWISE" },
+        ],
+        givesOtherwise: {},
       }),
     ],
     [
       "the field an answer is held back for named in no text",
       withStep({
-        withheld: [
+        stateRefusals: [
           {
             act: "answer",
             refusal: "CODE_STEP_GIVES_OTHERWISE",
-            field: ["receipt"],
           },
         ],
+        givesOtherwise: { field: ["receipt"] },
       }),
     ],
     [
       "what reads that field named as a step and as an output both",
       withStep({
-        withheld: [
+        stateRefusals: [
           {
             act: "answer",
             refusal: "CODE_STEP_GIVES_OTHERWISE",
-            field: "receipt",
-            readBy: { step: SUMMARISE, output: "total" },
           },
         ],
+        givesOtherwise: {
+          field: "receipt",
+          readBy: { step: SUMMARISE, output: "total" },
+        },
       }),
     ],
     [
       "what reads that field named as neither a step nor an output",
       withStep({
-        withheld: [
+        stateRefusals: [
           {
             act: "answer",
             refusal: "CODE_STEP_GIVES_OTHERWISE",
-            field: "receipt",
-            readBy: {},
           },
         ],
+        givesOtherwise: { field: "receipt", readBy: {} },
       }),
     ],
     [
       "what reads that field named as a step in no text",
       withStep({
-        withheld: [
+        stateRefusals: [
           {
             act: "answer",
             refusal: "CODE_STEP_GIVES_OTHERWISE",
-            field: "receipt",
-            readBy: { step: 7 },
           },
         ],
+        givesOtherwise: { field: "receipt", readBy: { step: 7 } },
       }),
     ],
     [
       "a step saying nothing of the acts it offers",
-      withStep({ acts: undefined }),
+      withStep({ stateActs: undefined }),
     ],
-    ["acts offered sent as no list", withStep({ acts: "review" })],
+    ["acts offered sent as no list", withStep({ stateActs: "review" })],
     [
       "the try a review waits on numbered in text",
       withStep({ where: { ...EVERY_MEMBER.where, number: "1" } }),
@@ -1620,11 +1804,153 @@ describe("readSteps", () => {
 });
 
 describe("child step reading", () => {
+  const child = {
+    runId: "00000008-0000-4000-8000-000000000c72",
+    number: 4,
+    runs: {
+      versionName: null,
+      kind: "workflow",
+      entryId: "00000006-0000-4000-8000-000000000c72",
+      name: "Claim follow-up",
+      version: 2,
+      versionId: VERSION,
+    },
+  };
+  const deepest = {
+    runId: "00000008-0000-4000-8000-000000000c73",
+    number: 5,
+    stepId: "00000009-0000-4000-8000-000000000c73",
+    name: "decide_next",
+  };
+
+  it("reads the deepest child's display name as given, keeping its machine name and address", async () => {
+    const { sent, read } = reading({
+      ...RUNNING,
+      steps: [
+        EVERY_MEMBER_SENT,
+        {
+          ...NOTHING_LEFT_IN,
+          state: "running",
+          beneath: {
+            ...child,
+            at: { ...deepest, label: "支払先 e\u0301\u202E" },
+          },
+        },
+      ],
+    });
+
+    expect(await read).toEqual({
+      run: { ...HEADER, stateActs: new Set(["stop", "rename"]) },
+      declarations: new Map([
+        [VERSION, { takes: [TICKET], gives: [SUMMARY] }],
+        [QUESTION_VERSION, { takes: [TICKET], gives: [SUMMARY] }],
+      ]),
+      gaveBack: RUNNING.gaveBack,
+      steps: [
+        {
+          ...EVERY_MEMBER,
+          stateActs: new Set(["review"]),
+          cost: {
+            spend: {
+              sent: "9007199254740993",
+              cameBack: "20",
+              spent: "9007199254741013",
+              cameBackUnknown: false,
+              measuredHere: "partly",
+            },
+          },
+        },
+        {
+          ...NOTHING_LEFT_IN,
+          state: "running",
+          cost: {},
+          stateActs: new Set(),
+          beneath: {
+            runId: "00000008-0000-4000-8000-000000000c72",
+            number: 4,
+            runs: {
+              versionName: null,
+              kind: "workflow",
+              entryId: "00000006-0000-4000-8000-000000000c72",
+              name: "Claim follow-up",
+              version: 2,
+              versionId: VERSION,
+            },
+            at: {
+              runId: "00000008-0000-4000-8000-000000000c73",
+              number: 5,
+              stepId: "00000009-0000-4000-8000-000000000c73",
+              name: "decide_next",
+              label: "支払先 e\u0301\u202E",
+            },
+          },
+        },
+      ],
+      rereadAfterSeconds: 5,
+    });
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(sent.mock.calls[0]![0]).toBe(
+      `/api/groups/${GROUP}/runs/${RUN}/steps`,
+    );
+
+    const withoutLabel = await reading({
+      ...RUNNING,
+      steps: [
+        EVERY_MEMBER_SENT,
+        {
+          ...NOTHING_LEFT_IN,
+          state: "running",
+          beneath: { ...child, at: deepest },
+        },
+      ],
+    }).read;
+    expect(withoutLabel.steps[1]?.beneath?.at).toEqual({
+      runId: "00000008-0000-4000-8000-000000000c73",
+      number: 5,
+      stepId: "00000009-0000-4000-8000-000000000c73",
+      name: "decide_next",
+    });
+    expect(withoutLabel.steps[1]?.beneath?.at).not.toHaveProperty("label");
+  });
+
+  it.each([
+    ["a null display name", { name: "decide_next", label: null }],
+    ["a numeric display name", { name: "decide_next", label: 12 }],
+    ["a boolean display name", { name: "decide_next", label: false }],
+    ["an object as the display name", { name: "decide_next", label: {} }],
+    ["an array as the display name", { name: "decide_next", label: [] }],
+    [
+      "a display name without its machine name",
+      { label: "支払先 e\u0301\u202E" },
+    ],
+  ])("refuses the whole page for a deepest child with %s", async (_, shown) => {
+    const { name: _name, ...address } = deepest;
+    const failure = await refusalOf(
+      reading({
+        ...RUNNING,
+        steps: [
+          EVERY_MEMBER_SENT,
+          {
+            ...NOTHING_LEFT_IN,
+            state: "running",
+            beneath: { ...child, at: { ...address, ...shown } },
+          },
+        ],
+      }).read,
+    );
+
+    expect(failure.problem).toEqual({
+      status: 200,
+      code: NOT_A_PROBLEM_DOCUMENT,
+    });
+  });
+
   it("keeps the route and actual child separate, with a deepest action address", () => {
     const beneath = {
       runId: "00000008-0000-4000-8000-000000000c72",
       number: 4,
       runs: {
+        versionName: null,
         kind: "workflow",
         entryId: "00000006-0000-4000-8000-000000000c72",
         name: "Demo Sample",

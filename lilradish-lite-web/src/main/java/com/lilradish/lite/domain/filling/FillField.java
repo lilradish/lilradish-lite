@@ -1,0 +1,170 @@
+package com.lilradish.lite.domain.filling;
+
+import static java.util.Objects.requireNonNull;
+
+import com.lilradish.lite.domain.declaration.Field;
+import com.lilradish.lite.domain.declaration.FieldHelp;
+import com.lilradish.lite.domain.declaration.FieldKind;
+import com.lilradish.lite.domain.declaration.FieldLabel;
+import com.lilradish.lite.domain.declaration.FieldName;
+import com.lilradish.lite.domain.declaration.FieldShape;
+import com.lilradish.lite.domain.declaration.HowMany;
+import com.lilradish.lite.domain.declaration.OfferedTerms;
+import com.lilradish.lite.domain.declaration.TextLines;
+import com.lilradish.lite.domain.file.FileExtension;
+import com.lilradish.lite.domain.registry.EntryVersionId;
+import java.util.List;
+import java.util.Map;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Pinned terms travel with the field so the person filling it reads no list.
+ * What a value stands on is nothing to whoever fills it, and is left out.
+ *
+ * @param label none where it is read by its name
+ * @param help none where it says nothing
+ * @param longest how many characters its value may run to, only where it is text
+ * @param most the most it holds where it holds many; none where it holds one
+ * @param terms what it offers, in its list version's order with that version's note, only where it is a term
+ * @param fields its own fields in declared order, exactly where it holds fields, and none otherwise
+ * @param fileTypes accepted extensions only for a file
+ * @param maximumBytes single-file limit only for a file
+ */
+public record FillField(
+        FieldName name,
+        @Nullable FieldLabel label,
+        @Nullable FieldHelp help,
+        FieldKind kind,
+        @Nullable Integer longest,
+        @Nullable Integer most,
+        boolean mustBeGiven,
+        @Nullable OfferedTerms terms,
+        List<FillField> fields,
+        @Nullable List<FileExtension> fileTypes,
+        @Nullable Long maximumBytes,
+        @Nullable TextLines lines) {
+
+    public FillField {
+        requireNonNull(name, "FillField name must not be null");
+        requireNonNull(kind, "FillField kind must not be null");
+        fields = List.copyOf(requireNonNull(fields, "FillField fields must not be null"));
+        if ((kind == FieldKind.TEXT) != (longest != null) || (longest != null && longest < 1)) {
+            throw new IllegalArgumentException("FillField says how long, of at least one, exactly where it is text");
+        }
+        if ((kind == FieldKind.TEXT) != (lines != null)) {
+            throw new IllegalArgumentException("FillField says how many lines exactly where it is text");
+        }
+        if (most != null && most < 1) {
+            throw new IllegalArgumentException("FillField most must be at least one: " + most);
+        }
+        if ((kind == FieldKind.TERM) != (terms != null)) {
+            throw new IllegalArgumentException("FillField offers terms exactly where it is a term");
+        }
+        if ((kind == FieldKind.FILE) != (fileTypes != null && maximumBytes != null)) {
+            throw new IllegalArgumentException("FillField names types and maximum bytes exactly for a file");
+        }
+        if (fileTypes != null) {
+            fileTypes = List.copyOf(fileTypes);
+            if (fileTypes.isEmpty() || requireNonNull(maximumBytes) < 1) {
+                throw new IllegalArgumentException("FillField file limits must be positive and types nonempty");
+            }
+        }
+        if ((kind == FieldKind.FIELDS) == fields.isEmpty()) {
+            throw new IllegalArgumentException("FillField holds fields exactly where it is fields");
+        }
+    }
+
+    public FillField(
+            FieldName name,
+            @Nullable FieldLabel label,
+            @Nullable FieldHelp help,
+            FieldKind kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            boolean mustBeGiven,
+            @Nullable OfferedTerms terms,
+            List<FillField> fields,
+            @Nullable List<FileExtension> fileTypes,
+            @Nullable Long maximumBytes) {
+        this(
+                name,
+                label,
+                help,
+                kind,
+                longest,
+                most,
+                mustBeGiven,
+                terms,
+                fields,
+                fileTypes,
+                maximumBytes,
+                kind == FieldKind.TEXT ? TextLines.SEVERAL : null);
+    }
+
+    public FillField(
+            FieldName name,
+            @Nullable FieldLabel label,
+            @Nullable FieldHelp help,
+            FieldKind kind,
+            @Nullable Integer longest,
+            @Nullable Integer most,
+            boolean mustBeGiven,
+            @Nullable OfferedTerms terms,
+            List<FillField> fields) {
+        this(name, label, help, kind, longest, most, mustBeGiven, terms, fields, null, null);
+    }
+
+    /**
+     * Each field of a declaration some version holds as submitting requires, beside the terms of every list it
+     * pins. A limit or a list not chosen, a list not handed over, or fields holding none is a store gone wrong.
+     *
+     * @throws IllegalStateException where a field is not as an approved version holds it
+     */
+    public static List<FillField> of(List<Field> fields, Map<EntryVersionId, OfferedTerms> lists) {
+        requireNonNull(fields, "FillField fields must not be null");
+        requireNonNull(lists, "FillField lists must not be null");
+        return fields.stream().map(field -> of(field, lists)).toList();
+    }
+
+    private static FillField of(Field field, Map<EntryVersionId, OfferedTerms> lists) {
+        FieldShape shape = field.shape();
+        return new FillField(
+                field.name(),
+                field.label(),
+                field.help(),
+                shape.kind(),
+                shape instanceof FieldShape.Text text ? chosen(text.longest(), field, "how long") : null,
+                switch (field.howMany()) {
+                    case HowMany.One ignored -> null;
+                    case HowMany.Many many -> chosen(many.most(), field, "how many");
+                },
+                field.demand().mustBe(),
+                shape instanceof FieldShape.Term term ? offered(chosen(term.list(), field, "which list"), lists) : null,
+                shape instanceof FieldShape.Nested nested ? of(held(nested, field), lists) : List.of(),
+                shape instanceof FieldShape.File file ? file.types() : null,
+                shape instanceof FieldShape.File file ? chosen(file.maximumBytes(), field, "how large") : null,
+                shape instanceof FieldShape.Text text ? text.lines() : null);
+    }
+
+    private static List<Field> held(FieldShape.Nested nested, Field field) {
+        if (nested.fields().isEmpty()) {
+            throw new IllegalStateException("FillField " + field.name().value() + " holds no fields");
+        }
+        return nested.fields();
+    }
+
+    private static <T> T chosen(@Nullable T limit, Field field, String what) {
+        if (limit == null) {
+            throw new IllegalStateException("FillField " + field.name().value() + " has not chosen " + what);
+        }
+        return limit;
+    }
+
+    private static OfferedTerms offered(EntryVersionId list, Map<EntryVersionId, OfferedTerms> lists) {
+        OfferedTerms offered = lists.get(list);
+        if (offered == null) {
+            throw new IllegalStateException("FillField was handed no terms for list " + list.value());
+        }
+        return offered;
+    }
+}

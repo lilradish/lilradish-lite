@@ -10,10 +10,9 @@ import {
 } from "../../../../../../lib/request/document";
 import {
   declaredFrom,
-  listVersionFrom,
   pinnedFrom,
+  termsFrom,
   type DeclaredField,
-  type ListVersion,
   type PinnedList,
 } from "../../../../../declaration";
 import { servedAmong, type Problem } from "../../../../../problem";
@@ -39,8 +38,9 @@ export interface QuestionVersion {
   readonly gives: readonly DeclaredField[];
   /** What a model is told of what it gives back; absent where that half is not whole yet. */
   readonly added?: string;
-  /** Every list of the group's in service, which is all a field of terms may pin. */
-  readonly lists: readonly ListVersion[];
+  readonly searchWay?: string;
+  readonly searchWays: readonly OfferedSearchWay[];
+  readonly searchShapeNeedsRefresh: boolean;
 }
 
 /** One version of a reference list as the library reads it, which every write to it answers with too. */
@@ -53,7 +53,7 @@ export interface ReferenceListVersion {
   readonly terms: readonly ListTerm[];
 }
 
-/** One term of a list. `termId` addresses a write to it, and is kept until it is removed. */
+/** `termId` addresses a write to it, and is kept until it is removed. */
 export interface ListTerm {
   readonly termId: string;
   readonly term: string;
@@ -85,9 +85,8 @@ export function readReferenceList(
 }
 
 /**
- * Whether a write was refused for the draft having been written since the page
- * read it, which only reading it afresh puts right. The status is read before
- * the code, as `Problem` requires.
+ * A write refused because the draft changed needs a fresh read before retrying.
+ * Read status before code, as `Problem` requires.
  */
 export function writtenSinceRead(problem: Problem): boolean {
   return servedAmong(problem, WRITTEN_SINCE_READ);
@@ -95,7 +94,7 @@ export function writtenSinceRead(problem: Problem): boolean {
 
 /** Built member by member; a version missing any of what it is drawn from is not one this side can show. */
 export function questionFrom(body: unknown): QuestionVersion | null {
-  if (!isUnchecked(body)) {
+  if (!isUnchecked(body) || "lists" in body) {
     return null;
   }
   const revision = revisionFrom(body.revision);
@@ -108,7 +107,9 @@ export function questionFrom(body: unknown): QuestionVersion | null {
   const takes = listOf(body.takes, declaredFrom);
   const gives = listOf(body.gives, declaredFrom);
   const added = optional(body, "added", textFrom);
-  const lists = listOf(body.lists, listVersionFrom);
+  const searchWay = optional(body, "searchWay", textFrom);
+  const searchWays = listOf(body.searchWays, searchWayFrom);
+  const searchShapeNeedsRefresh = body.searchShapeNeedsRefresh;
   if (
     revision === null ||
     instruction === null ||
@@ -116,7 +117,10 @@ export function questionFrom(body: unknown): QuestionVersion | null {
     takes === null ||
     gives === null ||
     added === null ||
-    lists === null
+    searchWay === null ||
+    searchWays === null ||
+    typeof searchShapeNeedsRefresh !== "boolean" ||
+    (searchShapeNeedsRefresh && searchWay === undefined)
   ) {
     return null;
   }
@@ -124,7 +128,9 @@ export function questionFrom(body: unknown): QuestionVersion | null {
     revision,
     takes,
     gives,
-    lists,
+    searchWays,
+    searchShapeNeedsRefresh,
+    ...(searchWay === undefined ? {} : { searchWay }),
     ...(instruction === undefined ? {} : { instruction }),
     ...(drawing === undefined ? {} : { drawing }),
     ...(added === undefined ? {} : { added }),
@@ -151,22 +157,13 @@ export interface SendPast {
 }
 
 /**
- * Where a bound value comes from: what the workflow takes, a step by its place among the steps, or a constant.
- * A constant crosses as its JSON text both ways, so none of its numbers is ever held as a double and rounded.
+ * A step source names its place in workflow order. Constants cross as JSON text both ways,
+ * so no number is held as a double and rounded.
  */
 export type BindingSource =
   | { readonly input: string }
   | { readonly step: number; readonly path: string }
   | { readonly constant: string };
-
-export type SearchSource = Exclude<
-  BindingSource,
-  { readonly constant: string }
->;
-
-export type SearchPart =
-  | { readonly text: string }
-  | { readonly partId: string; readonly from: SearchSource };
 
 const SEARCH_FIELDS = ["title", "body", "references", "other"] as const;
 
@@ -203,7 +200,7 @@ interface RouteCase {
   readonly bindings: readonly Binding[];
 }
 
-/** What a step runs, only the members its kind takes present. */
+/** Only the members its kind takes are present. */
 interface Runs {
   readonly kind: RunsKind;
   readonly version?: PinnedList;
@@ -213,7 +210,6 @@ interface Runs {
   readonly discriminator?: Binding;
   readonly cases?: readonly RouteCase[];
   readonly searchWay?: string;
-  readonly question?: readonly SearchPart[];
   readonly standings?: Partial<Record<SearchField, SearchStanding>>;
 }
 
@@ -221,17 +217,12 @@ interface Runs {
 export interface Step {
   readonly stepId: string;
   readonly name: string;
+  readonly label?: string;
   readonly runs?: Runs;
   readonly producer?: Producer;
   readonly tries?: number;
   readonly reviewer?: ModelChoice;
   readonly bindings: readonly Binding[];
-}
-
-/** A version of the group's in service that a step or a case may pin, with what it declares. */
-interface DeclaredVersion extends ListVersion {
-  readonly takes: readonly DeclaredField[];
-  readonly gives: readonly DeclaredField[];
 }
 
 export interface HeldModel {
@@ -257,9 +248,6 @@ export interface OfferedSearchWay {
 }
 
 interface WorkflowOffers {
-  readonly lists: readonly ListVersion[];
-  readonly questions: readonly DeclaredVersion[];
-  readonly workflows: readonly DeclaredVersion[];
   readonly codeSteps: readonly OfferedCodeStep[];
   readonly searchWays: readonly OfferedSearchWay[];
   readonly models: readonly HeldModel[];
@@ -376,21 +364,6 @@ export function workflowFrom(body: unknown): WorkflowVersion | null {
   };
 }
 
-function termsFrom(body: unknown): Map<string, readonly string[]> | null {
-  if (!isUnchecked(body)) {
-    return null;
-  }
-  const terms = new Map<string, readonly string[]>();
-  for (const [list, offered] of Object.entries(body)) {
-    const read = listOf(offered, textFrom);
-    if (read === null) {
-      return null;
-    }
-    terms.set(list, read);
-  }
-  return terms;
-}
-
 /** Past a double's exact integers the figure arrives rounded, which an about figure may be. */
 function sendPastFrom(body: unknown): SendPast | null {
   if (
@@ -418,6 +391,7 @@ function stepFrom(body: unknown): Step | null {
     return null;
   }
   const { stepId, name } = body;
+  const label = optional(body, "label", textFrom);
   const runs = optional(body, "runs", runsFrom);
   const producer = optional(body, "producer", producerFrom);
   const tries = optional(body, "tries", countFrom);
@@ -426,7 +400,7 @@ function stepFrom(body: unknown): Step | null {
   if (
     typeof stepId !== "string" ||
     typeof name !== "string" ||
-    [runs, producer, tries, reviewer, bindings].includes(null)
+    [label, runs, producer, tries, reviewer, bindings].includes(null)
   ) {
     return null;
   }
@@ -434,6 +408,7 @@ function stepFrom(body: unknown): Step | null {
     stepId,
     name,
     bindings: bindings!,
+    ...(label === undefined ? {} : { label: label! }),
     ...(runs === undefined ? {} : { runs: runs! }),
     ...(producer === undefined ? {} : { producer: producer! }),
     ...(tries === undefined ? {} : { tries: tries! }),
@@ -453,27 +428,33 @@ function runsFrom(body: unknown): Runs | null {
     if (
       Object.keys(body).some(
         (key) =>
-          !["kind", "searchWay", "gives", "question", "standings"].includes(
-            key,
-          ),
+          ![
+            "kind",
+            "searchWay",
+            "version",
+            "takes",
+            "gives",
+            "standings",
+          ].includes(key),
       )
     ) {
       return null;
     }
     const searchWay = optional(body, "searchWay", textFrom);
     const gives = optional(body, "gives", (held) => listOf(held, declaredFrom));
-    const question = listOf(body.question, searchPartFrom);
+    const version = optional(body, "version", pinnedFrom);
+    const takes = optional(body, "takes", (held) => listOf(held, declaredFrom));
     const standings = standingsFrom(body.standings);
     return searchWay === null ||
       gives === null ||
-      question === null ||
-      question.length > 256 ||
+      version === null ||
+      takes === null ||
       standings === null
       ? null
       : {
           kind: "search",
-          question,
           standings,
+          ...present({ version, takes }),
           ...(searchWay === undefined ? {} : { searchWay }),
           ...(gives === undefined ? {} : { gives }),
         };
@@ -490,25 +471,6 @@ function runsFrom(body: unknown): Runs | null {
     return null;
   }
   return { kind: body.kind as RunsKind, ...present(members) };
-}
-
-function searchPartFrom(body: unknown): SearchPart | null {
-  if (!isUnchecked(body)) {
-    return null;
-  }
-  const keys = Object.keys(body);
-  if (keys.length === 1 && typeof body.text === "string") {
-    return { text: body.text };
-  }
-  if (keys.length === 2 && typeof body.partId === "string") {
-    const from = sourceFrom(body.from);
-    return from === null ||
-      "constant" in from ||
-      ("step" in from && from.step < 0)
-      ? null
-      : { partId: body.partId, from };
-  }
-  return null;
 }
 
 function standingsFrom(
@@ -635,33 +597,20 @@ function offersFrom(body: unknown): WorkflowOffers | null {
   if (!isUnchecked(body)) {
     return null;
   }
-  const lists = listOf(body.lists, listVersionFrom);
-  const questions = listOf(body.questions, declaredVersionFrom);
-  const workflows = listOf(body.workflows, declaredVersionFrom);
   const codeSteps = listOf(body.codeSteps, codeStepFrom);
   const searchWays = listOf(body.searchWays, searchWayFrom);
   const models = listOf(body.models, modelFrom);
   if (
-    lists === null ||
-    questions === null ||
-    workflows === null ||
+    "lists" in body ||
+    "questions" in body ||
+    "workflows" in body ||
     codeSteps === null ||
     searchWays === null ||
     models === null
   ) {
     return null;
   }
-  return { lists, questions, workflows, codeSteps, searchWays, models };
-}
-
-function declaredVersionFrom(body: unknown): DeclaredVersion | null {
-  const listed = listVersionFrom(body);
-  if (listed === null || !isUnchecked(body)) {
-    return null;
-  }
-  const takes = listOf(body.takes, declaredFrom);
-  const gives = listOf(body.gives, declaredFrom);
-  return takes === null || gives === null ? null : { ...listed, takes, gives };
+  return { codeSteps, searchWays, models };
 }
 
 /** Built member by member, as a version offered with what it declares is. */

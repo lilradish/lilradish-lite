@@ -1,4 +1,5 @@
 import MenuIcon from "@mui/icons-material/Menu";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import AppBar from "@mui/material/AppBar";
 import Box from "@mui/material/Box";
 import Container from "@mui/material/Container";
@@ -12,6 +13,7 @@ import { useRef, useState, type ReactNode } from "react";
 
 import { say } from "../i18n/app";
 import { UNSEEN_SX } from "../lib/layout/parts";
+import { TOKENS } from "../lib/theme/tokens";
 import { useSidebarExpanded } from "./useSidebarExpanded";
 
 /** Within the 240–280px a dense enterprise sidebar stays legible at. */
@@ -32,18 +34,11 @@ const SKIP_LINK_SX = {
 };
 
 /**
- * The frame every screen sits in: what the product is called, where a person
- * can go, and the one place the work itself is rendered.
+ * Fixes the slots' order without coupling the frame to their contents or to
+ * the reader-specific rules that filter navigation.
  *
- * Slots rather than a component that knows its own contents. The order of the
- * parts is the whole point of a frame, so it is fixed here, while what goes in
- * each is the caller's. The navigation is filtered by what the reader may
- * reach, and it is the caller that knows it — so this file never learns who is
- * looking, and the rule deciding it stays on the one side that also enforces it.
- *
- * One drawer whose variant follows the viewport, rather than one per viewport:
- * two would put two navigation landmarks with the same name in the document,
- * and a screen reader offers both.
+ * Use one drawer across viewport variants to avoid rendering duplicate
+ * navigation landmarks.
  */
 export function AppShell({
   brand,
@@ -54,7 +49,6 @@ export function AppShell({
 }: {
   readonly brand: ReactNode;
   readonly navigation: ReactNode;
-  /** What is about the system rather than about the work, at the far end. */
   readonly utility: ReactNode;
   /** Where the reader is: a move made from the drawer without a link shuts it too. */
   readonly at?: string;
@@ -143,25 +137,36 @@ export function AppShell({
         variant={wide ? "permanent" : "temporary"}
         open={open}
         onClose={() => setOpen(false)}
-        // Shutting it hides the destinations rather than unmounting them, and
-        // what they hold with them. A docked drawer has no modal to keep.
+        // Keep narrow-screen navigation state while its temporary drawer is shut;
+        // the docked rail has no modal to keep.
         slotProps={{ root: { keepMounted: true } }}
         sx={{
-          width: { md: NAVIGATION_WIDTH },
+          width: { md: expanded ? NAVIGATION_WIDTH : TOKENS.sidePanel.rail },
           flexShrink: 0,
-          // Out of the layout and the tab order in one step. A persistent drawer
-          // hides its paper only once its slide ends, and keeps this width.
-          ...(wide && !expanded && { display: "none" }),
           "& .MuiDrawer-paper": {
-            width: NAVIGATION_WIDTH,
+            width: wide && !expanded ? TOKENS.sidePanel.rail : NAVIGATION_WIDTH,
             boxSizing: "border-box",
+            overflowX: "hidden",
           },
         }}
       >
         {/* Clears the fixed bar the drawer passes under. */}
         <Toolbar variant="dense" />
+        {wide && !expanded ? (
+          <IconButton
+            aria-label={say("navigation.sidebar")}
+            aria-expanded={false}
+            aria-controls={NAVIGATION_ID}
+            onClick={() => setExpanded(true)}
+            title={say("navigation.sidebar")}
+            sx={{ alignSelf: "center", my: "8px" }}
+          >
+            <ChevronRightIcon />
+          </IconButton>
+        ) : null}
         <Box
           component="nav"
+          data-navigation-collapsed={wide && !expanded}
           id={NAVIGATION_ID}
           aria-label={say("navigation.site")}
           // A temporary drawer otherwise stays over the screen it navigated to.
@@ -174,7 +179,17 @@ export function AppShell({
               setOpen(false);
             }
           }}
-          sx={{ overflowY: "auto", pb: 2 }}
+          sx={{
+            overflowY: "auto",
+            overflowX: "hidden",
+            pb: 2,
+            "&[data-navigation-collapsed=true]": {
+              px: "8px",
+              borderTop: 1,
+              borderColor: "surface.rule",
+              "& [data-navigation-label]": { display: "none" },
+            },
+          }}
         >
           {navigation}
         </Box>

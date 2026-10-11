@@ -14,28 +14,23 @@ export interface Resource<T> extends Settled<T> {
 }
 
 /**
- * What a screen reads because it opened: re-issued when `load` changes and when
- * `reload` is called, abandoned when the screen goes.
+ * Re-issued on `load` changes or `reload`, abandoned when the screen goes.
  *
  * `load` must be stable — a module constant, or the caller's own `useCallback`.
- * It is what the read is keyed on, so one rebuilt each render reads forever. A
- * ref holding the current `load` is not the way out: it would have to be
- * written during render, and what varies belongs in the caller's dependency
- * list where the linter can still read it.
+ * It keys the read, so rebuilding it each render reads forever. A ref would
+ * need writing during render; varying inputs belong in the caller's dependency
+ * list, where the linter can check them.
  *
- * A refusal takes the last answer with it. What was refused may be the
- * authority itself, and rows fetched under an authority since taken away must
- * not sit on screen looking current. The reason goes when the reader asks
- * again, because it was the answer to the read being replaced.
+ * A refusal clears the last answer: its authority may have been withdrawn,
+ * so old rows must not look current. Asking again clears the old refusal,
+ * which belonged to the read being replaced.
  */
 export function useResource<T>(
   load: (signal: AbortSignal) => Promise<T>,
   empty: T,
 ): Resource<T> {
-  // Held in state rather than aliased: a caller who builds the empty value
-  // inline would otherwise see `value` change identity at every source reset,
-  // and this is also what the effect below can name — `empty` itself would
-  // re-key the read on every render.
+  // State keeps an inline-built empty value stable across source resets;
+  // the effect names `blank`, since depending on `empty` could re-read each render.
   const [blank] = useState(() => empty);
   const [settled, setSettled] = useState<Settled<T>>({
     value: blank,
@@ -102,9 +97,8 @@ export function useResource<T>(
   // down through a context, and a new object re-renders every reader of it.
   const resource = useMemo(() => ({ ...settled, reload }), [settled, reload]);
 
-  // Let go of the previous resource here rather than in an effect: an effect
-  // runs after the commit, so a whole paint would show the rows and the refusal
-  // of the resource just left behind, under the heading of the one replacing it.
+  // Reset during render: waiting for an effect could paint old rows and refusal
+  // under the replacement resource's heading.
   if (source.load !== load) {
     const fresh = { value: blank, problem: null, loading: true };
     setSource({ load });

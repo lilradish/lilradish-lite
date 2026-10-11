@@ -6,9 +6,8 @@ import { useTypingPause } from "../search/useTypingPause";
 const FIELD_SX = { mb: 2 };
 
 /**
- * One box whose words the server matches. What is typed shows at once and is
- * handed on only once typing pauses: every change starts the read again from
- * an empty page, so each keystroke sent would blank the rows it was filtering.
+ * Shows typing immediately but sends only after a pause, since each sent change
+ * restarts from an empty page; sending every keystroke would blank the rows.
  *
  * The caller writes the value into the address by a functional update, which
  * keeps what else the address holds, and with `replace`: a pause is no step back.
@@ -18,7 +17,6 @@ export function FilterField({
   value,
   onChange,
 }: {
-  /** What can be typed to narrow the rows, which only the caller knows. */
   readonly label: string;
   readonly value: string;
   readonly onChange: (value: string) => void;

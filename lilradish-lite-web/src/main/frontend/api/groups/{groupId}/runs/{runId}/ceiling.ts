@@ -2,8 +2,8 @@ import { patch } from "../../../../../lib/request/http";
 import { atRun, runFrom, type Run } from "../{runId}";
 
 /**
- * The ceiling asked for, in digits, or null for none. Whether it holds at once
- * or waits on approval is the server's to judge, against the ceiling in force.
+ * Digits, or null for no ceiling. The server compares with the ceiling in force
+ * to decide immediate effect or approval.
  */
 export function changeCeiling(
   groupId: string,

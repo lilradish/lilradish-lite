@@ -1,34 +1,32 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { Action } from "../request/useAction";
-import { Press, type Reason } from "./Press";
+import { Press, type ActionTier, type Reason } from "./Press";
 
 /**
- * A button that asks for something and is unavailable while it is being asked.
+ * Holds the button during an ask to prevent repeated clicks issuing another;
+ * `useAction` explains how a second ask abandons the first.
  *
- * The unavailability is the part that is easy to leave out, and what it costs
- * is one ask per repeated click on a button that appeared to do nothing — see
- * `useAction` for what a second ask does to the first.
- *
- * A button the reader may not use is not this one: the caller leaves it out.
- * This is only ever a button that is drawn, and one drawn that cannot be
- * pressed says why, in words beside it that it is described by.
+ * The caller omits unauthorized acts. A drawn act that cannot be pressed must
+ * say why beside it and use those words as its description.
  */
 export function ActButton<T>({
   action,
   act,
-  variant,
-  warns,
+  tier,
+  small,
+  fill,
   waiting,
   reason,
+  reasonDescribedBy,
+  label,
   children,
 }: {
   readonly action: Action<T>;
   readonly act: (signal: AbortSignal) => Promise<T>;
-  /** As `Press` takes it. */
-  readonly variant?: "contained";
-  /** As `Press` takes it. */
-  readonly warns?: boolean;
+  readonly tier?: ActionTier;
+  readonly small?: true;
+  readonly fill?: boolean;
   /**
    * Unavailable as well while something else the screen waits on is out,
    * which the reader can see is out.
@@ -39,15 +37,26 @@ export function ActButton<T>({
    * flight; absent where it can.
    */
   readonly reason?: Reason;
+  readonly reasonDescribedBy?: string;
+  readonly label?: string;
   readonly children: ReactNode;
 }) {
+  const [pressed, setPressed] = useState(false);
+  if (pressed && !action.running) setPressed(false);
   return (
     <Press
-      variant={variant}
-      warns={warns}
+      tier={tier}
+      small={small}
+      fill={fill}
+      busy={pressed && action.running && waiting !== true}
       unavailable={action.running || waiting === true}
       reason={reason}
-      onPress={() => action.run(act)}
+      reasonDescribedBy={reasonDescribedBy}
+      label={label}
+      onPress={() => {
+        setPressed(true);
+        action.run(act);
+      }}
     >
       {children}
     </Press>

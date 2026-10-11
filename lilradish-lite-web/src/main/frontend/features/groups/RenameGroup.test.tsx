@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -31,7 +31,6 @@ function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-/** The dialog over the real action it is handed, opened on Payroll, shut as a page shuts it. */
 function renaming(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   const sent = serving(routes);
   const settled = vi.fn();
@@ -51,7 +50,7 @@ function renaming(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   return {
     sent,
     settled,
-    dialog: screen.getByRole("dialog", { name: "Rename a group" }),
+    dialog: screen.getByRole("textbox", { name: "Name" }).closest("form")!,
   };
 }
 
@@ -60,7 +59,7 @@ function nameBox(): HTMLElement {
 }
 
 function rename(): HTMLElement {
-  return screen.getByRole("button", { name: "Rename" });
+  return screen.getByRole("button", { name: "Save" });
 }
 
 /** The name box emptied and given another name. */
@@ -74,17 +73,19 @@ describe("RenameGroup", () => {
     renaming();
 
     expect(nameBox()).toHaveValue("Payroll");
+    expect(nameBox().tagName).toBe("TEXTAREA");
     expect(document.activeElement).toBe(nameBox());
   });
 
   /** A box that cannot be typed in is a control drawn dead; the key is said, not offered. */
-  it("says the key beside the name as text that nothing can change, and why", () => {
+  it("explains the stable key on the name control without offering to edit it", async () => {
     const { dialog } = renaming();
 
-    expect(within(dialog).getByRole("term")).toHaveTextContent("Key");
-    expect(within(dialog).getByRole("definition")).toHaveTextContent("PAYROLL");
     expect(within(dialog).queryByRole("textbox", { name: "Key" })).toBeNull();
-    expect(dialog).toHaveTextContent(
+    await userEvent.hover(nameBox());
+    const hint = await screen.findByRole("tooltip");
+    expect(hint).toHaveTextContent("PAYROLL");
+    expect(hint).toHaveTextContent(
       "Everything cites the group by its key, so it is never changed.",
     );
   });
@@ -99,13 +100,13 @@ describe("RenameGroup", () => {
 
       await renamedTo(name);
 
-      expect(rename()).toHaveAttribute("aria-disabled", "true");
+      expect(rename()).toBeDisabled();
       expect(rename()).toHaveAccessibleDescription(reason);
-      expect(rename().parentElement).toHaveTextContent(reason);
+      expect(nameBox().closest("form")).toHaveTextContent(reason);
       expect(
-        screen.getByRole("button", { name: "Cancel" }).parentElement,
-      ).not.toHaveTextContent(reason);
-      expect(noticesIn(rename().parentElement!)).toEqual([]);
+        screen.getByRole("button", { name: "Cancel" }),
+      ).not.toHaveAccessibleDescription(reason);
+      expect(noticesIn(nameBox().closest("form")!)).toEqual([]);
     },
   );
 
@@ -120,7 +121,7 @@ describe("RenameGroup", () => {
 
   it("sends nothing when the rename it holds is pressed", async () => {
     const { sent } = renaming();
-    rename().focus();
+    act(() => rename().focus());
 
     await userEvent.keyboard("{Enter}[Space]");
 
@@ -142,7 +143,9 @@ describe("RenameGroup", () => {
     expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
       name: "Salaries",
     });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+    );
   });
 
   it("says in place why a name another group has refused it, and stays open with the name typed in hand", async () => {
@@ -166,7 +169,9 @@ describe("RenameGroup", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+    );
     expect(settled).not.toHaveBeenCalled();
     expect(sent).not.toHaveBeenCalled();
   });
@@ -177,14 +182,16 @@ describe("RenameGroup", () => {
     await renamedTo("Salaries");
     await userEvent.click(rename());
     const abandon = screen.getByRole("button", { name: "Cancel" });
-    abandon.focus();
+    act(() => abandon.focus());
 
     await userEvent.keyboard("{Enter}{Escape}");
 
-    expect(abandon).toHaveAttribute("aria-disabled", "true");
+    expect(abandon).toBeDisabled();
     expect(abandon).toHaveAccessibleDescription(
       "It is being renamed, and that can no longer be called back.",
     );
-    expect(screen.getByRole("dialog", { name: "Rename a group" })).toBe(dialog);
+    expect(screen.getByRole("textbox", { name: "Name" }).closest("form")!).toBe(
+      dialog,
+    );
   });
 });

@@ -1,5 +1,5 @@
 /**
- * What this system is called. A name, not a sentence: nothing translates it and
+ * A name, not a sentence: nothing translates it and
  * no catalogue holds it, which is why it is a constant here rather than a
  * message id — a translator handed one would be asked to rename the product.
  *

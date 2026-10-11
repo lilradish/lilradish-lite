@@ -1,12 +1,12 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 
-import type { Turnaway } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { Turnaway } from "../../../api/stepTries";
 import { say } from "../../../i18n/app";
 import { QUIET_SX } from "../../../lib/layout/parts";
 import { HiddenShownIn } from "../../../lib/text/HiddenShownIn";
 import { useCalendarNow } from "../../../lib/time/When";
-import { turnawaySaid } from "./stepStates";
+import { turnawaySaid } from "./stepTries";
 
 const LIST_SX = { m: 0, pl: 2 };
 

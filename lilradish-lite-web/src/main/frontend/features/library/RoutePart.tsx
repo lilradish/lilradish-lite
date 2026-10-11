@@ -1,23 +1,34 @@
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import MenuItem from "@mui/material/MenuItem";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef } from "react";
 
 import type { DeclaredField } from "../../api/declaration";
 import type { ContentProblem } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
+import type { VersionDetail } from "../../api/groups/{groupId}/versions/{versionId}";
+import { ProblemView } from "../../app/ProblemView";
 import { say, type MessageId } from "../../i18n/app";
-import { Press } from "../../lib/action/Press";
+import { Press, type Reason } from "../../lib/action/Press";
+import type { Action } from "../../lib/request/useAction";
+import type { DraftField } from "./declarationDrafts";
+import { IconPress } from "../../lib/action/IconPress";
 import { isolatedInText } from "../../lib/direction/isolated";
+import {
+  BESIDE_LABELLED_SX,
+  LabelledTextField,
+  LINES_BESIDE_LABELLED_SX,
+} from "../../lib/form/LabelledTextField";
 import { GROUP_SX, HEADING_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { BindingControls, Inputs } from "./BindingControls";
 import { problemSaid } from "./ContentProblems";
 import { DeclarationBuilder } from "./DeclarationBuilder";
-import { PinNote, versionSaid } from "./PinNote";
+import { PinNote, versionShown } from "./PinNote";
+import { EditorVersionPicker, useVersionDetail } from "./EditorVersionPicker";
 import {
   boundTo,
   caseTookVersion,
@@ -39,7 +50,7 @@ const ROW_SX = {
   display: "flex",
   flexWrap: "wrap",
   gap: 2,
-  alignItems: "center",
+  alignItems: "flex-start",
   mb: 2,
 };
 
@@ -55,8 +66,29 @@ const CHOSEN_BY = {
 /** Where focus goes once the cases a press changed are drawn: a case, or the cases' heading. */
 type Focus = { readonly key: string } | "heading";
 
+/** A route's halves are typed into the flow and saved with it, as one unsaved part. */
+export const FLOW_UNIT = "flow";
+
+/** Brings the route's step into view, before a half of it puts the keyboard on a field. */
+export const FlowFieldLocationContext = createContext<(() => void) | null>(
+  null,
+);
+
+export const FlowFieldMoveContext = createContext<{
+  readonly action: Action<WorkflowVersion>;
+  readonly waiting: boolean;
+  readonly reason?: Reason;
+  readonly save: (
+    stepKey: string,
+    gives: readonly DraftField[],
+    signal: AbortSignal,
+    focus: { readonly key: string; readonly by: -1 | 1 },
+  ) => Promise<WorkflowVersion>;
+} | null>(null);
+
 export function RoutePart({
   runs,
+  stepKey,
   stepId,
   workflow,
   named,
@@ -66,8 +98,12 @@ export function RoutePart({
   rowsOf,
   editable,
   change,
+  scope,
+  resolve,
+  details,
 }: {
   readonly runs: RouteDraft;
+  readonly stepKey?: string;
   readonly stepId: string | null;
   readonly workflow: WorkflowVersion;
   readonly named: ReadonlyMap<string, Named>;
@@ -83,7 +119,15 @@ export function RoutePart({
   ) => TargetRow[];
   readonly editable: boolean;
   readonly change: (runs: RouteDraft) => void;
+  readonly scope: string;
+  readonly details: ReadonlyMap<string, VersionDetail>;
+  readonly resolve: (
+    detail: VersionDetail | null,
+    change: (runs: RouteDraft, named: ReadonlyMap<string, Named>) => RouteDraft,
+  ) => void;
 }) {
+  const locate = useContext(FlowFieldLocationContext);
+  const moving = useContext(FlowFieldMoveContext);
   const heading = useRef<HTMLHeadingElement>(null);
   const cases = useRef(new Map<string, HTMLElement>());
   const pending = useRef<Focus | null>(null);
@@ -144,11 +188,26 @@ export function RoutePart({
         depth={3}
         demands={WORKFLOW_GIVES}
         fields={readGives}
-        lists={workflow.offered.lists}
+        scope={`${scope}:gives`}
         editable={editable}
         controlled={{
           drafts: runs.gives,
+          details,
           change: (gives) => change({ ...runs, gives }),
+          unit: FLOW_UNIT,
+          move:
+            moving === null || stepKey === undefined
+              ? undefined
+              : {
+                  action: moving.action,
+                  waiting: moving.waiting,
+                  reason: moving.reason,
+                  save: (gives, signal, focus) =>
+                    moving.save(stepKey, gives, signal, focus),
+                },
+          onLocate: locate ?? undefined,
+          resolve: (detail, changed) =>
+            resolve(detail, (now) => ({ ...now, gives: changed(now.gives) })),
         }}
       />
       <Typography ref={heading} tabIndex={-1} variant="h5" sx={HEADING_SX}>
@@ -193,10 +252,18 @@ export function RoutePart({
               fallback !== undefined && fallback !== routeCase.key
             }
             terms={terms}
-            workflow={workflow}
             named={named}
             editable={editable}
             change={(changed) => setCase(routeCase.key, changed)}
+            scope={`${scope}:${routeCase.key}:${runs.cases.map((each) => each.key).join(",")}`}
+            resolve={(detail, changed) =>
+              resolve(detail, (now, resolved) => ({
+                ...now,
+                cases: now.cases.map((each) =>
+                  each.key === routeCase.key ? changed(each, resolved) : each,
+                ),
+              }))
+            }
           />
           <Inputs
             heading="workflow.caseInputs"
@@ -214,8 +281,9 @@ export function RoutePart({
             unknown="workflow.inputsUnknown"
           />
           {editable ? (
-            <Press
-              warns
+            <IconPress
+              icon={<DeleteOutlinedIcon />}
+              unavailable={false}
               label={say("workflow.removeCaseCalled", {
                 name: caseCalled(routeCase),
               })}
@@ -232,7 +300,7 @@ export function RoutePart({
               }}
             >
               {say("workflow.removeCase")}
-            </Press>
+            </IconPress>
           ) : null}
         </Box>
       ))}
@@ -266,29 +334,38 @@ function CaseControls({
   others,
   fallbackElsewhere,
   terms,
-  workflow,
   named,
   editable,
   change,
+  scope,
+  resolve,
 }: {
   readonly routeCase: CaseDraft;
   readonly others: readonly CaseDraft[];
   readonly fallbackElsewhere: boolean;
   readonly terms: readonly string[] | undefined;
-  readonly workflow: WorkflowVersion;
   readonly named: ReadonlyMap<string, Named>;
   readonly editable: boolean;
   readonly change: (changed: (routeCase: CaseDraft) => CaseDraft) => void;
+  readonly scope: string;
+  readonly resolve: (
+    detail: VersionDetail | null,
+    change: (
+      routeCase: CaseDraft,
+      named: ReadonlyMap<string, Named>,
+    ) => CaseDraft,
+  ) => void;
 }) {
-  const offered = workflow.offered.workflows;
-  const choices = [
-    ...(routeCase.workflow === "" ||
-    offered.some((each) => each.versionId === routeCase.workflow)
-      ? []
-      : [routeCase.workflow]),
-    ...offered.map((each) => each.versionId),
-  ];
   const pinned = named.get(routeCase.workflow)?.pinned;
+  const newer = useVersionDetail({
+    kind: "workflow",
+    scope: `${scope}:${routeCase.workflow}`,
+    disabled: !editable,
+    onRead: (detail) =>
+      resolve(detail, (now, resolved) =>
+        caseTookVersion(now, detail?.version.versionId ?? "", resolved),
+      ),
+  });
   if (!editable) {
     return (
       <Box sx={ROW_SX}>
@@ -296,7 +373,7 @@ function CaseControls({
         <Typography variant="body2">
           {say("workflow.caseWorkflow")}
           {": "}
-          {versionSaid(named.get(routeCase.workflow), routeCase.workflow)}
+          {versionShown(named.get(routeCase.workflow), routeCase.workflow)}
         </Typography>
         {pinned === undefined ? null : <PinNote pinned={pinned} />}
       </Box>
@@ -309,6 +386,7 @@ function CaseControls({
   return (
     <Box sx={ROW_SX}>
       <FormControlLabel
+        sx={BESIDE_LABELLED_SX}
         control={
           <Checkbox
             checked={routeCase.fallback}
@@ -321,7 +399,7 @@ function CaseControls({
         label={say("workflow.fallback")}
       />
       {routeCase.fallback ? null : terms === undefined ? (
-        <TextField
+        <LabelledTextField
           size="small"
           label={say("workflow.term")}
           value={routeCase.term}
@@ -341,7 +419,7 @@ function CaseControls({
           }
         />
       ) : (
-        <TextField
+        <LabelledTextField
           select
           size="small"
           label={say("workflow.term")}
@@ -365,36 +443,29 @@ function CaseControls({
               <bdi>{term}</bdi>
             </MenuItem>
           ))}
-        </TextField>
+        </LabelledTextField>
       )}
-      <TextField
-        select
-        size="small"
+      <EditorVersionPicker
+        kind="workflow"
         label={say("workflow.caseWorkflow")}
         value={routeCase.workflow}
-        onChange={(edit) =>
-          change((now) => ({
+        noneLabel={say("workflow.versionNone")}
+        scope={`${scope}:${routeCase.workflow}`}
+        selected={pinned}
+        onPick={(detail) =>
+          resolve(detail, (now) => ({
             ...now,
-            workflow: edit.target.value,
+            workflow: detail?.version.versionId ?? "",
             bindings: [],
           }))
         }
-      >
-        <MenuItem value="">{say("workflow.versionNone")}</MenuItem>
-        {choices.map((versionId) => (
-          <MenuItem key={versionId} value={versionId}>
-            {versionSaid(named.get(versionId), versionId)}
-          </MenuItem>
-        ))}
-      </TextField>
+      />
       {pinned === undefined ? null : (
-        <PinNote
-          pinned={pinned}
-          take={(versionId) =>
-            change((now) => caseTookVersion(now, versionId, named))
-          }
-        />
+        <Box sx={LINES_BESIDE_LABELLED_SX}>
+          <PinNote pinned={pinned} take={newer.read} />
+        </Box>
       )}
+      {newer.problem === null ? null : <ProblemView problem={newer.problem} />}
     </Box>
   );
 }

@@ -1,3 +1,22 @@
+-- DB-SPECIFIC: PostgreSQL's DO block, extension catalogs and schema USAGE check enforce the database prerequisite.
+do $pg_trgm_prerequisite$
+declare
+    extension_schema pg_catalog.oid;
+begin
+    select namespace.oid into extension_schema
+      from pg_catalog.pg_extension extension
+      join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+     where extension.extname = 'pg_trgm';
+
+    if extension_schema is null then
+        raise exception 'pg_trgm must be installed by the database administrator before migrations are run.';
+    end if;
+    if not pg_catalog.has_schema_privilege(extension_schema, 'USAGE') then
+        raise exception 'The migration role requires USAGE on the schema containing pg_trgm.';
+    end if;
+end
+$pg_trgm_prerequisite$;
+
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type subject_kind as enum ('person', 'system', 'seeder');
 
@@ -8,7 +27,7 @@ create function search_fold(text) returns text
     language sql immutable strict parallel safe
     return normalize(casefold(normalize($1 collate pg_unicode_fast, NFD)), NFC);
 
--- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now(), uuid, subject_kind and its label comparisons use PostgreSQL's syntax and semantics.
 create table subjects (
     -- No default: this key is minted before there is a row for it to name.
     subject_id    uuid         not null,
@@ -51,6 +70,7 @@ create table subjects (
 
 -- A row whose created_by is its own subject_id satisfies subjects_author_fk, which is how a first
 -- subject can exist at all.
+-- DB-SPECIFIC: These two subjects seed inserts supply PostgreSQL native subject_kind enum values.
 insert into subjects (subject_id, kind, created_by) values
     ('00000000-0000-4000-8000-000000000000', 'seeder', '00000000-0000-4000-8000-000000000000');
 

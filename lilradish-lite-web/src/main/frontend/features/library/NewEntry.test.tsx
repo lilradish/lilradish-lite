@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -20,7 +20,7 @@ const MADE = {
   entryId: "00000006-0000-4000-8000-000000000b21",
   kind: "question",
   name: "Triage",
-  acts: ["rename"],
+  stateActs: ["rename"],
   versions: [],
 };
 
@@ -116,7 +116,9 @@ describe("NewEntry", () => {
           purpose,
         );
       }
-      create().focus();
+      await act(async () => {
+        create().focus();
+      });
       await userEvent.keyboard("{Enter}");
 
       expect(create()).toHaveAttribute("aria-disabled", "true");

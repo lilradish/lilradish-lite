@@ -24,7 +24,6 @@ import { GROUP_ROLES, groupRoleSaid } from "./groupRoles";
 
 const FIELDS_SX = { pt: 1 };
 
-/** What bringing somebody in, and searching for them, takes. */
 const CHANGES: Rule = { inGroup: "change_membership" };
 
 /**
@@ -47,9 +46,7 @@ export function BringSomebodyIn({
 }: {
   readonly groupId: string;
   readonly changing: Action<Outcome>;
-  /** Bringing somebody in, refused. */
   readonly refused: Problem | null;
-  /** Told that somebody is being brought in, as it is asked. */
   readonly onAsk: (asked: Asked) => void;
   /**
    * Told a search was refused for the reader's standing, which has moved.
@@ -65,7 +62,7 @@ export function BringSomebodyIn({
   return (
     <>
       <Press
-        variant="contained"
+        tier="primary"
         unavailable={changing.running}
         onPress={() => {
           setOpening((count) => count + 1);
@@ -198,7 +195,6 @@ function Bringing({
   );
 }
 
-/** The first thing still missing, in the order the dialog asks for them. */
 function heldFor(
   picked: PersonInPool | null,
   chosen: ReadonlySet<GroupRole>,

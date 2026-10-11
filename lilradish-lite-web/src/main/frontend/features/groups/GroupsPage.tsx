@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { groupsLoader, type RegisteredGroup } from "../../api/groups";
 import { ProblemView } from "../../app/ProblemView";
 import { refusesTheAct } from "../../app/refusal";
 import { useStandingRead } from "../../app/standing/StandingContext";
 import { say, type MessageId } from "../../i18n/app";
-import { Press } from "../../lib/action/Press";
+import { InlineEditableValue } from "../../lib/action/InlineEditableValue";
 import { FilterField } from "../../lib/collection/FilterField";
 import { SortableTable } from "../../lib/collection/SortableTable";
 import { useListAddress } from "../../lib/collection/useListAddress";
@@ -24,21 +24,12 @@ export { GROUPS_PAGE } from "../../app/addresses";
 
 const SAID_SX = { mb: 1 };
 
-/** Which group a rename was opened on, and which opening it is. */
 interface Renaming {
   readonly group: RegisteredGroup;
   readonly opening: number;
 }
 
-/**
- * The register of groups. Filter and sort live in the address; a cursor never
- * does. A row opens nothing, and its Rename is the one thing on it that acts.
- *
- * Creating and renaming run under one action the page owns, so each outlives
- * the dialog it was asked from, and the list and the reader's standing are
- * read again for each. Each dialog says its own refusal; one refusing the act
- * itself reads the reader's standing again, which has moved.
- */
+// The page owns changes so they outlive an opening; settlement rereads the list and standing.
 export function GroupsPage({ title }: { readonly title: MessageId }) {
   const reloadStanding = useStandingRead().reload;
   const { filter, order, sort, onFilter, onOrder } = useListAddress(
@@ -47,6 +38,8 @@ export function GroupsPage({ title }: { readonly title: MessageId }) {
   );
   const [renaming, setRenaming] = useState<Renaming | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
+  const readControls = useRef(new Map<string, HTMLButtonElement>());
+  const returnFocus = useRef<string | null>(null);
 
   const load = useMemo(
     () => groupsLoader({ filter, order: sort }),
@@ -85,24 +78,50 @@ export function GroupsPage({ title }: { readonly title: MessageId }) {
   );
 
   const running = changing.running;
-  const columns = useMemo(
-    () =>
-      groupColumns((group) => (
-        <Press
-          label={say("group.renameOne", { name: isolatedInText(group.name) })}
-          unavailable={running}
-          onPress={() => {
-            setRenaming((last) => ({
-              group,
-              opening: (last?.opening ?? 0) + 1,
-            }));
-            setRenameOpen(true);
-          }}
-        >
-          {say("group.rename")}
-        </Press>
-      )),
-    [running],
+  useLayoutEffect(() => {
+    if (!renameOpen && !running && returnFocus.current !== null) {
+      if (document.activeElement === document.body)
+        readControls.current.get(returnFocus.current)?.focus();
+      returnFocus.current = null;
+    }
+  }, [renameOpen, running]);
+  const columns = groupColumns((group) => (
+    <InlineEditableValue
+      ref={(control) => {
+        if (control === null) readControls.current.delete(group.groupId);
+        else readControls.current.set(group.groupId, control);
+      }}
+      value={group.name}
+      disabled={running}
+      onEdit={() => {
+        setRenaming((last) => ({
+          group,
+          opening: (last?.opening ?? 0) + 1,
+        }));
+        setRenameOpen(true);
+      }}
+    />
+  )).map((column) =>
+    "sortKey" in column && column.sortKey === "name"
+      ? {
+          ...column,
+          cell: (group: RegisteredGroup) =>
+            renaming?.group.groupId === group.groupId && renameOpen ? (
+              <RenameGroup
+                key={renaming.opening}
+                group={group}
+                open
+                changing={changing}
+                onShut={(restoring = false) => {
+                  returnFocus.current = restoring ? group.groupId : null;
+                  setRenameOpen(false);
+                }}
+              />
+            ) : (
+              column.cell(group)
+            ),
+        }
+      : column,
   );
 
   return (
@@ -133,15 +152,6 @@ export function GroupsPage({ title }: { readonly title: MessageId }) {
         keyOf={groupIdOf}
         empty={say(filter === "" ? "register.empty" : "register.noMatch")}
       />
-      {renaming === null ? null : (
-        <RenameGroup
-          key={renaming.opening}
-          group={renaming.group}
-          open={renameOpen}
-          changing={changing}
-          onShut={() => setRenameOpen(false)}
-        />
-      )}
     </>
   );
 }

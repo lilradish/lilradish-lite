@@ -1,4 +1,3 @@
-import { buttonClasses } from "@mui/material/Button";
 import { ThemeProvider } from "@mui/material/styles";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -53,7 +52,9 @@ async function picker(): Promise<HTMLElement> {
   if (shown !== null) {
     return shown;
   }
-  await userEvent.click(await screen.findByRole("button", { name: "Change" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: /, editable$/ }),
+  );
   return screen.findByRole("combobox", { name: "Currency" });
 }
 
@@ -72,6 +73,61 @@ async function picking(select: HTMLElement, words: string) {
 }
 
 describe("CurrencyPicker", () => {
+  it("cancels a real portal selection by Escape, restoring the chosen value without a write", async () => {
+    const { sent, onChosen } = opening({
+      [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
+    });
+    const select = await picker();
+    await userEvent.click(select);
+    await screen.findByRole("listbox");
+    await userEvent.keyboard("{ArrowDown}{Escape}");
+    expect(
+      await screen.findByRole("button", { name: "EUR — Euro, editable" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "EUR — Euro, editable" }),
+    ).toHaveFocus();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(requestsTo(sent)).toEqual([READ]);
+    expect(onChosen).not.toHaveBeenCalled();
+  });
+
+  it("closes an unchanged currency on leaving and submits the selected code only once while its answer is pending", async () => {
+    const saving = deferred<readonly [string, number]>();
+    const { sent, onChosen } = opening({
+      [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
+      [CHOOSE]: [saving.promise],
+    });
+    await picker();
+    await userEvent.click(document.body);
+    expect(
+      await screen.findByRole("button", { name: "EUR — Euro, editable" }),
+    ).toBeVisible();
+    expect(requestsTo(sent)).toEqual([READ]);
+    const select = await picker();
+    await userEvent.click(select);
+    const list = await screen.findByRole("listbox");
+    expect(requestsTo(sent)).toEqual([READ]);
+    await userEvent.click(
+      within(list).getByRole("option", { name: "JPY — Japanese Yen" }),
+    );
+    await waitFor(() => expect(requestsTo(sent)).toEqual([READ, CHOOSE]));
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(document.body);
+    expect(requestsTo(sent)).toEqual([READ, CHOOSE]);
+    expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
+      currency: "JPY",
+    });
+    saving.settle(choice({ chosen: "JPY", offered: ["EUR", "JPY"] }));
+    expect(
+      await screen.findByRole("button", {
+        name: "JPY — Japanese Yen, editable",
+      }),
+    ).toBeVisible();
+    expect(onChosen.mock.calls).toEqual([["JPY — Japanese Yen"]]);
+  });
+
   it("starts with a quiet summary and opens the choice only for a reader who may change membership", async () => {
     const routes = {
       [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
@@ -79,7 +135,7 @@ describe("CurrencyPicker", () => {
     const { sent } = opening(routes, false);
 
     expect(await screen.findByText("Currency: EUR — Euro")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /, editable$/ })).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(requestsTo(sent)).toEqual([READ]);
   });
@@ -87,12 +143,12 @@ describe("CurrencyPicker", () => {
   it("offers each currency priced, by its code and its name in the reader's language, with the one chosen shown and nothing to unchoose it", async () => {
     opening({ [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })] });
 
-    const change = await screen.findByRole("button", { name: "Change" });
-    expect(change).toHaveClass(
-      buttonClasses.outlined,
-      buttonClasses.colorPrimary,
-    );
-    expect(change).not.toHaveClass(buttonClasses.text);
+    const change = await screen.findByRole("button", {
+      name: "EUR — Euro, editable",
+    });
+    expect(change).toHaveTextContent("EUR — Euro");
+    expect(change.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     const select = await picker();
 
@@ -137,14 +193,14 @@ describe("CurrencyPicker", () => {
   it.each([
     [
       "the one chosen, named as the choice is",
-      { chosen: "EUR" },
+      { chosen: "EUR", offered: ["EUR", "JPY"] },
       "Currency: EUR — Euro",
     ],
-    ["that none is chosen", {}, "Currency: None chosen"],
+    ["that none is chosen", { offered: [] }, "Currency: None chosen"],
   ])(
-    "shows a reader offered nothing %s in words, and draws nothing to choose with",
+    "shows a reader who may not change membership %s in words, and draws nothing to choose with",
     async (_case, body, words) => {
-      opening({ [READ]: [choice(body)] });
+      opening({ [READ]: [choice(body)] }, false);
 
       expect(await screen.findByText(words)).toBeInTheDocument();
       expect(screen.queryByRole("combobox")).toBeNull();
@@ -177,7 +233,7 @@ describe("CurrencyPicker", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("saves a currency as it is chosen, sending its code alone", async () => {
+  it("saves a currency when it is chosen, sending its final code alone", async () => {
     const { sent } = opening({
       [READ]: [choice({ chosen: "GBP", offered: ["EUR", "JPY"] })],
       [CHOOSE]: [choice({ chosen: "JPY", offered: ["EUR", "JPY"] })],
@@ -204,7 +260,8 @@ describe("CurrencyPicker", () => {
     const select = await picker();
     await picking(select, "JPY — Japanese Yen");
 
-    await waitFor(() => expect(select).toHaveTextContent("JPY — Japanese Yen"));
+    await screen.findByRole("button", { name: "JPY — Japanese Yen, editable" });
+    expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.queryByText(NO_LONGER_PRICED)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -223,7 +280,6 @@ describe("CurrencyPicker", () => {
     expect(onMoved).not.toHaveBeenCalled();
   });
 
-  /** A choice cannot be taken back, so a key pressed in passing must not make one. */
   it("chooses nothing for a letter typed on the closed list, and sends nothing", async () => {
     const { sent, onChosen } = opening({
       [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
@@ -250,11 +306,14 @@ describe("CurrencyPicker", () => {
 
     await userEvent.keyboard(" ");
     await screen.findByRole("listbox");
+    expect(requestsTo(sent)).toEqual([`GET ${CURRENCY}`]);
     await userEvent.keyboard("{ArrowDown}{Enter}");
-
-    await waitFor(() => expect(select).toHaveTextContent("JPY — Japanese Yen"));
+    await screen.findByRole("button", { name: "JPY — Japanese Yen, editable" });
     expect(requestsTo(sent)).toEqual([`GET ${CURRENCY}`, `PUT ${CURRENCY}`]);
     expect(onChosen.mock.calls).toEqual([["JPY — Japanese Yen"]]);
+    expect(JSON.parse(String(sent.mock.calls[1]![1]?.body))).toEqual({
+      currency: "JPY",
+    });
   });
 
   it("holds the choice while one is being saved, and lets it go once it is", async () => {
@@ -269,7 +328,8 @@ describe("CurrencyPicker", () => {
     const whileSaving = select.getAttribute("aria-readonly");
     saving.settle(choice({ chosen: "JPY", offered: ["EUR", "JPY"] }));
 
-    await waitFor(() => expect(select).not.toHaveAttribute("aria-readonly"));
+    await screen.findByRole("button", { name: "JPY — Japanese Yen, editable" });
+    expect(screen.queryByRole("combobox")).toBeNull();
     expect(whileSaving).toBe("true");
     expect(select).toHaveTextContent("JPY — Japanese Yen");
   });
@@ -292,7 +352,40 @@ describe("CurrencyPicker", () => {
     expect(onMoved).not.toHaveBeenCalled();
   });
 
-  it("reads what is offered again once a currency is refused as no longer priced, keeping the one chosen", async () => {
+  it("can choose a currently priced currency after the refused draft survives the offer being read again", async () => {
+    const { sent, onChosen } = opening({
+      [READ]: [
+        choice({ chosen: "GBP", offered: ["EUR", "GBP", "JPY"] }),
+        choice({ chosen: "GBP", offered: ["EUR", "GBP"] }),
+      ],
+      [CHOOSE]: [
+        refusal("CURRENCY_NOT_PRICED", 400),
+        choice({ chosen: "EUR", offered: ["EUR", "GBP"] }),
+      ],
+    });
+    const select = await picker();
+    await picking(select, "JPY — Japanese Yen");
+    await waitFor(() => expect(requestsTo(sent)).toEqual([READ, CHOOSE, READ]));
+    expect(select).toHaveTextContent("JPY — Japanese Yen");
+    expect(select).toHaveFocus();
+    expect(onChosen).not.toHaveBeenCalled();
+    await picking(select, "EUR — Euro");
+    const kept = await screen.findByRole("button", {
+      name: "EUR — Euro, editable",
+    });
+    expect(kept).toHaveFocus();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(requestsTo(sent)).toEqual([READ, CHOOSE, READ, CHOOSE]);
+    expect(
+      sent.mock.calls
+        .filter(([, init]) => init?.method === "PUT")
+        .map(([, init]) => JSON.parse(String(init?.body))),
+    ).toEqual([{ currency: "JPY" }, { currency: "EUR" }]);
+    expect(onChosen.mock.calls).toEqual([["EUR — Euro"]]);
+  });
+
+  it("reads the current offer after a refusal while keeping the refused draft until it is cancelled", async () => {
     const { sent, onChosen } = opening({
       [READ]: [
         choice({ chosen: "EUR", offered: ["EUR", "JPY"] }),
@@ -311,9 +404,24 @@ describe("CurrencyPicker", () => {
       ]),
     );
     const again = await picker();
-    expect(again).toHaveTextContent("EUR — Euro");
+    expect(again).toHaveTextContent("JPY — Japanese Yen");
+    expect(again).toHaveFocus();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "No model is priced in that currency.",
+    );
     expect(await offeredOn(again)).toEqual(["EUR — Euro"]);
+    expect(screen.getByRole("option", { name: "EUR — Euro" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    expect(requestsTo(sent)).toEqual([READ, CHOOSE, READ]);
     expect(onChosen).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(
+      await screen.findByRole("button", { name: "EUR — Euro, editable" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(requestsTo(sent)).toEqual([READ, CHOOSE, READ]);
   });
 
   it("says the rule a refusal of the change met, keeps the one chosen, and reads nothing again", async () => {
@@ -328,7 +436,11 @@ describe("CurrencyPicker", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "A group's membership is changed only by a role in it that may change it.",
     );
-    expect(select).toHaveTextContent("EUR — Euro");
+    expect(select).toHaveTextContent("JPY — Japanese Yen");
+    expect(
+      screen.queryByRole("button", { name: "JPY — Japanese Yen, editable" }),
+    ).toBeNull();
+    await waitFor(() => expect(select).toHaveFocus());
     expect(onChosen).not.toHaveBeenCalled();
     expect(requestsTo(sent)).toEqual([`GET ${CURRENCY}`, `PUT ${CURRENCY}`]);
   });
@@ -343,6 +455,47 @@ describe("CurrencyPicker", () => {
 
     await waitFor(() => expect(onMoved).toHaveBeenCalledTimes(1));
     expect(onChosen).not.toHaveBeenCalled();
+  });
+
+  it("drops a refused editing session on loss of permission without focusing a missing read control or writing again", async () => {
+    const sent = serving({
+      [READ]: [choice({ chosen: "EUR", offered: ["EUR", "JPY"] })],
+      [CHOOSE]: [refusal("ACT_NOT_PERMITTED", 403)],
+    });
+    const onChosen = vi.fn();
+    const onMoved = vi.fn();
+    const view = (mayChange: boolean) => (
+      <ThemeProvider theme={theme}>
+        <CurrencyPicker
+          groupId={GROUP}
+          mayChange={mayChange}
+          onChosen={onChosen}
+          onMoved={onMoved}
+        />
+      </ThemeProvider>
+    );
+    const { rerender } = render(view(true));
+    await picking(await picker(), "JPY — Japanese Yen");
+    await screen.findByRole("alert");
+    expect(
+      screen.getByRole("combobox", { name: "Currency" }),
+    ).toHaveTextContent("JPY — Japanese Yen");
+    rerender(view(false));
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: /, editable$/ })).toBeNull();
+    expect(document.body).toHaveFocus();
+    expect(screen.getByText("Currency: EUR — Euro")).toBeVisible();
+    rerender(view(true));
+    expect(
+      screen.getByRole("button", { name: "EUR — Euro, editable" }),
+    ).not.toHaveFocus();
+    await picker();
+    expect(
+      screen.getByRole("combobox", { name: "Currency" }),
+    ).toHaveTextContent("EUR — Euro");
+    expect(requestsTo(sent)).toEqual([READ, CHOOSE]);
+    expect(onChosen).not.toHaveBeenCalled();
+    expect(onMoved).toHaveBeenCalledOnce();
   });
 
   it("says the rule a refused read met in place of any currency", async () => {

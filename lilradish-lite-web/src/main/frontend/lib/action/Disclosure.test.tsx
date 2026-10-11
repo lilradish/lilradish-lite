@@ -1,9 +1,10 @@
 import Typography from "@mui/material/Typography";
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { Widest } from "./Widest";
 
 import { theme } from "../theme/theme";
 import { Disclosure } from "./Disclosure";
@@ -48,6 +49,25 @@ function markOf(button: HTMLElement): string | null {
 }
 
 describe("Disclosure", () => {
+  it("accepts overlapping labels and retains its heading style rather than the quiet tier", () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <Disclosure open={false} controls="length" onToggle={() => undefined}>
+          <Widest
+            labels={["Show why it is too long", "Hide why it is too long"]}
+            shown={0}
+          />
+        </Disclosure>
+        <div id="length" />
+      </ThemeProvider>,
+    );
+    const button = screen.getByRole("button", {
+      name: "Show why it is too long",
+    });
+    expect(button).toHaveClass("MuiButton-sizeMedium");
+    expect(getComputedStyle(button).minWidth).toBe("0px");
+    expect(screen.getByText("Hide why it is too long")).not.toBeVisible();
+  });
   it.each([
     ["open", true, "true", "ExpandLessIcon"],
     ["shut", false, "false", "ExpandMoreIcon"],
@@ -102,14 +122,18 @@ describe("Disclosure", () => {
     [
       "Enter",
       async (button: HTMLElement) => {
-        button.focus();
+        await act(async () => {
+          button.focus();
+        });
         await userEvent.keyboard("{Enter}");
       },
     ],
     [
       "Space",
       async (button: HTMLElement) => {
-        button.focus();
+        await act(async () => {
+          button.focus();
+        });
         await userEvent.keyboard(" ");
       },
     ],
@@ -130,7 +154,9 @@ describe("Disclosure", () => {
 
   it("opens what it held shut on a press, the keyboard left on it", async () => {
     const { toggled, button } = heading(false);
-    button.focus();
+    await act(async () => {
+      button.focus();
+    });
 
     await userEvent.keyboard("{Enter}");
 
@@ -166,7 +192,9 @@ describe("Disclosure", () => {
     expect(control).toHaveAccessibleDescription("This step");
     await userEvent.click(control);
     expect(focused).toHaveBeenCalledOnce();
-    control.blur();
+    await act(async () => {
+      control.blur();
+    });
     expect(blurred).toHaveBeenCalledOnce();
   });
 });

@@ -23,12 +23,10 @@ const VERSION = "00000007-0000-4000-8000-000000000cf1";
 
 const DAN = { userId: "000cf2", displayName: "Dan" };
 
-/** Every field the question gives, in the words a start sends them: none as null, many as a list. */
 const VALUES = { summary: "A printer fire.", note: null, tags: ["a", "b"] };
 
 const SUBMISSION = { values: VALUES, uploads: [], hasFilePositions: false };
 
-/** The step as the server reads it once Dan's answer filled try 2, its summary waiting on review. */
 const ANSWERED = {
   run: {
     runId: RUN,
@@ -36,7 +34,7 @@ const ANSWERED = {
     versionId: VERSION,
     state: "running",
     at: { stepId: STEP, name: "summarise" },
-    acts: ["stop"],
+    stateActs: ["stop"],
     progress: { done: 0, of: 1 },
   },
   declarations: {
@@ -56,10 +54,13 @@ const ANSWERED = {
     },
   },
   step: {
+    producedByUserId: DAN.userId,
+    producedByKind: "person",
     stepId: STEP,
     order: 1,
     name: "summarise",
     runs: {
+      versionName: null,
       kind: "question",
       name: "Summarise",
       version: 2,
@@ -83,8 +84,8 @@ const ANSWERED = {
       { field: "note", value: null, now: "stands" },
       { field: "tags", value: ["a", "b"], now: "stands" },
     ],
-    acts: [],
-    withheld: [{ act: "review", refusal: "REVIEW_OWN_PRODUCTION" }],
+    stateActs: ["review"],
+    stateRefusals: [],
   },
   cameOut: [
     { field: "summary", now: "waiting_on_review" },
@@ -97,6 +98,11 @@ const ANSWERED = {
   ],
   triesMade: [
     {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 2,
       beyond: false,
       producedBy: { kind: "person", person: DAN },
@@ -110,7 +116,12 @@ const ANSWERED = {
         { field: "note", value: null, now: "stands" },
         { field: "tags", value: ["a", "b"], now: "stands" },
       ],
-      review: { asked: true },
+      review: {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+        asked: true,
+      },
       ended: "waiting",
       cost: { callsAModel: false },
     },

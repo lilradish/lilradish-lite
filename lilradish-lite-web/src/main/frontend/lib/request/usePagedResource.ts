@@ -20,26 +20,17 @@ export interface PagedResource<T> {
 const NO_PAGE: Page<never> = { items: [] };
 
 /**
- * One page at a time of a cursor-paginated collection.
+ * Only forward or back to the start: stacking old cursors to offer a previous
+ * page would invent the offset these collections deliberately omit.
  *
- * Forward, or back to the start — never back one. A cursor points one way, and
- * keeping a stack of the ones already visited so a previous page could be
- * offered would be inventing an offset, which is the thing these collections
- * refuse to have.
+ * A changed `load` restarts at page one; a cursor belongs to its original query.
  *
- * A changed `load` starts again at the first page. A cursor belongs to the
- * query that minted it; carried to another, it names a position that query
- * never had.
+ * `load` must be stable as `useResource` requires. An unstable identity resets
+ * during render: React stops the render loop before a second request goes out,
+ * and the nearest boundary catches the render error.
  *
- * `load` must be stable, for the reason `useResource` gives, and an unstable
- * one fails loudly here rather than quietly: the reset below runs during
- * render, so React stops it at `Too many re-renders` before a second request
- * goes out. That is an uncaught render error, and the nearest boundary takes
- * the screen down for it — which is the cheaper of the two ways to be told.
- *
- * A refused page takes the rows of the page in hand down with it, which is
- * `useResource`'s rule and not this one: read what it says about an authority
- * withdrawn mid-read before softening this into keeping them.
+ * A refusal clears rows as `useResource` requires: their authority may have
+ * been withdrawn mid-read.
  */
 export function usePagedResource<T, B extends object = Record<never, never>>(
   load: (cursor: string | null, signal: AbortSignal) => Promise<Page<T> & B>,
@@ -71,9 +62,8 @@ export function usePagedResource<T, B extends object = Record<never, never>>(
     setCursor(null);
   }
   const nextCursor = page.value.nextCursor;
-  // Matched as a string rather than against `undefined`: a `null` written where
-  // the member should be absent would be a further page at the end of every
-  // collection, and the type saying `string | undefined` is not what arrives.
+  // Require a string: null instead of an absent member must not invent a next
+  // page. A static type does not constrain the arriving document.
   const hasNext = typeof nextCursor === "string";
 
   const next = useCallback(() => {

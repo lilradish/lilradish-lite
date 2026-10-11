@@ -6,7 +6,13 @@ import { draw } from "./drawing";
 const GROUP = "00000003-0000-4000-8000-000000000c61";
 const ENTRY = "00000006-0000-4000-8000-000000000c61";
 const VERSION = "00000007-0000-4000-8000-000000000c61";
-const ANSWER = { revision: 8, takes: [], gives: [], lists: [] };
+const ANSWER = {
+  revision: 8,
+  takes: [],
+  gives: [],
+  searchWays: [],
+  searchShapeNeedsRefresh: false,
+};
 
 describe("draw", () => {
   it.each([

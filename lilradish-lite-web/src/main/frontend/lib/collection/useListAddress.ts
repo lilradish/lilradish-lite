@@ -7,10 +7,9 @@ const FILTER = "filter";
 const SORT = "sort";
 
 /**
- * A list's filter and order as the address holds them, and how each is
- * written back: by a functional update, which keeps whatever else the address
- * holds, and in place of the entry it was on — a filter typed or a heading
- * pressed is no step back. An emptied filter leaves the address.
+ * Functional updates preserve other address entries. Filters and sort changes
+ * replace history: typing or pressing a heading is no step back.
+ * An emptied filter leaves the address.
  */
 export function useListAddress<K extends string>(
   sortable: Readonly<Record<K, true>>,

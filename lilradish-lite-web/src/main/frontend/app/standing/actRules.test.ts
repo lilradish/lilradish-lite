@@ -35,15 +35,15 @@ const RULE_OF_EACH_GROUP_RULE = {
   author_entry:
     "A group's entries are made, written and submitted only by a role in it that may write one.",
   approve_entry:
-    "A group's entries are put into service, and a run's raised ceiling approved or refused, only by a role in it that may approve an entry.",
+    "Only someone in this group who can approve entries can put workflows, questions and reference lists into service, or approve or reject a usage limit change.",
   revoke_entry:
     "A group's entries are retired, stopped and let go only by a role in it that may revoke one.",
   start_run:
-    "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.",
+    "Only someone in this group who can start runs can start, rename, stop or resume a run, set its usage limit, withdraw a limit change they asked for, or try sending a request that could not be sent.",
   answer_step:
-    "A group's steps are answered, and asked for again, only by a role in it that may answer one.",
+    "Only someone in this group who can answer steps can answer a step or ask again.",
   review_at_gate:
-    "A group's steps are reviewed, what they give back assured or refused, only by a role in it that may review them.",
+    "Only someone in this group who can review can review steps, accepting or rejecting their values.",
 } satisfies Record<GroupRule, string>;
 
 const RULES = Object.entries(RULE_OF_EACH_ACT) as [SurfaceAct, string][];

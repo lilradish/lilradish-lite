@@ -13,7 +13,6 @@ import {
   labelAt,
   laterStepSaid,
   outputSaid,
-  takenSaid,
   type Declaring,
 } from "./declared";
 
@@ -84,15 +83,22 @@ const DECLARATIONS: ReadonlyMap<string, Declared> = new Map([
 
 function step(changed: Partial<StepRow>): StepRow {
   return {
+    producedByUserId: null,
+    producedByKind: null,
     stepId: "00000009-0000-4000-8000-000000000c91",
     order: 1,
     name: "summarise_it",
-    runs: { kind: "question", name: "Summarise", versionId: QUESTION_VERSION },
+    runs: {
+      versionName: null,
+      kind: "question",
+      name: "Summarise",
+      versionId: QUESTION_VERSION,
+    },
     state: "done",
     takesFrom: [],
     cost: {},
-    acts: [],
-    withheld: [],
+    stateActs: new Set([]),
+    stateRefusals: [],
     ...changed,
   };
 }
@@ -103,7 +109,7 @@ const FILE_IT = step({
   stepId: "00000009-0000-4000-8000-000000000c95",
   order: 2,
   name: "file_it",
-  runs: { kind: "code_step", codeStep: "file_claim" },
+  runs: { versionName: null, kind: "code_step", codeStep: "file_claim" },
 });
 
 const DECLARING: Declaring = {
@@ -115,7 +121,7 @@ const DECLARING: Declaring = {
 
 describe("declaredFor", () => {
   it("uses a route's own declaration and a pinned workflow's declaration when either supplies a search input", () => {
-    const route = { ...FILE_IT, runs: { kind: "route" } };
+    const route = { ...FILE_IT, runs: { versionName: null, kind: "route" } };
     const declarations = new Map<string, Declared>([
       [`route:${route.stepId}`, { takes: [], gives: [TOTAL] }],
       [QUESTION_VERSION, { takes: [], gives: [SUMMARY] }],
@@ -156,7 +162,9 @@ describe("declaredFor", () => {
 
     expect(
       declaredFor(
-        step({ runs: { kind: "search", searchWay: "file_claim" } }),
+        step({
+          runs: { versionName: null, kind: "search", searchWay: "file_claim" },
+        }),
         declarations,
       ),
     ).toEqual({ takes: [], gives: [SUMMARY] });
@@ -166,19 +174,26 @@ describe("declaredFor", () => {
     });
     expect(
       declaredFor(
-        step({ runs: { kind: "search", searchWay: "other" } }),
+        step({
+          runs: { versionName: null, kind: "search", searchWay: "other" },
+        }),
         declarations,
       ),
     ).toBeUndefined();
   });
   it("finds what the version a step runs declares, and nothing for one that runs no version or one not read", () => {
     expect(declaredFor(SUMMARISE, DECLARATIONS)?.gives).toEqual([SUMMARY]);
-    expect(declaredFor(step({ runs: { kind: "route" } }), DECLARATIONS)).toBe(
-      undefined,
-    );
     expect(
       declaredFor(
-        step({ runs: { kind: "question", versionId: "elsewhere" } }),
+        step({ runs: { versionName: null, kind: "route" } }),
+        DECLARATIONS,
+      ),
+    ).toBe(undefined);
+    expect(
+      declaredFor(
+        step({
+          runs: { versionName: null, kind: "question", versionId: "elsewhere" },
+        }),
         DECLARATIONS,
       ),
     ).toBe(undefined);
@@ -187,13 +202,21 @@ describe("declaredFor", () => {
   it("finds what a code step declares by its name, and nothing for one whose release the read does not hold", () => {
     expect(
       declaredFor(
-        step({ runs: { kind: "code_step", codeStep: "file_claim" } }),
+        step({
+          runs: {
+            versionName: null,
+            kind: "code_step",
+            codeStep: "file_claim",
+          },
+        }),
         DECLARATIONS,
       )?.gives,
     ).toEqual([REFERENCE]);
     expect(
       declaredFor(
-        step({ runs: { kind: "code_step", codeStep: "tally" } }),
+        step({
+          runs: { versionName: null, kind: "code_step", codeStep: "tally" },
+        }),
         DECLARATIONS,
       ),
     ).toBe(undefined);
@@ -254,21 +277,30 @@ describe("labelAt", () => {
   });
 });
 
-describe("takenSaid", () => {
-  it("says an input by the label the step's version gives it, and where it comes from by the run's", () => {
-    const said = takenSaid(
-      { input: "ticket", from: { kind: "run_input", path: "ticket" } },
-      SUMMARISE,
-      DECLARING,
-    );
-
-    expect(said).toBe(
-      `${setApart("Text")}: ${setApart("Ticket")}, which the run was started with`,
-    );
-  });
-});
-
 describe("fromSaid", () => {
+  it("uses the source step's display name across runs without changing its machine path", () => {
+    const source = {
+      kind: "step",
+      path: "summary",
+      stepId: SUMMARISE.stepId,
+      name: "summarise_it",
+      label: "要約する\u202e",
+      versionId: QUESTION_VERSION,
+      runId: "another-run",
+      runNumber: 6,
+    };
+
+    expect(fromSaid(source, { ...DECLARING, runId: "this-run" })).toBe(
+      `${setApart("Summary")} (output of ${setApart("要約する\u202e")} in run 6)`,
+    );
+    expect(fromSaid(source, { ...DECLARING, runId: "another-run" })).toBe(
+      `${setApart("Summary")} (output of ${setApart("要約する\u202e")})`,
+    );
+    expect(fromSaid(source, DECLARING)).not.toContain("summarise it");
+    expect(source.path).toBe("summary");
+    expect(source.name).toBe("summarise_it");
+    expect(source.stepId).toBe(SUMMARISE.stepId);
+  });
   it("uses the published source run for a step, and keeps same-run wording", () => {
     const source = {
       kind: "step",
@@ -286,13 +318,13 @@ describe("fromSaid", () => {
     });
 
     expect(otherRun).toBe(
-      `${setApart("Summary")}, which ${setApart("summarise it")} in run 6 gave back`,
+      `${setApart("Summary")} (output of ${setApart("summarise it")} in run 6)`,
     );
     expect(otherRun).not.toBe(
-      `${setApart("Summary")}, which ${setApart("summarise it")} gave back`,
+      `${setApart("Summary")} (output of ${setApart("summarise it")})`,
     );
     expect(thisRun).toBe(
-      `${setApart("Summary")}, which ${setApart("summarise it")} gave back`,
+      `${setApart("Summary")} (output of ${setApart("summarise it")})`,
     );
   });
 
@@ -309,13 +341,9 @@ describe("fromSaid", () => {
       runId: "another-run",
     });
 
-    expect(otherRun).toBe(
-      `${setApart("ticket")}, which run 6 was started with`,
-    );
+    expect(otherRun).toBe(`${setApart("ticket")} (input of run 6)`);
     expect(otherRun).not.toContain(setApart("Ticket"));
-    expect(thisRun).toBe(
-      `${setApart("Ticket")}, which the run was started with`,
-    );
+    expect(thisRun).toBe(`${setApart("Ticket")} (run input)`);
   });
 
   it("names what an earlier step gave back by that step's own name, underscores read as spaces, and the label the version it pins gives", () => {
@@ -331,7 +359,7 @@ describe("fromSaid", () => {
     );
 
     expect(said).toBe(
-      `${setApart("Summary")}, which ${setApart("summarise it")} gave back`,
+      `${setApart("Summary")} (output of ${setApart("summarise it")})`,
     );
     expect(said).not.toContain("Summarise");
   });
@@ -349,14 +377,14 @@ describe("fromSaid", () => {
     );
 
     expect(said).toBe(
-      `${setApart("Reference")}, which ${setApart("file it")} gave back`,
+      `${setApart("Reference")} (output of ${setApart("file it")})`,
     );
     expect(said).not.toContain("file_claim");
   });
 
   it.each([
     [
-      "a workflow's version, which the read never declares",
+      "a version absent from this read",
       { versionId: "00000007-0000-4000-8000-000000000c99" },
     ],
     ["a code step whose release the read does not hold", { codeStep: "tally" }],
@@ -376,28 +404,28 @@ describe("fromSaid", () => {
       );
 
       expect(said).toBe(
-        `${setApart("summary")}, which ${setApart("sort it out")} gave back`,
+        `${setApart("summary")} (output of ${setApart("sort it out")})`,
       );
       expect(said).not.toContain("Summary");
     },
   );
 
   it.each([
-    ["a constant", { kind: "constant" }, "a value written into the workflow"],
+    ["a constant", { kind: "constant" }, "a fixed value set in the workflow"],
     [
       "a kind this build does not know",
       { kind: "archive", path: "a" },
-      "Not something this page can say yet.",
+      "This page can't show this yet.",
     ],
     [
       "the run's input at no path",
       { kind: "run_input" },
-      "Not something this page can say yet.",
+      "This page can't show this yet.",
     ],
     [
       "a step by no name",
       { kind: "step", path: "summary", stepId: "gone" },
-      "Not something this page can say yet.",
+      "This page can't show this yet.",
     ],
   ])("says %s in the reader's words", (_case, from, said) => {
     expect(fromSaid(from, DECLARING)).toBe(said);
@@ -426,7 +454,7 @@ describe("laterStepSaid", () => {
     expect(laterStepSaid(stepId, DECLARING)).toBe(said);
   });
 
-  it("names the reader as a later step when the step-list read failed", () => {
+  it("names the consuming step as a later step when the step-list read failed", () => {
     const said = laterStepSaid(FILE_IT.stepId, {
       ...DECLARING,
       steps: undefined,

@@ -1,0 +1,191 @@
+package com.lilradish.lite.domain.run;
+
+import static java.util.Objects.requireNonNull;
+
+import com.lilradish.lite.domain.identity.SubjectId;
+import java.time.Instant;
+import java.util.List;
+import org.jspecify.annotations.Nullable;
+import org.libprunus.core.log.annotation.DoNotLog;
+
+public sealed interface StepPosition
+        permits StepPosition.NotStarted,
+                StepPosition.Running,
+                StepPosition.HeldBack,
+                StepPosition.AwaitingReview,
+                StepPosition.Owed,
+                StepPosition.Failed,
+                StepPosition.Beneath,
+                StepPosition.Done {
+
+    StepState state();
+
+    /** The try a person may make next, or none; spent tries put it one beyond the declared tries. */
+    default @Nullable Owed nextTry() {
+        return switch (this) {
+            case Owed owed -> owed;
+            case HeldBack held -> held.owed();
+            case Failed failed ->
+                failed.why() instanceof StepFailure.TriesSpent spent
+                        ? new Owed(spent.used() + 1, false, true, failed.since())
+                        : null;
+            case NotStarted ignored -> null;
+            case Running ignored -> null;
+            case AwaitingReview ignored -> null;
+            case Beneath ignored -> null;
+            case Done ignored -> null;
+        };
+    }
+
+    record NotStarted() implements StepPosition {
+
+        @Override
+        public StepState state() {
+            return StepState.NOT_STARTED;
+        }
+    }
+
+    record Running(RunningOn on) implements StepPosition {
+
+        public Running {
+            requireNonNull(on, "StepPosition.Running on must not be null");
+        }
+
+        @Override
+        public StepState state() {
+            return StepState.RUNNING;
+        }
+    }
+
+    /**
+     * @param owed the try a person owes that a stop holds; none where the hold stands in place of a try the
+     *     system would make
+     */
+    record HeldBack(
+            RunStepHoldReason reason,
+            Instant since,
+            @Nullable Owed owed) implements StepPosition {
+
+        public HeldBack {
+            requireNonNull(reason, "StepPosition.HeldBack reason must not be null");
+            requireNonNull(since, "StepPosition.HeldBack since must not be null");
+            if (owed != null && reason != RunStepHoldReason.ENTRY_STOPPED) {
+                throw new IllegalArgumentException("StepPosition.HeldBack holds a try owed only on a stop");
+            }
+        }
+
+        @Override
+        public StepState state() {
+            return StepState.HELD_BACK;
+        }
+    }
+
+    /**
+     * Values of the step's newest try waiting on a review, which one review decides together.
+     *
+     * @param values in the order the step's declaration gives them back
+     * @param producedBy the person who produced them, whom nobody lets review them; none where no person did
+     * @param sending how the try stands with the model the step names to review it; none exactly where the step
+     *     names none
+     */
+    record AwaitingReview(
+            int number,
+            List<WaitingValue> values,
+            @Nullable SubjectId producedBy,
+            Instant since,
+            @Nullable ReviewSending sending)
+            implements StepPosition {
+
+        public AwaitingReview {
+            values = List.copyOf(requireNonNull(values, "StepPosition.AwaitingReview values must not be null"));
+            requireNonNull(since, "StepPosition.AwaitingReview since must not be null");
+            if (values.isEmpty()) {
+                throw new IllegalArgumentException("StepPosition.AwaitingReview names a value waiting");
+            }
+        }
+
+        @Override
+        public StepState state() {
+            return StepState.WAITING;
+        }
+    }
+
+    /**
+     * A next try only a person may make: asked already and waiting on an answer where {@code open}, and otherwise
+     * owed after the last was refused or lost.
+     *
+     * @param number the try an answer fills, or the one to be made
+     * @param beyond whether that try is beyond the tries the step declares
+     * @param since when it was asked, or when the try before it ended
+     */
+    record Owed(int number, boolean open, boolean beyond, Instant since) implements StepPosition {
+
+        public Owed {
+            requireNonNull(since, "StepPosition.Owed since must not be null");
+            if (number < 1) {
+                throw new IllegalArgumentException("StepPosition.Owed number must be positive: " + number);
+            }
+        }
+
+        @Override
+        public StepState state() {
+            return StepState.WAITING;
+        }
+    }
+
+    record Failed(StepFailure why, Instant since) implements StepPosition {
+
+        public Failed {
+            requireNonNull(why, "StepPosition.Failed why must not be null");
+            requireNonNull(since, "StepPosition.Failed since must not be null");
+        }
+
+        @Override
+        public StepState state() {
+            return StepState.FAILED;
+        }
+    }
+
+    record Beneath(
+            @DoNotLog RunSnapshot run,
+            @DoNotLog StepSnapshot at,
+            @DoNotLog StepPosition where) implements StepPosition {
+
+        public Beneath {
+            requireNonNull(run, "StepPosition.Beneath run must not be null");
+            requireNonNull(at, "StepPosition.Beneath at must not be null");
+            requireNonNull(where, "StepPosition.Beneath where must not be null");
+            if (where instanceof Done) {
+                throw new IllegalArgumentException("StepPosition.Beneath must name a step not done");
+            }
+        }
+
+        @Override
+        public StepState state() {
+            return where instanceof NotStarted ? StepState.RUNNING : where.state();
+        }
+
+        @Override
+        public String toString() {
+            return "Beneath[run=" + run.run().value() + ", at="
+                    + at.planned().id().value() + "]";
+        }
+    }
+
+    record Done() implements StepPosition {
+
+        @Override
+        public StepState state() {
+            return StepState.DONE;
+        }
+    }
+
+    record WaitingValue(ProductionValueId value, String field, WaitsOn on) {
+
+        public WaitingValue {
+            requireNonNull(value, "StepPosition.WaitingValue value must not be null");
+            requireNonNull(field, "StepPosition.WaitingValue field must not be null");
+            requireNonNull(on, "StepPosition.WaitingValue on must not be null");
+        }
+    }
+}

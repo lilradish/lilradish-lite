@@ -1,5 +1,5 @@
 import type { ReadField } from "../../../api/filling";
-import type { WentIn } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { WentIn } from "../../../api/stepSources";
 import type { Declaring } from "./declared";
 import { DrawnInputs, type Heading } from "./DrawnInputs";
 import { WentInListed } from "./WentInListed";

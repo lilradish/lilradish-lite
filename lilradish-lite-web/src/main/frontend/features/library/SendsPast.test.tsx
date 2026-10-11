@@ -25,6 +25,25 @@ function saidOf(each: HTMLElement): string | null {
 }
 
 describe("SendsPast", () => {
+  it("names a long request by the version's display name with no change to its machine identifier", () => {
+    const steps = [{ ...STEPS[0]!, label: "確認する\u202e" }, STEPS[1]!];
+    render(
+      <SendsPast
+        sendsPast={[
+          { stepId: "s1", role: "producing", model: "general", past: 1234 },
+        ]}
+        steps={steps}
+      />,
+    );
+
+    const item = screen.getByRole("listitem");
+    expect(saidOf(item)).toBe(
+      `${isolatedInText("確認する\u202e")}: what it could send ${isolatedInText("general")} to produce runs about 1,234 units past what that model takes.`,
+    );
+    expect(item).not.toHaveTextContent("triage");
+    expect(within(item).getByText("確認する\u202e").tagName).toBe("BDI");
+    expect(steps[0]!.name).toBe("triage");
+  });
   it("says each step past what a model takes by its name, what it asks the model and about how far past", () => {
     render(
       <SendsPast

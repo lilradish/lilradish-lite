@@ -1,6 +1,8 @@
 import { ThemeProvider } from "@mui/material/styles";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+import type { RunsKind } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 
 import { theme } from "../../lib/theme/theme";
 import { resolved } from "../../testutil/grounds";
@@ -11,14 +13,14 @@ import { StepKindTag } from "./StepKindTag";
  * icon drawn before them, by the name Material's icons are tested by.
  */
 const KINDS = [
-  ["question", "Question", "#00695c", "#e0f2f1", "QuestionAnswerIcon"],
-  ["workflow", "Workflow", "#283593", "#e8eaf6", "AccountTreeIcon"],
-  ["code_step", "Code step", "#37474f", "#eceff1", "CodeIcon"],
-  ["route", "Route", "#5d4037", "#efebe9", "AltRouteIcon"],
-  ["search", "Search", "#6a1b9a", "#f3e5f5", "SearchIcon"],
+  ["question", "Question", "#5c5721", "#f3f2db", "QuestionAnswerIcon"],
+  ["workflow", "Workflow", "#403c39", "#e8e6e3", "AccountTreeIcon"],
+  ["code_step", "Code step", "#324b5a", "#e4edf2", "CodeIcon"],
+  ["route", "Route", "#614232", "#f5eae5", "AltRouteIcon"],
+  ["search", "Search", "#8a2c55", "#f8e6ee", "SearchIcon"],
 ] as const;
 
-const UNKNOWN = "Not something this page can say yet.";
+const UNKNOWN = "This page can't show this yet.";
 
 function drawn(kind: string) {
   return render(
@@ -30,10 +32,15 @@ function drawn(kind: string) {
 
 describe("StepKindTag", () => {
   /** A kind coloured and never drawn, or drawn with no colour, would be a declaration nothing reads. */
-  it("sets apart exactly the kinds the theme colours", () => {
-    expect(Object.keys(theme.palette.stepKind)).toEqual(
-      KINDS.map(([kind]) => kind),
-    );
+  it("sets apart every wire kind with a canonical pair", () => {
+    expectTypeOf<(typeof KINDS)[number][0]>().toEqualTypeOf<RunsKind>();
+    expect(theme.palette.kind).toMatchObject({
+      question: { text: "#5c5721", ground: "#f3f2db" },
+      workflow: { text: "#403c39", ground: "#e8e6e3" },
+      codeStep: { text: "#324b5a", ground: "#e4edf2" },
+      route: { text: "#614232", ground: "#f5eae5" },
+      search: { text: "#8a2c55", ground: "#f8e6ee" },
+    });
   });
 
   it.each(KINDS)(
@@ -57,7 +64,6 @@ describe("StepKindTag", () => {
     },
   );
 
-  /** The tag's type as `theme.ts` writes it, copied by hand and in pixels as a style reports it back. */
   it("sets the words naming a kind in the tag's type", () => {
     drawn("question");
 

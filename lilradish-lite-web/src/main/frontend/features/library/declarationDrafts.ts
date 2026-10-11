@@ -71,7 +71,7 @@ export interface Held {
 // A limit the server takes: one up to the largest whole number it stores.
 const WHOLE = /^[1-9][0-9]*$/;
 
-const LARGEST_LIMIT = 2147483647;
+export const LARGEST_LIMIT = 2147483647;
 
 const HIGHEST_FLOOR = 100;
 
@@ -83,7 +83,6 @@ const LONGEST_PATH = 1023;
 
 const MOST_FIELDS = 256;
 
-/** A field as the server read it, held as a builder writes it. */
 export function draftOf(field: DeclaredField): DraftField {
   return {
     key: field.fieldId,
@@ -106,7 +105,6 @@ export function draftOf(field: DeclaredField): DraftField {
   };
 }
 
-/** A field nothing is written in yet: text, holding one, and to be given. */
 export function freshDraft(key: string): DraftField {
   return {
     key,
@@ -285,7 +283,11 @@ export function fileTypesFit(typed: string): boolean {
 }
 
 export function fileTypesOf(typed: string): string[] {
-  return typed.split("\n").map((type) => type.trim().toLowerCase());
+  return typed
+    .split("\n")
+    .map((type) =>
+      type.trim().replace(/[A-Z]/g, (letter) => letter.toLowerCase()),
+    );
 }
 
 export function fileSizeFits(typed: string, unit: FileSizeUnit): boolean {
@@ -332,7 +334,6 @@ function numberOf(typed: string): number | null {
   return typed === "" ? null : Number(typed);
 }
 
-/** The half with the row at `place` changed as `change` says, every other row as it was. */
 export function changedAt(
   drafts: readonly DraftField[],
   place: Place,
@@ -348,7 +349,6 @@ export function changedAt(
   );
 }
 
-/** The half without the row at `place`, and the rows it held with it. */
 export function removedAt(
   drafts: readonly DraftField[],
   place: Place,
@@ -363,7 +363,6 @@ export function removedAt(
   }));
 }
 
-/** The half with the row at `place` swapped with the one `by` rows from it among its fellows; none past either end. */
 export function movedAt(
   drafts: readonly DraftField[],
   place: Place,
@@ -385,7 +384,6 @@ export function movedAt(
   return moved;
 }
 
-/** The half with `added` last among the rows the row at `place` holds, or last on the first level. */
 export function addedUnder(
   drafts: readonly DraftField[],
   place: Place | null,
@@ -398,4 +396,221 @@ export function addedUnder(
     ...draft,
     fields: [...draft.fields, added],
   }));
+}
+
+/** A whole-half write includes the selected candidate and keeps other stored facts. */
+export function candidateFields(
+  stored: readonly DraftField[],
+  candidates: readonly DraftField[],
+  key: string,
+): DraftField[] {
+  const selected = candidates.find((field) => field.key === key);
+  const existing = stored.find((field) => field.key === key);
+  if (selected !== undefined || existing !== undefined) {
+    const rest = stored.filter((field) => field.key !== key);
+    if (selected === undefined) return rest;
+    const field = {
+      ...selected,
+      fields:
+        selected.kind === "fields" && existing?.kind === "fields"
+          ? existing.fields
+          : selected.fields,
+    };
+    const index = candidates.indexOf(selected);
+    rest.splice(Math.min(index, rest.length), 0, field);
+    return rest;
+  }
+  for (const parent of candidates) {
+    if (fieldAtKey(parent.fields, key) !== undefined) {
+      const previous = stored.find((field) => field.key === parent.key);
+      if (previous === undefined) {
+        return candidateFields(stored, candidates, parent.key);
+      }
+      return stored.map((field) =>
+        field.key === parent.key
+          ? {
+              ...field,
+              fields: candidateFields(field.fields, parent.fields, key),
+            }
+          : field,
+      );
+    }
+  }
+  return stored.map((field) => ({
+    ...field,
+    fields: candidateFields(
+      field.fields,
+      candidates.find((parent) => parent.key === field.key)?.fields ?? [],
+      key,
+    ),
+  }));
+}
+
+export function allFields(fields: readonly DraftField[]): DraftField[] {
+  return fields.flatMap((field) => [field, ...allFields(field.fields)]);
+}
+
+export function fieldAtKey(
+  fields: readonly DraftField[],
+  key: string,
+): DraftField | undefined {
+  for (const field of fields) {
+    if (field.key === key) return field;
+    const found = fieldAtKey(field.fields, key);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+export function fieldPlace(
+  fields: readonly DraftField[],
+  key: string,
+  above: Place = [],
+): Place | null {
+  for (const [index, field] of fields.entries()) {
+    const place = [...above, index];
+    if (field.key === key) return place;
+    const below = fieldPlace(field.fields, key, place);
+    if (below !== null) return below;
+  }
+  return null;
+}
+
+export function fieldAtPlace(
+  fields: readonly DraftField[],
+  place: Place,
+): DraftField | undefined {
+  const [at, ...below] = place;
+  const field = fields[at!];
+  return below.length === 0 || field === undefined
+    ? field
+    : fieldAtPlace(field.fields, below);
+}
+
+export function withoutField(
+  fields: readonly DraftField[],
+  key: string,
+): DraftField[] {
+  const place = fieldPlace(fields, key);
+  return place === null ? [...fields] : removedAt(fields, place);
+}
+
+export function changedKey(
+  fields: readonly DraftField[],
+  key: string,
+  change: (field: DraftField) => DraftField,
+): DraftField[] {
+  return fields.map((field) =>
+    field.key === key
+      ? change(field)
+      : field.fields.length === 0
+        ? field
+        : { ...field, fields: changedKey(field.fields, key, change) },
+  );
+}
+
+/** Confirmation can give fields new keys; their confirmed sibling names still identify the same subtree. */
+export function fieldKeysAfter(
+  before: readonly DraftField[],
+  after: readonly DraftField[],
+): ReadonlyMap<string, string> {
+  const keys = new Map<string, string>();
+  const match = (
+    previous: readonly DraftField[],
+    next: readonly DraftField[],
+  ) => {
+    for (const field of previous) {
+      const answered =
+        next.find((candidate) => candidate.key === field.key) ??
+        next.find((candidate) => candidate.name === field.name);
+      if (answered === undefined) continue;
+      keys.set(field.key, answered.key);
+      if (field.kind === "fields" && answered.kind === "fields")
+        match(field.fields, answered.fields);
+    }
+  };
+  match(before, after);
+  return keys;
+}
+
+/** The response replaces only the candidate sent; other closed editors keep their raw input. */
+export function rebaseCandidates(
+  before: readonly DraftField[],
+  after: readonly DraftField[],
+  candidates: readonly DraftField[],
+  applied: string,
+): DraftField[] {
+  const keys = fieldKeysAfter(before, after);
+  const answered = new Map(allFields(after).map((field) => [field.key, field]));
+  const align = (fields: readonly DraftField[]): DraftField[] =>
+    fields.map((field) => {
+      const canonical = answered.get(keys.get(field.key) ?? field.key);
+      return {
+        ...field,
+        key: canonical?.key ?? field.key,
+        fieldId: canonical?.fieldId ?? field.fieldId,
+        fields: align(field.fields),
+      };
+    });
+  const alignedBefore = align(before);
+  const alignedCandidates = align(candidates);
+  const appliedKey = keys.get(applied) ?? applied;
+  const previous = new Map(
+    allFields(alignedBefore).map((field) => [field.key, field]),
+  );
+  const next = new Map(
+    allFields(alignedCandidates).map((field) => [field.key, field]),
+  );
+  const previousPositions = positionsOf(alignedBefore);
+  const nextPositions = positionsOf(alignedCandidates);
+  // A new ancestor is sent with its whole subtree; the response gives every
+  // new node its canonical identity, including nodes not selected directly.
+  const committed = new Set(
+    allFields(candidateFields(alignedBefore, alignedCandidates, appliedKey))
+      .filter((field) => !previous.has(field.key))
+      .map((field) => field.key),
+  );
+  committed.add(appliedKey);
+  const dirty = new Set([...previous.keys(), ...next.keys()]);
+  let rebased = [...after];
+  for (const key of dirty) {
+    if (committed.has(key)) continue;
+    const a = previous.get(key);
+    const b = next.get(key);
+    const own = (field: DraftField | undefined) =>
+      field === undefined ? undefined : { ...field, fields: undefined };
+    const changed = JSON.stringify(own(a)) !== JSON.stringify(own(b));
+    const moved =
+      a !== undefined &&
+      b !== undefined &&
+      previousPositions.get(key) !== nextPositions.get(key);
+    if (moved || a === undefined || b === undefined) {
+      if (changed || moved)
+        rebased = candidateFields(rebased, alignedCandidates, key);
+    } else if (changed) {
+      rebased = changedKey(rebased, key, (field) => ({
+        ...b,
+        fields:
+          b.kind === "fields" && field.kind === "fields"
+            ? field.fields
+            : b.fields,
+      }));
+    }
+  }
+  return rebased;
+}
+
+function positionsOf(
+  fields: readonly DraftField[],
+): ReadonlyMap<string, string> {
+  const positions = new Map<string, string>();
+  function visit(fields: readonly DraftField[], above: string) {
+    for (const [index, field] of fields.entries()) {
+      const position = `${above}/${index}`;
+      positions.set(field.key, position);
+      visit(field.fields, position);
+    }
+  }
+  visit(fields, "");
+  return positions;
 }

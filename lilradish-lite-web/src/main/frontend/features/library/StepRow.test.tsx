@@ -5,10 +5,7 @@ import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  OfferedCodeStep,
-  OfferedSearchWay,
-} from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
+import type { OfferedCodeStep } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { theme } from "../../lib/theme/theme";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { StepRow } from "./StepRow";
@@ -19,11 +16,9 @@ const middle = { ...freshStep("middle"), name: "middle" };
 const last = { ...freshStep("last"), name: "last" };
 const named = new Map();
 const codeSteps: readonly OfferedCodeStep[] = [];
-const searchWays: readonly OfferedSearchWay[] = [];
 const onRegisterRow = vi.fn();
 const onRegisterOpen = vi.fn();
 const onMove = vi.fn();
-const onTakeOut = vi.fn();
 const onTakeVersion = vi.fn();
 
 function rows(steps: readonly StepDraft[], picked: string) {
@@ -38,20 +33,15 @@ function rows(steps: readonly StepDraft[], picked: string) {
                 step={step}
                 position={position}
                 last={position === steps.length - 1}
-                focusAfterTakingOut={
-                  steps[position + 1]?.key ?? steps[position - 1]?.key
-                }
                 picked={step.key === picked}
                 href={`/content?step=${step.key}`}
                 named={named}
                 codeSteps={codeSteps}
-                searchWays={searchWays}
                 editable
                 running={false}
                 onRegisterRow={onRegisterRow}
                 onRegisterOpen={onRegisterOpen}
                 onMove={onMove}
-                onTakeOut={onTakeOut}
                 onTakeVersion={onTakeVersion}
               />
             ))}
@@ -63,6 +53,29 @@ function rows(steps: readonly StepDraft[], picked: string) {
 }
 
 describe("StepRow", () => {
+  it("opens a display-named row by its unchanged step key and names its controls for people", () => {
+    const step = {
+      ...first,
+      name: "file_claim",
+      label: "\u8acb\u6c42\u3092\u78ba\u8a8d\u202e",
+    };
+    render(rows([step], "first"));
+
+    const link = screen.getByRole("link", {
+      name: `Open ${isolatedInText("\u8acb\u6c42\u3092\u78ba\u8a8d\u202e")}`,
+    });
+    expect(link).toHaveAttribute("href", "/content?step=first");
+    expect(link).toHaveTextContent("\u8acb\u6c42\u3092\u78ba\u8a8d\u202e");
+    expect(link.firstElementChild?.tagName).toBe("BDI");
+    expect(link).not.toHaveTextContent("file_claim");
+    expect(
+      screen.queryByRole("button", {
+        name: `Remove ${isolatedInText("\u8acb\u6c42\u3092\u78ba\u8a8d\u202e")}`,
+      }),
+    ).not.toBeInTheDocument();
+    expect(step.name).toBe("file_claim");
+    expect(step.key).toBe("first");
+  });
   it("sets an unnamed step's default name apart from its hint without changing the link's complete name", () => {
     render(rows([freshStep("added")], "added"));
 
@@ -78,8 +91,8 @@ describe("StepRow", () => {
     expect(hint.fontSize).toBe(getComputedStyle(link).fontSize);
     expect(getComputedStyle(link).fontStyle).not.toBe("italic");
     expect(
-      screen.getByRole("button", { name: "Take out: Step 1, not named yet" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Remove Step 1, not named yet" }),
+    ).not.toBeInTheDocument();
   });
 
   it("isolates a named step as text and draws no unnamed hint", () => {

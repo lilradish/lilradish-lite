@@ -5,6 +5,7 @@ import { act, type ReactNode } from "react";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
+import { expectConsoleErrors } from "../testutil/consoleErrors";
 import { theme } from "../lib/theme/theme";
 import { drawnAtDepth, drawnOf } from "../testutil/depths";
 import { FrameError, NoSuchScreen, ScreenError } from "./RouteError";
@@ -35,7 +36,7 @@ async function arrivingAt(
               {
                 path: "a-screen-that-breaks",
                 Component: () => {
-                  throw new TypeError(BROKEN_BY);
+                  throw BROKEN;
                 },
               },
               { path: "*", Component: NoSuchScreen },
@@ -52,7 +53,13 @@ async function arrivingAt(
       <RouterProvider router={router} />
     </ThemeProvider>,
   );
+  if (frame === aFrameThatBreaks) expectRouteFailure("aFrameThatBreaks");
   await act(() => router.navigate(address));
+  if (address === BREAKS || frame === aFrameThatBreaks) {
+    expectRouteFailure(
+      frame === aFrameThatBreaks ? "aFrameThatBreaks" : "Component",
+    );
+  }
   return router;
 }
 
@@ -61,9 +68,24 @@ const BREAKS = "/a-screen-that-breaks";
 
 /** A TypeError, as the commonest fault in a screen is. */
 const BROKEN_BY = "Cannot read properties of undefined (reading 'name')";
+const BROKEN = new TypeError(BROKEN_BY);
+const FRAME_BROKEN = new TypeError(BROKEN_BY);
+
+function expectRouteFailure(component: string) {
+  const broken = component === "aFrameThatBreaks" ? FRAME_BROKEN : BROKEN;
+  expectConsoleErrors(
+    [
+      "%o\n\n%s\n\n%s\n",
+      broken,
+      `The above error occurred in the <${component}> component.`,
+      "React will try to recreate this component tree from scratch using the error boundary you provided, RenderErrorBoundary.",
+    ],
+    ["React Router caught the following error during render", broken],
+  );
+}
 
 function aFrameThatBreaks(): ReactNode {
-  throw new TypeError(BROKEN_BY);
+  throw FRAME_BROKEN;
 }
 
 describe("NoSuchScreen", () => {
@@ -114,7 +136,6 @@ describe("NoSuchScreen", () => {
 
 describe("ScreenError", () => {
   it("tells a reader a screen broke and the menu is the way on, without saying what broke it", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
     await arrivingAt(BREAKS);
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
@@ -129,7 +150,6 @@ describe("ScreenError", () => {
 
   /** A reload keeps the address and whatever the history entry holds; a link to either would not. */
   it("offers to reload the page that broke as an action, not as a way somewhere else", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
     await arrivingAt(BREAKS);
 
     expect(
@@ -142,7 +162,6 @@ describe("ScreenError", () => {
 describe("FrameError", () => {
   /** The menu went down with the frame, so a sentence sending the reader to it would send them nowhere. */
   it("tells a reader the frame broke and only a reload carries on, pointing at no menu and saying nothing of the cause", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
     await arrivingAt("/", aFrameThatBreaks);
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
@@ -169,30 +188,35 @@ describe("reload from a broken page", () => {
   ] as const)(
     "asks the browser to reload the %s at its current address",
     async (_case, address, label, frame) => {
-      vi.spyOn(console, "error").mockImplementation(() => {});
       const router = await arrivingAt(address, frame);
       const browserAddress = window.location.href;
       const pageAddress = router.state.location.pathname;
-      const environment = globalThis as typeof globalThis & {
-        jsdom: {
-          virtualConsole: {
-            on(event: "jsdomError", listener: (error: Error) => void): void;
-            off(event: "jsdomError", listener: (error: Error) => void): void;
-          };
-        };
-      };
-      const reported: Error[] = [];
-      const onError = (error: Error) => reported.push(error);
-      environment.jsdom.virtualConsole.on("jsdomError", onError);
+      const originalWindow = window;
+      const windowProperty = Object.getOwnPropertyDescriptor(
+        globalThis,
+        "window",
+      )!;
+      const reload = vi.fn();
+      const browser = new Proxy(originalWindow, {
+        get(target, key, receiver) {
+          return key === "location"
+            ? { href: browserAddress, reload }
+            : Reflect.get(target, key, receiver);
+        },
+      });
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        writable: true,
+        value: browser,
+      });
       try {
         await userEvent.click(screen.getByRole("button", { name: label }));
-        expect(reported.map((error) => error.message)).toEqual([
-          "Not implemented: navigation to another Document",
-        ]);
+        expect(reload.mock.calls).toEqual([[]]);
+        expect(originalWindow.location.href).toBe(browserAddress);
         expect(window.location.href).toBe(browserAddress);
         expect(router.state.location.pathname).toBe(pageAddress);
       } finally {
-        environment.jsdom.virtualConsole.off("jsdomError", onError);
+        Object.defineProperty(globalThis, "window", windowProperty);
       }
     },
   );

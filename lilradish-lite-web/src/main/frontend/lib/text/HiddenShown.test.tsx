@@ -1,3 +1,4 @@
+import { expectConsoleErrors } from "../../testutil/consoleErrors";
 import { ThemeProvider } from "@mui/material/styles";
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,10 +13,10 @@ afterEach(() => {
 const of = (...codePoints: number[]) => String.fromCodePoint(...codePoints);
 
 const TURNS_ORDER = (code: string) =>
-  `A character that would turn the order text is shown in is here, drawn instead of obeyed: U+${code}.`;
+  `A text-direction character is here, shown instead of applied: U+${code}.`;
 
 const SHOWS_NOTHING = (code: string) =>
-  `A character that shows nothing is here: U+${code}.`;
+  `An invisible character is here: U+${code}.`;
 
 function drawing(text: string) {
   return render(
@@ -28,6 +29,54 @@ function drawing(text: string) {
 }
 
 describe("HiddenShown", () => {
+  it("splits a filename only for layout while preserving marker positions across the complete shared value", () => {
+    const text = `Imaginary${of(0x200b)} note.TA${of(0x202e)}R.GZ`;
+    const ending = `.TA${of(0x202e)}R.GZ`;
+    const { container } = render(
+      <ThemeProvider theme={theme}>
+        <HiddenShownAcross value={{ text }}>
+          <bdi>
+            <span>
+              <HiddenShown text={text} ending={ending} part="before-ending" />
+            </span>
+            <span>
+              <HiddenShown text={text} ending={ending} part="ending" />
+            </span>
+          </bdi>
+        </HiddenShownAcross>
+      </ThemeProvider>,
+    );
+    const pieces = container.querySelectorAll("bdi > span");
+    expect(pieces[0].textContent).toBe("ImaginaryU+200B note");
+    expect(pieces[1].textContent).toBe(".TAU+202ER.GZ");
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(container.innerHTML).not.toContain(of(0x200b));
+    expect(container.innerHTML).not.toContain(of(0x202e));
+  });
+
+  it("uses one complete-value marker budget for both filename fragments rather than resetting it for the suffix", () => {
+    const name = `${`a${of(0x200b)}`.repeat(1001)}.TXT`;
+    const { container } = render(
+      <ThemeProvider theme={theme}>
+        <HiddenShownAcross value={{ name }}>
+          <bdi>
+            <span>
+              <HiddenShown text={name} ending=".TXT" part="before-ending" />
+            </span>
+            <span>
+              <HiddenShown text={name} ending=".TXT" part="ending" />
+            </span>
+          </bdi>
+        </HiddenShownAcross>
+      </ThemeProvider>,
+    );
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(container.querySelector("bdi")?.textContent).toBe(
+      `${"a".repeat(1001)}.TXT`,
+    );
+    expect(container.textContent).toContain("1,001");
+    expect(container.innerHTML).not.toContain(of(0x200b));
+  });
   it("draws text holding nothing hidden as it is, with no marker", () => {
     const drawn = drawing("A kettle leaks.\n\tTwice.");
 
@@ -120,7 +169,7 @@ describe("HiddenShown", () => {
 
     expect(screen.getByRole("img")).toHaveAttribute(
       "title",
-      "1,234 characters that show nothing are here, one after another: U+0001.",
+      "1,234 invisible characters are here, in a row: U+0001.",
     );
     expect(drawn.querySelector("bdi")?.textContent).toBe("U+0001 ×1,234");
     expect(drawn.innerHTML).not.toContain(of(0x1));
@@ -131,7 +180,7 @@ describe("HiddenShown", () => {
 
     expect(screen.queryByRole("img")).toBeNull();
     expect(drawn.querySelector("bdi > span")).toHaveTextContent(
-      /^1,001 characters that show nothing or would turn the order/,
+      /^1,001 invisible or text-direction characters/,
     );
     expect(drawn.innerHTML).not.toContain(of(0x1));
     expect(drawn.innerHTML).not.toContain("\r");
@@ -140,7 +189,7 @@ describe("HiddenShown", () => {
   it("draws a character over and over as one marker saying how many, its count grouped, never the character", () => {
     const drawn = drawing(`a${of(0x200b).repeat(8_388_608)}b`);
     const marker = screen.getByRole("img", {
-      name: "8,388,608 characters that show nothing are here, one after another: U+200B.",
+      name: "8,388,608 invisible characters are here, in a row: U+200B.",
     });
 
     expect(screen.getAllByRole("img")).toEqual([marker]);
@@ -154,7 +203,7 @@ describe("HiddenShown", () => {
 
     expect(screen.getByRole("img")).toHaveAttribute(
       "title",
-      "2 characters that would turn the order text is shown in are here, one after another, drawn instead of obeyed: U+202E.",
+      "2 text-direction characters are here, in a row, shown instead of applied: U+202E.",
     );
     expect(screen.getByRole("img")).toHaveTextContent(/^U\+202E ×2$/);
   });
@@ -193,7 +242,7 @@ describe("HiddenShown", () => {
 
     expect(screen.queryByRole("img")).toBeNull();
     expect(above).toHaveTextContent(
-      "1,002 characters that show nothing or would turn the order text is shown in are left out of what is drawn here: too many to mark where each stands.",
+      "1,002 invisible or text-direction characters are left out here: too many to mark each one.",
     );
     expect(above).toHaveAttribute("dir", "auto");
     expect(drawn.querySelector("bdi")?.textContent).toBe(
@@ -226,7 +275,7 @@ describe("HiddenShownAcross", () => {
   const LAST = `b${of(0x202e, 0x202e, 0x202e)}`;
 
   const LEFT_OUT = (count: string) =>
-    `${count} characters that show nothing or would turn the order text is shown in are left out of what is drawn here: too many to mark where each stands.`;
+    `${count} invisible or text-direction characters are left out here: too many to mark each one.`;
 
   /** Each text of `texts` drawn apart within one value holding them all, a list and fields deep. */
   function drawingAcross(texts: readonly string[]) {
@@ -284,8 +333,6 @@ describe("HiddenShownAcross", () => {
   });
 
   it("refuses to draw a text within a value that does not hold it, rather than judge it alone", () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-
     expect(() =>
       render(
         <HiddenShownAcross value={[HALF]}>
@@ -293,5 +340,6 @@ describe("HiddenShownAcross", () => {
         </HiddenShownAcross>,
       ),
     ).toThrow("a text was drawn within a value that does not hold it");
+    expectConsoleErrors();
   });
 });

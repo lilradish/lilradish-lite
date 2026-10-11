@@ -1,7 +1,9 @@
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
 import { cleanup } from "@testing-library/react";
-import { afterEach, expect } from "vitest";
+import { afterEach, aroundAll, aroundEach, expect } from "vitest";
+
+import { guardConsoleErrors } from "./testutil/consoleErrors";
 
 // The library's own `/vitest` entry augments `Assertion`, whose type parameters
 // this version of Vitest declares differently — a hard TS2428. Its matchers go
@@ -25,6 +27,8 @@ expect.extend(matchers);
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+aroundAll(guardConsoleErrors);
+aroundEach(guardConsoleErrors);
 afterEach(cleanup);
 
 // A focus's related target is an element or null (whatwg/html source:87016-87020); jsdom stands

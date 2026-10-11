@@ -5,6 +5,8 @@
     { "moduleLicense": "The 3-Clause BSD License" },
     { "moduleLicense": "The 2-Clause BSD License" },
     { "moduleLicense": "PUBLIC DOMAIN" },
+    { "moduleLicense": "0BSD" },
+    { "moduleName": "io\\.zonky\\.test\\.postgres:embedded-postgres-binaries-.*" },
 
     { "moduleName": "org\\.libprunus:libprunus-bom" },
     { "moduleName": "org\\.libprunus:libprunus-core" },

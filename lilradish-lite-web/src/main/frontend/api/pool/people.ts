@@ -5,16 +5,13 @@ import { pagedLoader, type ListQuery } from "../../lib/request/pagedLoader";
 
 export const PEOPLE = "/api/pool/people";
 
-/**
- * The roles the estate grants, spelt the way the server spells them, and held
- * level with the server's list for the reason `SurfaceAct` gives.
- */
+/** Spelt and held level with the server's estate roles, for the reason `SurfaceAct` gives. */
 export type EstateRole = "steward" | "watcher";
 
 /** Held as the server said them, for the reason `Standing` gives: an unknown role is kept. */
 export type EstateRoles = ReadonlySet<string>;
 
-/** The columns the pool can be sorted by, spelt as the server takes them. */
+/** Spelt as the server takes them. */
 export type PoolSortColumn = "userId" | "displayName" | "groupCount";
 
 /** One column, led by a hyphen for descending. */
@@ -22,7 +19,7 @@ export type PoolOrder = PoolSortColumn | `-${PoolSortColumn}`;
 
 export type PoolQuery = ListQuery<PoolOrder>;
 
-/** One row of the pool. `subjectId` addresses the row and is never shown. */
+/** `subjectId` addresses the row and is never shown. */
 export interface PoolPerson {
   readonly subjectId: string;
   readonly userId: string;
@@ -40,8 +37,8 @@ export interface PoolPersonPanel {
   readonly displayName?: string;
   readonly estateRoles: EstateRoles;
   /**
-   * The roles held that nobody else in the pool could grant an estate role
-   * without, so withdrawing them is not offered.
+   * Roles no other pool member could grant an estate role without;
+   * withdrawing them is not offered.
    */
   readonly lastGrantingRoles: EstateRoles;
   readonly groups: readonly string[];
@@ -62,7 +59,6 @@ export function bringIn(
   return post(PEOPLE, { userId }, signal, panelFrom);
 }
 
-/** Built member by member, for the reason the rows of the list are. */
 export function panelFrom(body: unknown): PoolPersonPanel | null {
   if (!isUnchecked(body)) {
     return null;
@@ -96,7 +92,7 @@ export function panelFrom(body: unknown): PoolPersonPanel | null {
   return typeof displayName === "string" ? { ...read, displayName } : null;
 }
 
-/** Built member by member; a row missing what identifies it fails the whole page. */
+/** A row missing what identifies it fails the whole page. */
 function personFrom(row: unknown): PoolPerson | null {
   if (!isUnchecked(row)) {
     return null;

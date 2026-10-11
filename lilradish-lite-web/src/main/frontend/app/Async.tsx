@@ -10,23 +10,14 @@ import type { Rule } from "./standing/actRules";
 const QUIET_SX = { my: 1, color: "text.secondary" };
 
 /**
- * The four ways a read ends, decided in one place instead of on every screen.
+ * A refusal replaces the empty notice: claiming an unreadable queue is empty
+ * would mislead the reader. Keeping that order here protects every caller.
  *
- * The one that matters is the order: a refusal is rendered *instead of* the
- * empty notice, never beside it. "Nothing is waiting for you", written over a
- * queue the server would not show, is a lie the reader has no way to detect,
- * and every screen that spells these states out by hand is one edit from
- * telling it.
+ * Re-reading keeps the drawn value and shows loading beside it, preserving
+ * the requesting control and its focus. Only that same value counts as kept;
+ * a new source's fresh blank waits like a first read.
  *
- * A read asked again keeps what it last drew, and says it is reading beside
- * it rather than instead of it: swapped out, the control that asked would go
- * with it and take the keyboard back to the top of the page. Only the very
- * value drawn counts as kept — a read that moved to another source holds a
- * fresh blank, and that is waited on like a first read.
- *
- * Takes a whole `Resource` rather than a narrower shape of its own: that is
- * what produces these states, and the type behind it holding only the three
- * read here is unexported on purpose.
+ * Takes the producing `Resource`; its narrower three-field state stays unexported.
  */
 export function Async<T>({
   read,
@@ -38,9 +29,8 @@ export function Async<T>({
   /** What reading it takes, so a refusal of the act is said as that rule. */
   readonly rule?: Rule;
   /**
-   * What to say when the read came back with nothing, or null when it came back
-   * with something. Asked of the value rather than worked out here, because
-   * nothing is the caller's word: no rows, no approved version, no attempt yet.
+   * Null means something was returned; otherwise gives the empty notice.
+   * The caller decides what counts as nothing.
    */
   readonly empty: (value: T) => string | null;
   readonly children: (value: T) => ReactNode;

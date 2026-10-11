@@ -32,8 +32,8 @@ export function declare(
 }
 
 /**
- * Half of what a workflow draft declares, written whole in place of what it held, naming the revision the page
- * read; answered with the version as it then reads.
+ * Replaces the workflow draft's whole half, guarded by the revision read;
+ * returns the version as it then reads.
  */
 export function declareWorkflow(
   groupId: string,

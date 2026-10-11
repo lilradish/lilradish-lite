@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requestsTo, serving, type Reply } from "../../../testutil/answering";
 import { deferred } from "../../../testutil/deferred";
+import { KEY } from "../../../testutil/runPage";
 import { openStepPage } from "../../../testutil/stepPage";
 import { accountOpened } from "../../../testutil/stateAccount";
+import { tryReplies } from "../../../testutil/tryReplies";
 
 const GROUP = "00000003-0000-4000-8000-000000000d01";
 
@@ -25,7 +27,7 @@ const SUMMARISE = "00000009-0000-4000-8000-000000000d01";
 
 const FILE_IT = "00000009-0000-4000-8000-000000000d02";
 
-const PAGE = `/groups/${GROUP}/work/${RUN_ID}`;
+const PAGE = `/groups/${KEY}/work/${RUN_ID}`;
 
 const RUN = `/api/groups/${GROUP}/runs/${RUN_ID}`;
 
@@ -41,9 +43,8 @@ const DAN = { userId: "000d02", displayName: "Dan" };
 
 const EVE = { userId: "000d04", displayName: "Eve" };
 
-/** What is said where the answer is refused for the act itself: the rule of who may answer a step. */
 const ANSWER_RULE =
-  "A group's steps are answered, and asked for again, only by a role in it that may answer one.";
+  "Only someone in this group who can answer steps can answer a step or ask again.";
 
 const CRLF_REFUSED =
   "Lines here end in a line feed alone, never in a carriage return and a line feed (CRLF).";
@@ -53,6 +54,7 @@ const CLAIM = {
   number: 7,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000d01",
     name: "Handle a claim",
     version: 3,
@@ -73,7 +75,7 @@ const CLAIM = {
   at: { stepId: SUMMARISE, name: "summarise" },
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["stop"],
+  stateActs: ["stop"],
 };
 
 const STOPPED_CLAIM = {
@@ -81,7 +83,7 @@ const STOPPED_CLAIM = {
   state: "stopped",
   at: undefined,
   stopped: { at: "2026-09-26T09:45:00Z", by: CLAIM.startedBy },
-  acts: ["open_again"],
+  stateActs: ["open_again"],
 };
 
 const TICKET = {
@@ -127,7 +129,7 @@ const HEADER = {
   versionId: VERSION,
   state: "running",
   at: { stepId: SUMMARISE, name: "summarise" },
-  acts: ["stop"],
+  stateActs: ["stop"],
   progress: { done: 0, of: 2 },
 };
 
@@ -135,7 +137,7 @@ const STOPPED_HEADER = {
   ...HEADER,
   state: "stopped",
   at: undefined,
-  acts: ["open_again"],
+  stateActs: ["open_again"],
 };
 
 const WENT_IN = [
@@ -147,10 +149,13 @@ const WENT_IN = [
 ];
 
 const OWED_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
   runs: {
+    versionName: null,
     kind: "question",
     entryId: "00000006-0000-4000-8000-000000000d02",
     name: "Summarise",
@@ -175,29 +180,31 @@ const OWED_ROW = {
     { field: "priority", value: "high", now: "stands" },
   ],
   next: { number: 2, beyond: false },
-  acts: ["answer", "ask_again"],
-  withheld: [],
+  stateActs: ["answer", "ask_again"],
+  stateRefusals: [],
 };
 
 const STOPPED_ROW = {
   where: { ...OWED_ROW.where, waitsOn: undefined },
-  acts: [],
-  withheld: [
+  stateActs: [],
+  stateRefusals: [
     { act: "answer", refusal: "RUN_STOPPED" },
     { act: "ask_again", refusal: "RUN_STOPPED" },
   ],
 };
 
 const FILE_IT_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: FILE_IT,
   order: 2,
   name: "file_it",
-  runs: { kind: "route" },
+  runs: { versionName: null, kind: "route" },
   state: "not_started",
   takesFrom: [],
   cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
+  stateActs: [],
+  stateRefusals: [],
 };
 
 const FIRST_TRY = {
@@ -210,7 +217,7 @@ const FIRST_TRY = {
       field: "summary",
       value: "A fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Too short." },
+      decision: { outcome: "refused", whyLines: "several", why: "Too short." },
     },
     {
       field: "priority",
@@ -226,7 +233,6 @@ const FIRST_TRY = {
 
 const SMALL = { kind: "model", model: "small" };
 
-/** Include an invisible character to exercise how hidden review text is shown. */
 const MODEL_REVIEW = { asked: true, by: SMALL };
 
 const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b);
@@ -315,8 +321,8 @@ const ENTRY_STOPPED_ROW = {
     },
     waitsOn: "starter",
   },
-  acts: [],
-  withheld: [
+  stateActs: [],
+  stateRefusals: [
     { act: "answer", refusal: "ENTRY_STOPPED" },
     { act: "ask_again", refusal: "ENTRY_STOPPED" },
   ],
@@ -353,18 +359,22 @@ const ANSWERED_ROW = {
     { field: "priority", value: "low", now: "stands" },
   ],
   next: undefined,
-  acts: [],
+  stateActs: [],
 };
 
-function answeredBy(
-  person: typeof DAN,
-  withheld: object,
-): readonly [string, number] {
+function answeredBy(person: typeof DAN): readonly [string, number] {
   return reply({
     run: HEADER,
     rereadAfterSeconds: 5,
     declarations: DECLARATIONS,
-    step: { ...OWED_ROW, ...ANSWERED_ROW, withheld: [withheld] },
+    step: {
+      ...OWED_ROW,
+      ...ANSWERED_ROW,
+      stateActs: ["review"],
+      stateRefusals: [],
+      producedByKind: "person",
+      producedByUserId: person.userId,
+    },
     wentIn: WENT_IN,
     wentInFrom: "try",
     cameOut: [
@@ -399,15 +409,9 @@ function answeredBy(
 }
 
 /** A person cannot review their own answer. */
-const ANSWERED = answeredBy(DAN, {
-  act: "review",
-  refusal: "REVIEW_OWN_PRODUCTION",
-});
+const ANSWERED = answeredBy(DAN);
 
-const EVE_ANSWERED = answeredBy(EVE, {
-  act: "review",
-  refusal: "ACT_NOT_PERMITTED",
-});
+const EVE_ANSWERED = answeredBy(EVE);
 
 const SECOND_TRY = {
   number: 2,
@@ -419,7 +423,7 @@ const SECOND_TRY = {
       field: "summary",
       value: "A printer fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Say where." },
+      decision: { outcome: "refused", whyLines: "several", why: "Say where." },
     },
     {
       field: "priority",
@@ -476,12 +480,12 @@ const REFERENCE = { ...SUMMARY, name: "reference", label: "Reference" };
 const FOLDER = { ...SUMMARY, name: "folder", label: "Folder" };
 
 const CODE_ROW = {
-  runs: { kind: "code_step", codeStep: "file_claim" },
+  runs: { versionName: null, kind: "code_step", codeStep: "file_claim" },
   producer: { kind: "code" },
   reviewer: { kind: "person" },
   gaveBack: undefined,
-  acts: ["answer"],
-  withheld: [{ act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" }],
+  stateActs: ["answer"],
+  stateRefusals: [{ act: "ask_again", refusal: "ASK_AGAIN_NOT_OFFERED" }],
 };
 
 const NOT_HELD_ROW = {
@@ -493,8 +497,8 @@ const NOT_HELD_ROW = {
     waitsOn: "starter",
   },
   next: undefined,
-  acts: [],
-  withheld: [],
+  stateActs: [],
+  stateRefusals: [],
 };
 
 function codeStepRead(gives: readonly object[]): Reply {
@@ -557,25 +561,25 @@ const KINDS_TRY = {
       field: "address",
       value: { street: "Main St" },
       now: "refused",
-      decision: { outcome: "refused", why: "Which town?" },
+      decision: { outcome: "refused", whyLines: "several", why: "Which town?" },
     },
     {
       field: "notes",
       value: ["Smoke."],
       now: "refused",
-      decision: { outcome: "refused", why: "Say more." },
+      decision: { outcome: "refused", whyLines: "several", why: "Say more." },
     },
     {
       field: "priority",
       value: "high",
       now: "refused",
-      decision: { outcome: "refused", why: "Not today." },
+      decision: { outcome: "refused", whyLines: "several", why: "Not today." },
     },
     {
       field: "due",
       value: "2026-09-26T10:00:00+02:00",
       now: "refused",
-      decision: { outcome: "refused", why: "Too late." },
+      decision: { outcome: "refused", whyLines: "several", why: "Too late." },
     },
   ],
   review: { asked: true, by: { kind: "person", person: DAN } },
@@ -613,13 +617,13 @@ const EARLIER_SHAPE_TRY = {
       field: "summary",
       value: "A fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Too short." },
+      decision: { outcome: "refused", whyLines: "several", why: "Too short." },
     },
     {
       field: "priority",
       value: JSON.stringify("urgent"),
       now: "refused",
-      decision: { outcome: "refused", why: "Not today." },
+      decision: { outcome: "refused", whyLines: "several", why: "Not today." },
       earlierShape: true,
     },
   ],
@@ -646,11 +650,10 @@ function earlierShapeRead(): Reply {
   });
 }
 
-/** A reply the server never sends. */
 const UNANSWERED: Reply = new Promise(() => {});
 
 function reply(body: object): readonly [string, number] {
-  return [JSON.stringify(body), 200];
+  return tryReplies(body).summary;
 }
 
 function refusal(
@@ -665,12 +668,16 @@ function setApart(words: string): string {
   return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
 }
 
-function conversing(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
+function conversing(
+  routes: Readonly<Record<string, readonly Reply[]>> = {},
+  permissions: readonly string[] = ["answer_step", "start_run"],
+) {
   return openStepPage({
     groupId: GROUP,
     view: "run",
     address: PAGE,
-    permissions: ["answer_step"],
+    permissions,
+    userId: DAN.userId,
     routes: {
       [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
       [`GET ${STEPS}`]: [stepsRead(), UNANSWERED],
@@ -686,11 +693,11 @@ function stepOpened(routes: Readonly<Record<string, readonly Reply[]>>) {
     view: "step",
     address: `${PAGE}/steps/${SUMMARISE}`,
     permissions: ["answer_step"],
+    userId: DAN.userId,
     routes,
   });
 }
 
-/** What is in flight let land a turn at a time, until `landed` holds; failing where it never does. */
 async function landing(landed: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100 && !landed(); turn += 1) {
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -708,19 +715,23 @@ async function messageDrawn(): Promise<HTMLElement> {
   await landing(
     () => screen.queryByRole("list", { name: "The conversation" }) !== null,
   );
+  // Let the current refused value's guarded detail read land before an answer is opened.
+  await act(() => vi.advanceTimersByTimeAsync(0));
   return message();
 }
 
 async function answerOpened(): Promise<HTMLElement> {
   const drawn = await messageDrawn();
-  press(within(drawn).getByRole("button", { name: "Answer it here" }));
+  await press(
+    within(drawn).getByRole("button", { name: "Answer it yourself" }),
+  );
   await landing(() => yourAnswer() !== null);
   return yourAnswer()!;
 }
 
 async function detailsOpened(): Promise<void> {
   const drawn = await messageDrawn();
-  press(within(drawn).getByRole("button", { name: "Details" }));
+  await press(within(drawn).getByRole("button", { name: "Details" }));
   await landing(
     () =>
       within(message()).queryByRole("link", {
@@ -733,22 +744,42 @@ function yourAnswer(): HTMLElement | null {
   return screen.queryByRole("region", { name: "Your answer" });
 }
 
-function press(control: HTMLElement): void {
-  act(() => control.click());
+let reader: ReturnType<typeof userEvent.setup>;
+
+async function press(control: HTMLElement): Promise<void> {
+  let completed = false;
+  const pressed = reader.click(control);
+  void pressed.then(
+    () => {
+      completed = true;
+    },
+    () => {
+      completed = true;
+    },
+  );
+  // Testing Library's async wrapper schedules one more timeout after user-event has advanced its own timers.
+  if (vi.isFakeTimers()) {
+    for (let turn = 0; turn < 100 && !completed; turn += 1) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(completed).toBe(true);
+  }
+  await pressed;
+  await act(async () => {});
 }
 
 function summary(form: HTMLElement): HTMLElement {
-  return within(form).getByRole("textbox", { name: "Summary" });
+  return within(form).getByRole("textbox", { name: "Summary · summary" });
 }
 
 function reason(form: HTMLElement): HTMLElement {
   return within(form).getByRole("textbox", {
-    name: "Why you are answering this way",
+    name: "Your reason",
   });
 }
 
 function sendButton(form: HTMLElement): HTMLElement {
-  return within(form).getByRole("button", { name: "Send this answer" });
+  return within(form).getByRole("button", { name: "Submit answer" });
 }
 
 function sent(served: ReturnType<typeof serving>): RequestInit[] {
@@ -763,6 +794,12 @@ function asked(served: ReturnType<typeof serving>, request: string): number {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  reader = userEvent.setup({
+    advanceTimers: (delay) =>
+      vi.isFakeTimers()
+        ? act(() => vi.advanceTimersByTimeAsync(delay))
+        : Promise.resolve(),
+  });
 });
 
 afterEach(() => {
@@ -770,74 +807,355 @@ afterEach(() => {
 });
 
 describe("AnswerHere", () => {
+  it("marks the instruction's input label and name beside the input values without substituting them", async () => {
+    const { sent: requests } = stepOpened({
+      [`GET ${STEP}`]: [
+        stepRead({}, { instruction: "Read {{text}}. \\{{literal}}" }),
+      ],
+    });
+    await landing(
+      () =>
+        screen.queryByRole("button", { name: "Answer it yourself" }) !== null,
+    );
+    await press(screen.getByRole("button", { name: "Answer it yourself" }));
+    await landing(() => yourAnswer() !== null);
+    const form = yourAnswer()!;
+    expect(within(form).getByText("{{text}}").parentElement?.textContent).toBe(
+      "Text · {{text}}",
+    );
+    expect(form).toHaveTextContent("{{literal}}");
+    expect(screen.getAllByText("Printer on fire").length).toBeGreaterThan(0);
+    expect(form).not.toHaveTextContent("Read Printer on fire");
+    expect(sent(requests)).toEqual([]);
+  });
+  it.each(["ACT_NOT_PERMITTED", "REASON_UNUSABLE"])(
+    "discards a late answer PUT refusal %s after permission was revoked and restored",
+    async (code) => {
+      const later = deferred<readonly [string, number]>();
+      const {
+        sent: served,
+        changeStanding,
+        readAgain,
+      } = conversing({ [`PUT ${ANSWER}`]: [later.promise] });
+      const form = await answerOpened();
+      fireEvent.change(summary(form), { target: { value: "A printer fire." } });
+      fireEvent.change(reason(form), {
+        target: { value: "Read the incident twice." },
+      });
+      await press(sendButton(form));
+      await landing(() => sent(served).length === 1);
+      act(() => changeStanding([]));
+      act(() => changeStanding(["answer_step", "start_run"]));
+      const restored = within(message()).getByRole("button", {
+        name: "Answer it yourself",
+      });
+      act(() => restored.focus());
+      await act(async () =>
+        later.settle(refusal(code, code === "ACT_NOT_PERMITTED" ? 403 : 400)),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.activeElement).toBe(restored);
+      expect(reason(yourAnswer()!)).not.toHaveAttribute("aria-invalid", "true");
+      expect(summary(yourAnswer()!)).toHaveValue("A printer fire.");
+      expect(readAgain).not.toHaveBeenCalled();
+      expect(sent(served)).toHaveLength(1);
+    },
+  );
+  it.each(["success", "failure"])(
+    "discards an already issued answer reread's late %s after permission returns",
+    async (outcome) => {
+      const later = deferred<readonly [string, number]>();
+      const { sent: served, changeStanding } = conversing({
+        [`GET ${STEP}`]: [stepRead(), later.promise],
+        [`PUT ${ANSWER}`]: [refusal("STEP_MOVED_ON", 409)],
+      });
+      const form = await answerOpened();
+      fireEvent.change(summary(form), { target: { value: "A printer fire." } });
+      fireEvent.change(reason(form), {
+        target: { value: "Read the incident twice." },
+      });
+      await press(sendButton(form));
+      await landing(() => asked(served, `GET ${STEP}`) === 2);
+      act(() => changeStanding([]));
+      act(() => changeStanding(["answer_step", "start_run"]));
+      const restored = within(message()).getByRole("button", {
+        name: "Answer it yourself",
+      });
+      act(() => restored.focus());
+      await act(async () =>
+        later.settle(
+          outcome === "success"
+            ? await stepRead()
+            : refusal("READ_FAILED", 503),
+        ),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.activeElement).toBe(restored);
+      expect(summary(yourAnswer()!)).toHaveValue("A printer fire.");
+      expect(asked(served, `GET ${STEP}`)).toBe(2);
+      expect(sent(served)).toHaveLength(1);
+    },
+  );
+  it.each(["permission", "identity"])(
+    "does not accept a successful answer PUT after the reader's %s changes and returns",
+    async (change) => {
+      const later = deferred<readonly [string, number]>();
+      const {
+        sent: served,
+        changeStanding,
+        readAgain,
+      } = conversing({
+        [`PUT ${ANSWER}`]: [later.promise],
+      });
+      const form = await answerOpened();
+      fireEvent.change(summary(form), { target: { value: "A printer fire." } });
+      fireEvent.change(reason(form), {
+        target: { value: "Read the incident twice." },
+      });
+      await press(sendButton(form));
+      await landing(() => sent(served).length === 1);
+      const permissions = ["answer_step", "start_run"];
+      act(() =>
+        changeStanding(
+          change === "permission" ? ["start_run"] : permissions,
+          change === "identity" ? EVE.userId : DAN.userId,
+        ),
+      );
+      act(() => changeStanding(permissions, DAN.userId));
+      const restored = within(message()).getByRole("button", {
+        name: "Answer it yourself",
+      });
+      act(() => restored.focus());
+
+      await act(async () => later.settle(ANSWERED));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(restored).toHaveFocus();
+      expect(summary(yourAnswer()!)).toHaveValue("A printer fire.");
+      expect(reason(yourAnswer()!)).toHaveValue("Read the incident twice.");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(readAgain).not.toHaveBeenCalled();
+      expect(sent(served)).toHaveLength(1);
+    },
+  );
+  it.each(["permission", "identity"])(
+    "forgets an accepted answer-form failure after the reader's %s changes, without reviving it on return",
+    async (change) => {
+      const later = deferred<readonly [string, number]>();
+      const {
+        sent: served,
+        changeStanding,
+        readAgain,
+      } = conversing({
+        [`GET ${STEP}`]: [
+          stepRead({}, {}, { answering: undefined }),
+          later.promise,
+          stepRead(),
+        ],
+      });
+      const permissions = ["answer_step", "start_run"];
+      const drawn = await messageDrawn();
+      await press(
+        within(drawn).getByRole("button", { name: "Answer it yourself" }),
+      );
+      await landing(() => asked(served, `GET ${STEP}`) === 2);
+      await act(async () => later.settle(refusal("READ_FAILED", 503)));
+      await landing(() => screen.queryByRole("alert") !== null);
+      const alert = screen.getByRole("alert");
+      expect(alert).toBeVisible();
+      expect(alert.closest('[tabindex="-1"]')).toHaveFocus();
+      expect(yourAnswer()).toBeNull();
+
+      act(() => changeStanding(permissions));
+      expect(screen.getByRole("alert")).toBe(alert);
+      act(() =>
+        changeStanding(
+          change === "permission" ? ["start_run"] : permissions,
+          change === "identity" ? EVE.userId : DAN.userId,
+        ),
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(yourAnswer()).toBeNull();
+      act(() => changeStanding(permissions, DAN.userId));
+      expect(screen.queryByRole("alert")).toBeNull();
+      const restored = within(message()).getByRole("button", {
+        name: "Answer it yourself",
+      });
+      act(() => restored.focus());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(restored).toHaveFocus();
+      expect(asked(served, `GET ${STEP}`)).toBe(2);
+      expect(sent(served)).toEqual([]);
+      expect(readAgain).not.toHaveBeenCalled();
+
+      await press(restored);
+      await landing(() => yourAnswer() !== null);
+      expect(summary(yourAnswer()!)).toHaveValue("A fire.");
+      expect(summary(yourAnswer()!)).toHaveFocus();
+      expect(reason(yourAnswer()!)).toHaveValue("");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(asked(served, `GET ${STEP}`)).toBe(3);
+      expect(sent(served)).toEqual([]);
+    },
+  );
+  it("discards a late answer-form failure after answer permission was revoked and restored", async () => {
+    const later = deferred<readonly [string, number]>();
+    const {
+      sent: served,
+      changeStanding,
+      readAgain,
+    } = conversing({
+      [`GET ${STEP}`]: [
+        stepRead({}, {}, { answering: undefined }),
+        later.promise,
+      ],
+    });
+    const drawn = await messageDrawn();
+    await press(
+      within(drawn).getByRole("button", { name: "Answer it yourself" }),
+    );
+    await landing(() => asked(served, `GET ${STEP}`) === 2);
+    act(() => changeStanding([]));
+    act(() => changeStanding(["answer_step", "start_run"]));
+    const restored = within(message()).getByRole("button", {
+      name: "Answer it yourself",
+    });
+    act(() => restored.focus());
+    await act(async () => later.settle(refusal("READ_FAILED", 503)));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.activeElement).toBe(restored);
+    expect(yourAnswer()).toBeNull();
+    expect(readAgain).not.toHaveBeenCalled();
+    expect(sent(served)).toEqual([]);
+  });
+  it("discards an answer-form read that crossed a permission revocation instead of reopening its form when permission returns", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent: served, changeStanding } = conversing({
+      [`GET ${STEP}`]: [
+        stepRead({}, {}, { answering: undefined }),
+        later.promise,
+      ],
+    });
+    const drawn = await messageDrawn();
+    await press(
+      within(drawn).getByRole("button", { name: "Answer it yourself" }),
+    );
+    await landing(() => asked(served, `GET ${STEP}`) === 2);
+    act(() => changeStanding([]));
+    expect(yourAnswer()).toBeNull();
+    act(() => changeStanding(["answer_step", "start_run"]));
+    await act(async () => later.settle(await stepRead()));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(yourAnswer()).toBeNull();
+    expect(sent(served)).toEqual([]);
+    expect(asked(served, `GET ${STEP}`)).toBe(2);
+  });
   it.each([true, false])(
-    "draws the server's search question with sent=%s rather than assembling it from the inputs",
+    "draws its pinned instruction and separate ordinary inputs with sent=%s",
     async (sent) => {
-      const held = `Demo${String.fromCodePoint(0x200b)}Sample server question`;
+      const instruction = `Demo${String.fromCodePoint(0x200b)}Sample server instruction`;
       const { sent: requests } = stepOpened({
         [`GET ${STEP}`]: [
           stepRead(
-            { runs: { kind: "search", searchWay: "web" } },
-            {
-              instruction: undefined,
-              searchQuestion: held,
-              searchQuestionSent: sent,
-            },
+            { runs: { ...OWED_ROW.runs, kind: "search", searchWay: "web" } },
+            { instruction },
+            { wentInFrom: sent ? "try" : "not_yet_sent" },
           ),
         ],
       });
       await landing(
-        () => screen.queryByRole("button", { name: "Answer it here" }) !== null,
+        () =>
+          screen.queryByRole("button", { name: "Answer it yourself" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
       const form = yourAnswer()!;
-
-      expect(
-        within(form).getByText("The question it searches with"),
-      ).toBeInTheDocument();
-      expect(form).toHaveTextContent("DemoU+200BSample server question");
+      expect(form).toHaveTextContent("DemoU+200BSample server instruction");
       expect(form.innerHTML).not.toContain(String.fromCodePoint(0x200b));
       expect(within(form).queryByText("The instruction")).toBeNull();
-      expect(within(form).queryByText("What went in")).toBeNull();
-      expect(within(form).queryByText("Not yet sent")).toBeNull();
+      expect(within(form).queryByText("Inputs")).toBeNull();
+      expect(screen.getByText("Printer on fire")).toBeInTheDocument();
       expect(
-        form.textContent?.includes(
-          "Nothing is sent yet: this is what it would take now.",
-        ),
+        screen.queryByText(
+          "Not sent yet — these are the inputs it would use now.",
+          { exact: false },
+        ) !== null,
       ).toBe(!sent);
       expect(asked(requests, `GET ${STEP}`)).toBe(1);
     },
   );
 
-  it("draws the withheld search question without leaking the stored instruction or reconstructing it from inputs", async () => {
+  it("withholds a model-source input while keeping the author instruction and another readable input", async () => {
     stepOpened({
       [`GET ${STEP}`]: [
         stepRead(
-          { runs: { kind: "search", searchWay: "web" } },
-          { instruction: undefined, searchQuestionWithheld: true },
+          {
+            runs: { ...OWED_ROW.runs, kind: "search", searchWay: "web" },
+            takesFrom: [
+              ...OWED_ROW.takesFrom,
+              {
+                input: "secret",
+                from: { kind: "step", stepId: FILE_IT, name: "Earlier model" },
+              },
+            ],
+          },
+          { instruction: "Read the visible evidence." },
+          {
+            declarations: {
+              ...DECLARATIONS,
+              [QUESTION_VERSION]: {
+                ...DECLARATIONS[QUESTION_VERSION],
+                takes: [
+                  ...DECLARATIONS[QUESTION_VERSION].takes,
+                  { ...TICKET, name: "secret", label: "Secret evidence" },
+                ],
+              },
+            },
+            wentIn: [
+              ...WENT_IN,
+              {
+                input: "secret",
+                from: {
+                  kind: "step",
+                  stepId: FILE_IT,
+                  name: "Earlier model",
+                  runId: RUN_ID,
+                  runNumber: 7,
+                },
+                withheld: true,
+              },
+            ],
+          },
         ),
       ],
     });
     await landing(
-      () => screen.queryByRole("button", { name: "Answer it here" }) !== null,
+      () =>
+        screen.queryByRole("button", { name: "Answer it yourself" }) !== null,
     );
-    press(screen.getByRole("button", { name: "Answer it here" }));
+    await press(screen.getByRole("button", { name: "Answer it yourself" }));
     await landing(() => yourAnswer() !== null);
-    expect(yourAnswer()).toHaveTextContent("are withheld from you.");
+    expect(yourAnswer()).toHaveTextContent("Read the visible evidence.");
+    expect(screen.getByText("Printer on fire")).toBeInTheDocument();
+    expect(screen.getByText(/Secret evidence/)).toBeInTheDocument();
     expect(
-      within(yourAnswer()!).queryByText("The question it searches with"),
-    ).toBeNull();
-    expect(within(yourAnswer()!).queryByText("The instruction")).toBeNull();
+      screen.getByText(/You don't have permission to see/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Secret evidence/).closest("section"),
+    ).toHaveTextContent("You don't have permission to see");
   });
   describe("in a run's conversation", () => {
-    it("draws Answer it here as a button beside Ask again, neither pressed, with no form and no read of the step", async () => {
+    it("draws Answer it yourself beside Ask again without opening a form, while reading the current refusal once", async () => {
       const { sent: served } = conversing();
 
       const drawn = await messageDrawn();
 
       const answer = within(drawn).getByRole("button", {
-        name: "Answer it here",
+        name: "Answer it yourself",
       });
       expect(answer).toHaveAttribute("aria-expanded", "false");
       expect(
@@ -845,62 +1163,67 @@ describe("AnswerHere", () => {
       ).toBeVisible();
       expect(yourAnswer()).toBeNull();
       expect(within(drawn).queryByRole("textbox")).toBeNull();
-      expect(asked(served, `GET ${STEP}`)).toBe(0);
+      expect(asked(served, `GET ${STEP}`)).toBe(1);
       expect(sent(served)).toEqual([]);
     });
 
     it("draws neither where the step withholds both from the reader, saying so instead", async () => {
-      conversing({
-        [`GET ${STEPS}`]: [
-          stepsRead({
-            acts: [],
-            withheld: [
-              { act: "answer", refusal: "ACT_NOT_PERMITTED" },
-              { act: "ask_again", refusal: "ACT_NOT_PERMITTED" },
-            ],
-          }),
-        ],
-      });
+      conversing(
+        {
+          [`GET ${STEPS}`]: [
+            stepsRead({
+              stateActs: ["answer", "ask_again"],
+              stateRefusals: [],
+            }),
+          ],
+        },
+        [],
+      );
 
       const drawn = await messageDrawn();
 
-      expect(drawn).not.toHaveTextContent("You may not answer it here.");
+      expect(drawn).not.toHaveTextContent(
+        "You don't have permission to answer it.",
+      );
       expect(
         within(accountOpened(drawn, "Waiting")).getByText(
-          "You may not answer it here.",
+          "You don't have permission to answer it.",
         ),
       ).toBeVisible();
       expect(
-        within(drawn).queryByRole("button", { name: "Answer it here" }),
+        within(drawn).queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
       expect(
         within(drawn).queryByRole("button", { name: "Ask again" }),
       ).toBeNull();
     });
 
-    it("reads the step once pressed and opens the form under Answer it here, sending nothing", async () => {
+    it("reads the step once pressed and opens the form under Answer it yourself, sending nothing", async () => {
       const { sent: served } = conversing();
 
       const form = await answerOpened();
 
       expect(asked(served, `GET ${STEP}`)).toBe(1);
       expect(
-        within(message()).getByRole("button", { name: "Answer it here" }),
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
       ).toHaveAttribute("aria-expanded", "true");
       expect(form).toBeVisible();
       expect(sent(served)).toEqual([]);
     });
 
-    it("holds Answer it here while its read of the step is out, reading once however often it is pressed", async () => {
-      const { sent: served } = conversing({ [`GET ${STEP}`]: [UNANSWERED] });
+    it("holds Answer it yourself while its read of the step is out, reading once however often it is pressed", async () => {
+      const { sent: served } = conversing({
+        [`GET ${STEPS}`]: [stepsRead({ gaveBack: undefined }), UNANSWERED],
+        [`GET ${STEP}`]: [UNANSWERED],
+      });
       const answer = within(await messageDrawn()).getByRole("button", {
-        name: "Answer it here",
+        name: "Answer it yourself",
       });
       expect(answer).not.toHaveAttribute("aria-disabled");
 
-      press(answer);
+      await press(answer);
       await act(() => vi.advanceTimersByTimeAsync(0));
-      press(answer);
+      await press(answer);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(answer).toHaveAttribute("aria-disabled", "true");
@@ -910,16 +1233,27 @@ describe("AnswerHere", () => {
 
     it("forgets a refused read of the step once a later press opens the form from the step read beside it", async () => {
       const { sent: served } = conversing({
+        [`GET ${STEPS}`]: [stepsRead({ gaveBack: undefined }), UNANSWERED],
         [`GET ${STEP}`]: [refusal("INTERNAL", 500), stepRead(), UNANSWERED],
       });
       const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(drawn).getByRole("button", { name: "Answer it yourself" }),
+      );
       await landing(() => screen.queryByRole("alert") !== null);
       await detailsOpened();
 
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
 
       expect(yourAnswer()).not.toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(asked(served, `GET ${STEP}`)).toBe(2);
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
+      expect(yourAnswer()).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
       expect(asked(served, `GET ${STEP}`)).toBe(2);
     });
@@ -930,7 +1264,7 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
 
       expect(sendButton(form)).toHaveClass("MuiButton-contained");
-      expect(form).toHaveTextContent("What it asks");
+      expect(form).toHaveTextContent("Instructions");
       expect(within(form).getByText(/^Summarise the ticket/).textContent).toBe(
         INSTRUCTION,
       );
@@ -941,10 +1275,10 @@ describe("AnswerHere", () => {
 
       await answerOpened();
 
-      expect(
-        screen.getByRole("region", { name: "What went in" }),
-      ).toHaveTextContent("Printer on fire");
-      for (const name of ["What went in", "Your answer"]) {
+      expect(screen.getByRole("region", { name: "Inputs" })).toHaveTextContent(
+        "Printer on fire",
+      );
+      for (const name of ["Inputs", "Your answer"]) {
         expect(
           screen.getByRole("heading", { level: 3, name }),
         ).toBeInTheDocument();
@@ -961,10 +1295,10 @@ describe("AnswerHere", () => {
 
       await answerOpened();
 
-      const wentIn = screen.getByRole("region", { name: "What went in" });
+      const wentIn = screen.getByRole("region", { name: "Inputs" });
       const sectionLevel = Number(
         within(wentIn)
-          .getByRole("heading", { name: "What went in" })
+          .getByRole("heading", { name: "Inputs" })
           .tagName.slice(1),
       );
       expect(
@@ -974,7 +1308,7 @@ describe("AnswerHere", () => {
       expect(wentIn.querySelector("blockquote")).toHaveTextContent(
         /^Printer on fire$/,
       );
-      expect(wentIn.querySelector("dl")).toBeNull();
+      expect(wentIn.querySelector("dl:not(aside *)")).toBeNull();
     });
 
     it("starts every value from the try refused before it, saying so, and why from nothing", async () => {
@@ -983,7 +1317,7 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
 
       expect(form).toHaveTextContent(
-        "It starts from what try 1 gave, and every value is given again.",
+        "Pre-filled from attempt 1. Every value is submitted again, not only the rejected ones.",
       );
       expect(summary(form)).toHaveValue("A fire.");
       expect(within(form).getByRole("radio", { name: /^high/ })).toBeChecked();
@@ -1005,14 +1339,16 @@ describe("AnswerHere", () => {
       conversing();
 
       const form = await answerOpened();
-      const words = within(form).getByText("Too short.", { selector: "bdi" });
+      const words = within(form).getByText("Too short.", { selector: "p" });
 
       expect(words).toBeVisible();
-      expect(words.parentElement).toHaveTextContent(/^Refused: Too short\.$/);
-      expect(summary(form)).toHaveAccessibleDescription(
-        expect.stringContaining("Refused: Too short."),
+      expect(words.parentElement?.parentElement).toHaveTextContent(
+        /^Rejected: Too short\.$/,
       );
-      expect(within(form).queryByText("Assured.")).toBeNull();
+      expect(summary(form)).toHaveAccessibleDescription(
+        expect.stringContaining("Rejected: Too short."),
+      );
+      expect(within(form).queryByText("Accepted.")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
@@ -1052,28 +1388,85 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
 
       expect(summary(form)).toHaveAccessibleDescription(
-        expect.stringContaining("Refused for its length."),
+        expect.stringContaining("Rejected for length."),
       );
-      expect(within(form).queryByText("Assured.")).toBeNull();
+      expect(within(form).queryByText("Accepted.")).toBeNull();
+    });
+
+    it("prefills and sends the whole production when only one of its values was rejected for length", async () => {
+      const values = [
+        {
+          ...FIRST_TRY.values[0],
+          now: "refused_for_length",
+          decision: {
+            outcome: "refused",
+            why: "Give it again, shorter.",
+            whyLines: "several",
+            lengthUnits: "251",
+            excessUnits: "47",
+            lengthHeld: {
+              run: { runId: RUN_ID, number: 7 },
+              stepId: FILE_IT,
+              stepName: "file_it",
+            },
+          },
+        },
+        FIRST_TRY.values[1],
+      ];
+      const { sent: served } = conversing({
+        [`GET ${STEP}`]: [
+          stepRead(
+            {},
+            { lastRefused: { number: 1, values } },
+            {
+              triesMade: [
+                { ...FIRST_TRY, values, ended: "refused_for_length" },
+              ],
+            },
+          ),
+        ],
+        [`PUT ${ANSWER}`]: [ANSWERED],
+      });
+      const form = await answerOpened();
+      expect(summary(form)).toHaveValue("A fire.");
+      expect(within(form).getByRole("radio", { name: /high/ })).toBeChecked();
+      expect(
+        within(form).getByRole("radiogroup", { name: "Priority · priority" }),
+      ).toBeEnabled();
+      expect(summary(form)).toHaveAccessibleDescription(
+        expect.stringContaining("Rejected for length."),
+      );
+      fireEvent.change(summary(form), { target: { value: "Fire." } });
+      fireEvent.change(reason(form), {
+        target: { value: "Shortened the summary." },
+      });
+      await press(sendButton(form));
+      await landing(() => yourAnswer() === null);
+      expect(sent(served).map((init) => init.body)).toEqual([
+        JSON.stringify({
+          values: { summary: "Fire.", priority: "high" },
+          why: "Shortened the summary.",
+        }),
+      ]);
     });
 
     it.each([
       [
         "fields",
         (form: HTMLElement) =>
-          within(form).getByRole("group", { name: "Address" }),
+          within(form).getByRole("group", { name: "Address · address" }),
         "Which town?",
       ],
       [
         "many",
         (form: HTMLElement) =>
-          within(form).getByRole("group", { name: "Notes" }),
+          within(form).getByRole("group", { name: "Notes · notes" }),
         "Say more.",
       ],
       [
         "choice",
         (form: HTMLElement) =>
-          within(form).getByRole("radiogroup", { name: "Priority" }),
+          within(form).getByRole("radiogroup", { name: "Priority · priority" }),
         "Not today.",
       ],
       [
@@ -1093,16 +1486,16 @@ describe("AnswerHere", () => {
             screen.queryByRole("list", { name: "The conversation" }) !== null,
         );
 
-        press(screen.getByRole("button", { name: "Answer it here" }));
+        await press(screen.getByRole("button", { name: "Answer it yourself" }));
         await landing(() => yourAnswer() !== null);
 
         const form = yourAnswer()!;
         expect(control(form)).toHaveAccessibleDescription(
-          expect.stringContaining(`Refused: ${why}`),
+          expect.stringContaining(`Rejected: ${why}`),
         );
-        expect(
-          within(form).getAllByText(why, { selector: "bdi" }),
-        ).toHaveLength(1);
+        expect(within(form).getAllByText(why, { selector: "p" })).toHaveLength(
+          1,
+        );
       },
     );
 
@@ -1112,7 +1505,11 @@ describe("AnswerHere", () => {
         {
           ...FIRST_TRY.values[1],
           now: "refused",
-          decision: { outcome: "refused", why: `Not${ZERO_WIDTH_SPACE}today.` },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: `Not${ZERO_WIDTH_SPACE}today.`,
+          },
         },
       ];
       conversing({
@@ -1127,14 +1524,16 @@ describe("AnswerHere", () => {
 
       const form = await answerOpened();
       const marker = within(form).getByRole("img", {
-        name: "A character that shows nothing is here: U+200B.",
+        name: "An invisible character is here: U+200B.",
       });
 
-      expect(marker.closest("bdi")).toHaveTextContent(/^NotU\+200Btoday\.$/);
+      expect(marker.closest('[dir="auto"]')).toHaveTextContent(
+        /^NotU\+200Btoday\.$/,
+      );
       expect(
-        within(form).getByRole("radiogroup", { name: "Priority" }),
+        within(form).getByRole("radiogroup", { name: "Priority · priority" }),
       ).toHaveAccessibleDescription(
-        expect.stringMatching(/Refused: Not ?U\+200B ?today\./),
+        expect.stringMatching(/Rejected: Not ?U\+200B ?today\./),
       );
       expect(form.innerHTML).not.toContain(ZERO_WIDTH_SPACE);
     });
@@ -1143,7 +1542,11 @@ describe("AnswerHere", () => {
       const values = [
         {
           ...FIRST_TRY.values[0],
-          decision: { outcome: "refused", why: `Too${ZERO_WIDTH_SPACE}short.` },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: `Too${ZERO_WIDTH_SPACE}short.`,
+          },
         },
         FIRST_TRY.values[1],
       ];
@@ -1165,20 +1568,24 @@ describe("AnswerHere", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Earlier try" }));
+      await press(
+        within(drawn).getByRole("button", { name: "Previous attempt" }),
+      );
       await landing(
         () =>
           within(message()).queryByRole("img", {
-            name: "A character that shows nothing is here: U+200B.",
+            name: "An invisible character is here: U+200B.",
           }) !== null,
       );
 
       const marker = within(message()).getByRole("img", {
-        name: "A character that shows nothing is here: U+200B.",
+        name: "An invisible character is here: U+200B.",
       });
-      expect(marker.closest("bdi")?.textContent).toBe("TooU+200Bshort.");
-      expect(marker.closest("bdi")?.parentElement?.textContent).toBe(
-        "Refused: TooU+200Bshort.",
+      expect(marker.closest('[dir="auto"]')?.textContent).toBe(
+        "TooU+200Bshort.",
+      );
+      expect(marker.closest('[dir="auto"]')?.parentElement).toHaveTextContent(
+        "Rejected:",
       );
       expect(message().innerHTML).not.toContain(ZERO_WIDTH_SPACE);
     });
@@ -1195,7 +1602,11 @@ describe("AnswerHere", () => {
           field: "priority",
           value: "high",
           now: "refused",
-          decision: { outcome: "refused", why: "Not today." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Not today.",
+          },
         },
       ];
       const { sent: served } = conversing({
@@ -1214,15 +1625,15 @@ describe("AnswerHere", () => {
       expect(summary(form)).toHaveValue("A fire.");
       expect(summary(form)).toHaveAccessibleDescription(
         expect.stringContaining(
-          "What is filled in here leaves out 3 characters of the earlier answer that showed nothing or would have turned the order text is shown in.",
+          "The pre-filled text leaves out 3 invisible or text-direction characters from the earlier answer.",
         ),
       );
       expect(
-        within(form).getByRole("radiogroup", { name: "Priority" }),
+        within(form).getByRole("radiogroup", { name: "Priority · priority" }),
       ).not.toHaveAccessibleDescription(expect.stringContaining("leaves out"));
 
       fireEvent.change(reason(form), { target: { value: "As it reads." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(sent(served).map((init) => init.body)).toEqual([
@@ -1239,7 +1650,11 @@ describe("AnswerHere", () => {
           field: "summary",
           value: `A${String.fromCodePoint(0x1, 0x1, 0x200d)} fire.${String.fromCodePoint(0x2028, 0x1b)}\r`,
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Too short.",
+          },
         },
         {
           field: "priority",
@@ -1264,15 +1679,15 @@ describe("AnswerHere", () => {
       expect(summary(form)).toHaveValue("A fire.");
       expect(summary(form)).toHaveAccessibleDescription(
         expect.stringContaining(
-          "What is filled in here leaves out 6 characters of the earlier answer",
+          "The pre-filled text leaves out 6 invisible or text-direction characters from the earlier answer",
         ),
       );
       expect(
-        within(form).getByRole("radiogroup", { name: "Priority" }),
+        within(form).getByRole("radiogroup", { name: "Priority · priority" }),
       ).not.toHaveAccessibleDescription(expect.stringContaining("leaves out"));
 
       fireEvent.change(reason(form), { target: { value: "As it reads." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(sent(served).map((init) => init.body)).toEqual([
@@ -1300,7 +1715,11 @@ describe("AnswerHere", () => {
             field: "summary",
             value,
             now: "refused",
-            decision: { outcome: "refused", why: "Too short." },
+            decision: {
+              outcome: "refused",
+              whyLines: "several",
+              why: "Too short.",
+            },
           },
           {
             field: "priority",
@@ -1330,14 +1749,14 @@ describe("AnswerHere", () => {
         } else {
           expect(summary(form)).toHaveAccessibleDescription(
             expect.stringContaining(
-              `What is filled in here leaves out ${leftOut} character of the earlier answer`,
+              `The pre-filled text leaves out ${leftOut} invisible or text-direction character from the earlier answer`,
             ),
           );
         }
         expect(form).not.toHaveTextContent(CRLF_REFUSED);
 
         fireEvent.change(reason(form), { target: { value: "As it reads." } });
-        press(sendButton(form));
+        await press(sendButton(form));
         await landing(() => yourAnswer() === null);
 
         expect(sent(served).map((init) => init.body)).toEqual([
@@ -1364,19 +1783,19 @@ describe("AnswerHere", () => {
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
 
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
-      expect(within(form).getByRole("textbox", { name: "Street" })).toHaveValue(
-        "Main\nSt",
-      );
       expect(
-        within(within(form).getByRole("group", { name: "Notes" })).getByRole(
-          "textbox",
-        ),
+        within(form).getByRole("textbox", { name: "Street · street" }),
+      ).toHaveValue("Main\nSt");
+      expect(
+        within(
+          within(form).getByRole("group", { name: "Notes · notes" }),
+        ).getByRole("textbox"),
       ).toHaveValue("Smoke\nrising.");
-      for (const name of ["Address", "Notes"]) {
+      for (const name of ["Address · address", "Notes · notes"]) {
         expect(
           within(form).getByRole("group", { name }),
         ).not.toHaveAccessibleDescription(
@@ -1386,7 +1805,7 @@ describe("AnswerHere", () => {
       expect(form).not.toHaveTextContent(CRLF_REFUSED);
 
       fireEvent.change(reason(form), { target: { value: "As it reads." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(
@@ -1422,25 +1841,25 @@ describe("AnswerHere", () => {
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
 
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
-      expect(within(form).getByRole("textbox", { name: "Street" })).toHaveValue(
-        "MainSt",
-      );
       expect(
-        within(form).getByRole("group", { name: "Address" }),
+        within(form).getByRole("textbox", { name: "Street · street" }),
+      ).toHaveValue("MainSt");
+      expect(
+        within(form).getByRole("group", { name: "Address · address" }),
       ).toHaveAccessibleDescription(
         expect.stringContaining(
-          "What is filled in here leaves out 1 character of the earlier answer",
+          "The pre-filled text leaves out 1 invisible or text-direction character from the earlier answer",
         ),
       );
       expect(
         within(form).getByDisplayValue(`Smoke ${heartOnFire}`),
       ).toBeVisible();
       expect(
-        within(form).getByRole("group", { name: "Notes" }),
+        within(form).getByRole("group", { name: "Notes · notes" }),
       ).not.toHaveAccessibleDescription(expect.stringContaining("leaves out"));
     });
 
@@ -1475,20 +1894,22 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
-      expect(within(form).getByRole("textbox", { name: "Street" })).toHaveValue(
-        "Main St",
-      );
       expect(
-        within(form).getByRole("textbox", { name: "Private note" }),
+        within(form).getByRole("textbox", { name: "Street · street" }),
+      ).toHaveValue("Main St");
+      expect(
+        within(form).getByRole("textbox", {
+          name: "Private note · privateNote",
+        }),
       ).toHaveValue("");
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       const posted = sent(served).map((init) =>
@@ -1521,20 +1942,23 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
-      expect(within(form).getByRole("textbox", { name: "Street" })).toHaveValue(
-        "",
+      expect(
+        within(form).getByRole("textbox", { name: "Street · street" }),
+      ).toHaveValue("");
+      fireEvent.change(
+        within(form).getByRole("textbox", { name: "Street · street" }),
+        {
+          target: { value: "Demo Sample street" },
+        },
       );
-      fireEvent.change(within(form).getByRole("textbox", { name: "Street" }), {
-        target: { value: "Demo Sample street" },
-      });
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       const posted = sent(served).map((init) =>
@@ -1585,17 +2009,17 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
       expect(
-        within(form).getByRole("textbox", { name: "Withheld note" }),
+        within(form).getByRole("textbox", { name: "Withheld note · withheld" }),
       ).toHaveValue("Demo Sample");
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(
@@ -1627,7 +2051,7 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
@@ -1642,12 +2066,12 @@ describe("AnswerHere", () => {
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       expect(sent(served)).toEqual([]);
       expect(time).toHaveValue("10:00:00.1234567");
 
       fireEvent.change(time, { target: { value: "10:00:00.123456" } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(
@@ -1679,7 +2103,7 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
@@ -1689,7 +2113,7 @@ describe("AnswerHere", () => {
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(
@@ -1725,35 +2149,37 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
       vi.useRealTimers();
 
       const form = yourAnswer()!;
       const street = within(form).getByRole("textbox", {
-        name: "Street",
+        name: "Street · street",
       }) as HTMLInputElement;
       const user = userEvent.setup();
       expect(street).toHaveValue(`${astral}A`);
       fireEvent.change(street, { target: { value: `${astral}AB` } });
-      expect(street).toHaveValue(`${astral}A`);
+      expect(street).toHaveValue(`${astral}AB`);
+      await press(sendButton(form));
+      expect(street).toHaveFocus();
       expect(sent(served)).toEqual([]);
       await user.click(street);
       await user.paste("B");
-      expect(street).toHaveValue(`${astral}A`);
+      expect(street).toHaveValue(`${astral}ABB`);
       expect(street).toHaveAccessibleDescription(
         /This is longer than this field takes/,
       );
       expect(street).toHaveFocus();
       expect(sent(served)).toEqual([]);
 
-      street.setSelectionRange(astral.length, astral.length + 1);
+      street.setSelectionRange(astral.length, street.value.length);
       await user.paste("C");
       expect(street).toHaveValue(`${astral}C`);
       fireEvent.change(reason(form), {
         target: { value: "Demo Sample review." },
       });
-      press(sendButton(form));
+      await press(sendButton(form));
       await waitFor(() => expect(yourAnswer()).toBeNull());
 
       expect(
@@ -1777,12 +2203,12 @@ describe("AnswerHere", () => {
       });
       const form = await answerOpened();
       fireEvent.change(summary(form), { target: { value: "A printer fire." } });
-      press(within(form).getByRole("radio", { name: /^low/ }));
+      await press(within(form).getByRole("radio", { name: /^low/ }));
       fireEvent.change(reason(form), {
         target: { value: "Longer, and less urgent." },
       });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => yourAnswer() === null);
 
       expect(sent(served).map((init) => init.body)).toEqual([
@@ -1792,9 +2218,9 @@ describe("AnswerHere", () => {
         }),
       ]);
       expect(requestsTo(served)).toContain(`PUT ${ANSWER}`);
-      expect(within(message()).getByText("It waits on review.")).toBeVisible();
+      expect(within(message()).getByText("Waiting for review")).toBeVisible();
       expect(
-        within(message()).queryByRole("button", { name: "Answer it here" }),
+        within(message()).queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
       expect(asked(served, `GET ${RUN}`)).toBe(2);
       expect(document.activeElement).toBe(message());
@@ -1805,14 +2231,13 @@ describe("AnswerHere", () => {
       const kept = {
         id: "0000000a-0000-4000-8000-000000000d01",
         name: "Demo Sample.txt",
-        type: "text/plain",
         size: 6,
       };
       const fileField = {
         name: "attachment",
         label: "Attachment",
         kind: "file",
-        types: ["text/plain"],
+        types: [".txt"],
         maximumBytes: 20,
         mustBeGiven: true,
       };
@@ -1821,7 +2246,11 @@ describe("AnswerHere", () => {
           field: "attachment",
           value: kept,
           now: "refused",
-          decision: { outcome: "refused", why: "Read it again." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Read it again.",
+          },
         },
       ];
       const { sent: served } = conversing({
@@ -1845,7 +2274,13 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [ANSWERED],
       });
       const form = await answerOpened();
-      expect(within(form).getByText(/Demo Sample\.txt/)).toBeVisible();
+      expect(
+        [...form.querySelectorAll("bdi")].find(
+          (element) =>
+            element.textContent === "Demo Sample.txt" &&
+            element.closest("[hidden]") === null,
+        ),
+      ).toBeVisible();
       const picker = form.querySelector('input[type="file"]')!;
       fireEvent.change(picker, {
         target: {
@@ -1858,18 +2293,16 @@ describe("AnswerHere", () => {
         within(form).getByText(
           (_, element) =>
             element?.firstElementChild?.tagName === "BDI" &&
-            /Demo Sample\.png.*not a type this field takes/.test(
+            /Demo Sample\.png.*doesn't have an extension this field accepts/.test(
               element.textContent ?? "",
             ),
         ),
       ).toBeVisible();
       expect(
-        within(form).getByText(
-          (_, element) =>
-            element?.firstElementChild?.tagName === "BDI" &&
-            /Demo Sample\.txt.*previously given/.test(
-              element.textContent ?? "",
-            ),
+        [...form.querySelectorAll("bdi")].find(
+          (element) =>
+            element.textContent === "Demo Sample.txt" &&
+            element.closest("[hidden]") === null,
         ),
       ).toBeVisible();
       expect(picker).toHaveAttribute("aria-invalid", "true");
@@ -1877,7 +2310,7 @@ describe("AnswerHere", () => {
         target: { value: "Kept after review." },
       });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => sent(served).length === 1);
 
       const body = sent(served)[0]?.body;
@@ -1903,27 +2336,23 @@ describe("AnswerHere", () => {
       fireEvent.change(summary(form), { target: { value: "" } });
       act(() => send.focus());
 
-      press(send);
+      await press(send);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(document.activeElement).toBe(summary(form));
-      expect(summary(form)).toHaveAccessibleDescription(/This must be given\./);
-      expect(form).toHaveTextContent(
-        "A field that must be given is still empty.",
-      );
+      expect(summary(form)).toHaveAccessibleDescription(/Required\./);
+      expect(form).toHaveTextContent("A required field is empty.");
       expect(reason(form)).toHaveAccessibleDescription(
-        "A refusal, and an answer, say why.",
+        "A rejection or an answer needs a reason.",
       );
 
       fireEvent.change(summary(form), { target: { value: "A printer fire." } });
       act(() => send.focus());
-      press(send);
+      await press(send);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(document.activeElement).toBe(reason(form));
-      expect(summary(form)).not.toHaveAccessibleDescription(
-        /This must be given\./,
-      );
+      expect(summary(form)).not.toHaveAccessibleDescription(/Required\./);
       expect(sent(served)).toEqual([]);
     });
 
@@ -1933,16 +2362,14 @@ describe("AnswerHere", () => {
       const send = sendButton(form);
       act(() => send.focus());
 
-      press(send);
+      await press(send);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(document.activeElement).toBe(reason(form));
       expect(reason(form)).toHaveAccessibleDescription(
-        "A refusal, and an answer, say why.",
+        "A rejection or an answer needs a reason.",
       );
-      expect(summary(form)).not.toHaveAccessibleDescription(
-        /This must be given\./,
-      );
+      expect(summary(form)).not.toHaveAccessibleDescription(/Required\./);
       expect(sent(served)).toEqual([]);
     });
 
@@ -1952,7 +2379,11 @@ describe("AnswerHere", () => {
           field: "summary",
           withheld: true,
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Too short.",
+          },
         },
         FIRST_TRY.values[1],
       ];
@@ -1982,13 +2413,17 @@ describe("AnswerHere", () => {
 
       expect(summary(form)).toHaveValue("");
       expect(summary(form)).toHaveAccessibleDescription(
-        expect.stringContaining("What try 1 gave here is withheld from you."),
+        expect.stringContaining(
+          "You don't have permission to see what attempt 1 gave here.",
+        ),
       );
       expect(summary(form)).toHaveAccessibleDescription(
-        expect.stringContaining("Refused: Too short."),
+        expect.stringContaining("Rejected: Too short."),
       );
       expect(within(form).getByRole("radio", { name: /^high/ })).toBeChecked();
-      expect(within(form).getAllByText(/withheld from you/)).toHaveLength(1);
+      expect(
+        within(form).getAllByText(/don't have permission to see/),
+      ).toHaveLength(1);
     });
 
     it("starts empty a value the try refused before gave in a shape the step had before, saying so at its control, and starts the rest from what it gave", async () => {
@@ -2000,12 +2435,12 @@ describe("AnswerHere", () => {
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
 
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
       const priority = within(form).getByRole("radiogroup", {
-        name: "Priority",
+        name: "Priority · priority",
       });
       expect(
         within(priority)
@@ -2014,17 +2449,19 @@ describe("AnswerHere", () => {
       ).toEqual([]);
       expect(priority).toHaveAccessibleDescription(
         expect.stringContaining(
-          "What try 1 gave here was in the shape this step had before, so it starts empty.",
+          "Attempt 1 gave this in an older format of the field, so it starts empty.",
         ),
       );
       expect(priority).toHaveAccessibleDescription(
-        expect.stringContaining("Refused: Not today."),
+        expect.stringContaining("Rejected: Not today."),
       );
       expect(summary(form)).toHaveValue("A fire.");
       expect(summary(form)).not.toHaveAccessibleDescription(
         expect.stringContaining("shape this step had before"),
       );
-      expect(within(form).queryByText(/withheld from you/)).toBeNull();
+      expect(
+        within(form).queryByText(/don't have permission to see/),
+      ).toBeNull();
     });
 
     it("marks each value the server finds does not fit where it stands, says how many more it found, and forgets both once the value changes", async () => {
@@ -2041,7 +2478,7 @@ describe("AnswerHere", () => {
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
       act(() => send.focus());
 
-      press(send);
+      await press(send);
       await landing(() => screen.queryByRole("alert") !== null);
 
       expect(sent(served)).toHaveLength(1);
@@ -2050,10 +2487,10 @@ describe("AnswerHere", () => {
         /This is longer than this field takes\./,
       );
       expect(form).toHaveTextContent(
-        "1 more place does not fit and is not marked.",
+        "1 more field has a problem that isn't marked.",
       );
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Each value is written as its field takes it.",
+        "Some values aren't in the format their field expects.",
       );
 
       fireEvent.change(summary(form), { target: { value: "A fire, again." } });
@@ -2061,7 +2498,7 @@ describe("AnswerHere", () => {
       expect(summary(form)).not.toHaveAccessibleDescription(
         /This is longer than this field takes\./,
       );
-      expect(form).not.toHaveTextContent("more place does not fit");
+      expect(form).not.toHaveTextContent("more field has a problem");
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
@@ -2072,18 +2509,20 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => document.activeElement === reason(form));
 
       expect(reason(form)).toHaveAccessibleDescription(
-        "A reason is prose of one to 2048 characters, with something in it that shows.",
+        "A reason is 1 to 2048 characters, with at least one visible character.",
       );
       expect(screen.queryByRole("alert")).toBeNull();
       expect(summary(form)).toHaveValue("A fire.");
 
       fireEvent.change(reason(form), { target: { value: "Read it again." } });
 
-      expect(reason(form)).not.toHaveAccessibleDescription(/A reason is prose/);
+      expect(reason(form)).not.toHaveAccessibleDescription(
+        /A reason is 1 to 2048 characters/,
+      );
     });
 
     it("says nothing aloud, and the refusal nowhere, once a reason the server refused is changed", async () => {
@@ -2092,13 +2531,13 @@ describe("AnswerHere", () => {
       });
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => document.activeElement === reason(form));
 
       fireEvent.change(reason(form), { target: { value: "Read it again." } });
 
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText(/A reason is prose/)).toBeNull();
+      expect(screen.queryByText(/A reason is 1 to 2048 characters/)).toBeNull();
     });
 
     it("says the answer is refused by the rule of who may answer a step, and reads the reader's standing again, reading nothing of the step", async () => {
@@ -2108,13 +2547,13 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => screen.queryByRole("alert") !== null);
 
       const said = screen.getByRole("alert");
       expect(said).toHaveTextContent(ANSWER_RULE);
       expect(said).not.toHaveTextContent(
-        "This is done only by a role that reaches it.",
+        "You don't have permission to do this.",
       );
       expect(readAgain).toHaveBeenCalledTimes(1);
       expect(asked(served, `GET ${STEP}`)).toBe(1);
@@ -2123,7 +2562,12 @@ describe("AnswerHere", () => {
     describe("once the answer is refused as the step having moved on", () => {
       async function refusedAsMovedOn() {
         const opened = conversing({
-          [`GET ${STEP}`]: [stepRead(), thirdOwedRead()],
+          [`GET ${STEP}`]: [
+            stepRead(),
+            thirdOwedRead(),
+            thirdOwedRead(),
+            UNANSWERED,
+          ],
           [`PUT ${ANSWER}`]: [refusal("STEP_MOVED_ON", 409)],
         });
         const form = await answerOpened();
@@ -2132,10 +2576,10 @@ describe("AnswerHere", () => {
         });
         fireEvent.change(reason(form), { target: { value: "Read it twice." } });
 
-        press(sendButton(form));
+        await press(sendButton(form));
         await landing(
           () =>
-            asked(opened.sent, `GET ${STEP}`) === 2 &&
+            asked(opened.sent, `GET ${STEP}`) === 3 &&
             asked(opened.sent, `GET ${STEPS}`) === 2,
         );
         return opened;
@@ -2146,9 +2590,9 @@ describe("AnswerHere", () => {
 
         const alert = screen.getByRole("alert");
         expect(alert).toHaveTextContent(
-          `Answered already, by ${setApart("Eve")}.`,
+          `Already answered by ${setApart("Eve")}.`,
         );
-        expect(alert).not.toHaveTextContent("That step has moved on");
+        expect(alert).not.toHaveTextContent("This step has changed");
         expect(screen.getAllByRole("alert")).toHaveLength(1);
         expect(document.activeElement).toBe(alert.closest("[tabindex='-1']"));
       });
@@ -2156,7 +2600,8 @@ describe("AnswerHere", () => {
       it("reads the step again and hands that on to the run, which reads its steps again, sending nothing more", async () => {
         const { sent: served } = await refusedAsMovedOn();
 
-        expect(asked(served, `GET ${STEP}`)).toBe(2);
+        // The current refusal is read once, then the moved-on answer and its new footer are read.
+        expect(asked(served, `GET ${STEP}`)).toBe(3);
         expect(asked(served, `GET ${STEPS}`)).toBe(2);
         expect(sent(served)).toHaveLength(1);
       });
@@ -2166,7 +2611,7 @@ describe("AnswerHere", () => {
 
         const restarted = yourAnswer()!;
         expect(restarted).toHaveTextContent(
-          "It starts from what try 2 gave, and every value is given again.",
+          "Pre-filled from attempt 2. Every value is submitted again, not only the rejected ones.",
         );
         expect(summary(restarted)).toHaveValue("A printer fire.");
         expect(
@@ -2184,7 +2629,7 @@ describe("AnswerHere", () => {
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => asked(served, `GET ${STEP}`) === 2);
 
       expect(screen.queryByRole("alert")).toBeNull();
@@ -2201,15 +2646,16 @@ describe("AnswerHere", () => {
       });
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(() => screen.queryByRole("alert") !== null);
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
 
       accountOpened(message(), "Waiting");
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
-        () =>
-          within(message()).queryByText("Try 2 of the 3 it allows") !== null,
+        () => within(message()).queryByText("Attempt 2 of 3") !== null,
       );
 
       expect(screen.queryByRole("alert")).toBeNull();
@@ -2226,16 +2672,15 @@ describe("AnswerHere", () => {
       accountOpened(message(), "Waiting");
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
-        () =>
-          within(message()).queryByText("Try 2 of the 3 it allows") !== null,
+        () => within(message()).queryByText("Attempt 2 of 3") !== null,
       );
 
       expect(yourAnswer()).toBeNull();
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "That step has moved on since it was read.",
+        "This step has changed since you opened it.",
       );
       expect(
-        within(message()).getByRole("button", { name: "Answer it here" }),
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
       ).toHaveAttribute("aria-expanded", "false");
     });
 
@@ -2246,7 +2691,10 @@ describe("AnswerHere", () => {
           stepsRead(),
           stepsRead({
             ...ANSWERED_ROW,
-            withheld: [{ act: "review", refusal: "ACT_NOT_PERMITTED" }],
+            stateActs: ["review"],
+            stateRefusals: [],
+            producedByKind: "person",
+            producedByUserId: EVE.userId,
           }),
           stepsRead(THIRD_OWED),
           UNANSWERED,
@@ -2259,12 +2707,11 @@ describe("AnswerHere", () => {
       accountOpened(message(), "Waiting");
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
-        () =>
-          within(message()).queryByText("Try 2 of the 3 it allows") !== null,
+        () => within(message()).queryByText("Attempt 2 of 3") !== null,
       );
 
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText(/has moved on/)).toBeNull();
+      expect(screen.queryByText(/has changed since you opened it/)).toBeNull();
     });
 
     it.each([
@@ -2295,10 +2742,12 @@ describe("AnswerHere", () => {
           () =>
             screen.queryByRole("list", { name: "The conversation" }) !== null,
         );
-        press(screen.getByRole("button", { name: "Answer it here" }));
+        await press(screen.getByRole("button", { name: "Answer it yourself" }));
         await landing(() => yourAnswer() !== null);
         fireEvent.change(
-          within(yourAnswer()!).getByRole("textbox", { name: "Reference" }),
+          within(yourAnswer()!).getByRole("textbox", {
+            name: "Reference · reference",
+          }),
           { target: { value: "REF-1" } },
         );
         fireEvent.change(reason(yourAnswer()!), {
@@ -2309,13 +2758,17 @@ describe("AnswerHere", () => {
         await landing(() => yourAnswer() === null);
 
         expect(screen.queryByRole("alert")).toBeNull();
-        expect(screen.queryByText(/already, by|has moved on/)).toBeNull();
+        expect(
+          screen.queryByText(/Already .* by|has changed since you opened it/),
+        ).toBeNull();
 
         await act(() => vi.advanceTimersByTimeAsync(5000));
         await landing(() => yourAnswer() !== null);
 
         expect(
-          within(yourAnswer()!).getByRole("textbox", { name: "Reference" }),
+          within(yourAnswer()!).getByRole("textbox", {
+            name: "Reference · reference",
+          }),
         ).toHaveValue("REF-1");
         expect(reason(yourAnswer()!)).toHaveValue("Filed by hand.");
         expect(screen.queryByRole("alert")).toBeNull();
@@ -2379,8 +2832,8 @@ describe("AnswerHere", () => {
           [`DELETE ${RUN}/stop`]: [reply(CLAIM)],
         });
         await detailsOpened();
-        press(
-          within(message()).getByRole("button", { name: "Answer it here" }),
+        await press(
+          within(message()).getByRole("button", { name: "Answer it yourself" }),
         );
         fireEvent.change(summary(yourAnswer()!), {
           target: { value: "A kettle fire." },
@@ -2393,7 +2846,7 @@ describe("AnswerHere", () => {
         await landing(
           () =>
             asked(opened.sent, `GET ${STEP}`) === 2 &&
-            screen.queryByRole("button", { name: "Open again" }) !== null,
+            screen.queryByRole("button", { name: "Resume" }) !== null,
         );
         await act(() => vi.advanceTimersByTimeAsync(0));
         return opened;
@@ -2404,7 +2857,9 @@ describe("AnswerHere", () => {
 
         expect(yourAnswer()).toBeNull();
         expect(
-          within(message()).queryByRole("button", { name: "Answer it here" }),
+          within(message()).queryByRole("button", {
+            name: "Answer it yourself",
+          }),
         ).toBeNull();
         expect(screen.queryByRole("alert")).toBeNull();
       });
@@ -2412,7 +2867,7 @@ describe("AnswerHere", () => {
       it("draws the form again with what was typed once the run is opened again and the step read", async () => {
         const { sent: served } = await stoppedUnderTheForm();
 
-        press(screen.getByRole("button", { name: "Open again" }));
+        await press(screen.getByRole("button", { name: "Resume" }));
         await landing(() => yourAnswer() !== null);
         await act(() => vi.advanceTimersByTimeAsync(5000));
         await landing(() => asked(served, `GET ${STEP}`) === 3);
@@ -2432,7 +2887,7 @@ describe("AnswerHere", () => {
         within(message()).getByRole("button", { name: "Ask again" }),
       ).not.toHaveAttribute("aria-disabled");
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(
@@ -2449,11 +2904,12 @@ describe("AnswerHere", () => {
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
       expect(sendButton(form)).not.toHaveAttribute("aria-disabled");
 
-      press(within(message()).getByRole("button", { name: "Ask again" }));
+      await press(within(message()).getByRole("button", { name: "Ask again" }));
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(sendButton(form)).toHaveAttribute("aria-disabled", "true");
-      press(sendButton(form));
+      // Dispatch even though pointer interaction is disabled, to test the handler's own guard.
+      act(() => sendButton(form).click());
       expect(requestsTo(served)).not.toContain(`PUT ${ANSWER}`);
     });
 
@@ -2462,7 +2918,9 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [stepRead(), UNANSWERED],
       });
       await detailsOpened();
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
       fireEvent.change(summary(yourAnswer()!), {
         target: { value: "A kettle fire." },
       });
@@ -2470,7 +2928,7 @@ describe("AnswerHere", () => {
         target: { value: "Read it twice." },
       });
 
-      press(within(message()).getByRole("button", { name: "Details" }));
+      await press(within(message()).getByRole("button", { name: "Details" }));
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(
@@ -2487,13 +2945,19 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [thirdOwedRead(), UNANSWERED],
       });
       const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Earlier try" }));
+      await press(
+        within(drawn).getByRole("button", { name: "Previous attempt" }),
+      );
       await landing(
         () =>
-          within(message()).queryByText("Too short.", { selector: "bdi" })
-            ?.parentElement?.textContent === "Refused: Too short.",
+          within(message())
+            .queryByText("Too short.", { selector: "p" })
+            ?.closest("section")
+            ?.textContent?.includes("Rejected:") === true,
       );
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
       fireEvent.change(summary(yourAnswer()!), {
         target: { value: "A kettle fire." },
       });
@@ -2501,12 +2965,14 @@ describe("AnswerHere", () => {
         target: { value: "Read it twice." },
       });
 
-      press(within(message()).getByRole("button", { name: "Later try" }));
+      await press(
+        within(message()).getByRole("button", { name: "Next attempt" }),
+      );
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(
-        within(message()).getByRole("button", { name: "Later try" }),
-      ).toBeDisabled();
+        within(message()).getByRole("button", { name: "Next attempt" }),
+      ).toHaveAttribute("aria-disabled", "true");
       expect(summary(yourAnswer()!)).toHaveValue("A kettle fire.");
       expect(reason(yourAnswer()!)).toHaveValue("Read it twice.");
       expect(asked(served, `GET ${STEP}`)).toBe(1);
@@ -2519,34 +2985,37 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [stepRead(), thirdOwedRead()],
       });
       await answerOpened();
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
       expect(yourAnswer()).toBeNull();
       accountOpened(message(), "Waiting");
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
-        () =>
-          within(message()).queryByText("Try 2 of the 3 it allows") !== null,
+        () => within(message()).queryByText("Attempt 2 of 3") !== null,
       );
 
-      press(within(message()).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      );
       await landing(() => yourAnswer() !== null);
 
       expect(asked(served, `GET ${STEP}`)).toBe(2);
       expect(yourAnswer()).toHaveTextContent(
-        "It starts from what try 2 gave, and every value is given again.",
+        "Pre-filled from attempt 2. Every value is submitted again, not only the rejected ones.",
       );
       expect(summary(yourAnswer()!)).toHaveValue("A printer fire.");
     });
 
     it("says a stopped run takes no answer, reads the step again, and draws no form where it offers none", async () => {
       const stopped = reply({
-        run: { ...HEADER, at: undefined, state: "stopped", acts: [] },
+        run: { ...HEADER, at: undefined, state: "stopped", stateActs: [] },
         declarations: DECLARATIONS,
         step: {
           ...OWED_ROW,
           where: { ...OWED_ROW.where, waitsOn: undefined },
-          acts: [],
-          withheld: [
+          stateActs: [],
+          stateRefusals: [
             { act: "answer", refusal: "RUN_STOPPED" },
             { act: "ask_again", refusal: "RUN_STOPPED" },
           ],
@@ -2556,22 +3025,22 @@ describe("AnswerHere", () => {
         triesMade: [FIRST_TRY],
       });
       const { sent: served } = conversing({
-        [`GET ${STEP}`]: [stepRead(), stopped],
+        [`GET ${STEP}`]: [stepRead(), stopped, stopped, UNANSWERED],
         [`PUT ${ANSWER}`]: [refusal("RUN_STOPPED", 409)],
       });
       const form = await answerOpened();
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
 
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(
-        () => asked(served, `GET ${STEP}`) === 2 && yourAnswer() === null,
+        () => asked(served, `GET ${STEP}`) === 3 && yourAnswer() === null,
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "A stopped run takes no answer, review or try until it is opened again.",
+        "This run is stopped. Resume it before answering, reviewing or making another attempt.",
       );
       expect(
-        within(message()).queryByRole("button", { name: "Answer it here" }),
+        within(message()).queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
     });
 
@@ -2589,29 +3058,35 @@ describe("AnswerHere", () => {
           stepsRead(),
           UNANSWERED,
         ],
-        [`GET ${STEP}`]: [stepRead(), stoppedStepRead(), UNANSWERED],
+        [`GET ${STEP}`]: [
+          stepRead(),
+          stoppedStepRead(),
+          stoppedStepRead(),
+          stepRead(),
+          UNANSWERED,
+        ],
         [`PUT ${ANSWER}`]: [refusal("RUN_STOPPED", 409)],
         [`DELETE ${RUN}/stop`]: [reply(CLAIM)],
       });
       const form = await answerOpened();
       fireEvent.change(summary(form), { target: { value: "A kettle fire." } });
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(
-        () => screen.queryByRole("button", { name: "Open again" }) !== null,
+        () => screen.queryByRole("button", { name: "Resume" }) !== null,
       );
       expect(yourAnswer()).toBeNull();
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "A stopped run takes no answer, review or try until it is opened again.",
+        "This run is stopped. Resume it before answering, reviewing or making another attempt.",
       );
 
-      press(screen.getByRole("button", { name: "Open again" }));
+      await press(screen.getByRole("button", { name: "Resume" }));
       await landing(() => yourAnswer() !== null);
 
       expect(summary(yourAnswer()!)).toHaveValue("A kettle fire.");
       expect(reason(yourAnswer()!)).toHaveValue("Read it twice.");
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(asked(served, `GET ${STEP}`)).toBe(2);
+      expect(asked(served, `GET ${STEP}`)).toBe(4);
       expect(sent(served)).toHaveLength(1);
     });
 
@@ -2624,19 +3099,25 @@ describe("AnswerHere", () => {
           stepsRead(),
           UNANSWERED,
         ],
-        [`GET ${STEP}`]: [stepRead(), entryStoppedStepRead(), UNANSWERED],
+        [`GET ${STEP}`]: [
+          stepRead(),
+          entryStoppedStepRead(),
+          entryStoppedStepRead(),
+          stepRead(),
+          UNANSWERED,
+        ],
         [`PUT ${ANSWER}`]: [refusal("ENTRY_STOPPED", 409)],
       });
       const form = await answerOpened();
       fireEvent.change(summary(form), { target: { value: "A kettle fire." } });
       fireEvent.change(reason(form), { target: { value: "Read it twice." } });
-      press(sendButton(form));
+      await press(sendButton(form));
       await landing(
-        () => asked(served, `GET ${STEP}`) === 2 && yourAnswer() === null,
+        () => asked(served, `GET ${STEP}`) === 3 && yourAnswer() === null,
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "What this step runs, or the workflow itself, is stopped, so no try is made on it until that is let go.",
+        "What this step runs, or the workflow itself, has been stopped. No attempt can be made until it is allowed to be used again.",
       );
 
       await act(() => vi.advanceTimersByTimeAsync(5000));
@@ -2649,8 +3130,8 @@ describe("AnswerHere", () => {
     });
 
     it.each([
-      [2, 3, "Try 3 goes past the 2 tries its step allows."],
-      [1, 2, "Try 2 goes past the 1 try its step allows."],
+      [2, 3, "Attempt 3 goes beyond the 2 attempts this step allows."],
+      [1, 2, "Attempt 2 goes beyond the 1 attempt this step allows."],
     ])(
       "says once the try goes past the %i its step allows, where it does",
       async (declared, number, words) => {
@@ -2674,7 +3155,7 @@ describe("AnswerHere", () => {
 
       const drawn = await messageDrawn();
 
-      expect(within(drawn).queryByText(/goes past/)).toBeNull();
+      expect(within(drawn).queryByText(/goes beyond/)).toBeNull();
     });
 
     it("says the try the form is open for goes past what its step allows, where the run's steps were read before it was owed", async () => {
@@ -2695,10 +3176,12 @@ describe("AnswerHere", () => {
 
       expect(
         within(message()).getByText(
-          "Try 3 goes past the 2 tries its step allows.",
+          "Attempt 3 goes beyond the 2 attempts this step allows.",
         ),
       ).toBeVisible();
-      expect(within(message()).queryByText(/^Try 2 goes past/)).toBeNull();
+      expect(
+        within(message()).queryByText(/^Attempt 2 goes beyond/),
+      ).toBeNull();
     });
 
     it("answers a code step that may not run again as its release declares it, offering no Ask again, with no instruction and nothing refused before it", async () => {
@@ -2716,16 +3199,18 @@ describe("AnswerHere", () => {
       expect(
         within(drawn).queryByRole("button", { name: "Ask again" }),
       ).toBeNull();
-      press(within(drawn).getByRole("button", { name: "Answer it here" }));
+      await press(
+        within(drawn).getByRole("button", { name: "Answer it yourself" }),
+      );
       await landing(() => yourAnswer() !== null);
 
       const form = yourAnswer()!;
       const reference = within(form).getByRole("textbox", {
-        name: "Reference",
+        name: "Reference · reference",
       });
       expect(reference).toHaveValue("");
       expect(document.activeElement).toBe(reference);
-      expect(form).not.toHaveTextContent("What it asks");
+      expect(form).not.toHaveTextContent("Instructions");
       expect(form).not.toHaveTextContent("It starts from what try");
       expect(within(form).queryByRole("radio")).toBeNull();
     });
@@ -2742,35 +3227,38 @@ describe("AnswerHere", () => {
       await landing(
         () => screen.queryByRole("list", { name: "The conversation" }) !== null,
       );
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
       fireEvent.change(
-        within(yourAnswer()!).getByRole("textbox", { name: "Reference" }),
+        within(yourAnswer()!).getByRole("textbox", {
+          name: "Reference · reference",
+        }),
         { target: { value: "REF-1" } },
       );
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Filed by hand." },
       });
 
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await landing(() => asked(served, `GET ${STEP}`) === 2);
       await landing(
         () =>
           yourAnswer() !== null &&
-          within(yourAnswer()!).queryByRole("textbox", { name: "Folder" }) !==
-            null,
+          within(yourAnswer()!).queryByRole("textbox", {
+            name: "Folder · folder",
+          }) !== null,
       );
 
       const form = yourAnswer()!;
       expect(
-        within(form).getByRole("textbox", { name: "Reference" }),
+        within(form).getByRole("textbox", { name: "Reference · reference" }),
       ).toHaveValue("");
-      expect(within(form).getByRole("textbox", { name: "Folder" })).toHaveValue(
-        "",
-      );
+      expect(
+        within(form).getByRole("textbox", { name: "Folder · folder" }),
+      ).toHaveValue("");
       expect(reason(form)).toHaveValue("");
       expect(sent(served)).toHaveLength(1);
-      expect(screen.getByRole("alert")).not.toHaveTextContent(/already, by/);
+      expect(screen.getByRole("alert")).not.toHaveTextContent(/Already .* by/);
     });
   });
 
@@ -2783,14 +3271,12 @@ describe("AnswerHere", () => {
       const { sent: served } = stepOpened({ [`GET ${STEP}`]: [stepRead()] });
       await pageDrawn();
 
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
 
       const form = yourAnswer()!;
       expect(summary(form)).toHaveValue("A fire.");
       expect(document.activeElement).toBe(summary(form));
-      expect(
-        screen.getAllByRole("region", { name: "What went in" }),
-      ).toHaveLength(1);
+      expect(screen.getAllByRole("region", { name: "Inputs" })).toHaveLength(1);
       expect(asked(served, `GET ${STEP}`)).toBe(1);
     });
 
@@ -2800,7 +3286,7 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [ANSWERED],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(summary(yourAnswer()!), {
         target: { value: "A printer fire." },
       });
@@ -2815,7 +3301,7 @@ describe("AnswerHere", () => {
       expect(reason(yourAnswer()!)).toHaveValue("Read it twice.");
       expect(document.activeElement).toBe(summary(yourAnswer()!));
 
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await landing(() => yourAnswer() === null);
 
       expect(sent(served).map((init) => init.body)).toEqual([
@@ -2826,7 +3312,7 @@ describe("AnswerHere", () => {
       ]);
       expect(asked(served, `GET ${STEP}`)).toBe(3);
       expect(document.activeElement).toBe(
-        screen.getByRole("heading", { name: "What came out" }),
+        screen.getByRole("heading", { name: "Output" }),
       );
     });
 
@@ -2835,7 +3321,7 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [stepRead(), EVE_ANSWERED, UNANSWERED],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Read it twice." },
       });
@@ -2846,13 +3332,13 @@ describe("AnswerHere", () => {
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        `Answered already, by ${setApart("Eve")}.`,
+        `Already answered by ${setApart("Eve")}.`,
       );
       expect(screen.getByRole("alert")).not.toHaveTextContent(
-        "That step has moved on",
+        "This step has changed",
       );
       expect(
-        screen.queryByRole("button", { name: "Answer it here" }),
+        screen.queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
       expect(sent(served)).toEqual([]);
     });
@@ -2862,7 +3348,7 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [stepRead(), EVE_ANSWERED, UNANSWERED],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
 
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
@@ -2879,7 +3365,7 @@ describe("AnswerHere", () => {
         [`GET ${STEP}`]: [stepRead(), EVE_ANSWERED, UNANSWERED],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       const back = screen.getByRole("link", { name: "History" });
       act(() => back.focus());
 
@@ -2898,11 +3384,11 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [refusal("REASON_UNUSABLE", 400)],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Read it twice." },
       });
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await landing(
         () => reason(yourAnswer()!).getAttribute("aria-invalid") === "true",
       );
@@ -2914,9 +3400,9 @@ describe("AnswerHere", () => {
 
       expect(screen.getAllByRole("alert")).toHaveLength(1);
       expect(screen.getByRole("alert")).toHaveTextContent(
-        `Answered already, by ${setApart("Eve")}.`,
+        `Already answered by ${setApart("Eve")}.`,
       );
-      expect(screen.queryByText(/A reason is prose/)).toBeNull();
+      expect(screen.queryByText(/A reason is 1 to 2048 characters/)).toBeNull();
     });
 
     /** The reason's own refusal starts again with the draft, and is said nowhere else once it has. */
@@ -2930,24 +3416,24 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [refusal("REASON_UNUSABLE", 400)],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Read it twice." },
       });
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await landing(
         () => reason(yourAnswer()!).getAttribute("aria-invalid") === "true",
       );
       await act(() => vi.advanceTimersByTimeAsync(5000));
 
-      press(screen.getByRole("button", { name: "Answer it here" }));
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       await landing(() => yourAnswer() !== null);
 
       expect(reason(yourAnswer()!)).toHaveValue("");
       expect(reason(yourAnswer()!)).not.toHaveAttribute("aria-invalid", "true");
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText(/A reason is prose/)).toBeNull();
+      expect(screen.queryByText(/A reason is 1 to 2048 characters/)).toBeNull();
     });
 
     it("says only who answered first, and nothing of the refusal, once an answer's refusal arrives after a quiet read showed the try answered by somebody else, the form gone", async () => {
@@ -2957,27 +3443,27 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [answering.promise],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Read it twice." },
       });
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
         () => asked(served, `GET ${STEP}`) === 2 && yourAnswer() === null,
       );
-      expect(screen.queryByText(/already, by/)).toBeNull();
+      expect(screen.queryByText(/Already .* by/)).toBeNull();
 
       act(() => answering.settle(refusal("INTERNAL", 500)));
-      await landing(() => screen.queryByText(/Answered already/) !== null);
+      await landing(() => screen.queryByText(/Already answered/) !== null);
 
       expect(
         screen.getAllByRole("alert").map((each) => each.textContent),
-      ).toEqual([`Answered already, by ${setApart("Eve")}.`]);
+      ).toEqual([`Already answered by ${setApart("Eve")}.`]);
       expect(
-        screen.queryByRole("button", { name: "Answer it here" }),
+        screen.queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
-      expect(screen.queryByText(/has moved on/)).toBeNull();
+      expect(screen.queryByText(/has changed since you opened it/)).toBeNull();
       expect(sent(served)).toHaveLength(1);
     });
 
@@ -2988,26 +3474,133 @@ describe("AnswerHere", () => {
         [`PUT ${ANSWER}`]: [answering.promise],
       });
       await pageDrawn();
-      press(screen.getByRole("button", { name: "Answer it here" }));
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
       fireEvent.change(reason(yourAnswer()!), {
         target: { value: "Read it twice." },
       });
-      press(sendButton(yourAnswer()!));
+      await press(sendButton(yourAnswer()!));
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
         () => asked(served, `GET ${STEP}`) === 2 && yourAnswer() === null,
       );
 
-      act(() => answering.settle(ANSWERED));
+      await act(async () => answering.settle(ANSWERED));
       await landing(
         () =>
           document.activeElement ===
-          screen.getByRole("heading", { name: "What came out" }),
+          screen.getByRole("heading", { name: "Output" }),
       );
 
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText(/already, by/)).toBeNull();
+      expect(screen.queryByText(/Already .* by/)).toBeNull();
       expect(sent(served)).toHaveLength(1);
+    });
+    it.each(["another person", "another try"])(
+      "does not treat a successful payload for %s as completion of the reader's sent try",
+      async (mismatch) => {
+        const answering = deferred<readonly [string, number]>();
+        const { sent: served } = stepOpened({
+          [`GET ${STEP}`]: [stepRead(), EVE_ANSWERED, UNANSWERED],
+          [`PUT ${ANSWER}`]: [answering.promise],
+        });
+        await pageDrawn();
+        await press(screen.getByRole("button", { name: "Answer it yourself" }));
+        fireEvent.change(reason(yourAnswer()!), {
+          target: { value: "Read it twice." },
+        });
+        await press(sendButton(yourAnswer()!));
+        await act(() => vi.advanceTimersByTimeAsync(5000));
+        await landing(() => asked(served, `GET ${STEP}`) === 2);
+
+        await act(async () =>
+          answering.settle(
+            mismatch === "another person"
+              ? EVE_ANSWERED
+              : await stepRead(
+                  ANSWERED_ROW,
+                  {},
+                  {
+                    answering: undefined,
+                    triesMade: [
+                      FIRST_TRY,
+                      {
+                        ...SECOND_TRY,
+                        number: 3,
+                        producedBy: { kind: "person", person: DAN },
+                      },
+                    ],
+                  },
+                ),
+          ),
+        );
+        await landing(() => screen.queryByRole("alert") !== null);
+
+        expect(
+          screen.getAllByRole("alert").map((each) => each.textContent),
+        ).toEqual([`Already answered by ${setApart("Eve")}.`]);
+        expect(yourAnswer()).toBeNull();
+        expect(sent(served)).toHaveLength(1);
+        expect(asked(served, `GET ${STEP}`)).toBe(2);
+      },
+    );
+    it("keeps a quiet read's later review and next try when the earlier successful answer PUT arrives", async () => {
+      const answering = deferred<readonly [string, number]>();
+      const reviewed = stepRead(
+        {
+          ...THIRD_OWED,
+          producedByKind: "person",
+          producedByUserId: DAN.userId,
+        },
+        {
+          number: 3,
+          lastRefused: { number: 2, values: SECOND_TRY.values },
+        },
+        {
+          triesMade: [
+            FIRST_TRY,
+            { ...SECOND_TRY, producedBy: { kind: "person", person: DAN } },
+          ],
+          cameOut: [
+            { field: "summary", now: "refused" },
+            {
+              field: "priority",
+              standing: { number: 2, value: "low" },
+              now: "stands",
+            },
+          ],
+        },
+      );
+      const { sent: served } = stepOpened({
+        [`GET ${STEP}`]: [stepRead(), reviewed, UNANSWERED],
+        [`PUT ${ANSWER}`]: [answering.promise],
+      });
+      await pageDrawn();
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
+      fireEvent.change(reason(yourAnswer()!), {
+        target: { value: "Read it twice." },
+      });
+      await press(sendButton(yourAnswer()!));
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      await landing(() => asked(served, `GET ${STEP}`) === 2);
+
+      await act(async () => answering.settle(ANSWERED));
+      await landing(
+        () =>
+          document.activeElement ===
+          screen.getByRole("heading", { name: "Output" }),
+      );
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Answer it yourself" }),
+      ).toBeEnabled();
+      await press(screen.getByRole("button", { name: "Answer it yourself" }));
+      await landing(() => yourAnswer() !== null);
+      expect(reason(yourAnswer()!)).toHaveValue("");
+      expect(summary(yourAnswer()!)).toHaveValue("A printer fire.");
+      expect(sent(served)).toHaveLength(1);
+      expect(asked(served, `GET ${STEP}`)).toBe(2);
+      expect(within(yourAnswer()!).getByText("Say where.")).toBeVisible();
     });
   });
 });
@@ -3018,7 +3611,7 @@ it("clears rejected files when a moved-on step is read for another try", async (
     name: "attachments",
     label: "Attachments",
     kind: "file",
-    types: ["text/plain"],
+    types: [".txt"],
     maximumBytes: 4,
     most: 2,
     mustBeGiven: true,
@@ -3026,19 +3619,21 @@ it("clears rejected files when a moved-on step is read for another try", async (
   const kept = {
     id: "0000000a-0000-4000-8000-000000000d01",
     name: "Demo Sample earlier.txt",
-    type: "text/plain",
     size: 1,
   };
+  const moved = thirdOwedRead(undefined, {
+    gives: [fileField],
+    lastRefused: {
+      number: 2,
+      values: [{ field: "attachments", value: [kept], now: "refused" }],
+    },
+  });
   const opened = conversing({
     [`GET ${STEP}`]: [
       stepRead({}, { gives: [fileField] }),
-      thirdOwedRead(undefined, {
-        gives: [fileField],
-        lastRefused: {
-          number: 2,
-          values: [{ field: "attachments", value: [kept], now: "refused" }],
-        },
-      }),
+      moved,
+      moved,
+      UNANSWERED,
     ],
     [`PUT ${ANSWER}`]: [pending.promise],
     [`PUT ${STEP}/tries/3/answer`]: [ANSWERED],
@@ -3053,7 +3648,7 @@ it("clears rejected files when a moved-on step is read for another try", async (
     },
   });
   fireEvent.change(reason(form), { target: { value: "Read it twice." } });
-  press(sendButton(form));
+  await press(sendButton(form));
   await landing(() => sent(opened.sent).length === 1);
 
   fireEvent.change(picker, {
@@ -3073,13 +3668,14 @@ it("clears rejected files when a moved-on step is read for another try", async (
   act(() => pending.settle(refusal("STEP_MOVED_ON", 409)));
   await landing(
     () =>
-      asked(opened.sent, `GET ${STEP}`) === 2 &&
-      yourAnswer()?.textContent?.includes("try 2 gave") === true,
+      asked(opened.sent, `GET ${STEP}`) === 3 &&
+      yourAnswer()?.textContent?.includes("Pre-filled from attempt 2.") ===
+        true,
   );
 
   const later = yourAnswer()!;
   const laterPicker = later.querySelector('input[type="file"]')!;
-  expect(later).toHaveTextContent("try 2 gave");
+  expect(later).toHaveTextContent("Pre-filled from attempt 2.");
   expect(later).toHaveTextContent("Demo Sample earlier.txt");
   expect(
     within(later).queryByText("No files from this selection were added."),
@@ -3089,7 +3685,7 @@ it("clears rejected files when a moved-on step is read for another try", async (
   expect(reason(later)).toHaveValue("");
 
   fireEvent.change(reason(later), { target: { value: "Read the new try." } });
-  press(sendButton(later));
+  await press(sendButton(later));
   await landing(() => asked(opened.sent, `PUT ${STEP}/tries/3/answer`) === 1);
   const body = sent(opened.sent)[1]?.body;
   expect(body).toBeInstanceOf(FormData);

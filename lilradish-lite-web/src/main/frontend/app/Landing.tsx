@@ -5,12 +5,9 @@ import { Part } from "../lib/layout/Part";
 import { PRODUCT_NAME } from "./product";
 
 /**
- * Where a reader arrives, and the one screen every reader may be on.
- *
- * It sends nobody anywhere. A reader holding no role has nowhere to be sent, so
- * a redirect from here would either land them on a refusal or need to know what
- * they may reach before it could choose — and either one tells them what else
- * this system has.
+ * Every reader may arrive here. Never redirect: a reader with no roles has
+ * nowhere to go, and choosing a destination would either refuse them or
+ * disclose what else the system contains.
  */
 export function Landing() {
   return (

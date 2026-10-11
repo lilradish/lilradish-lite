@@ -1,6 +1,5 @@
 import type { PoolPersonPanel } from "../../api/pool/people";
 
-/** What a change to the pool settled as. */
 export type Outcome =
   | { readonly changed: PoolPersonPanel }
   | { readonly removed: PoolPersonPanel }

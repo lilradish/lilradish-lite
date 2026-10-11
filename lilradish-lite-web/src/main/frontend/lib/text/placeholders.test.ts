@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   holdsMark,
+  instructionNames,
+  markInstruction,
   markPlaceholders,
   marksIn,
+  renamedInstruction,
+  renamedPlaceholders,
   writtenAgain,
 } from "./placeholders";
 
@@ -12,6 +16,91 @@ const mark = (number: number) => String.fromCodePoint(0xf0000 + number);
 const of = (...codePoints: number[]) => String.fromCodePoint(...codePoints);
 
 const LONGEST_NAME = `a${"b".repeat(62)}`;
+
+describe("markInstruction", () => {
+  it("keeps repeated unfinished openings and protected characters as raw text", () => {
+    const raw = "{{".repeat(4096) + "\\{{tail " + mark(0) + " &#xF0000;\n";
+    const marked = markInstruction(raw);
+    expect(writtenAgain(marked.source, marked.segments)).toBe(raw);
+    expect(marked.segments).toEqual([
+      { written: "\\{{", text: "{{" },
+      { written: mark(0), text: mark(0) },
+      { written: "&#xF0000;", text: "&#xF0000;" },
+    ]);
+  });
+
+  it("renames simultaneous references while keeping escapes and unfinished text", () => {
+    const raw = "{{a}} / {{b}} / {{a}} / \\{{a}} / {{unfinished\n";
+    expect(
+      renamedInstruction(
+        raw,
+        new Map([
+          ["a", "b"],
+          ["b", "a"],
+        ]),
+      ),
+    ).toBe("{{b}} / {{a}} / {{b}} / \\{{a}} / {{unfinished\n");
+    expect(renamedPlaceholders("{{a.b}} {{a}}", new Map([["a", "b"]]))).toBe(
+      "{{a.b}} {{b}}",
+    );
+  });
+
+  it.each(["a.b", "items[0]", " name ", "", "\u540d\u524d", "<b>"])(
+    "keeps the complete reference {{%s}} available for validation and showing in place",
+    (name) => {
+      const raw = `Read {{${name}}}.`;
+      const marked = markInstruction(raw);
+      expect(marked.segments).toEqual([{ written: `{{${name}}}`, name }]);
+      expect(writtenAgain(marked.source, marked.segments)).toBe(raw);
+      expect(markPlaceholders(raw).segments).toEqual([]);
+    },
+  );
+
+  it("keeps escaped and unfinished braces literal without losing their written spelling", () => {
+    const raw = "\\{{a.b}} {{unfinished\n";
+    const marked = markInstruction(raw);
+    expect(marked.segments).toEqual([{ written: "\\{{", text: "{{" }]);
+    expect(writtenAgain(marked.source, marked.segments)).toBe(raw);
+  });
+
+  it("protects private-use characters even after unfinished braces, so none can become a reference mark", () => {
+    const raw = "Read {{unfinished" + mark(0);
+    const marked = markInstruction(raw);
+    expect(marked.segments).toEqual([{ written: mark(0), text: mark(0) }]);
+    expect(writtenAgain(marked.source, marked.segments)).toBe(raw);
+  });
+});
+
+describe("instructionNames", () => {
+  it("reads names from complete references without allocating private-use marks", () => {
+    const raw =
+      "{{a}}".repeat(65535) +
+      "\\{{escaped}} {{a.b}} {{unfinished" +
+      mark(0).repeat(65535);
+    expect(instructionNames(raw)).toEqual(["a", "a.b"]);
+  });
+});
+
+describe("renamedInstruction", () => {
+  it.each(["instruction", "drawing"])(
+    "rewrites dense references in raw %s while preserving private-use, escapes, numeric text and unknown names",
+    (where) => {
+      const dense = "{{a}}{{b}}".repeat(32768);
+      const rest =
+        mark(0).repeat(65535) + "\\{{a}} &#xF0000; {{a.b}} {{unfinished\n";
+      const names = new Map([
+        ["a", "b"],
+        ["b", "a"],
+      ]);
+      const rename =
+        where === "instruction" ? renamedInstruction : renamedPlaceholders;
+      expect(rename(dense + rest, names)).toBe(
+        "{{b}}{{a}}".repeat(32768) + rest,
+      );
+      expect(rename(dense + rest, new Map())).toBe(dense + rest);
+    },
+  );
+});
 
 describe("markPlaceholders", () => {
   it("marks each placeholder where it stands by the order it comes in, leaving the text between as it is", () => {

@@ -1,17 +1,14 @@
 import type { ReadField } from "../../../api/filling";
 import type {
   Declared,
-  From,
   StepRow,
   StepRuns,
-  TakesFrom,
-  WentIn,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { From } from "../../../api/stepSources";
 import { say } from "../../../i18n/app";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import { spokenName, stepTitle } from "./stepTitle";
 
-/** What a read names of the run's declarations, by the run's own version among them. */
 export interface Declaring {
   readonly runId: string;
   readonly declarations: ReadonlyMap<string, Declared>;
@@ -20,10 +17,7 @@ export interface Declaring {
   readonly step?: StepRow;
 }
 
-/**
- * What the version a step runs declares, or the code step it runs; none where it runs neither, or one the read does
- * not name, as a workflow's version and a code step its release does not hold are not.
- */
+/** A read may omit declarations, including when it does not hold a code step's release. */
 export function declaredFor(
   step: StepRow,
   declarations: ReadonlyMap<string, Declared>,
@@ -89,57 +83,9 @@ export function labelAt(
   );
 }
 
-/** One input of a step, and where it comes from. */
-export function takenSaid(
-  taken: TakesFrom,
-  step: StepRow,
-  declaring: Declaring,
-): string {
-  return say("step.takes", {
-    input: labelAt(
-      step.runs.kind === "search"
-        ? sourceFields(taken.from, declaring)
-        : declaredFor(step, declaring.declarations)?.takes,
-      taken.input,
-    ),
-    from: fromSaid(taken.from, declaring),
-  });
-}
-
-function sourceFields(
-  from: From,
-  declaring: Declaring,
-): readonly ReadField[] | undefined {
-  return from.kind === "run_input"
-    ? declaring.declarations.get(declaring.runVersionId)?.takes
-    : from.kind === "step"
-      ? declaredBy(from, declaring.declarations)?.gives
-      : undefined;
-}
-
-/** Search inputs keep their planned container's shape even when its leaves came from other runs. */
-export function inputFields(
-  each: WentIn,
-  takes: readonly ReadField[] | undefined,
-  declaring: Declaring,
-): readonly ReadField[] | undefined {
-  if (declaring.step?.runs.kind !== "search") {
-    return takes;
-  }
-  const planned =
-    each.sourcePartId === undefined
-      ? undefined
-      : declaring.step.takesFrom.find(
-          (part) => part.sourcePartId === each.sourcePartId,
-        );
-  return planned === undefined
-    ? undefined
-    : sourceFields(planned.from, declaring);
-}
-
 /**
  * Where an input comes from, each field by its label where what it is of is declared in the read; by its name where
- * it is not, as what a workflow's version gives back never is.
+ * it is not.
  */
 export function fromSaid(from: From, declaring: Declaring): string {
   const { declarations, runVersionId } = declaring;
@@ -168,7 +114,7 @@ export function fromSaid(from: From, declaring: Declaring): string {
     return say("step.unknown");
   }
   const field = labelAt(declaredBy(from, declarations)?.gives, from.path);
-  const step = isolatedInText(spokenName(from.name));
+  const step = isolatedInText(from.label ?? spokenName(from.name));
   return from.runId !== undefined &&
     from.runNumber !== undefined &&
     from.runId !== declaring.runId

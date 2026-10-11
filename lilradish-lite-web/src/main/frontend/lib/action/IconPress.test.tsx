@@ -9,58 +9,48 @@ import { describe, expect, it, vi } from "vitest";
 import { theme } from "../theme/theme";
 import { IconPress } from "./IconPress";
 
-/** `theme.palette.action.disabled`, which `theme.ts` leaves at Material's own value. */
-const DISABLED_COLOUR = "rgba(0, 0, 0, 0.26)";
-
-/** `theme.palette.warning.main`, as a resolved colour is reported back. */
-const WARNING_COLOUR = "rgb(154, 79, 0)";
+const DISABLED_COLOUR = "rgb(128, 143, 150)";
 
 function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-function pressing(unavailable: boolean, warns?: boolean, navigation?: boolean) {
+function pressing(unavailable: boolean, words = "Move up") {
   const onPress = vi.fn();
   render(
     <IconPress
       icon={<ArrowUpwardIcon />}
-      warns={warns}
-      navigation={navigation}
-      label="Move up: Payroll"
+      label={`${words}: Payroll`}
       unavailable={unavailable}
       onPress={onPress}
     >
-      Move up
+      {words}
     </IconPress>,
     { wrapper: themed },
   );
   return {
     onPress,
-    button: screen.getByRole("button", { name: "Move up: Payroll" }),
+    button: screen.getByRole("button", { name: `${words}: Payroll` }),
   };
 }
 
 describe("IconPress", () => {
-  it.each([
-    [undefined, false, false],
-    [true, true, false],
-    [false, false, false],
-  ] as const)(
-    "uses inherited colour for navigation %s",
-    (navigation, inherited, warning) => {
-      const { button } = pressing(false, warning, navigation);
+  it.each(["Move up", "Next", "Previous"])(
+    "keeps %s in the compact icon tier",
+    (words) => {
+      const { button } = pressing(false, words);
       expect(button.classList.contains(iconButtonClasses.colorInherit)).toBe(
-        inherited,
+        false,
       );
       expect(button.classList.contains(iconButtonClasses.colorWarning)).toBe(
-        warning,
+        false,
       );
       expect(button).toHaveClass(iconButtonClasses.sizeSmall);
     },
   );
-  it("gives warning priority over navigation and keeps held navigation unavailable", async () => {
-    const { button, onPress } = pressing(true, true, true);
-    expect(button).toHaveClass(iconButtonClasses.colorWarning);
+  it("keeps an icon act in its ordinary tier while held", async () => {
+    const { button, onPress } = pressing(true);
+    expect(button).not.toHaveClass(iconButtonClasses.colorWarning);
     expect(button).not.toHaveClass(iconButtonClasses.colorInherit);
     await userEvent.click(button);
     expect(onPress).not.toHaveBeenCalled();
@@ -135,15 +125,15 @@ describe("IconPress", () => {
     expect(onPress).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["where it warns", true, true],
-    ["nowhere else", undefined, false],
-  ])("is drawn in the warning colour %s", (_where, warns, warning) => {
-    const { button } = pressing(false, warns);
+  it.each(["Delete", "Move up"])(
+    "keeps the %s draft icon in its ordinary colour",
+    (words) => {
+      const { button } = pressing(false, words);
 
-    expect(button.classList.contains(iconButtonClasses.colorWarning)).toBe(
-      warning,
-    );
-    expect(getComputedStyle(button).color === WARNING_COLOUR).toBe(warning);
-  });
+      expect(button.classList.contains(iconButtonClasses.colorWarning)).toBe(
+        false,
+      );
+      expect(getComputedStyle(button).color).toBe("rgb(88, 102, 108)");
+    },
+  );
 });

@@ -8,7 +8,7 @@ const GROUP = "00000003-0000-4000-8000-000000000e51";
 
 describe("readCurrency", () => {
   it("asks for the group's currency under the group's escaped segment", async () => {
-    const sent = answering(["{}", 200]);
+    const sent = answering(['{"offered":[]}', 200]);
 
     await readCurrency(GROUP, new AbortController().signal);
     await readCurrency("a/b", new AbortController().signal);
@@ -35,10 +35,9 @@ describe("readCurrency", () => {
       "a currency chosen and the ones offered",
       { chosen: "EUR", offered: ["EUR", "JPY"] },
     ],
-    ["a currency chosen and none offered", { chosen: "EUR" }],
+    ["a currency chosen and none offered", { chosen: "EUR", offered: [] }],
     ["none chosen and the ones offered", { offered: ["USD"] }],
     ["none chosen, and an offer of nothing", { offered: [] }],
-    ["none chosen and none offered", {}],
   ])("reads %s, and leaves out what did not arrive", async (_case, body) => {
     answering([JSON.stringify(body), 200]);
 
@@ -53,6 +52,9 @@ describe("readCurrency", () => {
     ["a code of four letters", { chosen: "EURO" }],
     ["a chosen currency sent as null", { chosen: null }],
     ["an offer that is no list", { offered: "EUR" }],
+    ["no catalog supplied", { chosen: "EUR" }],
+    ["no currency and no catalog supplied", {}],
+    ["a catalog supplied as null", { offered: null }],
     ["an offer holding a code that is none", { offered: ["EUR", 978] }],
     ["no document at all", ["EUR"]],
   ])("refuses the whole answer holding %s", async (_case, body) => {

@@ -83,13 +83,14 @@ describe("groupsLoader", () => {
   });
 
   it("reads the last page as having no cursor, rather than a null one", async () => {
-    answering([JSON.stringify({ items: [PAYROLL] }), 200]);
+    answering([JSON.stringify({ items: [PAYROLL, EMPTY_ROOM] }), 200]);
 
     const page = await groupsLoader(EVERY_GROUP)(
       null,
       new AbortController().signal,
     );
 
+    expect(page.items).toEqual([PAYROLL, EMPTY_ROOM]);
     expect("nextCursor" in page).toBe(false);
   });
 

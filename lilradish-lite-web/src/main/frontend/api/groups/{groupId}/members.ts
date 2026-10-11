@@ -5,16 +5,13 @@ import type { Page } from "../../../lib/request/page";
 import { pagedLoader, type ListQuery } from "../../../lib/request/pagedLoader";
 import { GROUPS } from "../../groups";
 
-/**
- * The roles a group has, spelt the way the server spells them, and held level
- * with the server's list for the reason `SurfaceAct` gives.
- */
+/** Spelt and held level with the server's group roles, for the reason `SurfaceAct` gives. */
 export type GroupRole = "operator" | "overseer" | "owner";
 
 /** Held as the server said them, for the reason `Standing` gives: an unknown role is kept. */
 export type GroupRoles = ReadonlySet<string>;
 
-/** The columns a group's members can be sorted by, spelt as the server takes them. */
+/** Spelt as the server takes them. */
 export type MemberSortColumn = "userId" | "displayName";
 
 /** One column, led by a hyphen for descending. */
@@ -22,7 +19,7 @@ export type MemberOrder = MemberSortColumn | `-${MemberSortColumn}`;
 
 export type MemberQuery = ListQuery<MemberOrder>;
 
-/** One member of a group. `subjectId` addresses the row and is never shown. */
+/** `subjectId` addresses the row and is never shown. */
 export interface Member {
   readonly subjectId: string;
   readonly userId: string;
@@ -31,21 +28,17 @@ export interface Member {
   readonly roles: GroupRoles;
 }
 
-/**
- * Somebody as a group holds them, as a read of them and every change to them
- * answers: holding no role once their membership has ended.
- */
+/** Reads and changes share this shape; roles are empty after membership ends. */
 export interface MemberPanel extends Member {
   /**
    * The roles held that nobody else in the group could change its membership
    * without, so taking them is not offered.
    */
   readonly lastChangingRoles: GroupRoles;
-  /** Whether taking them out of the group is offered, as the server decides it. */
+  /** As the server decides it. */
   readonly removable: boolean;
 }
 
-/** The group's members' address handed to `ask`, made as `atSegment` makes one. */
 export function atMembers<T>(
   groupId: string,
   ask: (address: string) => Promise<T>,
@@ -75,7 +68,6 @@ export function bringIn(
   );
 }
 
-/** Built member by member, for the reason the rows of the list are. */
 export function panelFrom(body: unknown): MemberPanel | null {
   const member = memberFrom(body);
   if (member === null || !isUnchecked(body)) {
@@ -88,7 +80,7 @@ export function panelFrom(body: unknown): MemberPanel | null {
     : { ...member, lastChangingRoles: new Set(lastChanging), removable };
 }
 
-/** Built member by member; a row missing what identifies it fails the whole page. */
+/** A row missing what identifies it fails the whole page. */
 function memberFrom(row: unknown): Member | null {
   if (!isUnchecked(row)) {
     return null;

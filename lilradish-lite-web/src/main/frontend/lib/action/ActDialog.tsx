@@ -6,11 +6,11 @@ import type { ReactNode } from "react";
 
 import type { Action } from "../request/useAction";
 import { ActButton } from "./ActButton";
+import { ActGroup } from "./ActGroup";
 import { Press, type Reason } from "./Press";
 
 /**
- * A dialog over the page asking for one act, beside a control that abandons it.
- * Once the act is out it cannot be abandoned — by that control, Escape or the
+ * Once the act is out it cannot be abandoned — by the abandon control, Escape or the
  * shade — because the server carries it out whoever is still listening.
  */
 export function ActDialog<T>({
@@ -21,7 +21,7 @@ export function ActDialog<T>({
   action,
   act,
   actLabel,
-  warns,
+  tier,
   reason,
   abandonLabel,
   underway,
@@ -35,13 +35,12 @@ export function ActDialog<T>({
   readonly action: Action<T>;
   readonly act: (signal: AbortSignal) => Promise<T>;
   readonly actLabel: string;
-  readonly warns?: boolean;
+  readonly tier?: "primary" | "dangerConfirm";
   /** Why the act cannot be pressed yet; absent where it can. */
   readonly reason?: Reason;
   readonly abandonLabel: string;
-  /** Said by the abandon control while the act is out. */
   readonly underway: string;
-  /** A refusal of what this opening asked, in the caller's words, under what it asks for. */
+  /** The caller's own words for the refusal, shown below the fields. */
   readonly refusal: ReactNode;
   readonly children: ReactNode;
 }) {
@@ -60,24 +59,27 @@ export function ActDialog<T>({
         {refusal}
       </DialogContent>
       <DialogActions>
-        <Press
-          reason={
-            running ? { severity: "warning", words: underway } : undefined
-          }
-          variant="neutral"
-          onPress={onShut}
-        >
-          {abandonLabel}
-        </Press>
-        <ActButton
-          action={action}
-          act={act}
-          variant="contained"
-          warns={warns}
-          reason={reason}
-        >
-          {actLabel}
-        </ActButton>
+        <ActGroup>
+          <Press
+            fill
+            reason={
+              running ? { severity: "warning", words: underway } : undefined
+            }
+            tier="neutral"
+            onPress={onShut}
+          >
+            {abandonLabel}
+          </Press>
+          <ActButton
+            fill
+            tier={tier ?? "primary"}
+            action={action}
+            act={act}
+            reason={reason}
+          >
+            {actLabel}
+          </ActButton>
+        </ActGroup>
       </DialogActions>
     </Dialog>
   );

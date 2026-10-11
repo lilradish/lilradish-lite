@@ -5,11 +5,13 @@ import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import ListSubheader from "@mui/material/ListSubheader";
 import type SvgIcon from "@mui/material/SvgIcon";
+import Tooltip from "@mui/material/Tooltip";
 import { Fragment } from "react";
 import { NavLink } from "react-router";
 
 import { holds } from "../api/standing";
 import { say, type MessageId } from "../i18n/app";
+import { TOKENS } from "../lib/theme/tokens";
 import {
   DESTINATION_GROUPS,
   GROUP_ITEMS,
@@ -27,12 +29,22 @@ const DESTINATION_SX = {
     "& .MuiListItemText-primary": { typography: "term" },
     "& .MuiListItemIcon-root": { color: "primary.main" },
   },
+  "[data-navigation-collapsed=true] &": {
+    width: "40px",
+    height: "36px",
+    minHeight: 0,
+    px: 0,
+    justifyContent: "center",
+    borderRadius: TOKENS.shape.controlRadius,
+    "& .MuiListItemIcon-root": { minWidth: 0 },
+  },
 };
 
-/**
- * My work, the group in force and its pages, then the estate's: a place out of
- * reach is not drawn, and `NavLink` alone decides which entry is current.
- */
+const LIST_SX = {
+  "[data-navigation-collapsed=true] &": { py: "3px" },
+};
+
+/** A place out of reach is not drawn, and `NavLink` alone decides which entry is current. */
 export function Nav({ inForce }: { readonly inForce: GroupInForce }) {
   const standing = useStanding();
   const group = inForce.group;
@@ -41,19 +53,21 @@ export function Nav({ inForce }: { readonly inForce: GroupInForce }) {
     <>
       {group === null ? null : (
         <>
-          <List dense>
+          <List dense sx={LIST_SX}>
             <Entry to={MY_WORK.to} label={MY_WORK.label} icon={MY_WORK.icon} />
           </List>
-          <GroupPicker
-            groups={standing.groups}
-            group={group}
-            onPick={inForce.choose}
-          />
-          <List dense aria-label={group.name}>
+          <div data-navigation-label>
+            <GroupPicker
+              groups={standing.groups}
+              group={group}
+              onPick={inForce.choose}
+            />
+          </div>
+          <List dense aria-label={group.name} sx={LIST_SX}>
             {GROUP_ITEMS.filter((item) => opensIn(group, item)).map((item) => (
               <Entry
                 key={item.segment}
-                to={groupPage(group.groupId, item.segment)}
+                to={groupPage(group, item.segment)}
                 label={item.label}
                 icon={item.icon}
               />
@@ -75,12 +89,17 @@ export function Nav({ inForce }: { readonly inForce: GroupInForce }) {
         const headingId = section.label.replaceAll(".", "-");
         return (
           <Fragment key={section.label}>
-            <ListSubheader component="div" disableSticky id={headingId}>
+            <ListSubheader
+              component="div"
+              disableSticky
+              id={headingId}
+              data-navigation-label
+            >
               {say(section.label)}
             </ListSubheader>
             {/* Named by the heading beside it, not a label of its own: the
                 `subheader` slot renders that heading inside, as an extra item. */}
-            <List dense aria-labelledby={headingId}>
+            <List dense aria-labelledby={headingId} sx={LIST_SX}>
               {items.map((destination) => (
                 <Entry
                   key={destination.to}
@@ -108,12 +127,19 @@ function Entry({
 }) {
   return (
     <ListItem disablePadding>
-      <ListItemButton component={NavLink} to={to} sx={DESTINATION_SX}>
-        <ListItemIcon sx={{ minWidth: 36 }}>
-          <Icon fontSize="small" />
-        </ListItemIcon>
-        <ListItemText primary={say(label)} />
-      </ListItemButton>
+      <Tooltip title={say(label)} describeChild>
+        <ListItemButton
+          component={NavLink}
+          to={to}
+          aria-label={say(label)}
+          sx={DESTINATION_SX}
+        >
+          <ListItemIcon sx={{ minWidth: 36 }}>
+            <Icon sx={{ width: 20, height: 20 }} />
+          </ListItemIcon>
+          <ListItemText primary={say(label)} data-navigation-label />
+        </ListItemButton>
+      </Tooltip>
     </ListItem>
   );
 }

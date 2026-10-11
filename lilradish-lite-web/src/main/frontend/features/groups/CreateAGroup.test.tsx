@@ -50,11 +50,7 @@ function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-/**
- * The control and its dialog over the real action they are handed, held as a
- * page holds it, beside another change the same action can run. Only the
- * server is stood in for.
- */
+// Stand in only for the server so both changes share the real action guard.
 function creating(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   const sent = serving({ "GET /api/pool/search": [FOUND], ...routes });
   const settled = vi.fn();
@@ -98,7 +94,6 @@ function create(): HTMLElement {
   return screen.getByRole("button", { name: "Create" });
 }
 
-/** Whichever of a name and a key is given, typed in; nothing is typed for one not given. */
 async function typedIn(name: string, key: string) {
   if (name !== "") {
     await userEvent.type(nameBox(), name);
@@ -108,7 +103,6 @@ async function typedIn(name: string, key: string) {
   }
 }
 
-/** A name, a key, and Avo picked: everything the control holds out for. */
 async function filledIn() {
   await typedIn("Payroll", "payroll");
   await searchedFor("a");
@@ -287,18 +281,27 @@ describe("CreateAGroup", () => {
     const abandon = screen.getByRole("button", { name: "Cancel" });
     abandon.focus();
 
-    await userEvent.keyboard("{Enter}[Space]{Escape}");
-    await act(async () => {
-      await new Promise((resolve) =>
-        setTimeout(resolve, theme.transitions.duration.leavingScreen * 2),
-      );
-    });
+    vi.useFakeTimers();
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await act(async () => {
+        const attempted = user.keyboard("{Enter}[Space]{Escape}");
+        await vi.advanceTimersByTimeAsync(
+          theme.transitions.duration.leavingScreen * 2,
+        );
+        await attempted;
+      });
 
-    expect(abandon).toHaveAttribute("aria-disabled", "true");
-    expect(abandon).toHaveAccessibleDescription(
-      "It is being created, and that can no longer be called back.",
-    );
-    expect(screen.getByRole("dialog", { name: "Create a group" })).toBe(dialog);
+      expect(abandon).toHaveAttribute("aria-disabled", "true");
+      expect(abandon).toHaveAccessibleDescription(
+        "It is being created, and that can no longer be called back.",
+      );
+      expect(screen.getByRole("dialog", { name: "Create a group" })).toBe(
+        dialog,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("settles as the group created once the answer lands, whatever was tried meanwhile", async () => {

@@ -3,8 +3,8 @@ import { atVersion } from "../../versions";
 import { workflowFrom, type WorkflowVersion } from "../{versionId}";
 
 /**
- * The most a run of a workflow draft may spend, in digits or null for none, and whether a run keeps its own and a
- * raise waits on approving, naming the revision the page read; answered with the version as it then reads.
+ * Ceiling is digits, or null for none. Names the revision read and returns the
+ * version as it then reads.
  */
 export function writeCeiling(
   groupId: string,

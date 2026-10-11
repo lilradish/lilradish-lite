@@ -6,7 +6,7 @@ import { Press } from "../action/Press";
 import type { PagedResource } from "../request/usePagedResource";
 
 /**
- * Forward, or back to the start. No page number and no total: both are offset
+ * No page number and no total: both are offset
  * thinking, and a control that shows one is a control that needs it to exist.
  *
  * Nothing at all where the collection begins and ends on the same page, because
@@ -30,10 +30,10 @@ export function PagingControls({
   }
   return (
     <Stack direction="row" spacing={1.5} sx={{ my: 2 }}>
-      <Press navigation unavailable={page.onFirstPage} onPress={page.first}>
+      <Press tier="quiet" unavailable={page.onFirstPage} onPress={page.first}>
         {say("paging.first")}
       </Press>
-      <Press navigation unavailable={!page.hasNext} onPress={page.next}>
+      <Press tier="quiet" unavailable={!page.hasNext} onPress={page.next}>
         {say("paging.next")}
       </Press>
     </Stack>

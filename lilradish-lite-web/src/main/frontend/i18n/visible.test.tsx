@@ -84,16 +84,13 @@ describe("visible", () => {
     const name = 'Demo Sample <img src=x onerror="alert(1)"> مرحبا';
     const { container } = render(
       <p>
-        {visible("workflow.runsVersion", {
-          name: <bdi>{name}</bdi>,
-          number: 4,
+        {visible("pins.openNewest", {
+          label: <bdi>{name}</bdi>,
         })}
       </p>,
     );
 
-    expect(container.textContent).toBe(
-      say("workflow.runsVersion", { name, number: 4 }),
-    );
+    expect(container.textContent).toBe(say("pins.openNewest", { label: name }));
     expect(screen.getByText(name).tagName).toBe("BDI");
     expect(container.querySelector("img")).toBeNull();
   });

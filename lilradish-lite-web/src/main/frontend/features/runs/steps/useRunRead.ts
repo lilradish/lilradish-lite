@@ -30,7 +30,6 @@ interface Kept<T> {
   readonly value: T;
 }
 
-/** A read kept up, and a way to read it again at once, as it keeps up. */
 type KeptUp<T> = Resource<T | null> & { readonly quietly: () => void };
 
 /** A run and its steps, read together and kept up while the steps answer says how often. */

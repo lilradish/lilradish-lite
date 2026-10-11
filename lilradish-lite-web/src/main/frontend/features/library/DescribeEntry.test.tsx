@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ const TRIAGE: Entry = {
   kind: "question",
   name: "Triage",
   purpose: "Sorts claims.",
-  acts: new Set(["rename"]),
+  stateActs: new Set(["rename"]),
   versions: [],
 };
 
@@ -39,6 +39,7 @@ function themed({ children }: { readonly children: ReactNode }) {
 function editing(
   entry: Entry,
   routes: Readonly<Record<string, readonly Reply[]>> = {},
+  field?: "name" | "purpose",
 ) {
   const sent = serving(routes);
   const settled = vi.fn<(entry: Entry) => void>();
@@ -47,6 +48,7 @@ function editing(
     const changing = useAction<Entry>(settled);
     return (
       <DescribeEntry
+        editing={field}
         open={open}
         title="Edit this entry"
         actLabel="Save"
@@ -78,11 +80,78 @@ function save(): HTMLElement {
 }
 
 async function pressedHeld() {
-  save().focus();
+  act(() => save().focus());
   await userEvent.keyboard("{Enter}");
 }
 
 describe("DescribeEntry", () => {
+  it.each([
+    ["name", "Name", "Intake", { name: "Intake", purpose: "Sorts claims." }],
+    [
+      "purpose",
+      "What it is for",
+      "Routes claims.",
+      { name: "Triage", purpose: "Routes claims." },
+    ],
+  ] as const)(
+    "edits only %s inline and saves its complete description by Enter",
+    async (field, label, value, body) => {
+      const { sent, settled } = editing(
+        TRIAGE,
+        {
+          [`PATCH ${ADDRESS}`]: [
+            [
+              JSON.stringify({ ...TRIAGE, ...body, stateActs: ["rename"] }),
+              200,
+            ],
+          ],
+        },
+        field,
+      );
+      const input = screen.getByRole("textbox", { name: label });
+      expect(input.tagName).toBe("TEXTAREA");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.getAllByRole("textbox")).toEqual([input]);
+      await userEvent.clear(input);
+      await userEvent.type(input, value + "{Enter}");
+      await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
+      expect(requestsTo(sent)).toEqual([`PATCH ${ADDRESS}`]);
+      expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual(body);
+      expect(screen.queryByRole("textbox")).toBeNull();
+    },
+  );
+
+  it.each([
+    ["both, in the dialog", undefined, ["Name", "What it is for"]],
+    ["the name alone, inline", "name", ["Name"]],
+    ["what it is for alone, inline", "purpose", ["What it is for"]],
+  ] as const)(
+    "names %s, with visible labels only in the dialog and none floating inside a box",
+    (_case, field, labels) => {
+      editing(TRIAGE, {}, field);
+
+      const boxes = screen.getAllByRole("textbox");
+
+      expect(
+        boxes.map((box) =>
+          field === undefined
+            ? box.closest(".MuiInputBase-root")!.previousElementSibling
+                ?.textContent
+            : box.getAttribute("aria-label"),
+        ),
+      ).toEqual(labels);
+      expect(document.querySelectorAll(".MuiInputLabel-root")).toHaveLength(0);
+    },
+  );
+
+  it("abandons a changed purpose by Escape without sending or exposing a name editor", async () => {
+    const { sent, settled } = editing(TRIAGE, {}, "purpose");
+    await userEvent.type(purposeBox(), " revised{Escape}");
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(requestsTo(sent)).toEqual([]);
+    expect(settled).not.toHaveBeenCalled();
+  });
   it("opens holding the name and what it is for as they stand, and holds sending both as they stand", async () => {
     const { sent } = editing(TRIAGE);
 
@@ -149,7 +218,10 @@ describe("DescribeEntry", () => {
   it("sends the name and what it is for as one change, an emptied purpose as none, and shuts once it lands", async () => {
     const { sent, settled } = editing(TRIAGE, {
       [`PATCH ${ADDRESS}`]: [
-        [JSON.stringify({ ...TRIAGE, name: "Intake", acts: ["rename"] }), 200],
+        [
+          JSON.stringify({ ...TRIAGE, name: "Intake", stateActs: ["rename"] }),
+          200,
+        ],
       ],
     });
 
@@ -178,7 +250,7 @@ describe("DescribeEntry", () => {
       "the act, as the rule it was handed and no other",
       "ACT_NOT_PERMITTED",
       403,
-      "A group's entries are put into service, and a run's raised ceiling approved or refused, only by a role in it that may approve an entry.",
+      "Only someone in this group who can approve entries can put workflows, questions and reference lists into service, or approve or reject a usage limit change.",
     ],
   ])(
     "says a refusal of %s in the dialog, which stays open",

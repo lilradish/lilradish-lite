@@ -3,7 +3,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deferred } from "../../testutil/deferred";
 import { useAction, type Action } from "../request/useAction";
@@ -61,6 +61,78 @@ function Harness({
 }
 
 describe("ActButton", () => {
+  it("keeps concise visible words with a full accessible name and one shared reason", () => {
+    render(
+      <>
+        <p id="held-step">{REASON.words}</p>
+        <ActButton
+          action={stubbed()}
+          act={vi.fn()}
+          label="Save the steps and what fills what the workflow gives back"
+          reason={REASON}
+          reasonDescribedBy="held-step"
+        >
+          Save
+        </ActButton>
+      </>,
+      { wrapper: themed },
+    );
+    const button = screen.getByRole("button", {
+      name: "Save the steps and what fills what the workflow gives back",
+    });
+    expect(button).toHaveTextContent(/^Save$/);
+    expect(button).toHaveAccessibleDescription(REASON.words);
+    expect(screen.getAllByText(REASON.words)).toHaveLength(1);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("shows busy only on the button pressed when siblings share one action, and clears it for a later sibling action", async () => {
+    vi.useFakeTimers();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const firstAct = vi.fn(() => first.promise);
+    const secondAct = vi.fn(() => second.promise);
+    function Shared() {
+      const action = useAction(() => undefined);
+      return (
+        <>
+          <ActButton action={action} act={firstAct} tier="primary">
+            Save
+          </ActButton>
+          <ActButton action={action} act={secondAct}>
+            Approve
+          </ActButton>
+        </>
+      );
+    }
+    render(<Shared />, { wrapper: themed });
+    const save = screen.getByRole("button", { name: "Save" });
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await act(async () => {
+      save.focus();
+    });
+    fireEvent.click(save);
+    expect(save).not.toHaveClass(buttonClasses.disabled);
+    expect(approve).toHaveClass(buttonClasses.disabled);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(save).toHaveAccessibleName(/Save.*under way/);
+    expect(approve.querySelector("[role='progressbar']")).toBeNull();
+    fireEvent.click(approve);
+    expect(secondAct).not.toHaveBeenCalled();
+    await act(async () => first.settle(null));
+    expect(save).toHaveAccessibleName("Save");
+    expect(save).toHaveFocus();
+    fireEvent.click(approve);
+    expect(save).toHaveClass(buttonClasses.disabled);
+    expect(approve).not.toHaveClass(buttonClasses.disabled);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(approve).toHaveAccessibleName(/Approve.*under way/);
+    expect(save.querySelector("[role='progressbar']")).toBeNull();
+    await act(async () => second.settle(null));
+    expect(approve).toHaveAccessibleName("Approve");
+    expect(approve).not.toHaveAttribute("aria-disabled");
+  });
+
   /**
    * The signal, the busy flag and the refusal all belong to the action; a
    * button that called the act itself would have none of them.
@@ -107,7 +179,9 @@ describe("ActButton", () => {
       const asking = stubbed(over);
       render(button(asking, reason, waiting), { wrapper: themed });
       const remove = screen.getByRole("button", { name: "Remove" });
-      remove.focus();
+      await act(async () => {
+        remove.focus();
+      });
 
       await userEvent.keyboard("{Enter}[Space]");
       // Drawn with `pointer-events: none`, which userEvent will not click
@@ -149,7 +223,7 @@ describe("ActButton", () => {
         <ActButton
           action={stubbed()}
           act={vi.fn(() => Promise.resolve(null))}
-          warns
+          tier="danger"
         >
           Remove
         </ActButton>
@@ -174,7 +248,7 @@ describe("ActButton", () => {
         <ActButton
           action={stubbed()}
           act={vi.fn(() => Promise.resolve(null))}
-          variant="contained"
+          tier="primary"
         >
           Approve
         </ActButton>

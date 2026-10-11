@@ -92,7 +92,7 @@ describe("line choice", () => {
     },
   );
 
-  it("keeps a line feed under a several-line or older text field, and leaves ordinary spaces empty", () => {
+  it("keeps a line feed in a several-line text field or one with no lines setting, and leaves ordinary spaces empty", () => {
     const newline = String.fromCodePoint(0x0a);
 
     expect(

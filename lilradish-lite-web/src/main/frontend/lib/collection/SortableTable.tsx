@@ -8,7 +8,6 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TableSortLabel from "@mui/material/TableSortLabel";
 import Typography from "@mui/material/Typography";
-import type { Theme } from "@mui/material/styles";
 import type { MouseEvent, ReactNode } from "react";
 import { Link as RouterLink } from "react-router";
 
@@ -18,6 +17,7 @@ import { Notice } from "../notice/Notice";
 import type { PagedResource } from "../request/usePagedResource";
 import type { Ordering } from "./ordering";
 import { PagingControls } from "./PagingControls";
+import { TABLE_SX, CELL_SX } from "./table";
 
 interface Column<T, K extends string> {
   readonly label: string;
@@ -27,6 +27,7 @@ interface Column<T, K extends string> {
   readonly sortKey?: K;
   /** A figure, set at the trailing end in digits of one width, so a column of them reads by size. */
   readonly numeric?: true;
+  readonly compact?: true;
 }
 
 type Picking<T> =
@@ -51,12 +52,6 @@ const INTERACTIVE =
 
 const OPENING_ROW_SX = { cursor: "pointer" };
 
-// Painted inside the cell rather than as its border, which in the collapsed
-// border model takes its width out of the cell and moves the text.
-const PICKED_CELL_SX = {
-  boxShadow: (given: Theme) => `inset 4px 0 0 ${given.palette.primary.main}`,
-};
-
 const STATUS_REGION_SX = { my: 1 };
 
 const STATUS_SX = { color: "text.secondary" };
@@ -64,29 +59,29 @@ const STATUS_SX = { color: "text.secondary" };
 /** How a cell holding a figure is set, a numeric column's and any other table's alike, its heading's included. */
 export const FIGURE_SETTING = {
   align: "right",
-  sx: { typography: "figure" },
+  sx: { typography: "figure", width: "1%", whiteSpace: "nowrap" },
 } as const;
 
 const WORDS_SETTING = {};
+const COMPACT_SETTING = { sx: { width: "1%", whiteSpace: "nowrap" } };
 
-/** How a column's cells are set, its heading's included. */
 function cellSetting<T, K extends string>(column: Column<T, K>) {
-  return column.numeric === true ? FIGURE_SETTING : WORDS_SETTING;
+  return column.numeric === true
+    ? FIGURE_SETTING
+    : column.compact === true
+      ? COMPACT_SETTING
+      : WORDS_SETTING;
 }
 
 /**
- * One page of a collection, in the order the caller asked the server for. This
- * never sorts rows itself: a page sorted here is a page, not the collection,
- * in that order.
+ * Keep server order: sorting a page cannot sort the collection.
  *
- * The headers stay whatever the body is doing — reading, empty, refused — so a
- * sort just pressed keeps focus, and the table keeps saying what it is sorted
- * by. What there is to say about the body is said outside the table, in a
- * region that is there before the words it announces.
+ * Headers stay during loading, emptiness and refusal, preserving focus and the
+ * sort label. Body status lives outside the table, in a region mounted before
+ * the words it announces.
  *
- * A picked row is an address, so its control is a link. `aria-current` rather
- * than `aria-selected`, which belongs to composite widgets and this table is
- * none; and a bar rather than a tint, which would be colour alone.
+ * A picked row has an address, so uses a link with `aria-current`:
+ * `aria-selected` belongs to composite widgets. A bar avoids relying on colour alone.
  */
 export function SortableTable<T, K extends string>(
   props: {
@@ -102,7 +97,7 @@ export function SortableTable<T, K extends string>(
      * later page coming back empty says nothing about the collection: whatever
      * was on it may have gone since, and the rest is still there.
      */
-    readonly empty: string;
+    readonly empty: ReactNode;
   } & Picking<T>,
 ) {
   const {
@@ -118,7 +113,6 @@ export function SortableTable<T, K extends string>(
     linkDescriptionOf,
     empty,
   } = props;
-  // A wait is a state; nothing found is a hint, which a notice says.
   const status = page.loading ? (
     <Typography variant="body2" sx={STATUS_SX}>
       {say("read.pending")}
@@ -130,9 +124,9 @@ export function SortableTable<T, K extends string>(
   return (
     <>
       <TableContainer>
-        <Table size="small" aria-label={label}>
+        <Table size="small" aria-label={label} sx={TABLE_SX}>
           <SortingHead columns={columns} order={order} onOrder={onOrder} />
-          <TableBody>
+          <TableBody sx={CELL_SX}>
             {page.items.map((row) => {
               const key = keyOf(row);
               return (
@@ -159,9 +153,7 @@ export function SortableTable<T, K extends string>(
 }
 
 /**
- * A collection sent whole: with nothing further to read, the order is the
- * caller's to make and to keep. A picked row is marked as `SortableTable`
- * marks one.
+ * With the whole collection available, the caller owns its order.
  */
 export function WholeTable<T, K extends string>(
   props: {
@@ -171,7 +163,7 @@ export function WholeTable<T, K extends string>(
     readonly onOrder: (next: Ordering<K>) => void;
     readonly rows: readonly T[];
     readonly keyOf: (row: T) => string;
-    readonly empty: string;
+    readonly empty: ReactNode;
   } & Picking<T>,
 ) {
   const {
@@ -189,9 +181,9 @@ export function WholeTable<T, K extends string>(
   } = props;
   return (
     <TableContainer>
-      <Table size="small" aria-label={label}>
+      <Table size="small" aria-label={label} sx={TABLE_SX}>
         <SortingHead columns={columns} order={order} onOrder={onOrder} />
-        <TableBody>
+        <TableBody sx={CELL_SX}>
           {rows.length === 0 ? (
             <TableRow>
               <TableCell colSpan={columns.length} sx={STATUS_SX}>
@@ -220,10 +212,6 @@ export function WholeTable<T, K extends string>(
   );
 }
 
-/**
- * A row that opens somewhere where it has an address: through a link in its
- * first cell, which a press on the row is a press on.
- */
 function BodyRow<T, K extends string>({
   row,
   columns,
@@ -251,10 +239,15 @@ function BodyRow<T, K extends string>({
     );
   }
   return (
-    <TableRow hover onClick={forwardToLink} sx={OPENING_ROW_SX}>
+    <TableRow
+      hover
+      selected={current}
+      onClick={forwardToLink}
+      sx={OPENING_ROW_SX}
+    >
       {columns.map((column, index) =>
         index === 0 ? (
-          <TableCell key={index} sx={current ? PICKED_CELL_SX : undefined}>
+          <TableCell key={index} {...cellSetting(column)}>
             <Link
               component={RouterLink}
               to={href}

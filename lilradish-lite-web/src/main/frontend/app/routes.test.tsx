@@ -1,13 +1,22 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
+import { expectConsoleErrors } from "../testutil/consoleErrors";
 import { theme } from "../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../testutil/answering";
 import { deferred } from "../testutil/deferred";
 import { laidOutAt } from "../testutil/layout";
+import { GROUPS_PAGE } from "./addresses";
 import { Nav } from "./Nav";
 import { ROUTES } from "./routes";
 import { SystemPage } from "./SystemPage";
@@ -39,7 +48,6 @@ const OPENS_PEOPLE_AND_GROUPS_AND_GRANTS_ROLES = [
   "grant_estate_role",
 ];
 
-/** Each page's refusal, which names the rule of the act that page asks for. */
 const REFUSED = {
   people: "The pool is seen and changed only by a role that may keep it.",
   groups:
@@ -77,7 +85,6 @@ const REGISTER: Reply = [
   200,
 ];
 
-/** A group as the standing sends it. */
 interface GroupSent {
   readonly groupId: string;
   readonly key: string;
@@ -99,7 +106,6 @@ const SEES_NO_MEMBERS: GroupSent = {
   permissions: ["start_run"],
 };
 
-/** Every permission there is, which a group's founder holds. */
 const FOUNDED: GroupSent = {
   groupId: "00000003-0000-4000-8000-000000000953",
   key: "INTAKE",
@@ -107,21 +113,47 @@ const FOUNDED: GroupSent = {
   permissions: ["read_membership", "change_membership", "start_run"],
 };
 
+const REGISTER_WITH_INTAKE: Reply = [
+  JSON.stringify({
+    items: [
+      {
+        groupId: SEES_MEMBERS.groupId,
+        key: SEES_MEMBERS.key,
+        name: SEES_MEMBERS.name,
+        canBeAdministered: true,
+        memberCount: 2,
+      },
+      {
+        groupId: FOUNDED.groupId,
+        key: FOUNDED.key,
+        name: FOUNDED.name,
+        canBeAdministered: true,
+        memberCount: 1,
+      },
+    ],
+  }),
+  200,
+];
+
 const NOT_THEIRS = "00000003-0000-4000-8000-000000000959";
 
 const MEMBERS_REFUSED =
   "A group's members are seen only by a role in it that may see them.";
 
-/** The members page's heading, which names the group set apart from the words around it. */
 const PAYROLL_MEMBERS = `Members of ${String.fromCodePoint(0x2068)}Payroll${String.fromCodePoint(0x2069)}`;
 
-/** The members of the group whose members the reader may see, and its currency, as the server answers them. */
 const LISTED_MEMBERS = {
   [`GET /api/groups/${SEES_MEMBERS.groupId}/members`]: [['{"items":[]}', 200]],
-  [`GET /api/groups/${SEES_MEMBERS.groupId}/currency`]: [["{}", 200]],
+  [`GET /api/groups/${SEES_MEMBERS.groupId}/currency`]: [
+    ['{"offered":[]}', 200],
+  ],
 } as const satisfies Record<string, readonly Reply[]>;
 
-/** What the group whose members the reader may not see has running, and may start, as the server answers them. */
+const MEMBERS_READ = [
+  `GET /api/groups/${SEES_MEMBERS.groupId}/currency`,
+  `GET /api/groups/${SEES_MEMBERS.groupId}/members?sort=userId`,
+];
+
 const TRIAGE_WORK = {
   [`GET /api/groups/${SEES_NO_MEMBERS.groupId}/runs`]: [
     ['{"items":[],"reading":"own"}', 200],
@@ -131,7 +163,6 @@ const TRIAGE_WORK = {
   ],
 } as const satisfies Record<string, readonly Reply[]>;
 
-/** The work page's heading, which names the group set apart as the members page's does. */
 const TRIAGE_WORK_HEADING = `Work of ${String.fromCodePoint(0x2068)}Triage${String.fromCodePoint(0x2069)}`;
 
 const GLINN_PANEL: Reply = [
@@ -160,16 +191,35 @@ function wideViewport() {
   }));
 }
 
+function keptExpanded() {
+  const kept = localStorage.getItem("lilradish.panel.row");
+  localStorage.setItem("lilradish.panel.row", "expanded");
+  onTestFinished(() => {
+    if (kept === null) localStorage.removeItem("lilradish.panel.row");
+    else localStorage.setItem("lilradish.panel.row", kept);
+  });
+}
+
+function opening(
+  path: string,
+  acts: readonly string[],
+  routes: Readonly<Record<string, readonly Reply[]>> = {},
+  groups: readonly GroupSent[] = [],
+) {
+  return routed([path], acts, routes, groups).sent;
+}
+
 /**
- * The whole application at one address, reading what it reads the way it does
- * in a browser: through each endpoint, over a real `Response`. Stubbing the
- * hooks instead would leave the wiring between the screens untested.
+ * The whole application at the last of the addresses followed, its router kept
+ * to read where it is and to go back, reading what it reads the way it does in
+ * a browser: through each endpoint, over a real `Response`. Stubbing the hooks
+ * instead would leave the wiring between the screens untested.
  *
  * Nothing is laid out here, so a panel measuring its own box finds no room
  * beside its list and covers it.
  */
-function opening(
-  path: string,
+function routed(
+  followed: readonly string[],
   acts: readonly string[],
   routes: Readonly<Record<string, readonly Reply[]>> = {},
   groups: readonly GroupSent[] = [],
@@ -183,17 +233,40 @@ function opening(
     "GET /api/groups": [REGISTER],
     ...routes,
   });
+  const router = createMemoryRouter(ROUTES, {
+    initialEntries: [...followed],
+    initialIndex: followed.length - 1,
+  });
+  // Beside each request, in the same order, the address the router stood at as it was sent.
+  const sentFrom: string[] = [];
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    sentFrom.push(router.state.location.pathname);
+    return sent(input, init);
+  });
+  // Read as the router moves and before the screen is drawn again: what the address left had drawn.
+  const left: string[] = [];
+  let at = router.state.location.pathname;
+  router.subscribe((state) => {
+    if (state.location.pathname !== at) {
+      const heading = document.querySelector("h1")?.textContent ?? "";
+      left.push(`${at} ${heading}`.trim());
+      at = state.location.pathname;
+    }
+  });
   render(
     <ThemeProvider theme={theme}>
-      <RouterProvider
-        router={createMemoryRouter(ROUTES, { initialEntries: [path] })}
-      />
+      <RouterProvider router={router} />
     </ThemeProvider>,
   );
-  return sent;
+  return {
+    sent,
+    router,
+    askedFrom: () =>
+      requestsTo(sent).map((request, index) => `${sentFrom[index]} ${request}`),
+    left: () => [...left],
+  };
 }
 
-/** The same address, opened while the endpoint has yet to answer at all. */
 function openingBeforeTheServerAnswers(path: string) {
   wideViewport();
   const held = deferred<Response>();
@@ -212,36 +285,79 @@ function offered(): string[] {
 }
 
 const BROKEN_BY = "Cannot read properties of undefined (reading 'name')";
+const BROKEN = new TypeError(BROKEN_BY);
 
-/** The soundness screen throws while drawn, every other screen as it is; quiet, since React logs it. */
+/** The soundness screen throws while drawn, every other screen as it is; with its expected React report asserted. */
 function breakingTheSoundnessScreen() {
   const drawn = vi.mocked(SystemPage);
   const real = drawn.getMockImplementation()!;
   drawn.mockImplementation((props) => {
     if (props.title === "destination.soundness") {
-      throw new TypeError(BROKEN_BY);
+      throw BROKEN;
     }
     return real(props);
   });
   onTestFinished(() => {
     drawn.mockReset();
   });
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => {
+    expectConsoleErrors(
+      [
+        "%o\n\n%s\n\n%s\n",
+        BROKEN,
+        "The above error occurred in the <Mock> component.",
+        "React will try to recreate this component tree from scratch using the error boundary you provided, RenderErrorBoundary.",
+      ],
+      ["React Router caught the following error during render", BROKEN],
+    );
+  });
 }
 
-/** The sidebar throws while drawn, and with it the frame; quiet, since React logs it. */
+/** The sidebar throws while drawn, and with it the frame; with its expected React report asserted. */
 function breakingTheFrame() {
   const drawn = vi.mocked(Nav);
   drawn.mockImplementation(() => {
-    throw new TypeError(BROKEN_BY);
+    throw BROKEN;
   });
   onTestFinished(() => {
     drawn.mockReset();
   });
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => {
+    expectConsoleErrors(
+      [
+        "%o\n\n%s\n\n%s\n",
+        BROKEN,
+        "The above error occurred in the <Mock> component.",
+        "React will try to recreate this component tree from scratch using the error boundary you provided, RenderErrorBoundary.",
+      ],
+      ["React Router caught the following error during render", BROKEN],
+    );
+  });
 }
 
-/** The width the frame holds the screen to, by the one class naming it. */
+/** The page as drawn, but for the identifiers React mints, which count on across renders. */
+function pageAsDrawn(): string {
+  return document.body.innerHTML.replaceAll(/_r_\w+?_/g, "_r_");
+}
+
+async function openedFromTheRegister(path: string) {
+  const opened = routed(
+    [GROUPS_PAGE],
+    OPENS_PEOPLE_AND_GROUPS,
+    { "GET /api/groups": [REGISTER_WITH_INTAKE] },
+    [SEES_MEMBERS],
+  );
+  await screen.findByText(FOUNDED.key);
+  await act(() => opened.router.navigate(path));
+  await screen.findByRole("heading", { level: 1, name: "No such screen" });
+  return opened;
+}
+
+async function drawnFromTheRegister(path: string): Promise<string> {
+  await openedFromTheRegister(path);
+  return pageAsDrawn();
+}
+
 function heldTo(): string[] {
   return [...document.querySelector(".MuiContainer-root")!.classList].filter(
     (name) => name.startsWith("MuiContainer-maxWidth"),
@@ -250,6 +366,7 @@ function heldTo(): string[] {
 
 describe("ROUTES", () => {
   it("opens a screen this reader's standing names, with nothing refused on it", async () => {
+    await import("../features/people/PeoplePage");
     opening("/system/people", OPENS_PEOPLE_AND_GROUPS);
 
     expect(
@@ -260,6 +377,7 @@ describe("ROUTES", () => {
 
   /** The row may be on no page in hand, so the person is read on their own. */
   it("opens the pool with the person an address names picked, read on their own", async () => {
+    keptExpanded();
     const sent = opening(`/system/people/${GLINN.subjectId}`, ["keep_pool"]);
 
     const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
@@ -277,6 +395,7 @@ describe("ROUTES", () => {
    * screen with more in its address, and the list already read stays read.
    */
   it("picks a row without reading the list again or leaving the screen", async () => {
+    keptExpanded();
     const sent = opening("/system/people", ["keep_pool"]);
     const row = await screen.findByRole("link", { name: "000140" });
 
@@ -311,6 +430,7 @@ describe("ROUTES", () => {
    * rather than controls the server would refuse.
    */
   it("reads the reader's own standing again after an estate role changes, and stops at the wall it now draws", async () => {
+    keptExpanded();
     const sent = opening(`/system/people/${GLINN.subjectId}`, [], {
       "GET /api/standing": [
         [
@@ -350,6 +470,7 @@ describe("ROUTES", () => {
    * over it to push it down; only what it offers changes once the answer lands.
    */
   it("offers the destinations a role granted to the reader themselves reaches, keeping the page as it was while it reads", async () => {
+    keptExpanded();
     const readAgain = deferred<readonly [string, number]>();
     opening(`/system/people/${GLINN.subjectId}`, [], {
       "GET /api/standing": [
@@ -383,7 +504,7 @@ describe("ROUTES", () => {
     await userEvent.click(grant);
     await waitFor(() => expect(grant).toHaveTextContent("Withdraw Watcher"));
     const whileReading = {
-      waiting: screen.queryAllByText("Still reading…", { exact: true }).length,
+      waiting: screen.queryAllByText("Loading…", { exact: true }).length,
       heading: heading.isConnected,
       before: heading.previousElementSibling === before,
     };
@@ -578,7 +699,7 @@ describe("ROUTES", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "lilradish",
     );
-    expect(screen.queryByText("Still reading…")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
 
     // And the navigation still says nothing, which is the direction the
     // unanswered read has to fail in.
@@ -594,7 +715,7 @@ describe("ROUTES", () => {
   it("makes a guarded screen wait on the read rather than refusing on what it holds so far", async () => {
     openingBeforeTheServerAnswers("/system/people");
 
-    expect(await screen.findByText("Still reading…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("heading", { name: "People" })).toBeNull();
   });
@@ -656,17 +777,20 @@ describe("ROUTES", () => {
   it.each([
     [
       "membership alone reaches",
-      `/groups/${SEES_NO_MEMBERS.groupId}/work`,
+      `/groups/${SEES_NO_MEMBERS.key}/work`,
       TRIAGE_WORK_HEADING,
     ],
     [
       "the reader's permissions there reach",
-      `/groups/${SEES_MEMBERS.groupId}/members`,
+      `/groups/${SEES_MEMBERS.key}/members`,
       PAYROLL_MEMBERS,
     ],
   ])(
     "opens a page of a group the reader is in that %s",
     async (_case, path, heading) => {
+      if (path.endsWith("/work")) {
+        await import("../features/runs/WorkPage");
+      }
       opening(path, [], { ...LISTED_MEMBERS, ...TRIAGE_WORK }, [
         SEES_MEMBERS,
         SEES_NO_MEMBERS,
@@ -689,7 +813,7 @@ describe("ROUTES", () => {
     "opens the group's %s to a reader holding nothing there but membership",
     async (segment, heading) => {
       const sent = opening(
-        `/groups/${SEES_NO_MEMBERS.groupId}/${segment}`,
+        `/groups/${SEES_NO_MEMBERS.key}/${segment}`,
         [],
         {
           [`GET /api/groups/${SEES_NO_MEMBERS.groupId}/${segment}`]: [
@@ -715,9 +839,10 @@ describe("ROUTES", () => {
 
   /** An entry opens a page of its own under its kind's, reached as the kind's page is. */
   it("opens an entry's own page in a group the reader is in, by membership alone", async () => {
+    await import("../features/library/EntryPage");
     const entry = "00000006-0000-4000-8000-000000000951";
     opening(
-      `/groups/${SEES_NO_MEMBERS.groupId}/questions/${entry}`,
+      `/groups/${SEES_NO_MEMBERS.key}/questions/${entry}`,
       [],
       {
         [`GET /api/groups/${SEES_NO_MEMBERS.groupId}/questions/${entry}`]: [
@@ -726,7 +851,7 @@ describe("ROUTES", () => {
               entryId: entry,
               kind: "question",
               name: "Sort claims",
-              acts: [],
+              stateActs: [],
               versions: [],
             }),
             200,
@@ -763,7 +888,7 @@ describe("ROUTES", () => {
   it("opens a run as a page of its own under Work in a group the reader is in, by membership alone, drawing neither tab nor list", async () => {
     const run = "00000008-0000-4000-8000-000000000951";
     const sent = opening(
-      `/groups/${SEES_NO_MEMBERS.groupId}/work/${run}`,
+      `/groups/${SEES_NO_MEMBERS.key}/work/${run}`,
       [],
       {
         ...TRIAGE_WORK,
@@ -775,7 +900,7 @@ describe("ROUTES", () => {
                 number: 4,
                 versionId: "00000007-0000-4000-8000-000000000951",
                 state: "running",
-                acts: [],
+                stateActs: [],
                 progress: { done: 0, of: 0 },
               },
               declarations: {},
@@ -792,6 +917,7 @@ describe("ROUTES", () => {
               number: 4,
               name: "Claim from Avo",
               workflow: {
+                versionName: null,
                 entryId: "00000006-0000-4000-8000-000000000951",
                 name: "Handle a claim",
                 version: 1,
@@ -807,7 +933,7 @@ describe("ROUTES", () => {
                 cameBackUnknown: false,
               },
               ceiling: { raiseNeedsApproval: false },
-              acts: [],
+              stateActs: [],
             }),
             200,
           ],
@@ -856,18 +982,20 @@ describe("ROUTES", () => {
     const run = "00000008-0000-4000-8000-000000000953";
     const step = "00000009-0000-4000-8000-000000000953";
     const row = {
+      producedByUserId: null,
+      producedByKind: null,
       stepId: step,
       order: 1,
       name: "file_it",
-      runs: { kind: "route" },
+      runs: { versionName: null, kind: "route" },
       state: "not_started",
       takesFrom: [],
       cost: { callsAModel: false },
-      acts: [],
-      withheld: [],
+      stateActs: [],
+      stateRefusals: [],
     };
     const sent = opening(
-      `/groups/${SEES_NO_MEMBERS.groupId}/work/${run}/steps/${step}`,
+      `/groups/${SEES_NO_MEMBERS.key}/work/${run}/steps/${step}`,
       [],
       {
         ...TRIAGE_WORK,
@@ -880,7 +1008,7 @@ describe("ROUTES", () => {
                   number: 4,
                   versionId: "00000007-0000-4000-8000-000000000953",
                   state: "running",
-                  acts: [],
+                  stateActs: [],
                   progress: { done: 0, of: 1 },
                 },
                 declarations: {},
@@ -934,7 +1062,7 @@ describe("ROUTES", () => {
 
   /** Reached on purpose, a page the reader may not open is owed the rule that refused it. */
   it("refuses in place a page of a group the reader is in that their permissions there do not reach, the frame standing", async () => {
-    opening(`/groups/${SEES_NO_MEMBERS.groupId}/members`, [], {}, [
+    opening(`/groups/${SEES_NO_MEMBERS.key}/members`, [], {}, [
       SEES_MEMBERS,
       SEES_NO_MEMBERS,
     ]);
@@ -971,12 +1099,115 @@ describe("ROUTES", () => {
   });
 
   /**
+   * Written again in place of the address followed, so Back leaves the page; each read is asked once, by the
+   * identifier, and only from the address written with the key.
+   */
+  it.each([
+    ["its key in small letters", "/groups/payroll/members"],
+    ["its key in mixed case", "/groups/pAyRoLl/members"],
+    ["its key escaped", "/groups/%50AYROLL/members"],
+    ["its identifier", `/groups/${SEES_MEMBERS.groupId}/members`],
+  ])(
+    "opens a group's page named by %s, shows the key in capitals, and asks the server by the identifier",
+    async (_case, path) => {
+      // Drawn once first, so the page's module, loaded when first asked for, cannot be what keeps it from being
+      // drawn before the address is written again.
+      opening("/groups/PAYROLL/members", [], LISTED_MEMBERS, [SEES_MEMBERS]);
+      await screen.findByRole("heading", { level: 1, name: PAYROLL_MEMBERS });
+      cleanup();
+
+      const { router, askedFrom, left } = routed(
+        ["/", path],
+        [],
+        LISTED_MEMBERS,
+        [SEES_MEMBERS, SEES_NO_MEMBERS],
+      );
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: PAYROLL_MEMBERS }),
+      ).toBeInTheDocument();
+      expect(left()).toEqual([path]);
+      expect(router.state.location.pathname).toBe("/groups/PAYROLL/members");
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.getByRole("link", { name: "Work" })).toHaveAttribute(
+        "href",
+        "/groups/PAYROLL/work",
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+      await waitFor(() =>
+        expect([...askedFrom()].sort()).toEqual(
+          [
+            ...MEMBERS_READ.map((read) => `/groups/PAYROLL/members ${read}`),
+            `${path} GET /api/standing`,
+          ].sort(),
+        ),
+      );
+
+      await act(() => router.navigate(-1));
+
+      expect(router.state.location.pathname).toBe("/");
+    },
+  );
+
+  it("keeps what follows the group in an address it writes again with the key: the rest of the path, the query and the fragment", async () => {
+    const run = "00000008-0000-4000-8000-000000000954";
+    const { router } = routed(
+      ["/", `/groups/triage/work/${run}/?filter=claim#somewhere`],
+      [],
+      {},
+      [SEES_NO_MEMBERS],
+    );
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        `/groups/TRIAGE/work/${run}/`,
+      ),
+    );
+    expect(router.state.location.search).toBe("?filter=claim");
+    expect(router.state.location.hash).toBe("#somewhere");
+    expect(router.state.historyAction).toBe("REPLACE");
+
+    await act(() => router.navigate(-1));
+
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  /**
+   * Read after the register has named the group to this reader, so the page
+   * has had what it would need to tell a group that exists; it tells nothing.
+   */
+  it.each([
+    ["by the key of a group they are not in", "/groups/INTAKE/work"],
+    ["by that key in small letters", "/groups/intake/work"],
+    [
+      "by the identifier of a group they are not in",
+      `/groups/${FOUNDED.groupId}/work`,
+    ],
+  ])(
+    "answers an address naming a group %s exactly as one naming no group, asking nothing of it",
+    async (_case, path) => {
+      const namingNoGroup = await drawnFromTheRegister("/groups/NOSUCH/work");
+      cleanup();
+
+      const { sent, router } = await openedFromTheRegister(path);
+
+      expect(pageAsDrawn()).toBe(namingNoGroup);
+      expect(requestsTo(sent)).toEqual([
+        "GET /api/standing",
+        "GET /api/groups?sort=name",
+      ]);
+      expect(router.state.location.pathname).toBe(path);
+      expect(router.state.historyAction).toBe("PUSH");
+    },
+  );
+
+  /**
    * Changing the group on a page the new group does not open to the reader is
    * a move, and a move shows no refusal: the first page they do reach opens.
    */
   it("opens the first page the group picked reaches, and no refusal, where it does not reach the page the reader was on", async () => {
     opening(
-      `/groups/${SEES_MEMBERS.groupId}/members`,
+      `/groups/${SEES_MEMBERS.key}/members`,
       [],
       { ...LISTED_MEMBERS, ...TRIAGE_WORK },
       [SEES_MEMBERS, SEES_NO_MEMBERS],
@@ -1127,12 +1358,12 @@ describe("ROUTES", () => {
     expect(picker).toHaveValue("Payroll");
 
     await userEvent.click(
-      await screen.findByRole("button", { name: /^Rename .*Payroll/ }),
+      await screen.findByRole("button", { name: "Payroll, editable" }),
     );
     const name = screen.getByRole("textbox", { name: "Name" });
     await userEvent.clear(name);
     await userEvent.type(name, "Salaries");
-    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(picker).toHaveValue("Salaries"));
   });

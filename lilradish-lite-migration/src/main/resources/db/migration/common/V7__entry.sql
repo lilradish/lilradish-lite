@@ -1,7 +1,6 @@
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type entry_kind as enum ('workflow', 'question', 'reference_list');
 
--- ---------------------------------------------------------------- entries
 
 -- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table entries (
@@ -42,7 +41,6 @@ create table entries (
     constraint entries_purpose_bounded check (length(purpose) <= 512)
 );
 
--- ---------------------------------------------------------------- versions
 
 -- DB-SPECIFIC: generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table entry_versions (
@@ -63,7 +61,7 @@ create table entry_versions (
     retired_by       uuid,
     -- Unchecked while retired_by is null, for the reason pool_members gives.
     retired_by_kind  subject_kind not null default 'person',
-
+    version_name varchar(64),
     constraint entry_versions_pk primary key (entry_version_id),
     constraint entry_versions_entry_fk foreign key (entry_id, entry_kind) references entries (entry_id, kind),
     -- Foreign key targets, at the cost subjects_kind_unique gives.
@@ -99,7 +97,9 @@ create table entry_versions (
     constraint entry_versions_retired_after_approved
         check (retired_at is null or retired_at >= approved_at),
     constraint entry_versions_retired_once_approved
-        check (retired_at is null or approved_at is not null)
+        check (retired_at is null or approved_at is not null),
+    constraint entry_versions_version_name_not_empty
+        check (version_name is null or length(version_name) > 0)
 );
 
 -- Draft or submitted only while entry_versions_retired_once_approved holds.
@@ -154,7 +154,6 @@ create table entry_version_writers (
     constraint entry_version_writers_author_is_person check (created_by_kind = 'person')
 );
 
--- ---------------------------------------------------------------- stops
 
 -- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table entry_stops (

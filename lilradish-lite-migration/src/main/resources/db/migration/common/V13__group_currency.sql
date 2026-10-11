@@ -8,7 +8,7 @@ create table group_currencies (
     created_by_kind subject_kind not null default 'person',
     updated_at      timestamptz,
     updated_by      uuid,
-    -- Unchecked while updated_by is null, for the reason pool_members gives.
+    -- The editor foreign key is unchecked while updated_by is null.
     updated_by_kind subject_kind not null default 'person',
 
     constraint group_currencies_pk primary key (group_id),

@@ -19,17 +19,26 @@ export function styledClassOf(element: Element): string {
   return [...element.classList].find((name) => name.startsWith("css-"))!;
 }
 
-/** The width, in pixels, the wide one of two columns keeps where the narrow one stands beside it. */
-export function wideKeptBesideNarrow(): number {
-  const written = writtenRules();
-  const [, frame, narrow] =
-    /@container \(min-width: (\d+)px\)\{\.[\w-]+\{grid-template-columns:minmax\(0, 1fr\) (\d+)px;/.exec(
-      written,
-    )!;
-  const [, gap] = /grid-template-columns:minmax\(0, 1fr\);gap:(\d+)px;/.exec(
-    written,
-  )!;
-  return Number(frame) - Number(gap) - Number(narrow);
+/** Each style rule written for an element styled through `sx`, with the media it is written under, if any. */
+export function styleRulesOf(
+  element: Element,
+): { readonly media: string | null; readonly rule: CSSStyleRule }[] {
+  const generated = styledClassOf(element);
+  return [...document.styleSheets]
+    .flatMap((sheet) => [...sheet.cssRules])
+    .flatMap((rule): { media: string | null; rule: CSSRule }[] =>
+      rule instanceof CSSMediaRule
+        ? [...rule.cssRules].map((inner) => ({
+            media: rule.conditionText,
+            rule: inner,
+          }))
+        : [{ media: null, rule }],
+    )
+    .filter(
+      (each): each is { media: string | null; rule: CSSStyleRule } =>
+        each.rule instanceof CSSStyleRule &&
+        each.rule.selectorText.startsWith(`.${generated}`),
+    );
 }
 
 /** Whether a list is laid out with a label beside its value at any width. */

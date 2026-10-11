@@ -2,7 +2,13 @@ import Box from "@mui/material/Box";
 import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useCallback, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import {
   chooseCurrency,
@@ -16,11 +22,12 @@ import { movesTheReader } from "../../app/refusal";
 import type { Rule } from "../../app/standing/actRules";
 import { say, type WordedRefusal } from "../../i18n/app";
 import { readersIntl } from "../../i18n/intl";
-import { Press } from "../../lib/action/Press";
+import { InlineEdit } from "../../lib/action/InlineEdit";
+import { InlineEditableValue } from "../../lib/action/InlineEditableValue";
 import { useAction } from "../../lib/request/useAction";
 import { useResource } from "../../lib/request/useResource";
 
-const NOTHING_READ: CurrencyChoice = {};
+const NOTHING_READ: CurrencyChoice = { offered: [] };
 
 const NOT_PRICED: WordedRefusal = "CURRENCY_NOT_PRICED";
 
@@ -37,7 +44,7 @@ const SUMMARY_SX = {
   gap: 1,
 };
 
-const SELECT_SX = { minWidth: 220 };
+const SELECT_SX = { width: "100%", minWidth: 0 };
 
 const QUIET_SX = { color: "text.secondary" };
 
@@ -51,23 +58,23 @@ interface Answered {
   readonly choice: CurrencyChoice;
 }
 
-/**
- * A choice is saved as it is made and cannot be taken back, so only the opened list chooses. A currency no
- * model is priced in now stays shown as the choice, and is not offered.
- */
-export function CurrencyPicker({
+type PickerProps = {
+  readonly groupId: string;
+  readonly mayChange: boolean;
+  readonly onChosen: (said: string) => void;
+  readonly onMoved: () => void;
+};
+
+export function CurrencyPicker(props: PickerProps) {
+  return <CurrencyChoicePicker key={props.groupId} {...props} />;
+}
+
+function CurrencyChoicePicker({
   groupId,
   mayChange,
   onChosen,
   onMoved,
-}: {
-  readonly groupId: string;
-  readonly mayChange: boolean;
-  /** Told the currency chosen, as it is said. */
-  readonly onChosen: (said: string) => void;
-  /** Told the reader's standing has moved under the page. */
-  readonly onMoved: () => void;
-}) {
+}: PickerProps) {
   const load = useCallback(
     (signal: AbortSignal) => readCurrency(groupId, signal),
     [groupId],
@@ -76,9 +83,30 @@ export function CurrencyPicker({
   const reread = read.reload;
   const [answered, setAnswered] = useState<Answered | null>(null);
   const [showChoices, setShowChoices] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [drafted, setDrafted] = useState<string | null>(null);
+  const [previousMayChange, setPreviousMayChange] = useState(mayChange);
+  const readControl = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!showChoices) {
+      if (returnFocus.current && mayChange) readControl.current?.focus();
+      returnFocus.current = false;
+    }
+  }, [showChoices, mayChange]);
+  if (previousMayChange !== mayChange) {
+    setPreviousMayChange(mayChange);
+    if (!mayChange) {
+      setShowChoices(false);
+      setMenuOpen(false);
+      setDrafted(null);
+    }
+  }
   const choosing = useAction<Answered>(
     (answer) => {
       setAnswered(answer);
+      setShowChoices(false);
+      setDrafted(null);
       if (answer.choice.chosen !== undefined) {
         onChosen(currencySaid(answer.choice.chosen));
       }
@@ -99,81 +127,128 @@ export function CurrencyPicker({
       {(value) => {
         const shown = answered?.over === value ? answered.choice : value;
         const { chosen, offered } = shown;
-        const notPriced =
-          offered !== undefined &&
-          chosen !== undefined &&
-          !offered.includes(chosen);
+        const notPriced = chosen !== undefined && !offered.includes(chosen);
+        const selected = drafted ?? chosen ?? "";
+        const selectedIsUnpriced =
+          selected !== "" && !offered.includes(selected);
         return (
           <Box sx={PICKER_SX}>
-            <Box sx={SUMMARY_SX}>
-              <Typography variant="body2" sx={QUIET_SX}>
-                {say("currency.read", {
-                  currency:
+            <Box sx={{ ...SUMMARY_SX, width: "100%", minHeight: 32 }}>
+              {!showChoices && mayChange && offered.length > 0 ? (
+                <InlineEditableValue
+                  ref={readControl}
+                  value={
                     chosen === undefined
                       ? say("currency.noneChosen")
-                      : currencySaid(chosen),
-                })}
-              </Typography>
-              {mayChange && offered !== undefined && offered.length > 0 ? (
-                <Press
-                  unavailable={choosing.running}
-                  onPress={() => setShowChoices((shown) => !shown)}
+                      : currencySaid(chosen)
+                  }
+                  disabled={choosing.running}
+                  onEdit={() => {
+                    setDrafted(chosen ?? "");
+                    setShowChoices(true);
+                  }}
+                />
+              ) : showChoices ? null : (
+                <Typography variant="body2" sx={QUIET_SX}>
+                  {say("currency.read", {
+                    currency:
+                      chosen === undefined
+                        ? say("currency.noneChosen")
+                        : currencySaid(chosen),
+                  })}
+                </Typography>
+              )}
+              {notPriced && !showChoices ? (
+                <Typography variant="body2" sx={QUIET_SX}>
+                  {say("currency.notPriced")}
+                </Typography>
+              ) : null}
+              {mayChange && showChoices ? (
+                <InlineEdit
+                  readValue={
+                    chosen === undefined
+                      ? say("currency.noneChosen")
+                      : currencySaid(chosen)
+                  }
+                  open
+                  onShut={(restoring = false) => {
+                    returnFocus.current = restoring;
+                    setShowChoices(false);
+                    setDrafted(null);
+                  }}
+                  action={choosing}
+                  unchanged={selected === chosen || selected === ""}
+                  choiceOpen={menuOpen}
+                  confirmAfterChange={drafted ?? undefined}
+                  act={(signal) =>
+                    chooseCurrency(groupId, selected, signal).then(
+                      (choice) => ({
+                        over: value,
+                        choice,
+                      }),
+                    )
+                  }
+                  reason={
+                    selected === "" ||
+                    selected === chosen ||
+                    !offered.includes(selected)
+                      ? {
+                          severity: "info",
+                          words: say("currency.read", {
+                            currency:
+                              chosen === undefined
+                                ? say("currency.noneChosen")
+                                : currencySaid(chosen),
+                          }),
+                        }
+                      : undefined
+                  }
+                  refusal={null}
                 >
-                  {say("currency.change")}
-                </Press>
+                  <TextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={selected}
+                    onChange={(picked) => {
+                      setDrafted(picked.target.value);
+                    }}
+                    helperText={
+                      selectedIsUnpriced ? say("currency.notPriced") : undefined
+                    }
+                    slotProps={{
+                      input: { readOnly: choosing.running },
+                      select: {
+                        "aria-label": say("currency.label"),
+                        autoFocus: true,
+                        onOpen: () => setMenuOpen(true),
+                        onClose: () => setMenuOpen(false),
+                        SelectDisplayProps: {
+                          onKeyDownCapture: closedTypeaheadStopped,
+                        },
+                        displayEmpty: true,
+                        renderValue: (code) =>
+                          code === ""
+                            ? say("currency.noneChosen")
+                            : currencySaid(code as string),
+                      },
+                    }}
+                    sx={SELECT_SX}
+                  >
+                    {selectedIsUnpriced ? (
+                      <MenuItem value={selected} disabled sx={KEPT_SX}>
+                        {currencySaid(selected)}
+                      </MenuItem>
+                    ) : null}
+                    {offered.map((code) => (
+                      <MenuItem key={code} value={code}>
+                        {currencySaid(code)}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </InlineEdit>
               ) : null}
             </Box>
-            {notPriced && !showChoices ? (
-              <Typography variant="body2" sx={QUIET_SX}>
-                {say("currency.notPriced")}
-              </Typography>
-            ) : null}
-            {mayChange &&
-            showChoices &&
-            offered !== undefined &&
-            offered.length > 0 ? (
-              <TextField
-                select
-                size="small"
-                label={say("currency.label")}
-                value={chosen ?? ""}
-                onChange={(picked) => {
-                  const code = picked.target.value;
-                  choosing.run((signal) =>
-                    chooseCurrency(groupId, code, signal).then((choice) => ({
-                      over: value,
-                      choice,
-                    })),
-                  );
-                }}
-                helperText={notPriced ? say("currency.notPriced") : undefined}
-                slotProps={{
-                  input: { readOnly: choosing.running },
-                  select: {
-                    SelectDisplayProps: {
-                      onKeyDownCapture: closedTypeaheadStopped,
-                    },
-                    displayEmpty: true,
-                    renderValue: (code) =>
-                      code === ""
-                        ? say("currency.noneChosen")
-                        : currencySaid(code as string),
-                  },
-                }}
-                sx={SELECT_SX}
-              >
-                {notPriced ? (
-                  <MenuItem value={chosen} disabled sx={KEPT_SX}>
-                    {currencySaid(chosen)}
-                  </MenuItem>
-                ) : null}
-                {offered.map((code) => (
-                  <MenuItem key={code} value={code}>
-                    {currencySaid(code)}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : null}
             {choosing.problem === null ? null : (
               <ProblemView problem={choosing.problem} rule={CHANGES} />
             )}
@@ -193,8 +268,7 @@ function currencySaid(code: string): string {
   return name === undefined ? code : say("currency.named", { code, name });
 }
 
-// Material's closed select picks the item a letter starts, which here saves it; its typeahead yields to a
-// key already handled. Space still opens the list.
+// Material's closed select picks an item for a letter; consuming that key leaves the draft unchanged.
 function closedTypeaheadStopped(pressed: KeyboardEvent<HTMLDivElement>) {
   if (
     pressed.key.length === 1 &&

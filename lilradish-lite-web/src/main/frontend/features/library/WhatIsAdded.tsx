@@ -1,12 +1,10 @@
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import Box from "@mui/material/Box";
-import IconButton from "@mui/material/IconButton";
-import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useId, useState, type ReactNode } from "react";
 
 import { say } from "../../i18n/app";
 import { Disclosure } from "../../lib/action/Disclosure";
+import { InfoMark } from "../../lib/action/InfoMark";
 import { DEPTH_SX, HEADING_SX } from "../../lib/layout/parts";
 
 const QUIET_SX = { color: "text.secondary" };
@@ -86,15 +84,16 @@ function AddedShell({
 }) {
   return (
     <Box component="section" aria-labelledby={headingId} sx={DEPTH_SX[2]}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Typography id={headingId} variant="h3" sx={HEADING_SX}>
+      <Box
+        sx={{ display: "flex", alignItems: "center", gap: 1, ...HEADING_SX }}
+      >
+        <Typography id={headingId} variant="h3">
           {heading}
         </Typography>
-        <Tooltip title={say("question.addedHint")}>
-          <IconButton size="small" aria-label={say("question.addedHint")}>
-            <InfoOutlinedIcon />
-          </IconButton>
-        </Tooltip>
+        <InfoMark
+          about={say("question.addedAbout")}
+          hint={say("question.addedHint")}
+        />
       </Box>
       <Typography variant="body2" sx={QUIET_SX}>
         {summary}

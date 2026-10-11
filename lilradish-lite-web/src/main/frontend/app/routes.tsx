@@ -56,9 +56,8 @@ function Deferred({ children }: { readonly children: ReactNode }) {
 }
 
 /**
- * A group's page as it is built: one whose row picked is part of its own
- * address, under the name `picks` gives it, or one whose row opens a page of
- * its own, addressed under the name `by` gives it, and never both.
+ * Either a picked row shares this page's address under `picks`, or opens its
+ * own page addressed under `by`; never both.
  */
 type GroupScreen =
   | {
@@ -119,7 +118,6 @@ const GROUP_SCREENS: Partial<
   },
 };
 
-/** Every screen, each under the guard it is reached by, and last the answer to any other address. */
 const SCREENS: RouteObject[] = [
   { index: true, element: <Landing /> },
   {
@@ -132,7 +130,7 @@ const SCREENS: RouteObject[] = [
   },
   ...GROUP_ITEMS.flatMap((item) => {
     const built = GROUP_SCREENS[item.segment];
-    const page = `${IN_A_GROUP}/:groupId/${item.segment}`;
+    const page = `${IN_A_GROUP}/:group/${item.segment}`;
     return [
       {
         path: `${page}${built?.picks === undefined ? "" : `/:${built.picks}?`}`,
@@ -157,7 +155,7 @@ const SCREENS: RouteObject[] = [
     ];
   }),
   {
-    path: `${IN_A_GROUP}/:groupId/${WORK_ITEM.segment}/:runId/steps/:stepId`,
+    path: `${IN_A_GROUP}/:group/${WORK_ITEM.segment}/:runId/steps/:stepId`,
     element: (
       <RequireGroup reachedBy={WORK_ITEM.reachedBy}>
         <Deferred>
@@ -211,26 +209,19 @@ const SCREENS: RouteObject[] = [
 ];
 
 /**
- * Every address this application answers, and what guards each one.
- *
  * The guard is on the route rather than inside the screen, so a screen cannot
  * come to exist that forgot to ask. It is also why a screen not built yet is
  * declared all the same: an address that names no route is answered "no such
  * screen", which is a different thing from a screen that is there and
  * withheld — and only the second is the truth about it.
  *
- * A row picked in a list is an optional segment of the list's own route, not a
- * route beside it, so the list and a row picked in it are one screen by
- * declaration: picking a row leaves the list, and the control that picked it,
- * where they were. A row that opens a page of its own, as an entry or a run
- * does, is a route beside the list's; one step of a run is the one route beside
- * the run's, drawn by the same screen.
+ * An optional picked-row segment keeps the list and its pressed control mounted.
+ * An opened row instead gets a separate route. A run's step route shares the
+ * run's screen.
  *
- * Nested under one frame, because a refusal has to be shown where the reader is
- * standing, with the way out still on screen — and so are an address naming
- * nothing, answered by the last of the screens, and a screen that breaks, which
- * is why the screens share a boundary of their own beneath the frame. The
- * frame's own boundary is left only the frame itself failing.
+ * Refusals, unknown addresses and broken screens stay under the frame, keeping
+ * the way out visible. A screen boundary below it leaves the frame boundary
+ * to catch the frame itself failing.
  */
 export const ROUTES: RouteObject[] = [
   {

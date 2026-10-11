@@ -23,9 +23,6 @@ const ANSWER = {
   problems: [],
   sendsPast: [],
   offered: {
-    lists: [],
-    questions: [],
-    workflows: [],
     codeSteps: [],
     searchWays: [],
     models: [],
@@ -70,22 +67,21 @@ const OUTPUTS: readonly SentBinding[] = [
 ];
 
 describe("writeSteps", () => {
-  it("writes a searching question in its part order without read keys, and every field's standing", async () => {
+  it("writes the pinned searching question and ordinary inputs in order, and every field's standing", async () => {
     const sent = serving({
       [`PUT ${AT_STEPS}`]: [[JSON.stringify(ANSWER), 200]],
     });
     const search: SentStep = {
       stepId: null,
       name: "find",
-      bindings: [],
+      bindings: [
+        { target: "complaint", source: { input: "complaint" } },
+        { target: "summary", source: { step: 0, path: "summary" } },
+      ],
       runs: {
         kind: "search",
         searchWay: "web",
-        question: [
-          { text: "Find " },
-          { from: { input: "complaint" } },
-          { from: { step: 0, path: "summary" } },
-        ],
+        version: VERSION,
         standings: {
           title: "always",
           body: "never",
@@ -115,7 +111,9 @@ describe("writeSteps", () => {
 
     const body = JSON.parse(String(sent.mock.calls[0]![1]?.body));
     expect(body.steps).toEqual([search]);
-    expect(body.steps[0].runs.question).toHaveLength(3);
+    expect(body.steps[0].runs.version).toBe(VERSION);
+    expect(body.steps[0].bindings).toEqual(search.bindings);
+    expect(body.steps[0].runs).not.toHaveProperty("question");
     expect(JSON.stringify(body)).not.toContain("partId");
   });
 

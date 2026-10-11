@@ -12,7 +12,13 @@ const VERSION = "00000007-0000-4000-8000-000000000c71";
 
 const AT_VERSION = `/api/groups/${GROUP}/questions/${ENTRY}/versions/${VERSION}`;
 
-const ANSWER = { revision: 3, takes: [], gives: [], lists: [] };
+const ANSWER = {
+  revision: 3,
+  takes: [],
+  gives: [],
+  searchWays: [],
+  searchShapeNeedsRefresh: false,
+};
 
 const FIELD = {
   fieldId: "0000000b-0000-4000-8000-000000000a51",
@@ -67,9 +73,6 @@ const WORKFLOW = {
   problems: [],
   sendsPast: [],
   offered: {
-    lists: [],
-    questions: [],
-    workflows: [],
     codeSteps: [],
     searchWays: [],
     models: [],

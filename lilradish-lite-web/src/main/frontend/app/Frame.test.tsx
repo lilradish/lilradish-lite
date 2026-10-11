@@ -24,7 +24,6 @@ vi.mock("../api/standing", async (importOriginal) => ({
   useStandingResource: vi.fn(),
 }));
 
-/** The routed screen, as a marker only this outlet can put on the page. */
 const SCREEN = "Everybody this system knows";
 
 const NOT_SIGNED_IN = "You are not signed in.";
@@ -83,7 +82,6 @@ const TRIAGE = inGroup(
   [],
 );
 
-/** A narrow viewport, where the sidebar is a drawer that is gone while it is shut. */
 function framingNarrowly(path: string) {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -102,7 +100,7 @@ function framingNarrowly(path: string) {
         children: [
           { index: true, element: <p>{SCREEN}</p> },
           { path: "system/people", element: <p>People</p> },
-          { path: "groups/:groupId/:segment", element: <p>A group's page</p> },
+          { path: "groups/:group/:segment", element: <p>A group's page</p> },
         ],
       },
     ],
@@ -127,7 +125,6 @@ async function pickingTriage() {
   await userEvent.click(screen.getByRole("option", { name: "Triage TRIAGE" }));
 }
 
-/** The frame over two routes that share the same page width. */
 function framingAt(path: string) {
   wideViewport();
   vi.mocked(useStandingResource).mockReturnValue(answered([]));
@@ -223,14 +220,12 @@ describe("Frame", () => {
   });
 
   it("puts the drawer away once a group picked on a group's page has opened that page", async () => {
-    const router = framingNarrowly(`/groups/${PAYROLL.groupId}/work`);
+    const router = framingNarrowly("/groups/PAYROLL/work");
     await openingTheDrawer();
 
     await pickingTriage();
 
-    expect(router.state.location.pathname).toBe(
-      `/groups/${TRIAGE.groupId}/work`,
-    );
+    expect(router.state.location.pathname).toBe("/groups/TRIAGE/work");
     await waitFor(() => expect(screen.queryByRole("navigation")).toBeNull());
   });
 

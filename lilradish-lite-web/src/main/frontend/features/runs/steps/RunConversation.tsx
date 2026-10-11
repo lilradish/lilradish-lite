@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router";
 
 import type { StepRow } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import type { StepAnswer } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
+import type { GroupStanding } from "../../../api/standing";
 import { say } from "../../../i18n/app";
 import { stepAnchor } from "../runAddress";
 import { ActMessage } from "./ActMessage";
@@ -20,13 +21,12 @@ const LIST_SX = { listStyle: "none", m: 0, p: 0 };
  * then forgets it, so a conversation drawn anew at the same address starts the keyboard nowhere.
  */
 export function RunConversation({
-  groupId,
+  group,
   reading,
   onShown,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly reading: RunReading;
-  /** A step as an act on it answered it, or as it was read again once one was refused. */
   readonly onShown: (answer: StepAnswer) => void;
 }) {
   const { run, steps } = reading;
@@ -66,7 +66,7 @@ export function RunConversation({
         sx={LIST_SX}
       >
         <StartedWithMessage
-          groupId={groupId}
+          group={group}
           run={run}
           takes={steps.declarations.get(steps.run.versionId)?.takes}
           declarations={steps.declarations}
@@ -78,7 +78,7 @@ export function RunConversation({
             return step === undefined ? null : (
               <StepMessage
                 key={event.id}
-                groupId={groupId}
+                group={group}
                 reading={steps}
                 step={step}
                 handTries={handTries.get(step.stepId)}
@@ -93,7 +93,7 @@ export function RunConversation({
               run={run}
               reading={steps}
               step={"stepId" in event ? byStep.get(event.stepId) : undefined}
-              groupId={groupId}
+              group={group}
             />
           );
         })}
@@ -103,7 +103,7 @@ export function RunConversation({
   );
 }
 
-/** The step whose message an address's fragment names, of those the conversation draws; none where it names none. */
+/** Only reached steps have conversation messages. */
 export function messageNamed(
   steps: readonly StepRow[],
   hash: string,

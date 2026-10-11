@@ -1,17 +1,18 @@
-import Box from "@mui/material/Box";
-
 import { say } from "../../i18n/app";
 import { visible } from "../../i18n/visible";
 import { isolatedInText } from "../../lib/direction/isolated";
-import { MARKED_WORDS_SX } from "../../lib/layout/parts";
+import { StateNote } from "../../lib/text/StateNote";
+import { StatePill } from "../../lib/text/StatePill";
 import { runStateMark } from "./runStates";
 
 export function RunStateBadge({
   state,
   at,
+  atLabel,
 }: {
   readonly state: string;
   readonly at?: string;
+  readonly atLabel?: string;
 }) {
   const mark = runStateMark(state);
   if (mark === null) {
@@ -19,18 +20,21 @@ export function RunStateBadge({
   }
   const Icon = mark.icon;
   return (
-    <Box component="span" sx={{ ...MARKED_WORDS_SX, color: mark.colour }}>
-      <Icon fontSize="inherit" />
-      {state === "running" && at !== undefined
-        ? visible("runState.runningAtVisible", {
-            hint: (
-              <Box component="span" sx={{ typography: "systemHint" }}>
-                {say("runState.runningAtHint")}
-              </Box>
+    <>
+      <StatePill
+        tone={mark.tone}
+        icon={<Icon fontSize="inherit" />}
+        label={say(mark.words)}
+      />
+      {state === "running" && at !== undefined ? (
+        <StateNote>
+          {visible("runState.nowAt", {
+            step: (
+              <bdi>{isolatedInText(atLabel ?? at.replaceAll("_", " "))}</bdi>
             ),
-            step: <bdi>{isolatedInText(at)}</bdi>,
-          })
-        : say(mark.words)}
-    </Box>
+          })}
+        </StateNote>
+      ) : null}
+    </>
   );
 }

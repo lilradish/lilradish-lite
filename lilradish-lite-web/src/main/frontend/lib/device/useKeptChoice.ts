@@ -1,9 +1,8 @@
 import { useState } from "react";
 
 /**
- * One of `choices` as this device last kept it under `keptAs`, and a way to change it this device keeps. Nothing
- * kept, a word this build does not know, or a storage that refuses, gives the first: a lost choice is never a reason
- * for a page not to open.
+ * Nothing kept, an unknown choice or refused storage yields the first choice.
+ * A lost device choice must never prevent a page opening; writes are best effort.
  */
 export function useKeptChoice<C extends string>(
   keptAs: string,
@@ -16,7 +15,7 @@ export function useKeptChoice<C extends string>(
     try {
       localStorage.setItem(keptAs, next);
     } catch {
-      // setItem throws where storage is refused, as in private browsing, or its quota is full.
+      // setItem throws where storage is refused or its quota is full.
     }
   };
 

@@ -30,7 +30,6 @@ import {
 } from "../../api/groups/{groupId}/offered-workflows";
 import {
   runsLoader,
-  type RunReading,
   type RunRow,
   type StartedRun,
 } from "../../api/groups/{groupId}/runs";
@@ -43,6 +42,7 @@ import {
 import { mayIn, type GroupStanding } from "../../api/standing";
 import { ProblemView } from "../../app/ProblemView";
 import { movesTheReader } from "../../app/refusal";
+import { useGroup } from "../../app/standing/RequireGroup";
 import { useStandingRead } from "../../app/standing/StandingContext";
 import { say, type MessageId } from "../../i18n/app";
 import { FilterField } from "../../lib/collection/FilterField";
@@ -52,7 +52,7 @@ import { useKeptChoice } from "../../lib/device/useKeptChoice";
 import { Press } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
 import { PageHeading } from "../../lib/heading/PageHeading";
-import { QUIET_SX, SPACED_SX } from "../../lib/layout/parts";
+import { QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { reportCaught } from "../../lib/report/reportCaught";
 import { useAccumulatedResource } from "../../lib/request/useAccumulatedResource";
@@ -72,7 +72,6 @@ import { StepPage } from "./steps/StepPage";
 
 const KEPT_TAB_AS = "lilradish.work.tab";
 
-/** The words each tab is drawn with, closed over the tabs in both directions. */
 const TAB_WORDS = {
   newRun: "work.newRun",
   history: "work.history",
@@ -84,11 +83,6 @@ const CARDS_SX = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 16rem), 1fr))",
   gap: 2,
-  bgcolor: "background.default",
-  border: 1,
-  borderColor: "text.secondary",
-  borderRadius: 2,
-  p: { xs: 2, sm: 3 },
 };
 
 const CARD_SX = { borderColor: "text.secondary", bgcolor: "background.paper" };
@@ -105,32 +99,20 @@ const CARD_LINE_SX = {
 
 const CARD_WORDS_SX = { minWidth: 0, overflowWrap: "anywhere" };
 
-const CARD_ICON_SX = { flexShrink: 0, mt: 0.25 };
+const CARD_ICON_SX = { width: 20, height: 20, flexShrink: 0, mt: 0.25 };
 
 const CARD_NAME_SX = { display: "block" };
-
-const PICKED_PART_SX = {
-  mt: 3,
-  bgcolor: "background.paper",
-  border: 2,
-  borderColor: "primary.main",
-  borderRadius: 2,
-  p: { xs: 2, sm: 3 },
-  boxShadow: 1,
-  minWidth: 0,
-};
 
 const FILTER_STYLE = { width: "100%", maxWidth: "22rem" };
 
 /** The group the page is under, and what a refusal saying the reader's standing moved is handed to. */
 interface Reach {
-  readonly groupId: string;
-  readonly groupKey: string;
+  readonly group: GroupStanding;
   readonly onProblem: (problem: Problem | null) => void;
 }
 
 export function WorkPage() {
-  const group = useGroupOfWork();
+  const group = useGroup();
   const standing = useStandingRead();
   const reloadStanding = standing.reload;
   const [address, setAddress] = useSearchParams();
@@ -146,7 +128,7 @@ export function WorkPage() {
     [reloadStanding],
   );
   const named = tabNamed(address.toString());
-  const mayStart = group !== undefined && mayIn(group, "start_run");
+  const mayStart = mayIn(group, "start_run");
   const tab: WorkTab = mayStart ? (named ?? kept) : "history";
   // In place of the entry it was on: Back leaves Work rather than going back through its tabs.
   const naming = useCallback(
@@ -162,19 +144,12 @@ export function WorkPage() {
     [setAddress],
   );
   useEffect(() => {
-    if (group !== undefined && named !== tab) {
+    if (named !== tab) {
       naming(tab);
     }
-  }, [group, named, tab, naming]);
-  if (group === undefined) {
-    return null;
-  }
+  }, [named, tab, naming]);
   const heading = workHeading(group);
-  const reach: Reach = {
-    groupId: group.groupId,
-    groupKey: group.key,
-    onProblem,
-  };
+  const reach: Reach = { group, onProblem };
   if (!mayStart) {
     return (
       <>
@@ -223,10 +198,7 @@ export function WorkPage() {
   );
 }
 
-/**
- * A run opened from Work, or one of its steps: a page of its own, titled by what it opens, which draws neither tab
- * nor list. The way back to History is the run's own.
- */
+/** The way back to History is the run's own. */
 export function OpenedRun() {
   const { runId, stepId } = useParams();
   return stepId === undefined ? (
@@ -236,19 +208,10 @@ export function OpenedRun() {
   );
 }
 
-/** The group the address names, as the reader's standing holds it; none where it holds no such group. */
-function useGroupOfWork(): GroupStanding | undefined {
-  const { groupId } = useParams();
-  return useStandingRead().value.groups.find(
-    (each) => each.groupId === groupId,
-  );
-}
-
 function workHeading(group: GroupStanding): string {
   return say("work.heading", { group: isolatedInText(group.name) });
 }
 
-/** One tab's panel, which holds what it draws only while it is shown, and takes the keyboard where it is handed it. */
 function TabPanel({
   ref,
   id,
@@ -256,7 +219,6 @@ function TabPanel({
   children,
 }: {
   readonly ref?: RefObject<HTMLDivElement | null>;
-  /** The tab's own, which the panel's is made from. */
   readonly id: string;
   readonly shown: boolean;
   readonly children: ReactNode;
@@ -311,7 +273,7 @@ const closedOffers = async () => ({ items: [] });
 
 /**
  * One card per workflow on offer, by name, each saying what it is for, and nothing of a run already started. Picking
- * one draws beneath the cards what its newest version takes; a run begun there opens its own page for a reader who
+ * one asks what its newest version takes; a run begun there opens its own page for a reader who
  * may read it. Where the form goes with the control pressed in it, the keyboard starts again at the panel.
  */
 function NewRun({
@@ -321,10 +283,10 @@ function NewRun({
   readonly reach: Reach;
   readonly panel: RefObject<HTMLDivElement | null>;
 }) {
-  const { groupId, groupKey, onProblem } = reach;
+  const { group, onProblem } = reach;
+  const { groupId, key: groupKey } = group;
   const search = listQuery(useLocation().search);
   const navigate = useNavigate();
-  const pickedHeadingId = useId();
   const nameInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState("");
   const [checkProblem, setCheckProblem] = useState<Problem | null>(null);
@@ -346,6 +308,13 @@ function NewRun({
   } | null>(null);
   const closed = read.terminal || checkClosed;
   const workflow = closed ? null : picked;
+  const returnToPanel = useRef(false);
+  useEffect(() => {
+    if (workflow === null && returnToPanel.current) {
+      returnToPanel.current = false;
+      panel.current?.focus();
+    }
+  }, [workflow, panel]);
   const pickedId = picked?.entryId;
   const [terminalNoted, setTerminalNoted] = useState(false);
   const problem = checkClosed ? checkProblem : (read.problem ?? checkProblem);
@@ -387,8 +356,8 @@ function NewRun({
         setChecking(null);
         reloadOffered.current();
         if (found === null) {
+          returnToPanel.current = true;
           setPicked(null);
-          panel.current?.focus();
         } else {
           setPicked(found);
         }
@@ -410,16 +379,16 @@ function NewRun({
   }, [checking, groupId, panel]);
 
   const putAway = () => {
+    returnToPanel.current = true;
     setPicked(null);
     setChecking(null);
     setCheckProblem(null);
     setReadAgain(false);
-    panel.current?.focus();
   };
   const settled: StartSettled = {
     onStarted: (started: StartedRun) => {
-      if (started.readable) {
-        void navigate(`${runHref(groupId, started.runId)}${search}`);
+      if (mayIn(group, "read_all_runs") || mayIn(group, "read_own_runs")) {
+        void navigate(`${runHref(group, started.runId)}${search}`);
       } else {
         putAway();
         setBegun(started.number);
@@ -435,6 +404,33 @@ function NewRun({
     onProblem,
   };
 
+  const verification = (
+    <>
+      {!readAgain ? null : (
+        <Notice severity="warning">{say("work.noLongerOffered")}</Notice>
+      )}
+      {checkProblem === null ? null : (
+        <>
+          <ProblemView problem={checkProblem} />
+          {closed ? null : (
+            <Press
+              onPress={() => {
+                setCheckProblem(null);
+                setChecking((prior) =>
+                  prior === null
+                    ? null
+                    : { ...prior, attempt: prior.attempt + 1 },
+                );
+              }}
+            >
+              {say("read.retry")}
+            </Press>
+          )}
+        </>
+      )}
+    </>
+  );
+
   return (
     <>
       <div role="status">
@@ -445,9 +441,7 @@ function NewRun({
             })}
           </Notice>
         )}
-        {readAgain ? (
-          <Notice severity="warning">{say("work.noLongerOffered")}</Notice>
-        ) : null}
+        {workflow === null ? verification : null}
       </div>
       {closed ? null : (
         <Box style={FILTER_STYLE}>
@@ -475,7 +469,16 @@ function NewRun({
       read.items.length === 0 &&
       !read.hasNext ? (
         <Notice severity="info">
-          {say(filter === "" ? "work.nothingOffered" : "newRun.noMatch")}
+          {filter === "" ? (
+            <Box component="details">
+              <summary>{say("work.nothingOfferedShort")}</summary>
+              <Typography sx={{ typography: "systemHint", mt: 1 }}>
+                {say("work.nothingOffered")}
+              </Typography>
+            </Box>
+          ) : (
+            say("newRun.noMatch")
+          )}
         </Notice>
       ) : null}
       {closed || read.items.length === 0 ? null : (
@@ -501,11 +504,7 @@ function NewRun({
               >
                 <CardContent>
                   <Box sx={CARD_LINE_SX}>
-                    <AccountTreeIcon
-                      fontSize="small"
-                      aria-hidden="true"
-                      sx={CARD_ICON_SX}
-                    />
+                    <AccountTreeIcon aria-hidden="true" sx={CARD_ICON_SX} />
                     <Box sx={CARD_WORDS_SX}>
                       <Typography
                         variant="subtitle1"
@@ -534,7 +533,7 @@ function NewRun({
       {!closed && read.hasNext ? (
         <Stack direction="row" sx={{ my: 2 }}>
           <Press
-            navigation
+            tier="quiet"
             unavailable={read.loading || read.problem !== null}
             onPress={read.next}
           >
@@ -542,54 +541,25 @@ function NewRun({
           </Press>
         </Stack>
       ) : null}
-      {checkProblem === null ? null : (
-        <>
-          <ProblemView problem={checkProblem} />
-          {closed ? null : (
-            <Press
-              onPress={() => {
-                setCheckProblem(null);
-                setChecking((prior) =>
-                  prior === null
-                    ? null
-                    : { ...prior, attempt: prior.attempt + 1 },
-                );
-              }}
-            >
-              {say("read.retry")}
-            </Press>
-          )}
-        </>
-      )}
       {workflow === null ? null : (
-        <Box
-          component="section"
-          aria-labelledby={pickedHeadingId}
-          sx={PICKED_PART_SX}
-        >
-          <Typography id={pickedHeadingId} variant="h2" sx={SPACED_SX}>
-            {isolatedInText(workflow.name)}
-          </Typography>
-          <StartHere
-            key={workflow.entryId}
-            groupId={groupId}
-            workflow={workflow}
-            settled={settled}
-            nameRef={nameInput}
-            onAbandon={putAway}
-          />
-        </Box>
+        <StartHere
+          key={workflow.entryId}
+          groupId={groupId}
+          workflow={workflow}
+          settled={settled}
+          nameRef={nameInput}
+          onAbandon={putAway}
+          verification={verification}
+        />
       )}
     </>
   );
 }
 
-/**
- * Every run in a table under the filter, newest first until another column is asked for; a row opens its run's
- * page, whose address keeps the list's own query.
- */
+/** A row opens its run's page, whose address keeps the list's own query. */
 function History({ reach }: { readonly reach: Reach }) {
-  const { groupId, groupKey, onProblem } = reach;
+  const { group, onProblem } = reach;
+  const { groupId, key: groupKey } = group;
   const search = listQuery(useLocation().search);
   const { filter, order, sort, onFilter, onOrder } = useListAddress(
     RUNS_SORTABLE,
@@ -622,19 +592,25 @@ function History({ reach }: { readonly reach: Reach }) {
         page={page}
         keyOf={runIdOf}
         picked={null}
-        hrefOf={(row) => `${runHref(groupId, row.runId)}${search}`}
-        empty={emptySaid(page.answered?.reading, filter)}
+        hrefOf={(row) => `${runHref(group, row.runId)}${search}`}
+        empty={emptySaid(group, filter)}
       />
     </>
   );
 }
 
-/** Said as the server read the runs, so it never contradicts what it read: none it may, none of theirs, or none. */
-function emptySaid(reading: RunReading | undefined, filter: string): string {
-  if (reading === "none") {
-    return say("work.noneReadable");
+function emptySaid(group: GroupStanding, filter: string): ReactNode {
+  if (!mayIn(group, "read_all_runs") && !mayIn(group, "read_own_runs")) {
+    return (
+      <Box component="details">
+        <summary>{say("work.noneReadableShort")}</summary>
+        <Typography sx={{ typography: "systemHint", mt: 1 }}>
+          {say("work.noneReadable")}
+        </Typography>
+      </Box>
+    );
   }
-  if (reading === "own") {
+  if (!mayIn(group, "read_all_runs") && mayIn(group, "read_own_runs")) {
     return say(filter === "" ? "work.noOwnRuns" : "work.noOwnMatch");
   }
   return say(filter === "" ? "work.noRuns" : "work.noMatch");

@@ -12,6 +12,12 @@ const AVO = {
   displayName: "Avo Lumerace",
 };
 
+const OLIVE = {
+  subjectId: "00000002-0000-4000-8000-0000000009a2",
+  userId: "0009a2",
+  displayName: "Olive Lumerace",
+};
+
 describe("searchPoolOutside", () => {
   it("asks the pool's search inside the group with what was typed, as typed, and nothing else", async () => {
     const typed = " Gr%_\\&=+/#?ace ";
@@ -25,7 +31,7 @@ describe("searchPoolOutside", () => {
   });
 
   it("reads the matches as the pool's own search reads them", async () => {
-    answering([JSON.stringify({ items: [AVO], more: true }), 200]);
+    answering([JSON.stringify({ items: [AVO, OLIVE], more: true }), 200]);
 
     const found = await searchPoolOutside(
       GROUP,
@@ -33,7 +39,7 @@ describe("searchPoolOutside", () => {
       new AbortController().signal,
     );
 
-    expect(found).toEqual({ items: [AVO], more: true });
+    expect(found).toEqual({ items: [AVO, OLIVE], more: true });
   });
 
   it("refuses an answer the pool's own search would refuse", async () => {

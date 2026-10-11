@@ -10,7 +10,6 @@ import {
 } from "../../app/destinations";
 import { say, type MessageId } from "../../i18n/app";
 
-/** One kind's page: where it is, and what it says that the other kinds' pages say differently. */
 export interface LibraryKind {
   readonly kind: EntryKind;
   readonly item: GroupItem;
@@ -22,7 +21,6 @@ export interface LibraryKind {
   readonly newButton: MessageId;
 }
 
-/** Every kind's page, closed over the kinds in both directions. */
 export const LIBRARY_KINDS = {
   workflow: {
     kind: "workflow",

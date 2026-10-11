@@ -1,6 +1,9 @@
+import { expectConsoleErrors } from "./testutil/consoleErrors";
 import { act, screen } from "@testing-library/react";
-import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { createElement, type ComponentProps } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import "./app/routes";
 
 import { reportCaught, reportRouterError } from "./lib/report/reportCaught";
 import { serving } from "./testutil/answering";
@@ -10,11 +13,16 @@ const BROKEN = vi.hoisted(
 );
 
 const rootOptions = vi.hoisted(() => ({
+  root: undefined as
+    ReturnType<typeof import("react-dom/client").createRoot> | undefined,
   current: undefined as Parameters<
     typeof import("react-dom/client").createRoot
   >[1],
 }));
 const routerOptions = vi.hoisted(() => ({
+  router: undefined as
+    | ComponentProps<typeof import("react-router/dom").RouterProvider>["router"]
+    | undefined,
   current: undefined as ComponentProps<
     typeof import("react-router/dom").RouterProvider
   >["onError"],
@@ -26,7 +34,8 @@ vi.mock("react-dom/client", async (importOriginal) => {
     ...actual,
     createRoot: vi.fn((...args: Parameters<typeof actual.createRoot>) => {
       rootOptions.current = args[1];
-      return actual.createRoot(...args);
+      rootOptions.root = actual.createRoot(...args);
+      return rootOptions.root;
     }),
   };
 });
@@ -37,6 +46,7 @@ vi.mock("react-router/dom", async (importOriginal) => {
     ...actual,
     RouterProvider: (props: ComponentProps<typeof actual.RouterProvider>) => {
       routerOptions.current = props.onError;
+      routerOptions.router = props.router;
       return <actual.RouterProvider {...props} />;
     },
   };
@@ -50,11 +60,11 @@ vi.mock("./app/routes", async (importOriginal) => {
       ...actual.ROUTES,
       {
         path: "/reported-loader",
-        element: <p>Reading</p>,
+        element: createElement("p", null, "Reading"),
         loader: () => {
           throw BROKEN;
         },
-        errorElement: <p role="alert">The read failed.</p>,
+        errorElement: createElement("p", { role: "alert" }, "The read failed."),
       },
     ],
   };
@@ -77,7 +87,9 @@ vi.mock("./app/SystemPage", () => ({
  * React writes a warning of its own to the console for every update.
  */
 async function startingAt(path: string) {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
+  (
+    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = false;
   serving({
     "GET /api/standing": [
       [JSON.stringify({ acts: ["check_soundness"], groups: [] }), 200],
@@ -89,9 +101,39 @@ async function startingAt(path: string) {
 }
 
 describe("main", () => {
-  it("reports an error a screen throws once, through the one entry, and nothing else writes it down", async () => {
-    const written = vi.spyOn(console, "error").mockImplementation(() => {});
+  beforeEach(() => {
+    const actEnvironment = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "IS_REACT_ACT_ENVIRONMENT",
+    )!;
+    const fetch = Object.getOwnPropertyDescriptor(globalThis, "fetch")!;
+    vi.resetModules();
+    rootOptions.root = undefined;
+    rootOptions.current = undefined;
+    routerOptions.router = undefined;
+    routerOptions.current = undefined;
+    return async () => {
+      try {
+        await act(async () => {
+          rootOptions.root?.unmount();
+        });
+      } finally {
+        try {
+          routerOptions.router?.dispose();
+        } finally {
+          document.body.replaceChildren();
+          Object.defineProperty(
+            globalThis,
+            "IS_REACT_ACT_ENVIRONMENT",
+            actEnvironment,
+          );
+          Object.defineProperty(globalThis, "fetch", fetch);
+        }
+      }
+    };
+  });
 
+  it("reports an error a screen throws once, through the one entry, and nothing else writes it down", async () => {
     await startingAt("/system/soundness");
 
     expect(
@@ -102,41 +144,36 @@ describe("main", () => {
     ).toBeInTheDocument();
     expect(vi.mocked(reportCaught)).toHaveBeenCalledOnce();
     expect(vi.mocked(reportCaught).mock.calls[0]?.[0]).toBe(BROKEN);
-    expect(written.mock.calls).toEqual([[BROKEN]]);
+    expectConsoleErrors([BROKEN]);
   });
 
   it("connects uncaught and recoverable root errors to the same report entry", async () => {
-    if (rootOptions.current === undefined) {
-      await startingAt("/system/soundness");
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Something went wrong on this page.",
-      });
-    }
-    const written = vi.spyOn(console, "error").mockImplementation(() => {});
+    await startingAt("/system/soundness");
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Something went wrong on this page.",
+    });
+    expectConsoleErrors([BROKEN]);
     const reported = vi.mocked(reportCaught);
     for (const callback of [
       rootOptions.current?.onUncaughtError,
       rootOptions.current?.onRecoverableError,
     ]) {
       reported.mockClear();
-      written.mockClear();
       expect(callback).toBeTypeOf("function");
       callback?.(BROKEN, { componentStack: "" });
       expect(reported.mock.calls).toEqual([[BROKEN, { componentStack: "" }]]);
-      expect(written.mock.calls).toEqual([[BROKEN]]);
+      expectConsoleErrors([BROKEN]);
     }
   });
 
   it("connects router errors to the router report entry without a second root report", async () => {
-    if (routerOptions.current === undefined) {
-      await startingAt("/system/soundness");
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Something went wrong on this page.",
-      });
-    }
-    const written = vi.spyOn(console, "error").mockImplementation(() => {});
+    await startingAt("/system/soundness");
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Something went wrong on this page.",
+    });
+    expectConsoleErrors([BROKEN]);
     const reported = vi.mocked(reportCaught);
     reported.mockClear();
     expect(routerOptions.current).toBe(reportRouterError);
@@ -154,24 +191,26 @@ describe("main", () => {
     });
 
     expect(reported).not.toHaveBeenCalled();
-    expect(written.mock.calls).toEqual([[BROKEN]]);
+    expectConsoleErrors([BROKEN]);
   });
 
   it("reports a real router loader failure once through the browser route", async () => {
-    const written = vi.spyOn(console, "error").mockImplementation(() => {});
-    if (routerOptions.current === undefined) {
-      await startingAt("/reported-loader");
-    } else {
-      await act(async () => {
-        window.history.pushState(null, "", "/reported-loader");
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      });
-    }
+    await startingAt("/system/soundness");
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Something went wrong on this page.",
+    });
+    expectConsoleErrors([BROKEN]);
+
+    await act(async () => {
+      window.history.pushState(null, "", "/reported-loader");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
 
     expect(await screen.findByText("The read failed.")).toHaveAttribute(
       "role",
       "alert",
     );
-    expect(written.mock.calls).toEqual([[BROKEN]]);
+    expectConsoleErrors([BROKEN]);
   });
 });

@@ -3,6 +3,7 @@ import { useId } from "react";
 
 import type { ReadField } from "../../../api/filling";
 import type { Run } from "../../../api/groups/{groupId}/runs/{runId}";
+import type { GroupStanding } from "../../../api/standing";
 import { say } from "../../../i18n/app";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import { Part } from "../../../lib/layout/Part";
@@ -12,12 +13,14 @@ import { spokenName } from "./stepTitle";
 import { StepsTable } from "./StepsTable";
 import { StartedWithSources } from "./StartedWithSources";
 import type { RunReading } from "./useRunRead";
+import { ProseScope } from "../../../lib/text/ModelProse";
+import { Message } from "./Message";
 
 export function RunInFullDetail({
-  groupId,
+  group,
   reading,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly reading: RunReading;
 }) {
   const stepsId = useId();
@@ -25,32 +28,41 @@ export function RunInFullDetail({
   const declared = steps.declarations.get(steps.run.versionId);
   return (
     <>
-      <Part title={say("step.startedWith")} level="h2" depth={1}>
-        <StartedWith run={run} takes={declared?.takes} />
-        <StartedWithSources
-          groupId={groupId}
-          run={run}
-          takes={declared?.takes}
-          declarations={steps.declarations}
-          versionId={steps.run.versionId}
-        />
-      </Part>
-      <Part title={say("step.gaveBack")} level="h2" depth={1}>
+      <Message
+        title={say("step.startedWith")}
+        component="section"
+        conversation={false}
+      >
+        <ProseScope>
+          <StartedWith run={run} takes={declared?.takes} />
+          <StartedWithSources
+            group={group}
+            run={run}
+            takes={declared?.takes}
+            declarations={steps.declarations}
+            versionId={steps.run.versionId}
+          />
+        </ProseScope>
+      </Message>
+      <Message
+        title={say("step.gaveBack")}
+        component="section"
+        conversation={false}
+      >
         <GaveBackPart gaveBack={steps.gaveBack} gives={declared?.gives} />
-      </Part>
+      </Message>
       <Part
         title={say("step.theSteps")}
         level="h2"
         depth={1}
         headingId={stepsId}
       >
-        <StepsTable groupId={groupId} reading={steps} labelledBy={stepsId} />
+        <StepsTable group={group} reading={steps} labelledBy={stepsId} />
       </Part>
     </>
   );
 }
 
-/** Each value under its label. */
 function StartedWith({
   run,
   takes,
@@ -65,7 +77,9 @@ function StartedWith({
         {run.from === undefined
           ? say("step.unknown")
           : say("step.startedAboveWith", {
-              step: isolatedInText(spokenName(run.from.stepName)),
+              step: isolatedInText(
+                run.from.label ?? spokenName(run.from.stepName),
+              ),
               number: run.from.number,
               workflow: isolatedInText(run.workflow.name),
             })}
@@ -79,6 +93,7 @@ function StartedWith({
   }
   return (
     <FilledFields
+      cards
       fields={takes === undefined || takes.length === 0 ? undefined : takes}
       values={values}
       shut={false}

@@ -47,12 +47,12 @@ function themed({ children }: { readonly children: ReactNode }) {
  */
 const NAVIGATION = (
   <>
-    <h3>Work</h3>
+    <h3 data-navigation-label>Work</h3>
     <a href="#flows">
       <span aria-hidden="true">
         <svg />
       </span>
-      <span>Workflows</span>
+      <span data-navigation-label>Workflows</span>
     </a>
   </>
 );
@@ -120,7 +120,6 @@ function iconOf(destination: string): Element {
   return icon;
 }
 
-/** Where each of the next `count` presses of Tab lands, from wherever focus is now. */
 async function tabStops(count: number): Promise<Element[]> {
   const stops: Element[] = [];
   for (let press = 0; press < count; press += 1) {
@@ -210,12 +209,7 @@ describe("AppShell", () => {
     ).toBeNull();
   });
 
-  /**
-   * Put away for every reader, not only out of sight: a keyboard tabbing
-   * through destinations it cannot see, or a screen reader reading them out,
-   * would leave the page as crowded as before for everybody but the eye.
-   */
-  it("puts the docked destinations out of sight, reach and hearing, and leaves the control where it was", async () => {
+  it("folds the docked navigation to a rail, keeping destinations reachable and leaving the keyboard on its control", async () => {
     shell(WIDE);
     const control = screen.getByRole("button", { name: "Sidebar" });
     const navigation = screen.getByRole("navigation", { name: "Site" });
@@ -225,7 +219,9 @@ describe("AppShell", () => {
       iconButtonClasses.colorInherit,
       iconButtonClasses.sizeSmall,
     );
-    expect(getComputedStyle(control).borderColor).toBe("rgb(82, 101, 121)");
+    expect(getComputedStyle(control).borderWidth).toBe("0px");
+    expect(getComputedStyle(control).width).toBe("32px");
+    expect(getComputedStyle(control).height).toBe("32px");
 
     await userEvent.click(control);
 
@@ -233,13 +229,16 @@ describe("AppShell", () => {
     expect(control).toHaveAttribute("aria-expanded", "false");
     expect(control).toHaveAttribute("aria-controls", navigation.id);
     expect(document.activeElement).toBe(control);
-    expect(screen.queryByRole("navigation")).toBeNull();
-    expect(navigation).not.toBeVisible();
+    expect(screen.queryByRole("navigation")).toBe(navigation);
+    expect(navigation).toBeVisible();
     const stops = await tabStops(4);
     expect(stops).toContain(
       screen.getByRole("button", { name: "Who you are" }),
     );
-    expect(stops.filter((stop) => navigation.contains(stop))).toEqual([]);
+    expect(stops.some((stop) => navigation.contains(stop))).toBe(true);
+    expect(getComputedStyle(navigation.parentElement!).width).toBe("56px");
+    expect(screen.getByText("Workflows")).not.toBeVisible();
+    expect(getComputedStyle(navigation).overflowX).toBe("hidden");
   });
 
   /** Putting the destinations away is no more reason to lose what they hold than shutting the narrow drawer is. */
@@ -274,11 +273,16 @@ describe("AppShell", () => {
 
     shell(WIDE);
 
-    expect(screen.getByRole("button", { name: "Sidebar" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
+    expect(screen.getAllByRole("button", { name: "Sidebar" })).toHaveLength(2);
+    screen
+      .getAllByRole("button", { name: "Sidebar" })
+      .forEach((control) =>
+        expect(control).toHaveAttribute("aria-expanded", "false"),
+      );
+    expect(screen.getByRole("navigation")).toHaveAttribute(
+      "data-navigation-collapsed",
+      "true",
     );
-    expect(screen.queryByRole("navigation")).toBeNull();
   });
 
   /** Putting the docked destinations away is a choice about the room beside the work, which a narrow viewport never gives them. */

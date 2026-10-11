@@ -1,8 +1,8 @@
 import MenuItem from "@mui/material/MenuItem";
-import TextField from "@mui/material/TextField";
 
 import type { HeldModel } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say } from "../../i18n/app";
+import { LabelledTextField } from "../../lib/form/LabelledTextField";
 
 /** A model the deployment holds and one of its modes, nothing typed; a choice no longer held is kept in sight. */
 export function ModelControls({
@@ -27,7 +27,8 @@ export function ModelControls({
   ];
   return (
     <>
-      <TextField
+      <LabelledTextField
+        fullWidth
         select
         size="small"
         label={say("workflow.model")}
@@ -40,8 +41,9 @@ export function ModelControls({
             {name}
           </MenuItem>
         ))}
-      </TextField>
-      <TextField
+      </LabelledTextField>
+      <LabelledTextField
+        fullWidth
         select
         size="small"
         label={say("workflow.mode")}
@@ -54,7 +56,7 @@ export function ModelControls({
             {name}
           </MenuItem>
         ))}
-      </TextField>
+      </LabelledTextField>
     </>
   );
 }

@@ -5,7 +5,6 @@ import { servedAmong, type Problem } from "../../../../../../../../problem";
 import { atRun } from "../../../../../{runId}";
 import { stepAnswerFrom, type StepAnswer } from "../../../{stepId}";
 
-/** What one value's review says of it: a refusal says why, and nothing else does. */
 export type ReviewDecision =
   | { readonly outcome: "assured" }
   | { readonly outcome: "refused"; readonly why: string };
@@ -28,8 +27,8 @@ const REASON_REFUSED: ReadonlySet<string> = new Set([
 ] satisfies readonly WordedRefusal[]);
 
 /**
- * One review deciding every value of try `number` waiting on it, each by its field's name, and naming nothing
- * else. Answered with the step as it stands once the run has gone on as far as it goes by itself.
+ * Decides every value of try `number` awaiting review, keyed by field name and nothing else.
+ * Returns the step once the run has advanced as far as it goes by itself.
  */
 export function reviewTry(
   groupId: string,
@@ -56,12 +55,12 @@ export function refusedAsMovedOn(problem: Problem): boolean {
   return servedAmong(problem, MOVED_ON);
 }
 
-/** Whether the review was taken from every person since the step was read: the run stopped, or a model reviews. */
+/** Whether the review was taken from every person since the step was read. */
 export function refusedAsWithdrawn(problem: Problem): boolean {
   return servedAmong(problem, WITHDRAWN);
 }
 
-/** Whether a reason sent was refused; the refusal names no field, only why. */
+/** The refusal names no field, only why. */
 export function refusedForTheReason(problem: Problem): boolean {
   return servedAmong(problem, REASON_REFUSED);
 }

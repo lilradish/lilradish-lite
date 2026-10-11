@@ -3,7 +3,6 @@
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type code_step as enum ();
 
--- ---------------------------------------------------------------- code steps
 
 -- DB-SPECIFIC: text, ~, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table code_step_publications (
@@ -30,7 +29,6 @@ create table code_step_publications (
 create unique index code_step_publications_one_every_group
     on code_step_publications (code_step) where every_group;
 
--- ---------------------------------------------------------------- reference lists
 
 -- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table reference_list_versions (
@@ -42,7 +40,7 @@ create table reference_list_versions (
     created_by       uuid         not null,
     updated_at       timestamptz,
     updated_by       uuid,
-    -- Unchecked while updated_by is null, for the reason pool_members gives.
+    -- The editor foreign key is unchecked while updated_by is null.
     updated_by_kind  subject_kind not null default 'person',
 
     constraint reference_list_versions_pk primary key (entry_version_id),
@@ -73,7 +71,7 @@ create table reference_list_terms (
     created_by             uuid         not null,
     updated_at             timestamptz,
     updated_by             uuid,
-    -- Unchecked while updated_by is null, for the reason pool_members gives.
+    -- The editor foreign key is unchecked while updated_by is null.
     updated_by_kind        subject_kind not null default 'person',
 
     constraint reference_list_terms_pk primary key (reference_list_term_id),
@@ -98,9 +96,8 @@ create table reference_list_terms (
     constraint reference_list_terms_meaning_bounded check (length(meaning) <= 512)
 );
 
--- ---------------------------------------------------------------- questions and workflows
 
--- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: length(), text, ~, !~, four-digit Unicode escapes in regular expressions, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table question_versions (
     entry_version_id uuid         not null,
     entry_kind       entry_kind   not null default 'question',
@@ -110,9 +107,9 @@ create table question_versions (
     created_by       uuid         not null,
     updated_at       timestamptz,
     updated_by       uuid,
-    -- Unchecked while updated_by is null, for the reason pool_members gives.
+    -- The editor foreign key is unchecked while updated_by is null.
     updated_by_kind  subject_kind not null default 'person',
-
+    search_way       text,
     constraint question_versions_pk primary key (entry_version_id),
     constraint question_versions_version_fk foreign key (entry_version_id, entry_kind)
         references entry_versions (entry_version_id, entry_kind),
@@ -123,14 +120,15 @@ create table question_versions (
     constraint question_versions_editor_is_person check (updated_by_kind = 'person'),
     constraint question_versions_updated_together check ((updated_at is null) = (updated_by is null)),
     constraint question_versions_updated_after_created check (updated_at is null or updated_at >= created_at),
-    -- Prose, for the reason reference_list_versions_note_visible gives.
+    -- Prose permits tabs and line feeds; the other C0 and C1 controls are refused.
     constraint question_versions_instruction_visible check (
         instruction is null
             or (length(instruction) > 0 and instruction !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
     constraint question_versions_instruction_bounded check (length(instruction) <= 8192),
     constraint question_versions_drawing_visible check (
         drawing is null or (length(drawing) > 0 and drawing !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
-    constraint question_versions_drawing_bounded check (length(drawing) <= 8192)
+    constraint question_versions_drawing_bounded check (length(drawing) <= 8192),
+    constraint question_versions_search_way_shape check (search_way ~ '^[a-z][a-z0-9_]{0,62}$')
 );
 
 -- DB-SPECIFIC: text, ~, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
@@ -148,7 +146,7 @@ create table workflow_versions (
     created_by           uuid         not null,
     updated_at           timestamptz,
     updated_by           uuid,
-    -- Unchecked while updated_by is null, for the reason pool_members gives.
+    -- The editor foreign key is unchecked while updated_by is null.
     updated_by_kind      subject_kind not null default 'person',
 
     constraint workflow_versions_pk primary key (entry_version_id),

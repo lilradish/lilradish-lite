@@ -9,6 +9,7 @@ import type { MemberPanel } from "../../api/groups/{groupId}/members";
 import { useAction } from "../../lib/request/useAction";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
+import { deferred } from "../../testutil/deferred";
 import { drawnAtDepth, drawnOf } from "../../testutil/depths";
 import { noticesIn } from "../../testutil/notices";
 import type { Asked, Outcome } from "./changes";
@@ -39,7 +40,7 @@ const LAST_OWNER: MemberPanel = {
 const HOLDING_NOTHING: MemberPanel = { ...GLINN, roles: new Set() };
 
 const LAST_CHANGER =
-  "Nobody else here may change this group's membership, so what lets them is not taken away.";
+  "No one else here can change who is in this group, so they can't be removed, and the role that lets them do it can't be withdrawn.";
 
 /** As the server writes a member, which is not the shape this side holds one in. */
 function documentOf(member: MemberPanel): string {
@@ -57,17 +58,15 @@ function themed({ children }: { readonly children: ReactNode }) {
 interface Reading {
   readonly member?: MemberPanel;
   readonly mayChange?: boolean;
+  readonly waiting?: boolean;
   readonly routes?: Readonly<Record<string, readonly Reply[]>>;
 }
 
-/**
- * The panel over the real action it is handed, held as a page holds it: the
- * holder settles every change, keeps who asked, and hands a refusal back to
- * the panel. Only the server is stood in for.
- */
+/** The panel over the real action, held as a page holds it; only the server is stood in for. */
 function reading({
   member = GLINN,
   mayChange = true,
+  waiting = false,
   routes = {},
 }: Reading = {}) {
   const sent = serving(routes);
@@ -77,14 +76,18 @@ function reading({
   function Holder() {
     const [asked, setAsked] = useState<Asked | null>(null);
     const [may, setMay] = useState(mayChange);
+    const [shown, setShown] = useState(member);
     standingMoved = setMay;
-    const changing = useAction<Outcome>(settled);
+    const changing = useAction<Outcome>((outcome) => {
+      settled(outcome);
+      if ("changed" in outcome) setShown(outcome.changed);
+    });
     return (
       <RolesPanel
         groupId={GROUP}
-        member={member}
+        member={shown}
         changing={changing}
-        waiting={false}
+        waiting={waiting}
         mayChange={may}
         refused={
           changing.problem !== null &&
@@ -111,46 +114,71 @@ function reading({
   };
 }
 
+/** Each role's row as the reader reads it: its words, whether it is held, and the control at its end. */
 function roleRows(): string[][] {
   return within(screen.getByRole("list"))
     .getAllByRole("listitem")
     .map((row) => [
       row.querySelector("bdi")?.textContent ?? "",
       within(row).getByText(/^(Held|Not held)$/).textContent ?? "",
-      String(
-        within(row).queryByRole<HTMLInputElement>("switch")?.checked ?? "",
-      ),
+      within(row).queryByRole("button")?.textContent ?? "",
     ]);
 }
 
+function roleControls(): HTMLElement[] {
+  return within(screen.getByRole("list")).getAllByRole("button");
+}
+
 describe("RolesPanel", () => {
+  it("rules the existing roles off from the title without adding person facts", () => {
+    reading();
+    const part = screen.getByRole("region", { name: "Roles" });
+    expect(part.parentElement!).toHaveStyle({
+      borderTopStyle: "solid",
+      borderTopWidth: "1px",
+      marginTop: "18px",
+      paddingTop: "18px",
+      marginLeft: "calc(-1 * var(--card-side-padding))",
+      paddingLeft: "var(--card-side-padding)",
+    });
+    expect(part.querySelector("dl")).toBeNull();
+    expect(part).not.toContainElement(
+      screen.getByRole("button", { name: "Remove from the group" }),
+    );
+  });
   /** Every role the group has, whether or not it is held, and never only the highest held. */
-  it("lists every role the group has, whether the member holds each, and a control giving it or taking it away", () => {
+  it("lists every role the group has, whether the member holds each, and a button withdrawing it or granting it", () => {
     reading({ member: { ...GLINN, roles: new Set(["operator", "owner"]) } });
 
     expect(
       screen.getByRole("heading", { level: 3, name: "Roles" }),
     ).toBeInTheDocument();
     expect(roleRows()).toEqual([
-      ["Operator", "Held", "true"],
-      ["Overseer", "Not held", "false"],
-      ["Owner", "Held", "true"],
+      ["Operator", "Held", "Withdraw Operator"],
+      ["Overseer", "Not held", "Grant Overseer"],
+      ["Owner", "Held", "Withdraw Owner"],
     ]);
+    expect(screen.queryAllByRole("switch")).toEqual([]);
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
   });
 
-  /** Taking a role away and taking somebody out warn; giving a role undoes nothing and is drawn as any other. */
-  it("draws taking a role away and removing the member in the warning colour, and giving a role in none", () => {
+  /** Withdrawing a role and taking somebody out warn; granting a role undoes nothing and is drawn as any other. */
+  it("draws withdrawing a role and removing the member in the warning colour, and granting a role in none", () => {
     reading();
 
     expect(
-      screen.getByRole("switch", { name: "Operator" }).parentElement,
-    ).toHaveClass("MuiSwitch-colorWarning");
+      screen
+        .getAllByRole("button")
+        .filter((each) => each.classList.contains(buttonClasses.colorWarning))
+        .map((each) => each.textContent),
+    ).toEqual(["Withdraw Operator", "Remove from the group"]);
+    expect(screen.getByRole("button", { name: "Grant Overseer" })).toHaveClass(
+      buttonClasses.outlined,
+      buttonClasses.colorPrimary,
+    );
     expect(
-      screen.getByRole("switch", { name: "Overseer" }).parentElement,
-    ).toHaveClass("MuiSwitch-colorPrimary");
-    expect(
-      screen.getByRole("button", { name: "Remove from the group" }),
-    ).toHaveClass(buttonClasses.colorWarning);
+      screen.getByRole("button", { name: "Withdraw Operator" }),
+    ).toHaveClass(buttonClasses.outlined);
   });
 
   /** Spelt by whoever published it; shown, and offered nothing this build cannot address. */
@@ -174,13 +202,15 @@ describe("RolesPanel", () => {
     expect(sent).not.toHaveBeenCalled();
   });
 
-  it("gives a role not held, and settles as the group now holds the member", async () => {
+  it("grants a role not held, and settles as the group now holds the member", async () => {
     const given = { ...GLINN, roles: new Set(["operator", "overseer"]) };
     const { sent, settled, told } = reading({
       routes: { [`PUT ${MEMBER}/roles/overseer`]: [[documentOf(given), 200]] },
     });
 
-    await userEvent.click(screen.getByRole("switch", { name: "Overseer" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Grant Overseer" }),
+    );
 
     await waitFor(() => expect(settled).toHaveBeenCalledOnce());
     expect(settled).toHaveBeenCalledWith({ changed: given });
@@ -188,7 +218,7 @@ describe("RolesPanel", () => {
     expect(requestsTo(sent)).toEqual([`PUT ${MEMBER}/roles/overseer`]);
   });
 
-  it("takes a role held away, and settles as the group now holds the member", async () => {
+  it("withdraws a role held, and settles as the group now holds the member", async () => {
     const { sent, settled } = reading({
       routes: {
         [`DELETE ${MEMBER}/roles/operator`]: [
@@ -197,7 +227,9 @@ describe("RolesPanel", () => {
       },
     });
 
-    await userEvent.click(screen.getByRole("switch", { name: "Operator" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Withdraw Operator" }),
+    );
 
     await waitFor(() =>
       expect(settled).toHaveBeenCalledWith({ changed: HOLDING_NOTHING }),
@@ -205,22 +237,49 @@ describe("RolesPanel", () => {
     expect(requestsTo(sent)).toEqual([`DELETE ${MEMBER}/roles/operator`]);
   });
 
-  it("disables taking the last role that lets anybody change membership and omits removal", async () => {
+  /** A second change out at once would be answered in whichever order the two land. */
+  it.each([
+    ["something else the reader can see is out", true, []],
+    ["one change is out", false, [`PUT ${MEMBER}/roles/overseer`]],
+  ] as const)(
+    "holds every role control while %s, and asks nothing more when one is pressed",
+    async (_case, waiting, asked) => {
+      const held = deferred<readonly [string, number]>();
+      const { sent } = reading({
+        waiting,
+        routes: { [`PUT ${MEMBER}/roles/overseer`]: [held.promise] },
+      });
+      if (!waiting) {
+        await userEvent.click(
+          screen.getByRole("button", { name: "Grant Overseer" }),
+        );
+      }
+
+      for (const control of roleControls()) {
+        await act(() => control.focus());
+        await userEvent.keyboard("{Enter}[Space]");
+      }
+
+      expect(
+        roleControls().map((each) => each.getAttribute("aria-disabled")),
+      ).toEqual(["true", "true", "true"]);
+      expect(requestsTo(sent)).toEqual(asked);
+    },
+  );
+
+  it("reads the last role as a fact, offers no way to take it, and omits removal", async () => {
     const { sent } = reading({ member: LAST_OWNER });
 
     expect(roleRows()).toEqual([
-      ["Operator", "Held", "true"],
-      ["Overseer", "Not held", "false"],
-      ["Owner", "Held", "true"],
+      ["Operator", "Held", "Withdraw Operator"],
+      ["Overseer", "Not held", "Grant Overseer"],
+      ["Owner", "Held", ""],
     ]);
-    const owner = screen.getByRole<HTMLInputElement>("switch", {
-      name: "Owner",
-    });
-    expect(owner).toBeChecked();
-    expect(owner).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "Operator" })).toBeEnabled();
-    await userEvent.click(owner.closest(".MuiSwitch-root")!);
-    expect(owner).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Withdraw Owner" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Withdraw Operator" }),
+    ).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(screen.getByText("Owner"));
     expect(requestsTo(sent)).toEqual([]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
@@ -245,7 +304,11 @@ describe("RolesPanel", () => {
       },
     });
 
-    expect(roleRows().map((row) => row[2])).toEqual(["false", "true", "true"]);
+    expect(roleRows().map((row) => row[2])).toEqual([
+      "Grant Operator",
+      "Withdraw Overseer",
+      "Withdraw Owner",
+    ]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
     ).toBeNull();
@@ -257,7 +320,7 @@ describe("RolesPanel", () => {
   /** The control the keyboard was on goes with the right to use it, and the keyboard stays in the panel. */
   it("puts the keyboard on the roles' heading when the control it was on goes with the right to change them", async () => {
     const { mayChangeNoLonger } = reading();
-    screen.getByRole("switch", { name: "Overseer" }).focus();
+    screen.getByRole("button", { name: "Grant Overseer" }).focus();
 
     await mayChangeNoLonger();
 
@@ -265,6 +328,43 @@ describe("RolesPanel", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("heading", { level: 3, name: "Roles" }),
     );
+  });
+
+  /** The server may answer a role granted as one nobody else could change the membership without, which offers it no longer. */
+  it("puts the keyboard on the roles' heading when the control just pressed is no longer offered once the change answers", async () => {
+    const answer: MemberPanel = {
+      ...GLINN,
+      roles: new Set(["operator", "owner"]),
+      lastChangingRoles: new Set(["owner"]),
+      removable: false,
+    };
+    const { settled } = reading({
+      routes: { [`PUT ${MEMBER}/roles/owner`]: [[documentOf(answer), 200]] },
+    });
+    screen.getByRole("button", { name: "Grant Owner" }).focus();
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(roleRows().at(-1)).toEqual(["Owner", "Held", ""]);
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { level: 3, name: "Roles" }),
+    );
+  });
+
+  it("leaves the keyboard on the control just pressed where it is still offered once the change answers", async () => {
+    const answer = { ...GLINN, roles: new Set(["operator", "overseer"]) };
+    const { settled } = reading({
+      routes: { [`PUT ${MEMBER}/roles/overseer`]: [[documentOf(answer), 200]] },
+    });
+    screen.getByRole("button", { name: "Grant Overseer" }).focus();
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    const turned = screen.getByRole("button", { name: "Withdraw Overseer" });
+    expect(document.activeElement).toBe(turned);
+    expect(turned).not.toHaveAttribute("aria-disabled");
   });
 
   it("leaves the keyboard where it is when it was on nothing the right to change them took away", async () => {
@@ -318,19 +418,21 @@ describe("RolesPanel", () => {
       {
         severity: "info",
         words:
-          "No longer a member of this group. Giving a role here makes them one again.",
+          "No longer a member of this group. Granting a role here makes them one again.",
       },
     ]);
     expect(roleRows().map((row) => row[2])).toEqual([
-      "false",
-      "false",
-      "false",
+      "Grant Operator",
+      "Grant Overseer",
+      "Grant Owner",
     ]);
     expect(
       screen.queryByRole("button", { name: "Remove from the group" }),
     ).toBeNull();
 
-    await userEvent.click(screen.getByRole("switch", { name: "Overseer" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Grant Overseer" }),
+    );
 
     await waitFor(() =>
       expect(settled).toHaveBeenCalledWith({ changed: back }),
@@ -376,7 +478,7 @@ describe("RolesPanel", () => {
   it.each([
     [
       "a role",
-      "Overseer",
+      "Grant Overseer",
       `PUT ${MEMBER}/roles/overseer`,
       '{"code":"ACT_NOT_PERMITTED"}',
       403,
@@ -395,11 +497,7 @@ describe("RolesPanel", () => {
     async (_case, control, route, body, status, said) => {
       const { settled } = reading({ routes: { [route]: [[body, status]] } });
 
-      await userEvent.click(
-        screen.getByRole(_case === "a role" ? "switch" : "button", {
-          name: control,
-        }),
-      );
+      await userEvent.click(screen.getByRole("button", { name: control }));
       if (_case === "a removal") {
         await userEvent.click(screen.getByRole("button", { name: "Remove" }));
       }
@@ -408,4 +506,36 @@ describe("RolesPanel", () => {
       expect(settled).not.toHaveBeenCalled();
     },
   );
+
+  /** Said in place, under the roles it was asked of, and never behind a mark to be pointed at. */
+  it("says a withdrawal refused for leaving nobody else who may change the membership under the roles, and settles as nothing", async () => {
+    const { sent, settled } = reading({
+      routes: {
+        [`DELETE ${MEMBER}/roles/operator`]: [
+          ['{"code":"LAST_MEMBERSHIP_CHANGER"}', 409],
+        ],
+      },
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Withdraw Operator" }),
+    );
+
+    const refusal = await screen.findByRole("alert");
+    expect(refusal).toHaveTextContent(
+      "Nobody else in this group could change its membership.",
+    );
+    expect(refusal).toBeVisible();
+    expect(screen.getByRole("region", { name: "Roles" })).toContainElement(
+      refusal,
+    );
+    expect(
+      screen.getByRole("list").compareDocumentPosition(refusal) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(settled).not.toHaveBeenCalled();
+    expect(roleRows()[0]).toEqual(["Operator", "Held", "Withdraw Operator"]);
+    expect(requestsTo(sent)).toEqual([`DELETE ${MEMBER}/roles/operator`]);
+  });
 });

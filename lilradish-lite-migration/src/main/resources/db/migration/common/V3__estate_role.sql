@@ -11,7 +11,7 @@ create table estate_role_grants (
     created_by           uuid         not null,
     removed_at           timestamptz,
     removed_by           uuid,
-    -- Unchecked while removed_by is null, for the reason pool_members gives.
+    -- The remover foreign key is unchecked while removed_by is null.
     removed_by_kind      subject_kind not null default 'person',
 
     constraint estate_role_grants_pk primary key (estate_role_grant_id),

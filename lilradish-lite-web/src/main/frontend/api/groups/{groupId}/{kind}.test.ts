@@ -17,6 +17,7 @@ const AVO = { userId: "000a71", displayName: "Avo Lumerace" };
 const NAMELESS = { userId: "000a72" };
 
 const TRIAGE = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000a71",
   name: "Triage",
   purpose: "Sorts what comes in.",
@@ -26,6 +27,7 @@ const TRIAGE = {
 };
 
 const WAITING = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000a72",
   name: "Waiting",
   submitted: false,
@@ -33,25 +35,28 @@ const WAITING = {
 };
 
 const DRAFT = {
+  versionName: null,
   versionId: "00000007-0000-4000-8000-000000000a73",
   number: 3,
   standing: "draft",
   writers: [NAMELESS, AVO],
   writtenByMigration: false,
-  acts: ["write", "submit"],
+  stateActs: ["write", "submit"],
   pinnedBy: [],
 };
 
 const IN_SERVICE = {
+  versionName: null,
   versionId: "00000007-0000-4000-8000-000000000a72",
   number: 2,
   standing: "in_service",
   writers: [AVO],
   writtenByMigration: false,
   approval: { approver: NAMELESS },
-  acts: ["retire"],
+  stateActs: ["retire"],
   pinnedBy: [
     {
+      versionName: null,
       entryId: "00000006-0000-4000-8000-000000000a79",
       kind: "workflow",
       name: "Handle",
@@ -62,13 +67,14 @@ const IN_SERVICE = {
 };
 
 const SEEDED = {
+  versionName: null,
   versionId: "00000007-0000-4000-8000-000000000a71",
   number: 1,
   standing: "retired",
   writers: [],
   writtenByMigration: true,
   approval: {},
-  acts: [],
+  stateActs: [],
   pinnedBy: [],
 };
 
@@ -78,18 +84,18 @@ const ENTRY = {
   name: "Triage",
   purpose: "Sorts what comes in.",
   stopped: { by: AVO, at: "2026-09-24T08:15:00Z" },
-  acts: ["rename", "let_go"],
+  stateActs: ["rename", "let_go"],
   versions: [DRAFT, IN_SERVICE, SEEDED],
 };
 
 /** The entry as read: every list of words a set, and every member left out left out. */
 const READ = {
   ...ENTRY,
-  acts: new Set(["rename", "let_go"]),
+  stateActs: new Set(["rename", "let_go"]),
   versions: [
-    { ...DRAFT, acts: new Set(["write", "submit"]) },
-    { ...IN_SERVICE, acts: new Set(["retire"]) },
-    { ...SEEDED, acts: new Set() },
+    { ...DRAFT, stateActs: new Set(["write", "submit"]) },
+    { ...IN_SERVICE, stateActs: new Set(["retire"]) },
+    { ...SEEDED, stateActs: new Set() },
   ],
 };
 
@@ -214,19 +220,54 @@ describe("entryFrom", () => {
       entryId: ENTRY.entryId,
       kind: ENTRY.kind,
       name: ENTRY.name,
-      acts: ENTRY.acts,
+      stateActs: ENTRY.stateActs,
     };
     const read = entryFrom({ ...unsaid, versions: [DRAFT] })!;
 
     expect(read).toEqual({
       ...unsaid,
-      acts: new Set(["rename", "let_go"]),
-      versions: [{ ...DRAFT, acts: new Set(["write", "submit"]) }],
+      stateActs: new Set(["rename", "let_go"]),
+      versions: [{ ...DRAFT, stateActs: new Set(["write", "submit"]) }],
     });
     expect(["purpose", "stopped"].filter((member) => member in read)).toEqual(
       [],
     );
     expect("approval" in read.versions[0]!).toBe(false);
+  });
+
+  it.each([null, []])(
+    "keeps mandatory nullable state acts %j distinct at both resource levels",
+    (stateActs) => {
+      const read = entryFrom({
+        ...ENTRY,
+        stateActs,
+        versions: [{ ...DRAFT, stateActs }],
+      });
+      expect(read?.stateActs).toEqual(stateActs === null ? null : new Set());
+      expect(read?.versions[0]?.stateActs).toEqual(
+        stateActs === null ? null : new Set(),
+      );
+    },
+  );
+
+  it.each([undefined, "rename", {}, ["rename", 7]])(
+    "rejects malformed entry state acts %j",
+    (stateActs) => {
+      expect(entryFrom({ ...ENTRY, stateActs })).toBeNull();
+      expect(
+        entryFrom({ ...ENTRY, versions: [{ ...DRAFT, stateActs }] }),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps unknown state words without treating them as known actions", () => {
+    const read = entryFrom({
+      ...ENTRY,
+      stateActs: ["future_action"],
+      versions: [{ ...DRAFT, stateActs: ["future_action"] }],
+    });
+    expect(read?.stateActs).toEqual(new Set(["future_action"]));
+    expect(read?.versions[0]?.stateActs).toEqual(new Set(["future_action"]));
   });
 
   it("reads an approval naming nobody as one nobody made, never as no approval", () => {
@@ -238,7 +279,7 @@ describe("entryFrom", () => {
   it.each([
     ["no document at all", "Triage"],
     ["no kind", { ...ENTRY, kind: 7 }],
-    ["no acts", { ...ENTRY, acts: undefined }],
+    ["no acts", { ...ENTRY, stateActs: undefined }],
     ["no versions", { ...ENTRY, versions: undefined }],
     ["a purpose that is no text", { ...ENTRY, purpose: null }],
     ["a stop naming nobody", { ...ENTRY, stopped: { at: ENTRY.stopped.at } }],
@@ -265,7 +306,7 @@ describe("entryFrom", () => {
     ],
     [
       "a version with no acts",
-      { ...ENTRY, versions: [{ ...DRAFT, acts: undefined }] },
+      { ...ENTRY, versions: [{ ...DRAFT, stateActs: undefined }] },
     ],
     [
       "a version with no writers",

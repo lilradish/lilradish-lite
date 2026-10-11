@@ -1,6 +1,8 @@
 import { ThemeProvider } from "@mui/material/styles";
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+import type { StepState } from "../../../api/stepStates";
 
 import { theme } from "../../../lib/theme/theme";
 import { resolved } from "../../../testutil/grounds";
@@ -11,15 +13,15 @@ import { StepStateBadge } from "./StepStateBadge";
  * icon drawn before them, by the name Material's icons are tested by.
  */
 const STATES = [
-  ["not_started", "Not started", "#595959", "RadioButtonUncheckedIcon"],
-  ["running", "Running", "#01579b", "AutorenewIcon"],
-  ["held_back", "Held back", "#595959", "PauseCircleOutlinedIcon"],
-  ["waiting", "Waiting", "#9a4f00", "HourglassEmptyIcon"],
-  ["failed", "Failed", "#8c1d18", "ErrorOutlinedIcon"],
-  ["done", "Done", "#1b5e20", "CheckCircleIcon"],
+  ["not_started", "Not started", "#444f54", "RadioButtonUncheckedIcon"],
+  ["running", "Running", "#1f4f99", "AutorenewIcon"],
+  ["held_back", "Blocked", "#3a4449", "PauseCircleOutlinedIcon"],
+  ["waiting", "Waiting", "#8a4700", "HourglassEmptyIcon"],
+  ["failed", "Failed", "#a1261f", "ErrorOutlinedIcon"],
+  ["done", "Done", "#24683a", "CheckCircleIcon"],
 ] as const;
 
-const UNKNOWN = "Not something this page can say yet.";
+const UNKNOWN = "This page can't show this yet.";
 
 function drawn(state: string) {
   return render(
@@ -30,10 +32,16 @@ function drawn(state: string) {
 }
 
 describe("StepStateBadge", () => {
-  it("colours every state the theme colours, and no other", () => {
-    expect(Object.keys(theme.palette.stepState)).toEqual(
-      STATES.map(([state]) => state),
-    );
+  it("covers every wire state with its canonical text and ground", () => {
+    expectTypeOf<(typeof STATES)[number][0]>().toEqualTypeOf<StepState>();
+    expect(theme.palette.state).toMatchObject({
+      notStarted: { text: "#444f54", ground: "#ffffff", edge: "#a9b6bd" },
+      running: { text: "#1f4f99", ground: "#e3ebf7" },
+      blocked: { text: "#3a4449", ground: "#ffffff", edge: "#a9b6bd" },
+      waiting: { text: "#8a4700", ground: "#fbeedb" },
+      failed: { text: "#a1261f", ground: "#fbe7e5" },
+      done: { text: "#24683a", ground: "#e1f0e4" },
+    });
   });
 
   it.each(STATES)(

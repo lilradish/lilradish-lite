@@ -50,3 +50,4 @@ rootProject.name = "lilradish-lite"
 include("lilradish-lite-migration")
 include("lilradish-lite-web")
 include("lilradish-lite-flyway")
+include("lilradish-lite-test-support")

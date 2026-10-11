@@ -12,6 +12,7 @@ const READ = {
   number: 1,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c31",
     name: "Handle a claim",
     version: 1,
@@ -23,7 +24,7 @@ const READ = {
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { inForce: "9007199254740991", raiseNeedsApproval: false },
-  acts: ["stop", "change_ceiling"],
+  stateActs: ["stop", "change_ceiling"],
 };
 
 describe("changeCeiling", () => {

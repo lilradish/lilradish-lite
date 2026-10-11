@@ -31,8 +31,8 @@ function HintedPart({ part }: { readonly part: string }) {
 }
 
 /**
- * A sentence with text set into it, the text isolated and drawn as `HiddenShown` draws it where the sentence puts
- * it: `sentence` is handed what to put there, and says the rest.
+ * `sentence` receives a placeholder and returns the whole sentence; its placeholder
+ * positions receive `text`, drawn by `HiddenShown` and isolated in a `bdi`.
  */
 export function HiddenShownIn({
   sentence,

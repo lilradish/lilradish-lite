@@ -2,24 +2,21 @@ import type { GroupPermission, SurfaceAct } from "../../api/standing";
 import { say, type MessageId } from "../../i18n/app";
 import type { GroupGate } from "../destinations";
 
-/** A permission a group grants, spelt as one or refused by the compiler. */
-type Granted<Permission extends GroupPermission> = Permission;
+type CheckedPermission<Permission extends GroupPermission> = Permission;
 
 /**
- * A permission inside a group that a page there is reached by, or that a
- * control there asks: a rule a refusal has words for.
+ * Gates a group page or control; each permission has words for a refusal.
  */
 export type GroupRule =
   | GroupGate
-  | Granted<"change_membership">
-  | Granted<"author_entry">
-  | Granted<"approve_entry">
-  | Granted<"revoke_entry">
-  | Granted<"start_run">
-  | Granted<"answer_step">
-  | Granted<"review_at_gate">;
+  | CheckedPermission<"change_membership">
+  | CheckedPermission<"author_entry">
+  | CheckedPermission<"approve_entry">
+  | CheckedPermission<"revoke_entry">
+  | CheckedPermission<"start_run">
+  | CheckedPermission<"answer_step">
+  | CheckedPermission<"review_at_gate">;
 
-/** The rule a refused request met: an act across the estate, or a permission inside a group. */
 export type Rule =
   { readonly act: SurfaceAct } | { readonly inGroup: GroupRule };
 
@@ -28,12 +25,10 @@ export function ruleOf(act: SurfaceAct): string {
   return say(`reach.${act}` satisfies MessageId);
 }
 
-/** The same inside a group, by the permission the page is reached by or the control asks. */
 export function ruleInGroup(permission: GroupRule): string {
   return say(`inGroup.${permission}` satisfies MessageId);
 }
 
-/** Either rule, in the words written for it. */
 export function ruleSaid(rule: Rule): string {
   return "act" in rule ? ruleOf(rule.act) : ruleInGroup(rule.inGroup);
 }

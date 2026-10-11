@@ -36,7 +36,7 @@ const ANSWERED = {
     versionId: VERSION,
     state: "running",
     at: { stepId: STEP, name: "summarise" },
-    acts: ["stop"],
+    stateActs: ["stop"],
     progress: { done: 0, of: 1 },
   },
   declarations: {
@@ -49,10 +49,13 @@ const ANSWERED = {
     },
   },
   step: {
+    producedByUserId: null,
+    producedByKind: null,
     stepId: STEP,
     order: 1,
     name: "summarise",
     runs: {
+      versionName: null,
       kind: "question",
       name: "Summarise",
       version: 2,
@@ -76,8 +79,8 @@ const ANSWERED = {
       { field: "reply", value: "Sorry.", now: "refused" },
     ],
     next: { number: 2, beyond: false },
-    acts: ["answer", "ask_again"],
-    withheld: [],
+    stateActs: ["answer", "ask_again"],
+    stateRefusals: [],
   },
   cameOut: [
     {
@@ -89,6 +92,11 @@ const ANSWERED = {
   ],
   triesMade: [
     {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 1,
       beyond: false,
       producedBy: { kind: "person", person: { userId: "000cc1" } },
@@ -103,10 +111,20 @@ const ANSWERED = {
           field: "reply",
           value: "Sorry.",
           now: "refused",
-          decision: { outcome: "refused", why: "Too curt." },
+          decision: {
+            outcome: "refused",
+            why: "Too curt.",
+            whyLines: "several",
+          },
         },
       ],
-      review: { asked: true, by: { kind: "person", person: DAN } },
+      review: {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+        asked: true,
+        by: { kind: "person", person: DAN },
+      },
       ended: "refused_on_review",
       cost: { callsAModel: false },
     },
@@ -139,7 +157,7 @@ describe("reviewTry", () => {
     expect(sent).toHaveBeenCalledTimes(1);
     expect(read.step).toMatchObject({
       state: "waiting",
-      acts: ["answer", "ask_again"],
+      stateActs: new Set(["answer", "ask_again"]),
     });
     expect(read.triesMade[0]!.review.by).toEqual({
       kind: "person",

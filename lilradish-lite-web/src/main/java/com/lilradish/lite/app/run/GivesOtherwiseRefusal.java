@@ -1,0 +1,29 @@
+package com.lilradish.lite.app.run;
+
+import static java.util.Objects.requireNonNull;
+
+import com.lilradish.lite.domain.codestep.CodeError;
+import com.lilradish.lite.domain.failure.RefusalCode;
+import org.libprunus.core.error.ApiErrorException;
+
+/**
+ * Answering a code step here refused because what it gives back no longer matches, carrying what found it so: the
+ * field that refuses it, and what reads that field where that is why. Answered with those by
+ * {@link GivesOtherwiseOutlet}, wherever it is raised.
+ */
+final class GivesOtherwiseRefusal extends ApiErrorException {
+
+    private final transient CodeError.Fault fault;
+
+    GivesOtherwiseRefusal(RefusalCode code, String sentence, CodeError.Fault fault) {
+        super(code, sentence);
+        if (code != RefusalCode.CODE_STEP_GIVES_OTHERWISE) {
+            throw new IllegalArgumentException("GivesOtherwiseRefusal is only for CODE_STEP_GIVES_OTHERWISE");
+        }
+        this.fault = requireNonNull(fault, "GivesOtherwiseRefusal fault must not be null");
+    }
+
+    CodeError.Fault fault() {
+        return fault;
+    }
+}

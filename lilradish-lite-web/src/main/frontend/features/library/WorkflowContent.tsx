@@ -12,14 +12,19 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useSearchParams } from "react-router";
 
 import type { Version } from "../../api/groups/{groupId}/{kind}";
+import type { DeclaredField } from "../../api/declaration";
+import type { VersionDetail } from "../../api/groups/{groupId}/versions/{versionId}";
 import {
   readWorkflow,
   writtenSinceRead,
@@ -37,44 +42,58 @@ import {
 import { Async } from "../../app/Async";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { visible } from "../../i18n/visible";
-import { ActButton } from "../../lib/action/ActButton";
-import { Press } from "../../lib/action/Press";
+import { Press, type Reason } from "../../lib/action/Press";
 import { RowPanel } from "../../lib/collection/RowPanel";
+import { focusDrawerHeading } from "../../lib/layout/RowDrawer";
 import { FIGURE_SETTING } from "../../lib/collection/SortableTable";
+import { isolatedInText } from "../../lib/direction/isolated";
 import { Part } from "../../lib/layout/Part";
+import { UnsavedMark } from "../../lib/layout/UnsavedMark";
 import { INNER_PART_SX, HEADING_SX, SPACED_SX } from "../../lib/layout/parts";
+import { TOKENS } from "../../lib/theme/tokens";
 import { Notice } from "../../lib/notice/Notice";
+import { StatusLine, type Line } from "../../lib/notice/StatusLine";
 import { useAction, type Action } from "../../lib/request/useAction";
 import { useResource, type Resource } from "../../lib/request/useResource";
 import { VERSION_ACT_RULES } from "./actRules";
 import { BoundRows } from "./BindingControls";
-import { WRITTEN_LIMITS } from "./constantDrafts";
 import {
   ContentProblems,
   contentOf,
   type ReadContent,
 } from "./ContentProblems";
-import { DeclarationBuilder } from "./DeclarationBuilder";
+import { DeclarationBuilder, KeptCandidates } from "./DeclarationBuilder";
+import { fieldAtPlace, fieldPlace } from "./declarationDrafts";
+import {
+  useVersionDetail,
+  versionDetailOwner,
+  type VersionDetailOwner,
+} from "./EditorVersionPicker";
 import { OPEN_STEP } from "./entryAddress";
-import { useDraftPartStatus } from "./useDraftStatus";
+import { locatePart, useDraftPartStatus } from "./useDraftStatus";
+import {
+  FLOW_UNIT,
+  FlowFieldLocationContext,
+  FlowFieldMoveContext,
+} from "./RoutePart";
 import { SendsPast } from "./SendsPast";
 import { StepEditor } from "./StepEditor";
 import { calledOf, calledVisibleOf, kindSetApart, StepRow } from "./StepRow";
+import { heldReason, StepsSaid, StepsSave } from "./StepsSaving";
+import { useHeardRefusal } from "./useHeardRefusal";
+import { keptStepsOf, useKeptCandidates } from "./useKeptCandidates";
 import { RunSettings } from "./WorkflowSettings";
 import {
   boundTo,
-  flagsOf,
   flowOf,
   freshStep,
   MOST_STEPS,
   movedStep,
   namedVersions,
   removedStep,
+  referencedVersionDetails,
   reusableSentFlowOf,
   sentFlowOf,
-  sourcesFor,
-  targetRows,
   tookVersion,
   unusedKey,
   WORKFLOW_GIVES,
@@ -83,15 +102,48 @@ import {
   type Named,
   type StepDraft,
 } from "./workflowDrafts";
+import { flowChangeAt, outputRowsOf } from "./workflowUnsaved";
 
 export const WorkflowSubmissionRefusal = createContext<Problem | null>(null);
 
 const QUIET_SX = { color: "text.secondary" };
 
-const STEP_PANEL_WIDTH = 464;
+const DOCUMENT_PARTS_SX = {
+  "& > :not(:empty)": {
+    my: 0,
+    py: TOKENS.space.part,
+    borderTop: 1,
+    borderColor: "surface.rule",
+  },
+  "& section:has(> h3), & section:has(> div > h3), & [data-flow-part=steps] > div":
+    { my: 0 },
+};
 
-/** Where focus goes once the rows change: a row's step or the move pressed on it, or the steps' heading. */
-type Focus = { readonly key: string; readonly at?: "up" | "down" } | "heading";
+const REMOVE_AT_END_SX = { marginInlineStart: "auto" };
+
+const SAID_IN_DRAWER_SX = { mb: 2 };
+
+/** Where focus goes once the rows change: a row's step or the move pressed on it, the steps' heading or the step drawer's. */
+type Focus =
+  | {
+      readonly key: string;
+      readonly at?: "up" | "down";
+      readonly from?: string;
+      readonly pressed?: Element | null;
+    }
+  | {
+      readonly key: string;
+      readonly from: string;
+      readonly field: string;
+      readonly by: -1 | 1;
+      readonly owner: Element | null;
+      readonly pressed: Element | null;
+      readonly fallback: Element | null;
+    }
+  | "heading"
+  | "drawerHeading";
+
+type Half = "takes" | "gives";
 
 /**
  * A workflow version's content, each part written on its own naming the revision the page read, and edited only
@@ -101,6 +153,7 @@ export function WorkflowContent({
   groupId,
   entryId,
   version,
+  editable,
   readCount,
   onRefused,
   onWritten,
@@ -110,6 +163,7 @@ export function WorkflowContent({
   readonly groupId: string;
   readonly entryId: string;
   readonly version: Version;
+  readonly editable: boolean;
   /** Changed each time the page reads the entry again, which is when this reads the workflow again too. */
   readonly readCount: number;
   readonly onRefused: (problem: Problem) => void;
@@ -142,6 +196,10 @@ export function WorkflowContent({
   const [shown, setShown] = useState(read.value);
   const [readShown, setReadShown] = useState(read.value);
   const [stale, setStale] = useState(false);
+  const [halvesAfresh, setHalvesAfresh] = useState<{
+    readonly count: number;
+    readonly from: Half | null;
+  }>({ count: 0, from: null });
   if (read.value !== readShown) {
     setReadShown(read.value);
     setShown(read.value);
@@ -167,9 +225,18 @@ export function WorkflowContent({
     }
     onRefused(problem);
   };
+  const candidates = useKeptCandidates();
+  const loadSaved = () => {
+    candidates.forgetAll();
+    reload();
+  };
+  const readAfresh = (from: Half) => () => {
+    setHalvesAfresh((now) => ({ count: now.count + 1, from }));
+    loadSaved();
+  };
   const actions = {
-    taking: useAction<WorkflowVersion>(written, refused),
-    giving: useAction<WorkflowVersion>(written, refused),
+    taking: useAction<WorkflowVersion>(written, onRefused),
+    giving: useAction<WorkflowVersion>(written, onRefused),
     flowing: useAction<WorkflowVersion>(written, refused),
     spending: useAction<WorkflowVersion>(written, refused),
     helping: useAction<WorkflowVersion>(written, refused),
@@ -183,7 +250,6 @@ export function WorkflowContent({
   const waitingBeside = (own: Action<WorkflowVersion>) =>
     read.loading ||
     Object.values(actions).some((other) => other !== own && other.running);
-  const editable = version.acts.has("write");
   const at = { groupId, entryId, versionId: version.versionId };
 
   return (
@@ -193,18 +259,23 @@ export function WorkflowContent({
       actions={actions}
       waiting={waitingBeside}
       at={at}
+      afresh={halvesAfresh}
+      readAfresh={readAfresh}
+      candidates={candidates}
       wrapDocument={wrapDocument}
+      stale={
+        shown === null || !stale ? null : (
+          <Box ref={afresh} sx={SPACED_SX}>
+            <Notice severity="warning" alert>
+              {say("workflow.writtenSince")}
+            </Notice>
+            <Press onPress={loadSaved}>{say("draft.readAfresh")}</Press>
+          </Box>
+        )
+      }
       before={
         shown === null ? null : (
           <>
-            {stale ? (
-              <Box ref={afresh} sx={SPACED_SX}>
-                <Notice severity="warning" alert>
-                  {say("workflow.writtenSince")}
-                </Notice>
-                <Press onPress={reload}>{say("workflow.readAfresh")}</Press>
-              </Box>
-            ) : null}
             <ContentProblems
               problems={
                 refusedProblems ??
@@ -246,43 +317,170 @@ function Parts({
   actions,
   waiting,
   at,
+  afresh,
+  readAfresh,
+  candidates,
+  stale,
 }: {
   readonly read: Resource<WorkflowVersion | null>;
   readonly before: ReactNode;
+  /** That somebody saved since, said at the head of the step's drawer while it covers the page, and above the steps otherwise. */
+  readonly stale: ReactNode;
   readonly wrapDocument?: (content: ReactNode) => ReactNode;
   readonly editable: boolean;
   readonly actions: Actions;
   /** Whether anything but the write named is out, which saving that part would be refused beside. */
   readonly waiting: (own: Action<WorkflowVersion>) => boolean;
   readonly at: At;
+  /** How often a half asked to load the saved draft, and which last: each ask draws both halves anew. */
+  readonly afresh: { readonly count: number; readonly from: Half | null };
+  readonly readAfresh: (from: Half) => () => void;
+  readonly candidates: ReturnType<typeof useKeptCandidates>;
 }) {
-  const workflow = read.value;
-  const named = useMemo(
-    () =>
-      workflow === null ? new Map<string, Named>() : namedVersions(workflow),
-    [workflow],
-  );
+  const loaded = read.value;
+  const stepsNode = useRef<HTMLDivElement>(null);
+  const outputsNode = useRef<HTMLDivElement>(null);
+  const outputsHeading = useRef<HTMLHeadingElement>(null);
+  const stepEditorNode = useRef<HTMLDivElement>(null);
+  const [revealing, setRevealing] = useState<object | undefined>(undefined);
   const saved = useMemo(
-    () => (workflow === null ? null : flowOf(workflow)),
-    [workflow],
+    () => (loaded === null ? null : flowOf(loaded)),
+    [loaded],
   );
   // Pin descriptions may refresh without changing the steps being edited.
-  const savedAs = useMemo(() => JSON.stringify(saved), [saved]);
-  const [flow, setFlow] = useState(saved);
+  const savedAs = useMemo(
+    () =>
+      `${at.groupId}:${at.entryId}:${at.versionId}:${JSON.stringify(saved)}`,
+    [at.groupId, at.entryId, at.versionId, saved],
+  );
+  const [owner, setOwner] = useState({
+    source: loaded,
+    flow: saved,
+    details: new Map<string, VersionDetail>(),
+  });
+  const flow = owner.flow;
+  const named = useMemo(
+    () => namedWith(loaded, owner.details.values()),
+    [loaded, owner.details],
+  );
+  const workflow = useMemo(() => {
+    if (loaded === null) return null;
+    const terms = new Map(loaded.terms);
+    for (const detail of owner.details.values())
+      for (const [id, held] of detail.terms) terms.set(id, held);
+    return { ...loaded, terms };
+  }, [loaded, owner.details]);
   const [readAs, setReadAs] = useState(savedAs);
   if (savedAs !== readAs) {
     setReadAs(savedAs);
-    setFlow(saved);
+    setOwner({ source: loaded, flow: saved, details: new Map() });
+  } else if (owner.source !== loaded) {
+    setOwner((now) => ({ ...now, source: loaded }));
   }
-  const [flowAsked, setFlowAsked] = useState(false);
+  // A step's field changes not yet taken in, kept while its drawer is shut;
+  // a save of the steps carries them over, loading the saved draft lets them go.
+  const { holding, prune } = candidates;
+  const keptSteps = useMemo(
+    () => keptStepsOf(holding, flow?.steps),
+    [holding, flow?.steps],
+  );
   const running = actions.flowing.running;
+  // Kept under the keys a save answers before its steps arrive; none is let go until then.
+  useEffect(() => {
+    if (flow !== null && !running) prune(flow.steps);
+  }, [flow, running, prune]);
   const change = useCallback(
     (next: (now: FlowDraft) => FlowDraft) => {
       if (!running) {
-        setFlow((now) => (now === null ? null : next(now)));
+        setOwner((now) =>
+          now.flow === null
+            ? now
+            : (() => {
+                const flow = next(now.flow);
+                return {
+                  ...now,
+                  flow,
+                  details: referencedVersionDetails(flow, now.details),
+                };
+              })(),
+        );
       }
     },
     [running],
+  );
+  const blocked = waiting(actions.flowing);
+  const resolvingDisabled = !editable || running || blocked || read.loading;
+  const detailInput = useMemo(
+    () => ({
+      source: loaded,
+      savedAs,
+      steps: flow?.steps,
+      disabled: resolvingDisabled,
+    }),
+    [loaded, savedAs, flow?.steps, resolvingDisabled],
+  );
+  const [detailsOwned, setDetailsOwned] = useState(() => ({
+    input: detailInput,
+    owners: new Map<string, VersionDetailOwner>(),
+  }));
+  if (
+    detailsOwned.input !== detailInput ||
+    detailsOwned.owners.size !== (flow?.steps.length ?? 0)
+  ) {
+    const owners = new Map<string, VersionDetailOwner>();
+    const sameAuthority =
+      detailsOwned.input.source === loaded &&
+      detailsOwned.input.savedAs === savedAs &&
+      detailsOwned.input.disabled === resolvingDisabled;
+    for (const [position, step] of (flow?.steps ?? []).entries()) {
+      const before = detailsOwned.input.steps?.[position];
+      const held =
+        sameAuthority && before?.key === step.key && before.runs === step.runs
+          ? detailsOwned.owners.get(step.key)
+          : undefined;
+      owners.set(step.key, held ?? versionDetailOwner());
+    }
+    setDetailsOwned({ input: detailInput, owners });
+  }
+  const resolve = useCallback(
+    (
+      expected: StepDraft,
+      position: number,
+      detail: VersionDetail | null,
+      changed: (
+        step: StepDraft,
+        named: ReadonlyMap<string, Named>,
+      ) => StepDraft,
+    ) => {
+      if (resolvingDisabled) return;
+      setOwner((now) => {
+        if (
+          now.source !== loaded ||
+          now.flow === null ||
+          now.flow.steps[position]?.key !== expected.key ||
+          now.flow.steps[position]?.runs !== expected.runs
+        )
+          return now;
+        const details = new Map(now.details);
+        if (detail !== null) details.set(detail.version.versionId, detail);
+        const resolved = namedWith(loaded, [
+          ...now.details.values(),
+          ...(detail === null ? [] : [detail]),
+        ]);
+        const flow = {
+          ...now.flow,
+          steps: now.flow.steps.map((step) =>
+            step.key === expected.key ? changed(step, resolved) : step,
+          ),
+        };
+        return {
+          ...now,
+          flow,
+          details: referencedVersionDetails(flow, details),
+        };
+      });
+    },
+    [loaded, resolvingDisabled],
   );
   const sendFlow = useMemo(() => reusableSentFlowOf(), []);
   const sent = useMemo(
@@ -306,20 +504,53 @@ function Parts({
         : [JSON.stringify(savedSent.steps), JSON.stringify(savedSent.outputs)],
     [savedSent],
   );
-  const stepsUnsaved =
-    sent !== null &&
-    savedSentAs !== null &&
-    JSON.stringify(sent.steps) !== savedSentAs[0];
-  const outputsUnsaved =
-    sent !== null &&
-    savedSentAs !== null &&
-    JSON.stringify(sent.outputs) !== savedSentAs[1];
+  const stepsUnsaved = useMemo(
+    () =>
+      sent !== null &&
+      savedSentAs !== null &&
+      JSON.stringify(sent.steps) !== savedSentAs[0],
+    [sent, savedSentAs],
+  );
+  const outputsUnsaved = useMemo(
+    () =>
+      sent !== null &&
+      savedSentAs !== null &&
+      JSON.stringify(sent.outputs) !== savedSentAs[1],
+    [sent, savedSentAs],
+  );
   const unchanged = !stepsUnsaved && !outputsUnsaved;
-  useDraftPartStatus("flow", !unchanged, running || waiting(actions.flowing));
-  const heldAt =
-    flow?.steps.findIndex((step) => step.key === sent?.held?.step) ?? -1;
   const [parameters, setParameters] = useSearchParams();
   const picked = parameters.get(OPEN_STEP);
+  const latestPicked = useRef(picked);
+  useEffect(() => {
+    latestPicked.current = picked;
+  }, [picked]);
+  const refusalAt = useRef<HTMLDivElement>(null);
+  const heard = useHeardRefusal(actions.flowing, !unchanged, refusalAt);
+  const [fieldMoved, setFieldMoved] = useState<{
+    readonly step: string;
+    readonly line: Line;
+  } | null>(null);
+  const [stepMoved, setStepMoved] = useState<Line | null>(null);
+  const moveReasonId = useId();
+  const moveHeld =
+    sent?.held == null ? undefined : heldReason(sent.held, flow!);
+  const { letGo } = heard;
+  // Shutting the step's drawer, or picking another, leaves the part.
+  const [pickedSeen, setPickedSeen] = useState(picked);
+  if (picked !== pickedSeen) {
+    setPickedSeen(picked);
+    letGo();
+  }
+  // Said until the next change once the save or the removal it follows has landed.
+  const [dropped, setDropped] = useState<{
+    readonly with: FlowDraft | null;
+  } | null>(null);
+  const droppedSaid = dropped !== null;
+  if (dropped !== null && !running && flow !== null) {
+    if (dropped.with === null) setDropped({ with: flow });
+    else if (dropped.with !== flow) setDropped(null);
+  }
   // The router's setter changes with the address; read through this, picking a step redraws only the rows it marks.
   const latestSetParameters = useRef(setParameters);
   useEffect(() => {
@@ -351,11 +582,110 @@ function Parts({
       })),
     [change],
   );
+  const stepsHeading = useRef<HTMLHeadingElement>(null);
+  const stepOpens = useRef(new Map<string, HTMLElement>());
+  const stepRows = useRef(new Map<string, HTMLElement>());
+  const stepFocus = useRef<Focus | null>(null);
+  useEffect(() => {
+    const focus = stepFocus.current;
+    if (
+      focus !== null &&
+      typeof focus === "object" &&
+      "field" in focus &&
+      (picked !== focus.key ||
+        !flow?.steps.some((step) => step.key === focus.key))
+    ) {
+      if (picked !== focus.from && picked !== focus.key)
+        stepFocus.current = null;
+      return;
+    }
+    if (
+      focus !== null &&
+      typeof focus === "object" &&
+      "from" in focus &&
+      !("field" in focus) &&
+      !flow?.steps.some((step) => step.key === focus.key)
+    )
+      return;
+    stepFocus.current = null;
+    if (focus === "heading") {
+      stepsHeading.current?.focus();
+    } else if (focus === "drawerHeading") {
+      focusDrawerHeading(stepEditorNode.current);
+    } else if (focus !== null && "field" in focus) {
+      const active = document.activeElement;
+      if (
+        picked !== focus.key ||
+        (active !== document.body &&
+          active !== focus.owner &&
+          active !== focus.pressed &&
+          active !== focus.fallback)
+      )
+        return;
+      const row = [
+        ...(stepEditorNode.current?.querySelectorAll<HTMLElement>(
+          "[data-field-key]",
+        ) ?? []),
+      ].find((each) => each.getAttribute("data-field-key") === focus.field);
+      const direction = focus.by < 0 ? "up" : "down";
+      (
+        row?.querySelector<HTMLElement>(`[data-part="${direction}"] button`) ??
+        row?.querySelector<HTMLElement>("[data-part] button")
+      )?.focus();
+    } else if (focus !== null) {
+      if (
+        focus.from !== undefined &&
+        document.activeElement !== document.body &&
+        document.activeElement !== focus.pressed
+      )
+        return;
+      (focus.at === undefined
+        ? stepOpens.current.get(focus.key)
+        : (stepRows.current
+            .get(focus.key)
+            ?.querySelector<HTMLElement>(`[data-part="${focus.at}"] button`) ??
+          stepRows.current
+            .get(focus.key)
+            ?.querySelector<HTMLElement>("[data-part] button"))
+      )?.focus();
+    }
+  }, [flow?.steps, picked]);
+  const { forget, lend, rekey } = candidates;
+  const latestSteps = useRef(flow?.steps);
+  useEffect(() => {
+    latestSteps.current = flow?.steps;
+  }, [flow?.steps]);
+  const takeOut = useCallback(
+    (index: number, focusAfter: string | undefined, wasPicked: boolean) => {
+      stepFocus.current =
+        focusAfter === undefined ? "heading" : { key: focusAfter };
+      const removed = latestSteps.current?.[index];
+      if (removed !== undefined && forget(removed.key))
+        setDropped({ with: null });
+      if (wasPicked) {
+        pick(null);
+      }
+      change((now) => removedStep(now, index));
+    },
+    [change, pick, forget],
+  );
   const position = flow?.steps.findIndex((step) => step.key === picked) ?? -1;
   const step = flow?.steps[position];
+  const editorScope =
+    workflow === null
+      ? ""
+      : `${at.groupId}:${at.entryId}:${at.versionId}:${workflow.revision}:${position}`;
+  const keptKind = flow?.steps.find((each) => each.key === picked)?.runs.kind;
+  const keeping = useMemo(
+    () =>
+      picked === null || keptKind === undefined
+        ? null
+        : lend(picked, keptKind, `${editorScope}:${picked}:${keptKind}`),
+    [picked, keptKind, editorScope, lend],
+  );
   // The server answers the steps in the order sent, so the step picked keeps its place under the key it now has.
   const repick = (keys: readonly string[], answered: WorkflowVersion) =>
-    setParameters(
+    latestSetParameters.current(
       (now) => {
         const picked = now.get(OPEN_STEP);
         const at = picked === null ? -1 : keys.indexOf(picked);
@@ -373,22 +703,271 @@ function Parts({
       },
       { replace: true },
     );
+  const moving = useRef(false);
+  const latestMove = useRef<
+    ((key: string, index: number, by: -1 | 1) => void) | null
+  >(null);
+  useLayoutEffect(() => {
+    latestMove.current = (key, index, by) => {
+      if (
+        moving.current ||
+        !editable ||
+        running ||
+        blocked ||
+        read.loading ||
+        flow === null ||
+        workflow === null ||
+        sent?.held !== null ||
+        flow.steps[index]?.key !== key
+      )
+        return;
+      const proposed = movedStep(flow, index, by);
+      if (proposed === flow) return;
+      const compiled = sentFlowOf(proposed, workflow, named);
+      if (compiled.held !== null) return;
+      const keys = proposed.steps.map((step) => step.key);
+      const nextIndex = keys.indexOf(key);
+      const pressed = document.activeElement;
+      let ownsFocus = true;
+      const movedAway = (event: FocusEvent) => {
+        if (event.target !== document.body && event.target !== pressed)
+          ownsFocus = false;
+      };
+      const pointedAway = (event: PointerEvent) => {
+        if (!(event.target instanceof Node && pressed?.contains(event.target)))
+          ownsFocus = false;
+      };
+      const tabbedAway = (event: KeyboardEvent) => {
+        if (event.key === "Tab" || event.key === "Escape") ownsFocus = false;
+      };
+      document.addEventListener("focusin", movedAway);
+      document.addEventListener("pointerdown", pointedAway);
+      document.addEventListener("keydown", tabbedAway);
+      moving.current = true;
+      setStepMoved(null);
+      heard.sent();
+      actions.flowing.run(async (signal) => {
+        try {
+          const answered = await writeSteps(
+            at.groupId,
+            at.entryId,
+            at.versionId,
+            workflow.revision,
+            compiled.steps,
+            compiled.outputs,
+            signal,
+          );
+          if (!signal.aborted) {
+            const moved = answered.steps[nextIndex];
+            repick(keys, answered);
+            if (
+              rekey(
+                keys,
+                answered.steps.map((step) => step.stepId),
+              )
+            )
+              setDropped({ with: null });
+            if (moved !== undefined) {
+              setStepMoved({
+                severity: "info",
+                words: say("declaration.moved", {
+                  label: isolatedInText(moved.label || moved.name),
+                  position: nextIndex + 1,
+                  count: answered.steps.length,
+                }),
+              });
+              if (ownsFocus)
+                stepFocus.current = {
+                  key: moved.stepId,
+                  from: key,
+                  pressed,
+                  at: by < 0 ? "up" : "down",
+                };
+            }
+          }
+          return answered;
+        } finally {
+          moving.current = false;
+          document.removeEventListener("focusin", movedAway);
+          document.removeEventListener("pointerdown", pointedAway);
+          document.removeEventListener("keydown", tabbedAway);
+        }
+      });
+    };
+  });
+  const move = useCallback(
+    (key: string, index: number, by: -1 | 1) =>
+      latestMove.current?.(key, index, by),
+    [],
+  );
+  const keptAny = keptSteps.size > 0;
+  useDraftPartStatus(
+    "flow",
+    !unchanged || keptAny,
+    running || waiting(actions.flowing),
+    {
+      saving: running,
+      unit: FLOW_UNIT,
+      node: stepsUnsaved || keptAny ? stepsNode : outputsNode,
+      locate: () => {
+        if (
+          flow === null ||
+          saved === null ||
+          workflow === null ||
+          sent === null ||
+          savedSent === null
+        )
+          return;
+        const changedAt = flowChangeAt({
+          flow,
+          saved,
+          sent,
+          savedSent,
+          stepsUnsaved,
+          keptSteps,
+          workflow,
+          named,
+        });
+        if (changedAt.at === "steps") {
+          if (stepsNode.current !== null) locatePart(stepsNode.current);
+        } else if (changedAt.at === "step") {
+          pick(changedAt.key);
+          setRevealing({
+            focus: () => {
+              const editor = stepEditorNode.current;
+              if (editor === null) return;
+              const control = changedAt.control;
+              const target =
+                control?.part === "binding"
+                  ? editor.querySelector<HTMLElement>(
+                      `[data-path="${CSS.escape(control.path!)}"]`,
+                    )
+                  : control === undefined
+                    ? null
+                    : editor.querySelector<HTMLElement>(
+                        `[data-flow-control="${control.part}"]`,
+                      );
+              if (target !== null && control?.label !== undefined) {
+                const label = [
+                  ...target.querySelectorAll<HTMLElement>("label"),
+                ].find((each) => each.textContent === say(control.label!));
+                const id = label?.id;
+                const labelled = label?.getAttribute("for");
+                const input =
+                  (labelled == null
+                    ? null
+                    : document.getElementById(labelled)) ??
+                  (id === undefined
+                    ? null
+                    : target.querySelector<HTMLElement>(
+                        `[aria-labelledby~="${CSS.escape(id)}"]`,
+                      ));
+                locatePart(input ?? target);
+              } else
+                locatePart(
+                  (control?.bindingControl === undefined
+                    ? null
+                    : target?.querySelector<HTMLElement>(
+                        `[data-binding-control="${control.bindingControl}"]`,
+                      )) ??
+                    target ??
+                    editor,
+                );
+            },
+          });
+        } else {
+          const row =
+            changedAt.path === null
+              ? null
+              : outputsNode.current?.querySelector<HTMLElement>(
+                  `tbody > tr[data-path="${CSS.escape(changedAt.path)}"]`,
+                );
+          if (row === null || row === undefined)
+            outputsHeading.current?.focus();
+          else
+            locatePart(
+              (changedAt.control === undefined
+                ? null
+                : row.querySelector<HTMLElement>(
+                    `[data-binding-control="${changedAt.control}"]`,
+                  )) ?? row,
+            );
+        }
+      },
+    },
+  );
+  const stepOpen = read.problem === null && step !== undefined;
+  // One save, drawn on the page and at the foot of the step's drawer, which
+  // covers the page's while it is open; both read the one draft and action.
+  const stepsSave =
+    workflow === null || flow === null || sent === null ? null : (
+      <StepsSave
+        unsaved={!unchanged}
+        action={actions.flowing}
+        waiting={waiting(actions.flowing)}
+        flow={flow}
+        held={sent.held}
+        act={(signal) => {
+          heard.sent();
+          const keys = flow.steps.map((step) => step.key);
+          const fromPage = !stepOpen;
+          return writeSteps(
+            at.groupId,
+            at.entryId,
+            at.versionId,
+            workflow.revision,
+            sent.steps,
+            sent.outputs,
+            signal,
+          ).then((answered) => {
+            repick(keys, answered);
+            if (
+              rekey(
+                keys,
+                answered.steps.map((each) => each.stepId),
+              )
+            )
+              setDropped({ with: null });
+            stepFocus.current = fromPage ? "heading" : "drawerHeading";
+            return answered;
+          });
+        }}
+      />
+    );
+  const saving = stepsSave !== null && (!unchanged || running);
+  useEffect(() => {
+    if (heard.problem !== null)
+      refusalAt.current?.scrollIntoView?.({ block: "start" });
+  }, [heard.problem, refusalAt]);
+  const stepsSaid =
+    !running && heard.problem === null && !droppedSaid ? null : (
+      <StepsSaid
+        running={running}
+        refusal={heard.problem}
+        settled={heard.settled}
+        dropped={droppedSaid}
+        workflow={workflow}
+      />
+    );
   const contents =
     workflow === null || flow === null || sent === null ? null : (
       <>
         <DeclarationBuilder
+          key={`takes:${afresh.count}`}
           title={say("workflow.takes")}
           heading="h3"
           depth={2}
           demands={WORKFLOW_TAKES}
           fields={workflow.takes}
-          lists={workflow.offered.lists}
+          scope={`${at.groupId}:${at.entryId}:${at.versionId}:takes`}
           editable={editable}
           waiting={waiting(actions.taking)}
           saveLabel={say("workflow.saveTakes")}
           underway={say("workflow.underway")}
           rule={VERSION_ACT_RULES.write}
           action={actions.taking}
+          focusOnArrival={afresh.from === "takes"}
+          onReadAfresh={readAfresh("takes")}
           save={(fields, signal) =>
             declareWorkflow(
               at.groupId,
@@ -401,31 +980,47 @@ function Parts({
             )
           }
         />
-        <StepsPart
-          flow={flow}
-          workflow={workflow}
-          named={named}
-          editable={editable}
-          running={running}
-          unsaved={stepsUnsaved}
-          picked={picked}
-          pick={pick}
-          changeStep={changeStep}
-          change={change}
-        />
+        <Box ref={stepsNode} data-flow-part="steps">
+          <StepsPart
+            detailOwners={detailsOwned.owners}
+            flow={flow}
+            workflow={workflow}
+            named={named}
+            editable={editable}
+            running={running || blocked || read.loading}
+            moveReason={moveHeld}
+            moveReasonId={moveReasonId}
+            moved={stepMoved}
+            unsaved={stepsUnsaved}
+            picked={picked}
+            pick={pick}
+            change={change}
+            heading={stepsHeading}
+            opens={stepOpens}
+            rows={stepRows}
+            move={move}
+            scope={`${at.groupId}:${at.entryId}:${at.versionId}:${workflow.revision}`}
+            resolvingDisabled={resolvingDisabled}
+            resolve={resolve}
+          />
+        </Box>
         <DeclarationBuilder
+          key={`gives:${afresh.count}`}
           title={say("workflow.gives")}
+          hint={say("workflow.givesHint")}
           heading="h3"
           depth={2}
           demands={WORKFLOW_GIVES}
           fields={workflow.gives}
-          lists={workflow.offered.lists}
+          scope={`${at.groupId}:${at.entryId}:${at.versionId}:gives`}
           editable={editable}
           waiting={waiting(actions.giving)}
           saveLabel={say("workflow.saveGives")}
           underway={say("workflow.underway")}
           rule={VERSION_ACT_RULES.write}
           action={actions.giving}
+          focusOnArrival={afresh.from === "gives"}
+          onReadAfresh={readAfresh("gives")}
           save={(fields, signal) =>
             declareWorkflow(
               at.groupId,
@@ -438,94 +1033,24 @@ function Parts({
             )
           }
         />
-        <OutputsPart
-          flow={flow}
-          workflow={workflow}
-          named={named}
-          editable={editable}
-          unsaved={outputsUnsaved}
-          change={change}
-        />
-        {editable ? (
+        <Box ref={outputsNode}>
+          <OutputsPart
+            flow={flow}
+            workflow={workflow}
+            named={named}
+            editable={editable}
+            unsaved={outputsUnsaved}
+            change={change}
+            headingRef={outputsHeading}
+          />
+        </Box>
+        {editable && (saving || stepsSaid !== null) ? (
           <Box sx={SPACED_SX}>
-            <ActButton
-              action={actions.flowing}
-              variant={!unchanged ? "contained" : undefined}
-              waiting={waiting(actions.flowing)}
-              reason={
-                sent.held !== null
-                  ? {
-                      severity: "warning",
-                      words:
-                        heldAt === -1
-                          ? say(sent.held.why, { ...WRITTEN_LIMITS, most: 256 })
-                          : say("workflow.heldAt", {
-                              step: calledOf(flow.steps[heldAt]!, heldAt),
-                              why: say(sent.held.why, {
-                                ...WRITTEN_LIMITS,
-                                most: 256,
-                              }),
-                            }),
-                      visible:
-                        heldAt === -1
-                          ? undefined
-                          : visible("workflow.heldAt", {
-                              step: (
-                                <>
-                                  {calledVisibleOf(
-                                    flow.steps[heldAt]!,
-                                    heldAt,
-                                    "inherit",
-                                  )}
-                                </>
-                              ),
-                              why: (
-                                <Box
-                                  component="span"
-                                  sx={{ typography: "systemHint" }}
-                                >
-                                  {say(sent.held.why, {
-                                    ...WRITTEN_LIMITS,
-                                    most: 256,
-                                  })}
-                                </Box>
-                              ),
-                            }),
-                    }
-                  : unchanged
-                    ? {
-                        severity: "info",
-                        words: say("workflow.stepsUnchanged"),
-                      }
-                    : undefined
-              }
-              act={(signal) => {
-                setFlowAsked(true);
-                const keys = flow.steps.map((step) => step.key);
-                return writeSteps(
-                  at.groupId,
-                  at.entryId,
-                  at.versionId,
-                  workflow.revision,
-                  sent.steps,
-                  sent.outputs,
-                  signal,
-                ).then((answered) => {
-                  repick(keys, answered);
-                  return answered;
-                });
-              }}
-            >
-              {say("workflow.saveSteps")}
-            </ActButton>
-            {running ? (
-              <Notice severity="info">{say("workflow.underway")}</Notice>
-            ) : null}
-            {!flowAsked || actions.flowing.problem === null ? null : (
-              <ProblemView
-                problem={actions.flowing.problem}
-                rule={{ inGroup: VERSION_ACT_RULES.write }}
-              />
+            {stepsSave}
+            {stepOpen || stepsSaid === null ? null : (
+              <div ref={refusalAt} tabIndex={-1}>
+                {stepsSaid}
+              </div>
             )}
           </Box>
         ) : null}
@@ -566,51 +1091,244 @@ function Parts({
       {() =>
         contents === null ? null : (
           <>
+            {stepOpen ? null : stale}
             {before}
-            {contents}
+            <Box
+              sx={wrapDocument === undefined ? undefined : DOCUMENT_PARTS_SX}
+            >
+              {contents}
+            </Box>
           </>
         )
       }
     </Async>
   );
-  return (
+  const rowDocument = (
     <RowPanel
-      open={read.problem === null && step !== undefined}
+      over
+      reveal={revealing}
+      open={stepOpen}
       onClose={() => pick(null)}
       title={step === undefined ? "" : calledOf(step, position)}
       visibleTitle={
         step === undefined ? undefined : calledVisibleOf(step, position)
       }
       headingLevel="h4"
-      width={STEP_PANEL_WIDTH}
-      leastListWidth={620}
       besideHeading={step === undefined ? undefined : kindSetApart(step)}
-      list={wrapDocument === undefined ? list : wrapDocument(list)}
+      list={list}
       listLabel={say("workflow.steps")}
+      listRole={contents === null ? "region" : "group"}
+      above={
+        stepOpen ? (
+          <>
+            {stale !== null || stepsSaid !== null ? (
+              <Box ref={refusalAt} tabIndex={-1} sx={SAID_IN_DRAWER_SX}>
+                {stale}
+                {stepsSaid}
+              </Box>
+            ) : null}
+            <StatusLine
+              said={
+                fieldMoved?.step === step?.key
+                  ? (fieldMoved?.line ?? null)
+                  : null
+              }
+            />
+          </>
+        ) : null
+      }
+      foot={
+        !editable || flow === null ? undefined : (
+          <>
+            {stepsSave}
+            {unchanged ? null : <UnsavedMark />}
+            <Box sx={REMOVE_AT_END_SX}>
+              <Press
+                tier="quiet"
+                unavailable={running}
+                onPress={() =>
+                  takeOut(
+                    position,
+                    (flow.steps[position + 1] ?? flow.steps[position - 1])?.key,
+                    true,
+                  )
+                }
+              >
+                {say("workflow.removeThis")}
+              </Press>
+            </Box>
+          </>
+        )
+      }
     >
       {read.problem !== null ||
       step === undefined ||
       flow === null ||
       workflow === null ? null : (
-        <StepEditor
-          key={step.key}
-          step={step}
-          position={position}
-          flow={flow}
-          workflow={workflow}
-          named={named}
-          editable={editable && !running}
-          change={(changed) => changeStep(step.key, changed)}
-        />
+        <FlowFieldMoveContext.Provider
+          value={{
+            action: actions.flowing,
+            waiting: blocked,
+            reason:
+              sent?.held == null ? undefined : heldReason(sent.held, flow),
+            save: async (stepKey, gives, signal, focus) => {
+              if (!editable || running || blocked)
+                throw new Error(
+                  "The steps cannot be written while another write is out",
+                );
+              const moving = flow.steps.find((each) => each.key === stepKey);
+              if (moving?.runs.kind !== "route")
+                throw new Error("The route is no longer in these steps");
+              const proposed = {
+                ...flow,
+                steps: flow.steps.map((each) =>
+                  each === moving
+                    ? { ...each, runs: { ...moving.runs, gives: [...gives] } }
+                    : each,
+                ),
+              };
+              const compiled = sentFlowOf(proposed, workflow, named);
+              if (compiled.held !== null)
+                throw new Error("The steps do not hold as written");
+              const place = fieldPlace(gives, focus.key);
+              const path = place?.map(
+                (_, index) =>
+                  fieldAtPlace(gives, place.slice(0, index + 1))!.name,
+              );
+              const pressed = document.activeElement;
+              const owner =
+                stepEditorNode.current?.closest('[role="dialog"]') ?? null;
+              const half = pressed?.closest("section");
+              const fallback = document.getElementById(
+                half?.getAttribute("aria-labelledby") ?? "",
+              );
+              let ownsFocus = true;
+              const movedAway = (event: FocusEvent) => {
+                if (
+                  event.target !== document.body &&
+                  event.target !== owner &&
+                  event.target !== pressed &&
+                  event.target !== fallback
+                )
+                  ownsFocus = false;
+              };
+              const pointedElsewhere = () => {
+                ownsFocus = false;
+              };
+              const tabbedAway = (event: KeyboardEvent) => {
+                if (event.key === "Tab" || event.key === "Escape")
+                  ownsFocus = false;
+              };
+              document.addEventListener("focusin", movedAway);
+              document.addEventListener("pointerdown", pointedElsewhere);
+              document.addEventListener("keydown", tabbedAway);
+              setFieldMoved(null);
+              heard.sent();
+              const keys = flow.steps.map((each) => each.key);
+              try {
+                const answered = await writeSteps(
+                  at.groupId,
+                  at.entryId,
+                  at.versionId,
+                  workflow.revision,
+                  compiled.steps,
+                  compiled.outputs,
+                  signal,
+                );
+                if (!signal.aborted) {
+                  const step = answered.steps[keys.indexOf(stepKey)];
+                  let fields =
+                    step?.runs?.kind === "route" ? step.runs.gives : undefined;
+                  let field: DeclaredField | undefined;
+                  let position = 0;
+                  let count = 0;
+                  for (const name of path ?? []) {
+                    const index =
+                      fields?.findIndex((each) => each.name === name) ?? -1;
+                    position = index + 1;
+                    count = fields?.length ?? 0;
+                    field = fields?.[index];
+                    fields = field?.fields;
+                  }
+                  if (field !== undefined && step !== undefined)
+                    setFieldMoved({
+                      step: step.stepId,
+                      line: {
+                        severity: "info",
+                        words: say("declaration.moved", {
+                          label: isolatedInText(field.label || field.name),
+                          position,
+                          count,
+                        }),
+                      },
+                    });
+                  if (
+                    ownsFocus &&
+                    latestPicked.current === stepKey &&
+                    step !== undefined &&
+                    field !== undefined
+                  )
+                    stepFocus.current = {
+                      key: step.stepId,
+                      from: stepKey,
+                      field: field.fieldId,
+                      by: focus.by,
+                      owner,
+                      pressed,
+                      fallback,
+                    };
+                  repick(keys, answered);
+                  if (
+                    rekey(
+                      keys,
+                      answered.steps.map((each) => each.stepId),
+                    )
+                  )
+                    setDropped({ with: null });
+                }
+                return answered;
+              } finally {
+                document.removeEventListener("focusin", movedAway);
+                document.removeEventListener("pointerdown", pointedElsewhere);
+                document.removeEventListener("keydown", tabbedAway);
+              }
+            },
+          }}
+        >
+          <FlowFieldLocationContext.Provider value={() => setRevealing({})}>
+            <KeptCandidates.Provider value={keeping}>
+              <div ref={stepEditorNode}>
+                <StepEditor
+                  details={owner.details}
+                  detailOwner={detailsOwned.owners.get(step.key)}
+                  key={step.key}
+                  step={step}
+                  position={position}
+                  flow={flow}
+                  workflow={workflow}
+                  named={named}
+                  editable={editable && !running}
+                  change={(changed) => changeStep(step.key, changed)}
+                  scope={editorScope}
+                  resolve={(detail, changed) =>
+                    resolve(step, position, detail, changed)
+                  }
+                />
+              </div>
+            </KeptCandidates.Provider>
+          </FlowFieldLocationContext.Provider>
+        </FlowFieldMoveContext.Provider>
       )}
     </RowPanel>
   );
+  return wrapDocument === undefined ? rowDocument : wrapDocument(rowDocument);
 }
 
 /**
  * The steps in the order they run; nothing but moving one reorders them.
  */
 function StepsPart({
+  detailOwners,
   flow,
   workflow,
   named,
@@ -619,9 +1337,27 @@ function StepsPart({
   unsaved,
   picked,
   pick,
-  changeStep,
   change,
+  heading,
+  opens,
+  rows,
+  move,
+  moveReason,
+  moveReasonId,
+  moved,
+  scope,
+  resolvingDisabled,
+  resolve,
 }: {
+  /** Where the keyboard goes once the rows change, which its host decides for the step's drawer too. */
+  readonly heading: RefObject<HTMLHeadingElement | null>;
+  readonly opens: RefObject<Map<string, HTMLElement>>;
+  readonly rows: RefObject<Map<string, HTMLElement>>;
+  readonly move: (key: string, index: number, by: -1 | 1) => void;
+  readonly moveReason?: Reason;
+  readonly moveReasonId: string;
+  readonly moved: Line | null;
+  readonly detailOwners: ReadonlyMap<string, VersionDetailOwner>;
   readonly flow: FlowDraft;
   readonly workflow: WorkflowVersion;
   readonly named: ReadonlyMap<string, Named>;
@@ -630,31 +1366,17 @@ function StepsPart({
   readonly unsaved: boolean;
   readonly picked: string | null;
   readonly pick: (key: string | null) => void;
-  readonly changeStep: (
-    key: string,
-    changed: (step: StepDraft) => StepDraft,
-  ) => void;
   readonly change: (next: (now: FlowDraft) => FlowDraft) => void;
+  readonly scope: string;
+  readonly resolvingDisabled: boolean;
+  readonly resolve: (
+    expected: StepDraft,
+    position: number,
+    detail: VersionDetail | null,
+    change: (step: StepDraft, named: ReadonlyMap<string, Named>) => StepDraft,
+  ) => void;
 }) {
   const headingId = useId();
-  const heading = useRef<HTMLHeadingElement>(null);
-  const opens = useRef(new Map<string, HTMLElement>());
-  const rows = useRef(new Map<string, HTMLElement>());
-  const pending = useRef<Focus | null>(null);
-  useEffect(() => {
-    const focus = pending.current;
-    pending.current = null;
-    if (focus === "heading") {
-      heading.current?.focus();
-    } else if (focus !== null) {
-      (focus.at === undefined
-        ? opens.current.get(focus.key)
-        : rows.current
-            .get(focus.key)
-            ?.querySelector<HTMLElement>(`[data-part="${focus.at}"] button`)
-      )?.focus();
-    }
-  }, [flow.steps]);
   const [parameters] = useSearchParams();
   const hrefOf = (key: string) => {
     const next = new URLSearchParams(parameters);
@@ -665,45 +1387,23 @@ function StepsPart({
   const registerRow = useCallback(
     (key: string, row: HTMLElement | null) =>
       setOrDelete(rows.current, key, row),
-    [],
+    [rows],
   );
   const registerOpen = useCallback(
     (key: string, open: HTMLElement | null) =>
       setOrDelete(opens.current, key, open),
-    [],
+    [opens],
   );
-  const move = useCallback(
-    (key: string, index: number, by: -1 | 1) => {
-      pending.current = { key, at: by < 0 ? "up" : "down" };
-      change((now) => movedStep(now, index, by));
-    },
-    [change],
-  );
-  const takeOut = useCallback(
-    (index: number, focusAfter: string | undefined, wasPicked: boolean) => {
-      pending.current =
-        focusAfter === undefined ? "heading" : { key: focusAfter };
-      if (wasPicked) {
-        pick(null);
-      }
-      change((now) => removedStep(now, index));
-    },
-    [change, pick],
-  );
-  const takeVersion = useCallback(
-    (key: string, versionId: string) =>
-      changeStep(key, (now) => tookVersion(now, versionId, named)),
-    [changeStep, named],
-  );
-  // No region of its own: the panel names the list it is drawn beside.
+  // No region of its own: the panel names the list.
   const table = (
     <Box sx={INNER_PART_SX}>
       <Box
         sx={{
           display: "flex",
-          alignItems: "baseline",
+          alignItems: "center",
           gap: 1,
           flexWrap: "wrap",
+          ...HEADING_SX,
         }}
       >
         <Typography
@@ -711,31 +1411,28 @@ function StepsPart({
           ref={heading}
           tabIndex={-1}
           variant="h3"
-          sx={HEADING_SX}
+          sx={{ ...HEADING_SX, mb: 0 }}
         >
           {say("workflow.steps")}
         </Typography>
-        {editable && unsaved ? (
-          <Typography
-            component="span"
-            variant="body2"
-            color="text.secondary"
-            sx={{ typography: "systemHint" }}
-          >
-            {say("draft.unsaved")}
-          </Typography>
-        ) : null}
+        {editable && unsaved ? <UnsavedMark /> : null}
       </Box>
+      <StatusLine said={moved} />
+      {moveReason === undefined ? null : (
+        <Notice id={moveReasonId} severity={moveReason.severity}>
+          {moveReason.visible ?? moveReason.words}
+        </Notice>
+      )}
       {flow.steps.length === 0 ? (
-        <>
-          <Typography variant="body2" sx={QUIET_SX}>
+        <Box component="details">
+          <Typography component="summary" variant="body2" sx={QUIET_SX}>
             {say("workflow.stepsNone")}
           </Typography>
           {/* Submitting refuses a workflow with no step; said where the steps are typed, before any is saved. */}
           <Typography variant="body2">
             {say("contentProblem.no_steps")}
           </Typography>
-        </>
+        </Box>
       ) : (
         <TableContainer>
           <Table size="small" aria-labelledby={headingId}>
@@ -746,33 +1443,40 @@ function StepsPart({
                 </TableCell>
                 <TableCell>{say("workflow.name")}</TableCell>
                 <TableCell>{say("workflow.runs")}</TableCell>
-                <TableCell>{say("workflow.produces")}</TableCell>
-                <TableCell>{say("workflow.reviewedBy")}</TableCell>
-                <TableCell>{say("workflow.givesBack")}</TableCell>
+                <TableCell data-compact="true">
+                  {say("workflow.produces")}
+                </TableCell>
+                <TableCell data-compact="true">
+                  {say("workflow.reviewedBy")}
+                </TableCell>
+                <TableCell data-compact="true">
+                  {say("workflow.givesBack")}
+                </TableCell>
+                {editable ? <TableCell data-compact="true" /> : null}
               </TableRow>
             </TableHead>
             <TableBody>
               {flow.steps.map((each, index) => (
-                <StepRow
+                <ResolvedStepRow
                   key={each.key}
+                  detailOwner={detailOwners.get(each.key)}
                   step={each}
                   position={index}
                   last={index === flow.steps.length - 1}
-                  focusAfterTakingOut={
-                    (flow.steps[index + 1] ?? flow.steps[index - 1])?.key
-                  }
                   picked={each.key === picked}
                   href={hrefOf(each.key)}
                   named={named}
                   codeSteps={workflow.offered.codeSteps}
-                  searchWays={workflow.offered.searchWays}
                   editable={editable}
                   running={running}
+                  moveHeld={moveReason !== undefined}
+                  moveReasonId={moveReasonId}
                   onRegisterRow={registerRow}
                   onRegisterOpen={registerOpen}
                   onMove={move}
-                  onTakeOut={takeOut}
-                  onTakeVersion={takeVersion}
+                  scope={scope}
+                  resolvingDisabled={resolvingDisabled}
+                  resolve={resolve}
                 />
               ))}
             </TableBody>
@@ -808,6 +1512,73 @@ function StepsPart({
   return table;
 }
 
+function ResolvedStepRow({
+  detailOwner,
+  scope,
+  resolvingDisabled,
+  resolve,
+  ...row
+}: Omit<ComponentProps<typeof StepRow>, "onTakeVersion"> & {
+  readonly detailOwner?: VersionDetailOwner;
+  readonly scope: string;
+  readonly resolvingDisabled: boolean;
+  readonly resolve: (
+    expected: StepDraft,
+    position: number,
+    detail: VersionDetail | null,
+    change: (step: StepDraft, named: ReadonlyMap<string, Named>) => StepDraft,
+  ) => void;
+}) {
+  const runs = row.step.runs;
+  const detail = useVersionDetail({
+    owner: detailOwner,
+    kind: runs.kind === "workflow" ? "workflow" : "question",
+    scope: `${scope}:${row.step.key}:${row.position}:${runs.kind === "question" || runs.kind === "workflow" || runs.kind === "search" ? runs.version : ""}:${runs.kind === "search" ? runs.searchWay : ""}`,
+    disabled: resolvingDisabled,
+    searchWay: runs.kind === "search" ? runs.searchWay : undefined,
+    onRead: (chosen) =>
+      resolve(row.step, row.position, chosen, (now, named) =>
+        tookVersion(now, chosen?.version.versionId ?? "", named),
+      ),
+  });
+  const readDetail = detail.read;
+  const takeVersion = useCallback(
+    (_key: string, versionId: string) => readDetail(versionId),
+    [readDetail],
+  );
+  return (
+    <>
+      <StepRow {...row} onTakeVersion={takeVersion} />
+      {detail.problem === null ? null : (
+        <TableRow>
+          <TableCell colSpan={row.editable ? 7 : 6}>
+            <ProblemView problem={detail.problem} />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+/** The versions the workflow read names, with those read since for its steps over them. */
+function namedWith(
+  loaded: WorkflowVersion | null,
+  details: Iterable<VersionDetail>,
+): Map<string, Named> {
+  const named =
+    loaded === null ? new Map<string, Named>() : namedVersions(loaded);
+  for (const detail of details) {
+    if (detail.kind !== "reference_list")
+      named.set(detail.version.versionId, {
+        ...detail.version,
+        takes: detail.takes,
+        gives: detail.gives,
+        pinned: detail.version,
+      });
+  }
+  return named;
+}
+
 function setOrDelete(
   held: Map<string, HTMLElement>,
   key: string,
@@ -828,6 +1599,7 @@ function OutputsPart({
   editable,
   unsaved,
   change,
+  headingRef,
 }: {
   readonly flow: FlowDraft;
   readonly workflow: WorkflowVersion;
@@ -835,37 +1607,16 @@ function OutputsPart({
   readonly editable: boolean;
   readonly unsaved: boolean;
   readonly change: (next: (now: FlowDraft) => FlowDraft) => void;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
 }) {
-  const position = flow.steps.length;
-  const sources = sourcesFor(flow, position, workflow, named, undefined);
-  const problems = workflow.problems.filter(
-    (problem) => problem.part === "gives",
-  );
-  const rows = targetRows(
-    workflow.gives,
-    flow.outputs,
-    problems,
-    (binding, target) =>
-      flagsOf(binding, target, flow, position, problems, sources),
-    "workflow.outputUnbound",
-  );
+  const { rows, sources } = outputRowsOf(flow, workflow, named);
   return (
     <Part
       title={say("workflow.outputs")}
-      actions={
-        editable && unsaved ? (
-          <Typography
-            component="span"
-            variant="body2"
-            color="text.secondary"
-            sx={{ typography: "systemHint" }}
-          >
-            {say("draft.unsaved")}
-          </Typography>
-        ) : undefined
-      }
+      unsaved={editable && unsaved}
       level="h3"
       depth={2}
+      headingRef={headingRef}
     >
       {rows.length === 0 ? (
         <Typography variant="body2" sx={QUIET_SX}>

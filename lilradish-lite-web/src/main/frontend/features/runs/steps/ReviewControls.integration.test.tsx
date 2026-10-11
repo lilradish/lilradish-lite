@@ -3,8 +3,12 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requestsTo, serving, type Reply } from "../../../testutil/answering";
+import { regionsSaid } from "../../../testutil/heard";
+import { KEY } from "../../../testutil/runPage";
 import { openStepPage } from "../../../testutil/stepPage";
 import { accountOpened } from "../../../testutil/stateAccount";
+import { tryReplies } from "../../../testutil/tryReplies";
+import { deferred } from "../../../testutil/deferred";
 
 const GROUP = "00000003-0000-4000-8000-000000000cd1";
 
@@ -18,7 +22,7 @@ const SUMMARISE = "00000009-0000-4000-8000-000000000cd1";
 
 const FILE_IT = "00000009-0000-4000-8000-000000000cd2";
 
-const PAGE = `/groups/${GROUP}/work/${RUN_ID}`;
+const PAGE = `/groups/${KEY}/work/${RUN_ID}`;
 
 const RUN = `/api/groups/${GROUP}/runs/${RUN_ID}`;
 
@@ -37,6 +41,7 @@ const CLAIM = {
   number: 7,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000cd1",
     name: "Handle a claim",
     version: 3,
@@ -57,7 +62,7 @@ const CLAIM = {
   at: { stepId: SUMMARISE, name: "summarise" },
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["stop"],
+  stateActs: ["stop"],
 };
 
 const TICKET = {
@@ -100,7 +105,7 @@ const HEADER = {
   versionId: VERSION,
   state: "running",
   at: { stepId: SUMMARISE, name: "summarise" },
-  acts: ["stop"],
+  stateActs: ["stop"],
   progress: { done: 0, of: 2 },
 };
 
@@ -110,7 +115,6 @@ const HEADER_ON = {
   progress: { done: 1, of: 2 },
 };
 
-/** Long enough, and over lines, that a value is shut until opened wherever it is not reviewed. */
 const WRITTEN = "A printer caught fire.\nNobody was hurt.";
 
 const WENT_IN = [
@@ -122,10 +126,13 @@ const WENT_IN = [
 ];
 
 const WAITING_ROW = {
+  producedByUserId: CAT.userId,
+  producedByKind: "person",
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
   runs: {
+    versionName: null,
     kind: "question",
     entryId: "00000006-0000-4000-8000-000000000cd2",
     name: "Summarise",
@@ -146,20 +153,22 @@ const WAITING_ROW = {
   tries: { current: 1, declared: 2, beyond: false },
   cost: { callsAModel: false },
   gaveBack: [{ field: "summary", value: WRITTEN, now: "waiting_on_review" }],
-  acts: ["review"],
-  withheld: [],
+  stateActs: ["review"],
+  stateRefusals: [],
 };
 
 const FILE_IT_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: FILE_IT,
   order: 2,
   name: "file_it",
-  runs: { kind: "route" },
+  runs: { versionName: null, kind: "route" },
   state: "not_started",
   takesFrom: [],
   cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
+  stateActs: [],
+  stateRefusals: [],
 };
 
 function stepsRead(first: object = {}): Reply {
@@ -189,7 +198,7 @@ function reviewed(
     step: {
       ...WAITING_ROW,
       gaveBack: [{ field: "summary", value: WRITTEN, now }],
-      acts: [],
+      stateActs: [],
       ...changed,
     },
     wentIn: WENT_IN,
@@ -230,14 +239,12 @@ const OWED = {
     waitsOn: "answer_step",
   },
   next: { number: 2, beyond: false },
-  withheld: [
-    { act: "answer", refusal: "ACT_NOT_PERMITTED" },
-    { act: "ask_again", refusal: "ACT_NOT_PERMITTED" },
-  ],
+  stateActs: ["answer", "ask_again"],
+  stateRefusals: [],
 };
 
 const REFUSED = reviewed(
-  { outcome: "refused", why: "Too short." },
+  { outcome: "refused", why: "Too short.", whyLines: "several" },
   "refused",
   HEADER,
   OWED,
@@ -252,7 +259,7 @@ const ASSURED_BY_DAN = reviewed(
 );
 
 const REFUSED_BY_DAN = reviewed(
-  { outcome: "refused", why: "Too short." },
+  { outcome: "refused", why: "Too short.", whyLines: "several" },
   "refused",
   HEADER,
   OWED,
@@ -272,13 +279,13 @@ const SECOND_WAITING = stepsRead({
 });
 
 const STOPPED = reply({
-  run: { ...HEADER, at: undefined, state: "stopped", acts: [] },
+  run: { ...HEADER, at: undefined, state: "stopped", stateActs: [] },
   declarations: declarations(SUMMARY),
   step: {
     ...WAITING_ROW,
     where: { ...WAITING_ROW.where, waitsOn: undefined },
-    acts: [],
-    withheld: [{ act: "review", refusal: "RUN_STOPPED" }],
+    stateActs: [],
+    stateRefusals: [{ act: "review", refusal: "RUN_STOPPED" }],
   },
   wentIn: WENT_IN,
   wentInFrom: "try",
@@ -344,7 +351,11 @@ const SECOND_WAITING_READ = reply({
           field: "summary",
           value: WRITTEN,
           now: "refused",
-          decision: { outcome: "refused", why: "Too short." },
+          decision: {
+            outcome: "refused",
+            whyLines: "several",
+            why: "Too short.",
+          },
         },
       ],
       review: { asked: true, by: { kind: "person", person: DAN } },
@@ -376,8 +387,8 @@ const MODEL_REVIEWS = reply({
       values: [{ field: "summary", on: "model" }],
       waitsOn: "model",
     },
-    acts: [],
-    withheld: [{ act: "review", refusal: "REVIEW_NOT_A_PERSONS" }],
+    stateActs: [],
+    stateRefusals: [{ act: "review", refusal: "REVIEW_NOT_A_PERSONS" }],
   },
   wentIn: WENT_IN,
   wentInFrom: "try",
@@ -385,18 +396,16 @@ const MODEL_REVIEWS = reply({
   triesMade: [FIRST_TRY_WAITING],
 });
 
-/** A reply the server never sends. */
 const UNANSWERED: Reply = new Promise(() => {});
 
 const REASON_UNUSABLE =
-  "A reason is prose of one to 2048 characters, with something in it that shows.";
+  "A reason is 1 to 2048 characters, with at least one visible character.";
 
-/** What is said where the review is refused for the act itself: the rule of who may review a step. */
 const REVIEW_RULE =
-  "A group's steps are reviewed, what they give back assured or refused, only by a role in it that may review them.";
+  "Only someone in this group who can review can review steps, accepting or rejecting their values.";
 
 function reply(body: object): Reply {
-  return [JSON.stringify(body), 200];
+  return tryReplies(body).summary;
 }
 
 function refusal(code: string, status: number): Reply {
@@ -407,12 +416,16 @@ function setApart(words: string): string {
   return `${String.fromCodePoint(0x2068)}${words}${String.fromCodePoint(0x2069)}`;
 }
 
-function conversing(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
+function conversing(
+  routes: Readonly<Record<string, readonly Reply[]>> = {},
+  permissions: readonly string[] = ["review_at_gate"],
+) {
   return openStepPage({
     groupId: GROUP,
     view: "run",
     address: PAGE,
-    permissions: ["review_at_gate"],
+    permissions,
+    userId: DAN.userId,
     routes: {
       [`GET ${RUN}`]: [reply(CLAIM)],
       [`GET ${STEPS}`]: [stepsRead()],
@@ -427,11 +440,12 @@ function stepOpened(routes: Readonly<Record<string, readonly Reply[]>>) {
     view: "step",
     address: `${PAGE}/steps/${SUMMARISE}`,
     permissions: ["review_at_gate"],
+    userId: DAN.userId,
     routes,
   });
 }
 
-/** What is in flight let land a turn at a time, until `landed` holds; failing where it never does. */
+/** Timeouts are faked, and testing-library's waits advance faked time only under jest: each turn is advanced by hand. */
 async function landing(landed: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100 && !landed(); turn += 1) {
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -452,7 +466,32 @@ async function messageDrawn(): Promise<HTMLElement> {
   return message();
 }
 
-function press(control: HTMLElement): void {
+let reader: ReturnType<typeof userEvent.setup>;
+
+async function press(control: HTMLElement): Promise<void> {
+  const pressed = reader.click(control);
+  if (vi.isFakeTimers()) {
+    let finished = false;
+    void pressed.then(
+      () => {
+        finished = true;
+      },
+      () => {
+        finished = true;
+      },
+    );
+    // RTL drains its async wrapper with another timeout after user-event's own timer advancement.
+    for (let turn = 0; turn < 100 && !finished; turn += 1) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(finished).toBe(true);
+  }
+  await pressed;
+  // Flush only after RTL has restored its act environment.
+  await act(async () => {});
+}
+
+function dispatchClick(control: HTMLElement): void {
   act(() => control.click());
 }
 
@@ -466,12 +505,51 @@ function asked(sent: ReturnType<typeof serving>, request: string): number {
   return requestsTo(sent).filter((each) => each === request).length;
 }
 
-function reason(drawn: HTMLElement): HTMLElement {
-  return within(drawn).getByRole("textbox", { name: /^Why you refuse/ });
+function reviewFrame(): HTMLElement {
+  const review = screen.getByRole("region", { name: "Needs your review" });
+  return review.closest("li") ?? review.parentElement!;
+}
+
+function reason(_drawn: HTMLElement): HTMLElement {
+  return within(reviewFrame()).getByRole("textbox", {
+    name: /^Reason for rejecting/,
+  });
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  reader = userEvent.setup({
+    advanceTimers: (milliseconds) =>
+      vi.isFakeTimers()
+        ? act(() => vi.advanceTimersByTimeAsync(milliseconds))
+        : Promise.resolve(),
+  });
+  // Give the long fixture a measured preview viewport; jsdom has no layout.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
+      return this.hasAttribute("data-value-content") ? 192 : 0;
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
+      return this.hasAttribute("data-value-content") &&
+        this.textContent?.includes("Nobody was hurt.")
+        ? 384
+        : 0;
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return DOMRect.fromRect({
+        width: Element.prototype.getBoundingClientRect.call(this).width,
+        height:
+          this.parentElement?.hasAttribute("data-value-content") &&
+          this.textContent?.includes("Nobody was hurt.")
+            ? 384
+            : 0,
+      });
+    },
+  );
 });
 
 afterEach(() => {
@@ -479,32 +557,118 @@ afterEach(() => {
 });
 
 describe("ReviewControls", () => {
+  it.each(["success", "failure"])(
+    "discards an already issued review reread's late %s after reviewer identity returns",
+    async (outcome) => {
+      const later = deferred<readonly [string, number]>();
+      const { sent, changeStanding } = conversing({
+        [`PUT ${REVIEW}`]: [refusal("STEP_MOVED_ON", 409)],
+        [`GET ${STEP}`]: [later.promise],
+      });
+      await messageDrawn();
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
+      await landing(() => asked(sent, `GET ${STEP}`) === 1);
+      act(() => changeStanding(["review_at_gate"], CAT.userId));
+      act(() => changeStanding(["review_at_gate"], DAN.userId));
+      const restored = within(reviewFrame()).getByRole("button", {
+        name: "Accept",
+      });
+      act(() => restored.focus());
+      await act(async () =>
+        later.settle(
+          outcome === "success"
+            ? await SECOND_WAITING_READ
+            : await refusal("READ_FAILED", 503),
+        ),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.activeElement).toBe(restored);
+      expect(within(reviewFrame()).queryByText("A longer summary.")).toBeNull();
+      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(reviews(sent)).toHaveLength(1);
+    },
+  );
+  it("discards a late review refusal after reviewer identity changed and returned", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding, readAgain } = conversing({
+      [`PUT ${REVIEW}`]: [later.promise],
+    });
+    await messageDrawn();
+    await press(within(reviewFrame()).getByRole("button", { name: "Accept" }));
+    await landing(() => reviews(sent).length === 1);
+    act(() => changeStanding(["review_at_gate"], CAT.userId));
+    act(() => changeStanding(["review_at_gate"], DAN.userId));
+    const restored = within(reviewFrame()).getByRole("button", {
+      name: "Accept",
+    });
+    act(() => restored.focus());
+    await act(async () =>
+      later.settle(await refusal("ACT_NOT_PERMITTED", 403)),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByText(REVIEW_RULE)).toBeNull();
+    expect(document.activeElement).toBe(restored);
+    expect(readAgain).not.toHaveBeenCalled();
+    expect(reviews(sent)).toHaveLength(1);
+  });
+  it("discards a review reply after the actual reviewer identity changed, even when the original identity returns", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding } = conversing({
+      [`PUT ${REVIEW}`]: [later.promise],
+    });
+    await messageDrawn();
+    await press(within(reviewFrame()).getByRole("button", { name: "Accept" }));
+    await landing(() => reviews(sent).length === 1);
+    act(() => changeStanding(["review_at_gate"], CAT.userId));
+    expect(
+      screen.queryByRole("region", { name: "Needs your review" }),
+    ).toBeNull();
+    act(() => changeStanding(["review_at_gate"], DAN.userId));
+    await act(async () => later.settle(await ASSURED));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(asked(sent, `GET ${RUN}`)).toBe(1);
+    expect(
+      screen.getByRole("region", { name: "Needs your review" }),
+    ).toBeVisible();
+    expect(reviews(sent)).toHaveLength(1);
+  });
   describe("in a run's conversation", () => {
-    it("lays out what went in and the value waiting in full the moment its message is drawn, beside Assure and Refuse named after the value", async () => {
+    it("lays out what went in and opens the long value waiting beside Accept and Reject named after the value", async () => {
       conversing();
 
       const drawn = await messageDrawn();
 
-      const wentIn = within(drawn).getByRole("region", {
-        name: "What went in",
+      const wentIn = within(reviewFrame()).getByRole("region", {
+        name: "Inputs",
       });
-      expect(within(wentIn).getByRole("term")).toHaveTextContent(
-        setApart("Text"),
-      );
-      expect(within(wentIn).getByRole("definition")).toHaveTextContent(
-        `${setApart("Ticket")}, which the run was started with` +
-          "Printer on fire",
-      );
-      const review = within(drawn).getByRole("region", { name: "Your review" });
+      expect(
+        within(wentIn).getByRole("region", {
+          name: `${setApart("Text")} · text`,
+        }),
+      ).toHaveTextContent("Printer on fire");
+      expect(wentIn).toHaveTextContent(`${setApart("Ticket")} (run input)`);
+      expect(drawn).not.toContainElement(reviewFrame());
+      expect(drawn.nextElementSibling).toBe(reviewFrame());
+      const review = screen.getByRole("region", { name: "Needs your review" });
       expect(review).toHaveTextContent(
         "A printer caught fire. Nobody was hurt.",
       );
-      for (const name of ["What went in", "Your review"]) {
+      const expand = within(review).getByRole("button", { name: "Show all" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      await press(expand);
+      expect(expand).toHaveAttribute("aria-expanded", "true");
+      expect(review).toHaveTextContent(
+        "A printer caught fire. Nobody was hurt.",
+      );
+      for (const name of ["Inputs", "Needs your review"]) {
         expect(
-          within(drawn).getByRole("heading", { level: 3, name }),
+          within(reviewFrame()).getByRole("heading", { level: 3, name }),
         ).toBeInTheDocument();
         expect(
-          within(drawn).queryByRole("heading", { level: 2, name }),
+          within(reviewFrame()).queryByRole("heading", { level: 2, name }),
         ).toBeNull();
       }
       expect(
@@ -517,17 +681,17 @@ describe("ReviewControls", () => {
         within(choice)
           .getAllByRole("button")
           .map((each) => each.textContent),
-      ).toEqual(["Assure", "Refuse"]);
+      ).toEqual(["Accept", "Reject"]);
       expect(
-        within(choice).getByRole("button", { name: "Assure" }),
-      ).toHaveClass("MuiButton-contained");
+        within(choice).getByRole("button", { name: "Accept" }),
+      ).toHaveClass("MuiButton-outlined");
       expect(within(review).queryByRole("textbox")).toBeNull();
       expect(
-        within(review).queryByRole("button", { name: "Submit this review" }),
+        within(review).queryByRole("button", { name: "Submit review" }),
       ).toBeNull();
     });
 
-    it("draws in full, and once, what came out that stands without review beside the value waiting, offering a choice for the value waiting alone", async () => {
+    it("opens once what came out that stands without review beside the value waiting, offering a choice for the value waiting alone", async () => {
       conversing({
         [`GET ${STEPS}`]: [
           reply({
@@ -557,7 +721,14 @@ describe("ReviewControls", () => {
 
       const drawn = await messageDrawn();
 
-      const review = within(drawn).getByRole("region", { name: "Your review" });
+      const review = screen.getByRole("region", { name: "Needs your review" });
+      expect(drawn).toHaveTextContent(
+        "A printer caught fire. Nobody was hurt.",
+      );
+      const expand = within(drawn).getByRole("button", { name: "Show all" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      await press(expand);
+      expect(expand).toHaveAttribute("aria-expanded", "true");
       expect(drawn).toHaveTextContent(
         "A printer caught fire. Nobody was hurt.",
       );
@@ -572,46 +743,48 @@ describe("ReviewControls", () => {
           .map((each) => each.getAttribute("aria-labelledby"))
           .map((id) => document.getElementById(id!)?.textContent),
       ).toEqual([setApart("Summary")]);
-      expect(within(drawn).getAllByText("A fire.")).toHaveLength(1);
+      expect(within(review).getAllByText("A fire.")).toHaveLength(1);
+      expect(within(drawn).queryByText("A fire.")).toBeNull();
     });
 
     it("draws neither, nor what went in, where the step withholds the review from the reader, and keeps a long value shut", async () => {
-      conversing({
-        [`GET ${STEPS}`]: [
-          stepsRead({
-            acts: [],
-            withheld: [{ act: "review", refusal: "ACT_NOT_PERMITTED" }],
-            wentIn: undefined,
-            wentInFrom: undefined,
-          }),
-        ],
-      });
+      conversing(
+        {
+          [`GET ${STEPS}`]: [
+            stepsRead({
+              stateActs: ["review"],
+              stateRefusals: [],
+              wentIn: undefined,
+              wentInFrom: undefined,
+            }),
+          ],
+        },
+        [],
+      );
 
       const drawn = await messageDrawn();
 
-      expect(drawn).not.toHaveTextContent("You may not review it.");
+      expect(drawn).not.toHaveTextContent(
+        "You don't have permission to review it.",
+      );
       expect(
         within(accountOpened(drawn, "Waiting")).getByText(
-          "You may not review it.",
+          "You don't have permission to review it.",
         ),
       ).toBeVisible();
       expect(
         within(drawn).getByRole("button", {
-          name: `${setApart("Summary")}, in full`,
+          name: "Show all",
         }),
       ).toHaveAttribute("aria-expanded", "false");
       expect(
-        within(drawn).queryByRole("region", { name: "What went in" }),
+        within(drawn).queryByRole("region", { name: "Inputs" }),
       ).toBeNull();
       expect(
-        within(drawn).queryByRole("region", { name: "Your review" }),
+        screen.queryByRole("region", { name: "Needs your review" }),
       ).toBeNull();
-      expect(
-        within(drawn).queryByRole("button", { name: "Assure" }),
-      ).toBeNull();
-      expect(
-        within(drawn).queryByRole("button", { name: "Refuse" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
     });
 
     it("assures a lone value at a press, sending that decision alone, then shows the step as it answers, reads the run again and gives the keyboard to its message", async () => {
@@ -620,20 +793,22 @@ describe("ReviewControls", () => {
         [`GET ${STEPS}`]: [stepsRead(), UNANSWERED],
         [`PUT ${REVIEW}`]: [ASSURED],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => within(message()).queryByText("Done") !== null);
 
       expect(reviews(sent).map((init) => init.body)).toEqual([
         JSON.stringify({ decisions: { summary: { outcome: "assured" } } }),
       ]);
-      expect(within(message()).getByText("It stands.")).toBeVisible();
+      expect(within(message()).queryByText("Accepted.")).toBeNull();
       expect(screen.getByText("1 of 2 steps done")).toBeVisible();
       expect(asked(sent, `GET ${RUN}`)).toBe(2);
       expect(document.activeElement).toBe(message());
       expect(
-        within(message()).queryByRole("region", { name: "Your review" }),
+        screen.queryByRole("region", { name: "Needs your review" }),
       ).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
     });
@@ -644,64 +819,89 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [REFUSED],
       });
       const drawn = await messageDrawn();
-      const refuse = within(drawn).getByRole("button", { name: "Refuse" });
+      const refuse = within(reviewFrame()).getByRole("button", {
+        name: "Reject",
+      });
 
-      press(refuse);
+      expect(refuse.querySelector("svg")).toBeNull();
+      expect(
+        getComputedStyle(refuse).getPropertyValue("--variant-outlinedBg"),
+      ).toBe("#ffffff");
+
+      await press(refuse);
 
       const why = reason(drawn);
       expect(refuse).toHaveAttribute("aria-pressed", "true");
+      expect(refuse.querySelector("svg")).toHaveAttribute(
+        "aria-hidden",
+        "true",
+      );
+      expect(
+        getComputedStyle(refuse).getPropertyValue("--variant-outlinedBg"),
+      ).toBe("#daebf7");
+      expect(
+        within(reviewFrame())
+          .getByRole("button", { name: "Accept" })
+          .querySelector("svg"),
+      ).toBeNull();
       expect(document.activeElement).toBe(why);
-      const submit = within(drawn).getByRole("button", {
-        name: "Submit this review",
+      const submit = within(reviewFrame()).getByRole("button", {
+        name: "Submit review",
       });
       expect(submit).toHaveClass("MuiButton-contained");
       expect(submit).toHaveAttribute("aria-disabled", "true");
-      press(submit);
+      dispatchClick(submit);
       await act(() => vi.advanceTimersByTimeAsync(0));
       expect(reviews(sent)).toEqual([]);
 
       fireEvent.change(why, { target: { value: "Too short." } });
       expect(submit).not.toHaveAttribute("aria-disabled");
-      press(submit);
-      await landing(() => reviews(sent).length === 1);
+      await press(submit);
+      await landing(
+        () => within(message()).queryByText("Rejected in review") !== null,
+      );
 
-      expect(reviews(sent)[0]!.body).toBe(
+      expect(reviews(sent).map((init) => init.body)).toEqual([
         JSON.stringify({
           decisions: { summary: { outcome: "refused", why: "Too short." } },
         }),
-      );
+      ]);
     });
 
     it("says Submit is held on why the lone value is refused, and not on a choice for each value", async () => {
       conversing();
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Refuse" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Reject" }),
+      );
 
-      const submit = within(drawn).getByRole("button", {
-        name: "Submit this review",
+      const submit = within(reviewFrame()).getByRole("button", {
+        name: "Submit review",
       });
-      expect(submit).toHaveAccessibleDescription("Say why you refuse it.");
+      expect(submit).toHaveAccessibleDescription(
+        "Give a reason for rejecting it.",
+      );
       expect(submit).toHaveAttribute("aria-disabled", "true");
       expect(within(drawn).queryByText(/for each value/)).toBeNull();
     });
 
     it.each([
-      ["showing nothing", " \t\n ", "A refusal, and an answer, say why."],
+      ["showing nothing", " \t\n ", "A rejection or an answer needs a reason."],
       [
         "holding a tag character",
         `No${String.fromCodePoint(0xe0041)}`,
-        "What was written holds a tag character, which shows nothing and which text sent to a model may not hold.",
+        "What you wrote contains an invisible tag character, which can't be sent to a model.",
       ],
       [
         "holding a direction control",
         `No${String.fromCodePoint(0x202e)}`,
-        "What was written holds a direction control, which text sent to a model may not hold.",
+        "What you wrote contains a text-direction character, which can't be sent to a model.",
       ],
       [
         "holding a direction control and nothing that shows, which is refused for the control before being taken as none",
         String.fromCodePoint(0x202e),
-        "What was written holds a direction control, which text sent to a model may not hold.",
+        "What you wrote contains a text-direction character, which can't be sent to a model.",
       ],
       ["of 2049 characters", "x".repeat(2049), REASON_UNUSABLE],
       [
@@ -714,18 +914,20 @@ describe("ReviewControls", () => {
       async (_case, typed, words) => {
         const { sent } = conversing({ [`PUT ${REVIEW}`]: [REFUSED] });
         const drawn = await messageDrawn();
-        press(within(drawn).getByRole("button", { name: "Refuse" }));
+        await press(
+          within(reviewFrame()).getByRole("button", { name: "Reject" }),
+        );
         const why = reason(drawn);
 
         fireEvent.change(why, { target: { value: typed } });
 
         expect(why).toHaveAccessibleDescription(words);
         expect(why).toHaveAttribute("aria-invalid", "true");
-        const submit = within(drawn).getByRole("button", {
-          name: "Submit this review",
+        const submit = within(reviewFrame()).getByRole("button", {
+          name: "Submit review",
         });
         expect(submit).toHaveAttribute("aria-disabled", "true");
-        press(submit);
+        dispatchClick(submit);
         await act(() => vi.advanceTimersByTimeAsync(0));
         expect(reviews(sent)).toEqual([]);
       },
@@ -742,7 +944,9 @@ describe("ReviewControls", () => {
       async (_case, typed) => {
         conversing();
         const drawn = await messageDrawn();
-        press(within(drawn).getByRole("button", { name: "Refuse" }));
+        await press(
+          within(reviewFrame()).getByRole("button", { name: "Reject" }),
+        );
         const why = reason(drawn);
 
         fireEvent.change(why, { target: { value: typed } });
@@ -750,7 +954,7 @@ describe("ReviewControls", () => {
         expect(why).toHaveAttribute("aria-invalid", "false");
         expect(why).not.toHaveAccessibleDescription();
         expect(
-          within(drawn).getByRole("button", { name: "Submit this review" }),
+          within(reviewFrame()).getByRole("button", { name: "Submit review" }),
         ).not.toHaveAttribute("aria-disabled");
       },
     );
@@ -762,24 +966,22 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("STEP_MOVED_ON", 409)],
         [`GET ${STEP}`]: [ASSURED_BY_DAN],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => screen.queryByRole("alert") !== null);
 
       const said = screen.getByRole("alert");
-      expect(said).toHaveTextContent(
-        `This was reviewed already, by ${setApart("Dan")}.`,
-      );
+      expect(said).toHaveTextContent(`Already reviewed by ${setApart("Dan")}.`);
       expect(document.activeElement).toContainElement(said);
       expect(asked(sent, `GET ${STEP}`)).toBe(1);
       expect(asked(sent, `GET ${RUN}`)).toBe(2);
       expect(within(message()).getByText("Done")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
       expect(
-        within(message()).queryByRole("button", { name: "Assure" }),
-      ).toBeNull();
-      expect(
-        screen.queryByText("That step has moved on since it was read."),
+        screen.queryByText("This step has changed since you opened it."),
       ).toBeNull();
     });
 
@@ -800,14 +1002,16 @@ describe("ReviewControls", () => {
           [`PUT ${REVIEW}`]: [refusal("STEP_MOVED_ON", 409)],
           [`GET ${STEP}`]: [readAgain],
         });
-        const drawn = await messageDrawn();
+        await messageDrawn();
 
-        press(within(drawn).getByRole("button", { name: "Assure" }));
+        await press(
+          within(reviewFrame()).getByRole("button", { name: "Accept" }),
+        );
         await landing(() => screen.queryByRole("alert") !== null);
 
         const said = screen.getByRole("alert");
         expect(said).toHaveTextContent(
-          "That step has moved on since it was read.",
+          "This step has changed since you opened it.",
         );
         expect(said).not.toHaveTextContent("reviewed already");
         expect(document.activeElement).toContainElement(said);
@@ -823,23 +1027,21 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("STEP_MOVED_ON", 409)],
         [`GET ${STEP}`]: [SECOND_WAITING_READ],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
-      await landing(
-        () => within(message()).queryByText("A longer summary.") !== null,
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
       );
+      await landing(() => screen.queryByText("A longer summary.") !== null);
 
       const said = screen.getByRole("alert");
-      expect(said).toHaveTextContent(
-        `This was reviewed already, by ${setApart("Dan")}.`,
-      );
+      expect(said).toHaveTextContent(`Already reviewed by ${setApart("Dan")}.`);
       expect(document.activeElement).toContainElement(said);
       expect(requestsTo(sent).filter((each) => each.startsWith("PUT"))).toEqual(
         [`PUT ${REVIEW}`],
       );
       expect(
-        screen.queryByText("That step has moved on since it was read."),
+        screen.queryByText("This step has changed since you opened it."),
       ).toBeNull();
     });
 
@@ -853,22 +1055,22 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("STEP_MOVED_ON", 409)],
         [`GET ${STEP}`]: [REFUSED_BY_DAN],
       });
-      const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await messageDrawn();
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => screen.queryByRole("alert") !== null);
       expect(screen.getByRole("alert")).toHaveTextContent(
-        `This was reviewed already, by ${setApart("Dan")}.`,
+        `Already reviewed by ${setApart("Dan")}.`,
       );
 
       settle(SECOND_WAITING as readonly [string, number]);
-      await landing(
-        () => within(message()).queryByText("A longer summary.") !== null,
-      );
+      await landing(() => screen.queryByText("A longer summary.") !== null);
 
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(screen.queryByText(/reviewed already/)).toBeNull();
+      expect(screen.queryByText(/Already reviewed/)).toBeNull();
       expect(
-        within(message()).getByRole("button", { name: "Assure" }),
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
       ).not.toHaveAttribute("aria-disabled");
     });
 
@@ -878,18 +1080,22 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("REASON_UNUSABLE", 400)],
       });
       const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Refuse" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Reject" }),
+      );
       fireEvent.change(reason(drawn), { target: { value: "Too short." } });
-      press(within(drawn).getByRole("button", { name: "Submit this review" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Submit review" }),
+      );
       await landing(
         () => reason(message()).getAttribute("aria-invalid") === "true",
       );
 
       await act(() => vi.advanceTimersByTimeAsync(5000));
-      await landing(
-        () => within(message()).queryByText("A longer summary.") !== null,
+      await landing(() => screen.queryByText("A longer summary.") !== null);
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Reject" }),
       );
-      press(within(message()).getByRole("button", { name: "Refuse" }));
 
       const why = reason(message());
       expect(why).toHaveValue("");
@@ -899,20 +1105,22 @@ describe("ReviewControls", () => {
       expect(asked(sent, `GET ${STEPS}`)).toBe(2);
     });
 
-    it("sends Assure once while the first is out, holding it until that answers", async () => {
+    it("sends Accept once while the first is out, holding it until that answers", async () => {
       const { sent } = conversing({ [`PUT ${REVIEW}`]: [UNANSWERED] });
-      const drawn = await messageDrawn();
-      const assure = within(drawn).getByRole("button", { name: "Assure" });
+      await messageDrawn();
+      const assure = within(reviewFrame()).getByRole("button", {
+        name: "Accept",
+      });
 
-      press(assure);
+      await press(assure);
       await landing(() => reviews(sent).length === 1);
-      press(assure);
+      dispatchClick(assure);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(reviews(sent)).toHaveLength(1);
       expect(assure).toHaveAttribute("aria-disabled", "true");
       expect(
-        within(message()).getByRole("region", { name: "Your review" }),
+        screen.getByRole("region", { name: "Needs your review" }),
       ).toBeVisible();
     });
 
@@ -925,22 +1133,22 @@ describe("ReviewControls", () => {
         [`GET ${STEPS}`]: [stepsRead(), stale, UNANSWERED],
         [`PUT ${REVIEW}`]: [ASSURED],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => within(message()).queryByText("Done") !== null);
       settle(stepsRead() as readonly [string, number]);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(within(message()).getByText("Done")).toBeVisible();
       expect(
-        within(message()).queryByRole("region", { name: "Your review" }),
+        screen.queryByRole("region", { name: "Needs your review" }),
       ).toBeNull();
-      expect(
-        within(message()).queryByRole("button", { name: "Assure" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
       expect(asked(sent, `GET ${STEPS}`)).toBe(3);
     });
 
@@ -952,17 +1160,23 @@ describe("ReviewControls", () => {
         [`GET ${STEPS}`]: [stepsRead(), UNANSWERED],
         [`PUT ${REVIEW}`]: [ASSURED],
       });
-      const drawn = await messageDrawn();
-      // The page's own region comes first.
-      const news = screen.getAllByRole("status")[0]!;
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => asked(sent, `GET ${RUN}`) === 2);
       await act(() => vi.advanceTimersByTimeAsync(0));
       await act(() => vi.advanceTimersByTimeAsync(0));
 
-      expect(news).toHaveTextContent(`${setApart("Summarise")}: now Done.`);
-      expect(news).not.toHaveTextContent("Claim from Avo");
+      expect(regionsSaid()).toEqual([
+        "",
+        `${setApart("Summarise")}: now Done.`,
+        "",
+        "",
+        "",
+        "",
+      ]);
     });
 
     it("says a stopped run takes no review, and reads the step again, which offers none", async () => {
@@ -972,18 +1186,19 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("RUN_STOPPED", 409)],
         [`GET ${STEP}`]: [STOPPED],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => asked(sent, `GET ${STEP}`) === 1);
       await landing(
-        () =>
-          within(message()).queryByRole("button", { name: "Assure" }) === null,
+        () => screen.queryByRole("button", { name: "Accept" }) === null,
       );
 
       const said = screen.getByRole("alert");
       expect(said).toHaveTextContent(
-        "A stopped run takes no answer, review or try until it is opened again.",
+        "This run is stopped. Resume it before answering, reviewing or making another attempt.",
       );
       expect(document.activeElement).toContainElement(said);
       expect(reviews(sent)).toHaveLength(1);
@@ -996,24 +1211,25 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("REVIEW_NOT_A_PERSONS", 409)],
         [`GET ${STEP}`]: [MODEL_REVIEWS],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(
-        () =>
-          within(message()).queryByRole("button", { name: "Assure" }) === null,
+        () => screen.queryByRole("button", { name: "Accept" }) === null,
       );
 
       const said = screen.getByRole("alert");
       expect(said).toHaveTextContent(
-        "Those values wait on the model the step names to review.",
+        "These values are for the model this step names to review, not a person.",
       );
       expect(document.activeElement).toContainElement(said);
       expect(asked(sent, `GET ${STEP}`)).toBe(1);
       expect(reviews(sent)).toHaveLength(1);
       expect(readAgain).not.toHaveBeenCalled();
       expect(
-        within(message()).queryByRole("region", { name: "Your review" }),
+        screen.queryByRole("region", { name: "Needs your review" }),
       ).toBeNull();
     });
 
@@ -1026,23 +1242,30 @@ describe("ReviewControls", () => {
       });
       const drawn = await messageDrawn();
       const control = within(drawn).getByRole("button", { name: "Details" });
-      press(control);
+      await press(control);
       const details = () =>
         document.getElementById(control.getAttribute("aria-controls")!)!;
       await landing(
-        () =>
-          within(details()).queryByText("Nobody has reviewed it yet.") !== null,
+        () => within(details()).queryByText("Not reviewed yet.") !== null,
       );
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => asked(sent, `GET ${STEP}`) === 2);
-      await landing(() => within(details()).queryByText("It stands.") !== null);
+      await landing(
+        () => within(details()).queryAllByText("Accepted.").length === 2,
+      );
+      expect(within(details()).getAllByText("Accepted.")).toHaveLength(2);
+      expect(
+        within(details()).getByRole("rowheader", {
+          name: "\u2068Summary\u2069",
+        }),
+      ).toBeVisible();
 
       expect(within(details()).getByText("A person")).toBeVisible();
-      expect(
-        within(details()).queryByText("Nobody has reviewed it yet."),
-      ).toBeNull();
-      expect(within(details()).queryByText("It waits on review.")).toBeNull();
+      expect(within(details()).queryByText("Not reviewed yet.")).toBeNull();
+      expect(within(details()).queryByText("Waiting for review.")).toBeNull();
     });
 
     it("marks at its field a reason the server refuses, giving the field the keyboard and saying nothing else, until it is changed", async () => {
@@ -1050,11 +1273,15 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [refusal("REASON_UNUSABLE", 400)],
       });
       const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Refuse" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Reject" }),
+      );
       const why = reason(drawn);
       fireEvent.change(why, { target: { value: "Too short." } });
 
-      press(within(drawn).getByRole("button", { name: "Submit this review" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Submit review" }),
+      );
       await landing(() => why.getAttribute("aria-invalid") === "true");
 
       expect(why).toHaveAccessibleDescription(REASON_UNUSABLE);
@@ -1072,15 +1299,17 @@ describe("ReviewControls", () => {
       const { sent, readAgain } = conversing({
         [`PUT ${REVIEW}`]: [refusal("ACT_NOT_PERMITTED", 403)],
       });
-      const drawn = await messageDrawn();
+      await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => screen.queryByRole("alert") !== null);
 
       const said = screen.getByRole("alert");
       expect(said).toHaveTextContent(REVIEW_RULE);
       expect(said).not.toHaveTextContent(
-        "This is done only by a role that reaches it.",
+        "You don't have permission to do this.",
       );
       expect(document.activeElement).toContainElement(said);
       expect(readAgain).toHaveBeenCalledTimes(1);
@@ -1098,7 +1327,7 @@ describe("ReviewControls", () => {
             state: "done",
             where: undefined,
             gaveBack: [{ field: "summary", value: WRITTEN, now: "stands" }],
-            acts: [],
+            stateActs: [],
           },
           {
             ...FILE_IT_ROW,
@@ -1112,11 +1341,13 @@ describe("ReviewControls", () => {
         [`GET ${STEPS}`]: [stepsRead(), after],
         [`PUT ${REVIEW}`]: [ASSURED],
       });
-      const drawn = await messageDrawn();
-      press(within(drawn).getByRole("button", { name: "Assure" }));
+      await messageDrawn();
+      await press(
+        within(reviewFrame()).getByRole("button", { name: "Accept" }),
+      );
       await landing(() => document.activeElement === message());
       const elsewhere = screen.getByRole("button", {
-        name: "Show in full detail",
+        name: "Full detail",
       });
       act(() => elsewhere.focus());
 
@@ -1190,11 +1421,8 @@ describe("ReviewControls", () => {
           { field: "reply", value: WRITTEN, now: "refused" },
         ],
         next: { number: 2, beyond: false },
-        acts: [],
-        withheld: [
-          { act: "answer", refusal: "ACT_NOT_PERMITTED" },
-          { act: "ask_again", refusal: "ACT_NOT_PERMITTED" },
-        ],
+        stateActs: ["answer", "ask_again"],
+        stateRefusals: [],
       },
       wentIn: WENT_IN,
       wentInFrom: "try",
@@ -1222,7 +1450,11 @@ describe("ReviewControls", () => {
               field: "reply",
               value: WRITTEN,
               now: "refused",
-              decision: { outcome: "refused", why: "Too curt." },
+              decision: {
+                outcome: "refused",
+                whyLines: "several",
+                why: "Too curt.",
+              },
             },
           ],
           review: { asked: true, by: { kind: "person" } },
@@ -1234,24 +1466,41 @@ describe("ReviewControls", () => {
 
     async function pageDrawn(): Promise<HTMLElement> {
       await landing(() => screen.queryByRole("heading", { level: 1 }) !== null);
-      return screen.getByRole("region", { name: "Your review" });
+      return screen.getByRole("region", { name: "Needs your review" });
     }
 
     function choice(review: HTMLElement, label: string): HTMLElement {
-      return within(review).getByRole("radiogroup", { name: setApart(label) });
+      return within(review).getByRole("radiogroup", {
+        name: `Decision for ${setApart(label)}`,
+      });
     }
 
-    it("draws each value waiting in full beside its own choice, and sends nothing until every value is chosen and every refusal says why", async () => {
+    function option(
+      review: HTMLElement,
+      label: string,
+      name: "Accept" | "Reject",
+    ): HTMLElement {
+      return within(choice(review, label)).getByRole("radio", { name });
+    }
+
+    it("opens each long value waiting beside its own choice, and sends nothing until every value is chosen and every refusal says why", async () => {
       const { sent } = stepOpened({
         [`GET ${STEP}`]: [twoWaiting()],
         [`PUT ${REVIEW}`]: [DECIDED],
       });
       const review = await pageDrawn();
       const submit = within(review).getByRole("button", {
-        name: "Submit this review",
+        name: "Submit review",
       });
 
       expect(review).toHaveTextContent("A fire.");
+      expect(review).toHaveTextContent(
+        "A printer caught fire. Nobody was hurt.",
+      );
+      const expand = within(review).getByRole("button", { name: "Show all" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      await press(expand);
+      expect(expand).toHaveAttribute("aria-expanded", "true");
       expect(review).toHaveTextContent(
         "A printer caught fire. Nobody was hurt.",
       );
@@ -1260,34 +1509,153 @@ describe("ReviewControls", () => {
       ).toBeNull();
       for (const label of ["Summary", "Reply"]) {
         const radios = within(choice(review, label)).getAllByRole("radio");
-        expect(radios.map((each) => each.getAttribute("value"))).toEqual([
-          "assured",
-          "refused",
-        ]);
         expect(
-          radios.filter((each) => (each as HTMLInputElement).checked),
+          radios.map((each) =>
+            each.textContent === "Accept" ? "assured" : "refused",
+          ),
+        ).toEqual(["assured", "refused"]);
+        expect(
+          radios.filter((each) => each.getAttribute("aria-checked") === "true"),
         ).toEqual([]);
       }
       expect(submit).toHaveAttribute("aria-disabled", "true");
 
-      press(
-        within(choice(review, "Summary")).getByRole("radio", {
-          name: "Assure",
-        }),
-      );
+      await press(option(review, "Summary", "Accept"));
       expect(submit).toHaveAttribute("aria-disabled", "true");
-      press(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Refuse" }),
-      );
+      await press(option(review, "Reply", "Reject"));
 
       const why = within(review).getByRole("textbox", {
-        name: `Why you refuse ${setApart("Reply")}`,
+        name: `Reason for rejecting ${setApart("Reply")}`,
       });
+      const accept = option(review, "Summary", "Accept");
+      const reject = option(review, "Reply", "Reject");
+      await press(accept);
+      await press(reject);
+      expect(accept).toHaveAttribute("aria-checked", "true");
+      expect(reject).toHaveAttribute("aria-checked", "true");
+      expect(
+        within(review).getByRole("textbox", {
+          name: `Reason for rejecting ${setApart("Reply")}`,
+        }),
+      ).toBe(why);
       expect(within(review).getAllByRole("textbox")).toEqual([why]);
       expect(submit).toHaveAttribute("aria-disabled", "true");
-      press(submit);
+      dispatchClick(submit);
       await act(() => vi.advanceTimersByTimeAsync(0));
       expect(reviews(sent)).toEqual([]);
+    });
+
+    it("takes the keyboard into each decision at one stop, moves and chooses with the arrows, and keeps a choice pressed again", async () => {
+      stepOpened({ [`GET ${STEP}`]: [twoWaiting()] });
+      const review = await pageDrawn();
+      vi.useRealTimers();
+      const user = userEvent.setup();
+      const group = choice(review, "Summary");
+      const accept = within(group).getByRole("radio", { name: "Accept" });
+      const reject = within(group).getByRole("radio", { name: "Reject" });
+      const checked = () =>
+        [accept, reject].map((radio) => radio.getAttribute("aria-checked"));
+      const stops = () =>
+        within(group)
+          .getAllByRole("radio")
+          .filter((radio) => radio.tabIndex === 0);
+      expect(checked()).toEqual(["false", "false"]);
+      expect(stops()).toEqual([accept]);
+      await act(async () => {
+        accept.focus();
+      });
+      await user.tab();
+      expect(group).not.toContainElement(document.activeElement as HTMLElement);
+      await user.tab({ shift: true });
+      expect(accept).toHaveFocus();
+      expect(checked()).toEqual(["false", "false"]);
+
+      await user.keyboard("{ArrowRight}");
+      expect(reject).toHaveFocus();
+      expect(checked()).toEqual(["false", "true"]);
+      expect(stops()).toEqual([reject]);
+      await user.keyboard("{ArrowRight}");
+      expect(accept).toHaveFocus();
+      expect(checked()).toEqual(["true", "false"]);
+      await user.keyboard("{ArrowLeft}");
+      expect(reject).toHaveFocus();
+      expect(checked()).toEqual(["false", "true"]);
+      await user.keyboard("{ArrowUp}");
+      expect(accept).toHaveFocus();
+      expect(stops()).toEqual([accept]);
+
+      await user.keyboard("{Enter}{ }");
+      await user.click(accept);
+      expect(checked()).toEqual(["true", "false"]);
+      expect(accept).toHaveFocus();
+      expect(
+        within(choice(review, "Reply"))
+          .getAllByRole("radio")
+          .map((radio) => radio.getAttribute("aria-checked")),
+      ).toEqual(["false", "false"]);
+    });
+
+    it("leaves the keyboard and both choices where they are at an arrow while the review is being sent", async () => {
+      const sending = deferred<readonly [string, number]>();
+      stepOpened({
+        [`GET ${STEP}`]: [twoWaiting()],
+        [`PUT ${REVIEW}`]: [sending.promise],
+      });
+      const review = await pageDrawn();
+      await press(option(review, "Summary", "Accept"));
+      await press(option(review, "Reply", "Accept"));
+      await press(
+        within(review).getByRole("button", { name: "Submit review" }),
+      );
+      vi.useRealTimers();
+      const user = userEvent.setup();
+      const accept = option(review, "Summary", "Accept");
+      const reject = option(review, "Summary", "Reject");
+      expect(accept).toHaveAttribute("aria-disabled", "true");
+      await act(async () => {
+        accept.focus();
+      });
+
+      await user.keyboard("{ArrowRight}");
+
+      expect(accept).toHaveFocus();
+      expect(reject).not.toHaveFocus();
+      expect([accept, reject].map((radio) => radio.ariaChecked)).toEqual([
+        "true",
+        "false",
+      ]);
+      await act(async () => sending.settle(await DECIDED));
+    });
+
+    it("draws the choice made as on, with a check before its words kept from its name, and the other as off with none", async () => {
+      stepOpened({ [`GET ${STEP}`]: [twoWaiting()] });
+      const review = await pageDrawn();
+      const accept = option(review, "Summary", "Accept");
+      const reject = option(review, "Summary", "Reject");
+      for (const radio of [accept, reject]) {
+        expect(radio.querySelector("svg")).toBeNull();
+        expect(
+          getComputedStyle(radio).getPropertyValue("--variant-outlinedBg"),
+        ).toBe("#ffffff");
+      }
+
+      await press(accept);
+
+      const check = accept.querySelector("svg");
+      expect(check).toHaveAttribute("aria-hidden", "true");
+      expect(check!.nextSibling?.textContent).toBe("Accept");
+      expect(accept).toHaveAccessibleName("Accept");
+      const on = getComputedStyle(accept);
+      expect([
+        on.getPropertyValue("--variant-outlinedBg"),
+        on.getPropertyValue("--variant-outlinedBorder"),
+        on.getPropertyValue("--variant-outlinedColor"),
+      ]).toEqual(["#daebf7", "#1c5b81", "#1c5b81"]);
+      expect(reject.querySelector("svg")).toBeNull();
+      expect(
+        getComputedStyle(reject).getPropertyValue("--variant-outlinedBg"),
+      ).toBe("#ffffff");
+      expect(option(review, "Reply", "Accept").querySelector("svg")).toBeNull();
     });
 
     it("sends one review deciding every value its own way, then shows the step as it answers, reads it again and gives the keyboard to what came out", async () => {
@@ -1296,21 +1664,18 @@ describe("ReviewControls", () => {
         [`PUT ${REVIEW}`]: [DECIDED],
       });
       const review = await pageDrawn();
-      press(
-        within(choice(review, "Summary")).getByRole("radio", {
-          name: "Assure",
-        }),
-      );
-      press(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Refuse" }),
-      );
+      await press(option(review, "Summary", "Accept"));
+      await press(option(review, "Reply", "Reject"));
       fireEvent.change(within(review).getByRole("textbox"), {
         target: { value: "Too curt." },
       });
 
-      press(within(review).getByRole("button", { name: "Submit this review" }));
+      await press(
+        within(review).getByRole("button", { name: "Submit review" }),
+      );
       await landing(
-        () => screen.queryByRole("region", { name: "Your review" }) === null,
+        () =>
+          screen.queryByRole("region", { name: "Needs your review" }) === null,
       );
 
       expect(reviews(sent).map((init) => init.body)).toEqual([
@@ -1321,11 +1686,12 @@ describe("ReviewControls", () => {
           },
         }),
       ]);
-      const cameOut = screen.getByRole("region", { name: "What came out" });
-      expect(cameOut).toHaveTextContent("A fire.It stands.");
-      expect(cameOut).toHaveTextContent("Refused on review.");
+      const cameOut = screen.getByRole("region", { name: "Output" });
+      expect(cameOut).toHaveTextContent("A fire.");
+      expect(cameOut).not.toHaveTextContent("Accepted.");
+      expect(cameOut).toHaveTextContent("Rejected in review");
       expect(document.activeElement).toBe(
-        within(cameOut).getByRole("heading", { name: "What came out" }),
+        within(cameOut).getByRole("heading", { name: "Output" }),
       );
       expect(screen.queryByRole("radiogroup")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -1342,18 +1708,18 @@ describe("ReviewControls", () => {
         ["Summary", "The summary misses the fire."],
         ["Reply", "The reply misses the printer."],
       ] as const) {
-        press(
-          within(choice(review, label)).getByRole("radio", { name: "Refuse" }),
-        );
+        await press(option(review, label, "Reject"));
         fireEvent.change(
           within(review).getByRole("textbox", {
-            name: `Why you refuse ${setApart(label)}`,
+            name: `Reason for rejecting ${setApart(label)}`,
           }),
           { target: { value: reason } },
         );
       }
 
-      press(within(review).getByRole("button", { name: "Submit this review" }));
+      await press(
+        within(review).getByRole("button", { name: "Submit review" }),
+      );
       await landing(() => screen.queryByRole("alert") !== null);
 
       const alert = screen.getByRole("alert");
@@ -1371,12 +1737,13 @@ describe("ReviewControls", () => {
         ["Summary", "The summary misses the fire."],
         ["Reply", "The reply misses the printer."],
       ] as const) {
-        expect(
-          within(choice(review, label)).getByRole("radio", { name: "Refuse" }),
-        ).toBeChecked();
+        expect(option(review, label, "Reject")).toHaveAttribute(
+          "aria-checked",
+          "true",
+        );
         expect(
           within(review).getByRole("textbox", {
-            name: `Why you refuse ${setApart(label)}`,
+            name: `Reason for rejecting ${setApart(label)}`,
           }),
         ).toHaveValue(reason);
       }
@@ -1394,29 +1761,28 @@ describe("ReviewControls", () => {
       const review = await pageDrawn();
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(() => asked(sent, `GET ${STEP}`) === 2);
-      press(
-        within(choice(review, "Summary")).getByRole("radio", {
-          name: "Assure",
-        }),
-      );
-      press(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Refuse" }),
-      );
+      await press(option(review, "Summary", "Accept"));
+      await press(option(review, "Reply", "Reject"));
       fireEvent.change(within(review).getByRole("textbox"), {
         target: { value: "Too curt." },
       });
 
-      press(within(review).getByRole("button", { name: "Submit this review" }));
+      await press(
+        within(review).getByRole("button", { name: "Submit review" }),
+      );
       await landing(
-        () => screen.queryByRole("region", { name: "Your review" }) === null,
+        () =>
+          screen.queryByRole("region", { name: "Needs your review" }) === null,
       );
       settle(twoWaiting() as readonly [string, number]);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
+      expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent(
+        "Rejected in review",
+      );
       expect(
-        screen.getByRole("region", { name: "What came out" }),
-      ).toHaveTextContent("Refused on review.");
-      expect(screen.queryByRole("region", { name: "Your review" })).toBeNull();
+        screen.queryByRole("region", { name: "Needs your review" }),
+      ).toBeNull();
       expect(screen.queryByRole("radiogroup")).toBeNull();
       expect(asked(sent, `GET ${STEP}`)).toBe(3);
     });
@@ -1424,14 +1790,8 @@ describe("ReviewControls", () => {
     it("keeps what was chosen and the reason half typed where the step is read again meanwhile", async () => {
       const { sent } = stepOpened({ [`GET ${STEP}`]: [twoWaiting()] });
       const review = await pageDrawn();
-      press(
-        within(choice(review, "Summary")).getByRole("radio", {
-          name: "Assure",
-        }),
-      );
-      press(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Refuse" }),
-      );
+      await press(option(review, "Summary", "Accept"));
+      await press(option(review, "Reply", "Reject"));
       fireEvent.change(within(review).getByRole("textbox"), {
         target: { value: "Too cu" },
       });
@@ -1440,38 +1800,40 @@ describe("ReviewControls", () => {
       await landing(() => asked(sent, `GET ${STEP}`) === 2);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
-      const again = screen.getByRole("region", { name: "Your review" });
+      const again = screen.getByRole("region", { name: "Needs your review" });
       const checked = (label: string) =>
         within(choice(again, label))
           .getAllByRole("radio")
-          .filter((each) => (each as HTMLInputElement).checked)
-          .map((each) => each.getAttribute("value"));
+          .filter((each) => each.getAttribute("aria-checked") === "true")
+          .map((each) =>
+            each.textContent === "Accept" ? "assured" : "refused",
+          );
       expect(checked("Summary")).toEqual(["assured"]);
       expect(checked("Reply")).toEqual(["refused"]);
       expect(within(again).getByRole("textbox")).toHaveValue("Too cu");
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("keeps the keyboard on Refuse where arrow keys move onto it, drawing the reason after it", async () => {
+    it("takes the keyboard to the reason once Reject is pressed beside a value", async () => {
       stepOpened({ [`GET ${STEP}`]: [twoWaiting()] });
       const review = await pageDrawn();
       // Testing Library wraps every user-event call in a wait on a timeout of 0 that it advances only where `jest`
       // is defined, so faked timeouts hang it whatever `advanceTimers` says.
       vi.useRealTimers();
       const user = userEvent.setup();
-      await user.click(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Assure" }),
-      );
+      await user.click(option(review, "Reply", "Accept"));
 
-      await user.keyboard("{ArrowRight}");
+      await user.click(option(review, "Reply", "Reject"));
 
-      const refuse = within(choice(review, "Reply")).getByRole("radio", {
-        name: "Refuse",
-      });
-      expect(refuse).toBeChecked();
-      expect(document.activeElement).toBe(refuse);
+      const refuse = option(review, "Reply", "Reject");
+      expect(refuse).toHaveAttribute("aria-checked", "true");
+      expect(
+        within(review).getByRole("textbox", {
+          name: `Reason for rejecting ${setApart("Reply")}`,
+        }),
+      ).toHaveFocus();
       const why = within(review).getByRole("textbox", {
-        name: `Why you refuse ${setApart("Reply")}`,
+        name: `Reason for rejecting ${setApart("Reply")}`,
       });
       expect(
         refuse.compareDocumentPosition(why) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1480,22 +1842,16 @@ describe("ReviewControls", () => {
 
     it("says why Submit is held until every value is chosen and every refusal says why, and nothing once it is not", async () => {
       const held =
-        "Choose Assure or Refuse for each value, and say why for each one refused.";
+        "Choose Accept or Reject for each value, and give a reason for each one you reject.";
       stepOpened({ [`GET ${STEP}`]: [twoWaiting()] });
       const review = await pageDrawn();
       const submit = within(review).getByRole("button", {
-        name: "Submit this review",
+        name: "Submit review",
       });
       expect(submit).toHaveAccessibleDescription(held);
 
-      press(
-        within(choice(review, "Summary")).getByRole("radio", {
-          name: "Assure",
-        }),
-      );
-      press(
-        within(choice(review, "Reply")).getByRole("radio", { name: "Refuse" }),
-      );
+      await press(option(review, "Summary", "Accept"));
+      await press(option(review, "Reply", "Reject"));
       expect(submit).toHaveAccessibleDescription(held);
       fireEvent.change(within(review).getByRole("textbox"), {
         target: { value: "Too curt." },
@@ -1511,20 +1867,21 @@ describe("ReviewControls", () => {
         [`GET ${STEP}`]: [
           twoWaiting({
             ...TWO_ROW,
-            acts: [],
-            withheld: [{ act: "review", refusal: "REVIEW_OWN_PRODUCTION" }],
+            stateActs: ["review"],
+            stateRefusals: [],
+            producedByUserId: DAN.userId,
           }),
         ],
       });
       await landing(() => screen.queryByRole("heading", { level: 1 }) !== null);
 
+      expect(screen.getByRole("region", { name: "Inputs" })).toBeVisible();
       expect(
-        screen.getByRole("region", { name: "What went in" }),
-      ).toBeVisible();
-      expect(screen.queryByRole("region", { name: "Your review" })).toBeNull();
+        screen.queryByRole("region", { name: "Needs your review" }),
+      ).toBeNull();
       expect(screen.queryByRole("radiogroup")).toBeNull();
       expect(
-        screen.queryByRole("button", { name: "Submit this review" }),
+        screen.queryByRole("button", { name: "Submit review" }),
       ).toBeNull();
     });
   });

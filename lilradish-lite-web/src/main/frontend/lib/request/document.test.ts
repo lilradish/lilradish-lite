@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   allMembersRead,
   countFrom,
+  flagFrom,
   isUnchecked,
   listOf,
   optional,
   present,
+  severalFrom,
   textFrom,
+  trueFrom,
   wordsIn,
 } from "./document";
 
@@ -37,6 +40,43 @@ describe("listOf", () => {
     ["a list with one item unreadable", [1, -2, 3]],
   ])("reads %s as nothing", (_case, listed) => {
     expect(listOf(listed, positive)).toBeNull();
+  });
+});
+
+describe("listOf sparse arrays", () => {
+  it.each([0, 1, 2])("refuses a missing item at index %s", (at) => {
+    const listed = [1, 2, 3];
+    Reflect.deleteProperty(listed, at);
+
+    expect(listOf(listed, () => "read")).toBeNull();
+  });
+
+  it("refuses a list of one missing item even when undefined could be read", () => {
+    expect(listOf(new Array(1), () => "read")).toBeNull();
+  });
+
+  it("reads an explicitly present undefined through the item's own contract", () => {
+    expect(
+      listOf([undefined], (item) => (item === undefined ? "present" : null)),
+    ).toEqual(["present"]);
+  });
+
+  it.each([
+    [
+      [3, 1, 2],
+      [3, 1, 2],
+    ],
+    [[1, -2, 3], null],
+  ])("keeps the dense callback order and count for %j", (listed, read) => {
+    const seen: unknown[] = [];
+    expect(
+      listOf(listed, (item) => {
+        seen.push(item);
+        return positive(item);
+      }),
+    ).toEqual(read);
+    expect(seen).toEqual(listed);
+    expect(seen).toHaveLength(3);
   });
 });
 
@@ -128,4 +168,51 @@ describe("wordsIn", () => {
       expect(wordsIn(listed)).toBeNull();
     },
   );
+});
+describe("trueFrom", () => {
+  it.each([true, false, undefined, null, 1, "true", {}, []])(
+    "reads only the true flag in %j",
+    (said) => {
+      expect(trueFrom(said)).toBe(said === true ? true : null);
+    },
+  );
+
+  it("distinguishes an absent flag from one explicitly sent as false or null", () => {
+    expect(optional({}, "withheld", trueFrom)).toBeUndefined();
+    expect(optional({ withheld: true }, "withheld", trueFrom)).toBe(true);
+    expect(optional({ withheld: false }, "withheld", trueFrom)).toBeNull();
+    expect(optional({ withheld: null }, "withheld", trueFrom)).toBeNull();
+  });
+});
+
+describe("flagFrom", () => {
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, null],
+    [null, null],
+    [0, null],
+    [1, null],
+    ["false", null],
+  ])("reads %j as %j", (said, read) => {
+    expect(flagFrom(said)).toBe(read);
+  });
+});
+
+describe("severalFrom", () => {
+  it.each([
+    ["several", "several"],
+    ["one", null],
+    ["", null],
+    [null, null],
+    [undefined, null],
+    [true, null],
+  ])("reads %j as %j", (said, read) => {
+    expect(severalFrom(said)).toBe(read);
+  });
+
+  it("distinguishes missing lines from an explicitly invalid spelling", () => {
+    expect(optional({}, "lines", severalFrom)).toBeUndefined();
+    expect(optional({ lines: "one" }, "lines", severalFrom)).toBeNull();
+  });
 });

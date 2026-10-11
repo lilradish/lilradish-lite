@@ -2,18 +2,12 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 
 import type { ReadField } from "../../../api/filling";
-import type { WentIn } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { WentIn } from "../../../api/stepSources";
 import { say } from "../../../i18n/app";
-import { Field, Fields } from "../../../lib/form/Fields";
 import { QUIET_SX } from "../../../lib/layout/parts";
+import { Field, Fields } from "../../../lib/form/Fields";
 import { FilledValue } from "../fill/FilledValue";
-import {
-  fieldAt,
-  fromSaid,
-  inputFields,
-  labelAt,
-  type Declaring,
-} from "./declared";
+import { fieldAt, fromSaid, labelAt, type Declaring } from "./declared";
 
 export function WentInListed({
   wentIn,
@@ -29,53 +23,51 @@ export function WentInListed({
   if (sourcesOnly) {
     return (
       <Box component="aside">
-        {wentIn.map((each) => {
-          const fields = inputFields(each, takes, declaring);
-          const label = labelAt(fields, each.input);
-          return (
-            <Box key={each.sourcePartId ?? each.input}>
-              <Typography component="div" variant="body2" sx={QUIET_SX}>
+        <Fields>
+          {wentIn.map((each) => {
+            const fields = takes;
+            const label = labelAt(fields, each.input);
+            return (
+              <Field key={each.input} label={label}>
                 {each.from === undefined
-                  ? label
-                  : say("step.takes", {
-                      input: label,
-                      from: fromSaid(each.from, declaring),
-                    })}
-              </Typography>
-              <CompositeSources
-                each={each}
-                takes={takes}
-                declaring={declaring}
-              />
-            </Box>
-          );
-        })}
+                  ? null
+                  : fromSaid(each.from, declaring)}
+                <CompositeSources
+                  each={each}
+                  takes={takes}
+                  declaring={declaring}
+                />
+              </Field>
+            );
+          })}
+        </Fields>
       </Box>
     );
   }
   return (
-    <Fields>
+    <Box>
       {wentIn.map((each) => {
-        const fields = inputFields(each, takes, declaring);
+        const fields = takes;
         const label = labelAt(fields, each.input);
         return (
-          <Field key={each.sourcePartId ?? each.input} label={label}>
+          <Box key={each.input}>
             {each.from === undefined ? null : (
               <Typography variant="body2" sx={QUIET_SX}>
                 {fromSaid(each.from, declaring)}
               </Typography>
             )}
             <FilledValue
+              cards
               field={fieldAt(fields, each.input)}
               label={label}
               shown={each}
               shut={false}
             />
             <CompositeSources each={each} takes={takes} declaring={declaring} />
-          </Field>
+          </Box>
         );
       })}
-    </Fields>
+    </Box>
   );
 }
 
@@ -91,25 +83,19 @@ export function CompositeSources({
   if (each.sources === undefined) {
     return null;
   }
-  const fields = fieldAt(
-    inputFields(each, takes, declaring),
-    each.input,
-  )?.fields;
+  const fields = fieldAt(takes, each.input)?.fields;
   return (
     <>
       <Typography variant="body2" sx={QUIET_SX}>
         {say("step.putTogetherFromThese")}
       </Typography>
-      <Box component="ul">
+      <Fields>
         {each.sources.map(({ targetPath, from }) => (
-          <li key={targetPath}>
-            {say("step.takes", {
-              input: labelAt(fields, targetPath),
-              from: fromSaid(from, declaring),
-            })}
-          </li>
+          <Field key={targetPath} label={labelAt(fields, targetPath)}>
+            {fromSaid(from, declaring)}
+          </Field>
         ))}
-      </Box>
+      </Fields>
     </>
   );
 }

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { theme } from "./theme";
+import { styleViolations } from "./stylePolicy";
 
-/** Every production module, read as text, but the theme that defines type. */
+/** Every production module but the theme and its static typography authority. */
 const SOURCES = import.meta.glob<string>(
   [
     "../../**/*.{ts,tsx}",
@@ -10,24 +11,19 @@ const SOURCES = import.meta.glob<string>(
     "!../../testSetup.ts",
     "!**/*.test.{ts,tsx}",
     "!./theme.ts",
+    "!./tokens.ts",
   ],
   { query: "?raw", import: "default", eager: true },
 );
 
 const TYPE_PROPERTIES = [
-  "fontSize",
-  "fontWeight",
   "fontFamily",
   "fontStyle",
   "letterSpacing",
-  "lineHeight",
   "textTransform",
-  "font-size",
-  "font-weight",
   "font-family",
   "font-style",
   "letter-spacing",
-  "line-height",
   "text-transform",
 ].join("|");
 
@@ -38,6 +34,9 @@ const TYPE_PROPERTIES = [
 const SETS_TYPE_PROPERTY = new RegExp(
   `(?<![\\w.$-])\\[?["'\`]?(?:${TYPE_PROPERTIES})["'\`]?\\]?\\s*:`,
 );
+
+const SETS_ROLE_PROPERTY =
+  /(?<![\w.$-])\[?["'`]?(?:fontSize|fontWeight|lineHeight|font-size|font-weight|line-height)["'`]?\]?\s*:/;
 
 /** The shorthand sets all of them at once; `inherit` hands down what is around it and sets nothing. */
 const SETS_FONT_SHORTHAND =
@@ -145,7 +144,14 @@ function namesHeadingApartFromVariant(source: string): boolean {
 }
 
 function setsTypeDirectly(source: string): boolean {
-  return SETS_TYPE_PROPERTY.test(source) || SETS_FONT_SHORTHAND.test(source);
+  return (
+    SETS_TYPE_PROPERTY.test(source) ||
+    SETS_FONT_SHORTHAND.test(source) ||
+    (SETS_ROLE_PROPERTY.test(source) &&
+      styleViolations("typography.tsx", source).some((failure) =>
+        failure.endsWith(": font value outside a typography role"),
+      ))
+  );
 }
 
 function rolesNamedIn(source: string): string[] {
@@ -197,13 +203,13 @@ describe("typography", () => {
         "../../app/ProblemView.tsx",
         "../../features/people/PeoplePage.tsx",
         "../../i18n/en.ts",
-        "../collection/TaskCard.tsx",
       ]),
     );
     expect(
       read.filter(
         (path) =>
           path === "./theme.ts" ||
+          path === "./tokens.ts" ||
           path.includes("/testutil/") ||
           path.includes("testSetup") ||
           path.includes(".test."),
@@ -212,26 +218,98 @@ describe("typography", () => {
   });
 
   it.each([
-    ["an sx weight", "sx={{ fontWeight: 600 }}", true],
-    ["a style size", "style={{ fontSize : '1rem' }}", true],
+    ["an sx weight", "<Box sx={{ fontWeight: 600 }} />", true],
+    ["a style size", "<Box style={{ fontSize : '1rem' }} />", true],
     ["a family in a style object", "const X = { fontFamily: FACE };", true],
-    ["a slant", '{ fontStyle: "italic" }', true],
-    ["a letter spacing", '{ letterSpacing: "0.1em" }', true],
-    ["a line height", "{ lineHeight: 1.5 }", true],
-    ["a case", '{ textTransform: "uppercase" }', true],
-    ["a quoted key", '{ "fontWeight": 700 }', true],
-    ["a quoted kebab-case key", "{ 'font-size': '12px' }", true],
+    ["a slant", 'const sx = { fontStyle: "italic" };', true],
+    ["a letter spacing", 'const sx = { letterSpacing: "0.1em" };', true],
+    ["a line height", "const sx = { lineHeight: 1.5 };", true],
+    ["a case", 'const sx = { textTransform: "uppercase" };', true],
+    ["a quoted key", 'const sx = { "fontWeight": 700 };', true],
+    ["a quoted kebab-case key", "const sx = { 'font-size': '12px' };", true],
     [
       "a declaration in template CSS",
       "styled.span`\n  line-height: 2;\n`",
       true,
     ],
-    ["a computed key", '{ ["fontFamily"]: FACE }', true],
-    ["a computed template key", "{ [`letterSpacing`]: 1 }", true],
-    ["the shorthand", '{ font: "700 12px serif" }', true],
-    ["the shorthand, quoted", '{ "font": FACE }', true],
+    ["a computed key", 'const sx = { ["fontFamily"]: FACE };', true],
+    ["a computed template key", "const sx = { [`letterSpacing`]: 1 };", true],
+    ["the shorthand", 'const sx = { font: "700 12px serif" };', true],
+    ["the shorthand, quoted", 'const sx = { "font": FACE };', true],
     ["the shorthand in template CSS", "`font: bold 1rem serif;`", true],
-    ["a role", "sx={{ typography: 'term' }}", false],
+    ["a role", "<Box sx={{ typography: 'term' }} />", false],
+    [
+      "a token role's weight",
+      "const sx = { fontWeight: TOKENS.type.roles.body.fontWeight };",
+      false,
+    ],
+    [
+      "a theme role's size",
+      "const sx = { fontSize: theme.typography.body.fontSize };",
+      false,
+    ],
+    [
+      "a theme role's line height",
+      "const sx = { lineHeight: theme.typography.body.lineHeight };",
+      false,
+    ],
+    ["an inherited weight", 'const sx = { fontWeight: "inherit" };', false],
+    [
+      "a role held by a local name",
+      "const weight = TOKENS.type.roles.body.fontWeight; const sx = { fontWeight: weight };",
+      false,
+    ],
+    [
+      "a role or inherited weight",
+      'const sx = { fontWeight: flag ? TOKENS.type.roles.body.fontWeight : "inherit" };',
+      false,
+    ],
+    [
+      "a computed role property",
+      'const sx = { ["fontWeight"]: TOKENS.type.roles.body.fontWeight };',
+      false,
+    ],
+    [
+      "a CSS role variable",
+      "styled.span`font-weight: var(--lr-type-roles-body-font-weight);`",
+      false,
+    ],
+    [
+      "a token role changed by arithmetic",
+      "const sx = { fontWeight: TOKENS.type.roles.body.fontWeight + 1 };",
+      true,
+    ],
+    [
+      "a theme role changed by arithmetic",
+      "const sx = { fontSize: theme.typography.body.fontSize + 1 };",
+      true,
+    ],
+    [
+      "a role with a literal alternative",
+      "const sx = { fontWeight: flag ? TOKENS.type.roles.body.fontWeight : 400 };",
+      true,
+    ],
+    [
+      "a local name holding a literal",
+      "const weight = 400; const sx = { fontWeight: weight };",
+      true,
+    ],
+    [
+      "a role beside a literal property",
+      "const sx = { fontWeight: TOKENS.type.roles.body.fontWeight, fontSize: 14 };",
+      true,
+    ],
+    [
+      "a property outside the role's type values",
+      "const sx = { fontWeight: TOKENS.type.roles.body.weight };",
+      true,
+    ],
+    [
+      "a non-role theme number",
+      "const sx = { fontSize: theme.typography.fontSize };",
+      true,
+    ],
+    ["a quoted computed literal", 'const sx = { ["fontWeight"]: 400 };', true],
     ["an icon's own size prop", '<Icon fontSize="small" />', false],
     [
       "the shorthand handing down the type around it",

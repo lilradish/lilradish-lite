@@ -1,57 +1,70 @@
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
 import CssBaseline from "@mui/material/CssBaseline";
 import Container from "@mui/material/Container";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemButton from "@mui/material/ListItemButton";
+import MenuItem from "@mui/material/MenuItem";
+import MenuList from "@mui/material/MenuList";
+import Radio from "@mui/material/Radio";
+import Switch from "@mui/material/Switch";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
+import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import { ThemeProvider } from "@mui/material/styles";
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
 import { SEVERITIES } from "../../testutil/notices";
 import { Notice } from "../notice/Notice";
-import { IDENTIFIER_FONT, theme } from "./theme";
+import { theme } from "./theme";
+
+const IDENTIFIER_FONT = "ui-monospace, monospace";
 
 /** `theme.palette.primary.main`, as a resolved colour is reported back. */
-const PRIMARY_COLOUR = "rgb(11, 87, 208)";
+const PRIMARY_COLOUR = "rgb(28, 91, 129)";
 
-/** The widths are what say which of the two rules drew a given ring. */
-const MATERIAL_RING_WIDTH = "2px";
+/** Every ring is this wide, whichever of the two rules draws it. */
+const RING_WIDTH = "2px";
 
-const GLOBAL_RING_WIDTH = "3px";
+/** Material's offset turns inward on a component an overflow container would clip; outward it is 2px. */
+const MATERIAL_RING_OFFSET = "calc(var(--_focusVisible-offset, 1) * 2px)";
+
+const GLOBAL_RING_OFFSET = "2px";
 
 /** Material's medium button, as the type scale resolves it. */
 const MEDIUM_BUTTON_TEXT = "14px";
 
-const SYSTEM_FACE =
-  'system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const SYSTEM_FACE = 'system-ui, "Segoe UI", Helvetica, sans-serif';
 
 const HEADING_LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
 
 /** `theme.palette.text.primary` and `text.secondary`, as resolved colours are reported back. */
-const BODY_TEXT_COLOUR = "rgb(26, 26, 26)";
+const BODY_TEXT_COLOUR = "rgb(25, 32, 36)";
 
-const SUPPORTING_TEXT_COLOUR = "rgb(89, 89, 89)";
+const SUPPORTING_TEXT_COLOUR = "rgb(88, 102, 108)";
 
 /** Every colour text is drawn in, by what it marks. */
 const TEXT_COLOURS = [
-  ["the mark on generated output", theme.palette.generated.main],
+  ["the mark on generated output", theme.palette.model.text],
   ["body text", theme.palette.text.primary],
   ["supporting text", theme.palette.text.secondary],
   ["a primary action", theme.palette.primary.main],
@@ -63,7 +76,7 @@ const TEXT_COLOURS = [
 const READ_ON = [
   ["the page", theme.palette.background.default],
   ["a white card", theme.palette.background.paper],
-  ["the reader's own messages' ground", theme.palette.part.mine],
+  ["the ground of messages given to the reader", theme.palette.surface.given],
 ] as const;
 
 /**
@@ -140,6 +153,101 @@ function styled(children: ReactNode) {
   );
 }
 
+describe("typography roles", () => {
+  it.each([
+    [16, "14px", "22px"],
+    [32, "28px", "44px"],
+  ])(
+    "keeps body and button type relative to a %s-pixel root",
+    (root, size, leading) => {
+      const previous = document.documentElement.style.fontSize;
+      document.documentElement.style.fontSize = `${root}px`;
+      onTestFinished(() => {
+        document.documentElement.style.fontSize = previous;
+      });
+      styled(
+        <>
+          <Typography>Reading the claim.</Typography>
+          <Button>Save claim</Button>
+        </>,
+      );
+      const prose = screen.getByText("Reading the claim.");
+      const button = screen.getByRole("button", { name: "Save claim" });
+      expect(theme.typography.body1.fontSize).toBe("0.875rem");
+      expect(theme.typography.body1.lineHeight).toBe("1.375rem");
+      expect(theme.typography.button.fontSize).toBe("0.875rem");
+      expect(getComputedStyle(prose).fontSize).toBe(size);
+      expect(getComputedStyle(prose).lineHeight).toBe(leading);
+      expect(getComputedStyle(button).fontSize).toBe(size);
+    },
+  );
+  it.each([
+    ["valueLabel", "13px", "20px", "600"],
+    ["factLabel", "13px", "24px", "600"],
+    ["factValue", "14px", "24px", "400"],
+    ["statusPill", "12px", "22px", "600"],
+    ["stepListName", "14px", "20px", "600"],
+    ["stepListUnstartedName", "14px", "20px", "500"],
+    ["stepListState", "12px", "18px", "600"],
+    ["controlLabel", "12px", "18px", "600"],
+    ["quietControl", "12px", "18px", "600"],
+    ["controlSmall", "13px", "20px", "600"],
+    ["supportingProse", "13px", "20px", "400"],
+    ["fieldName", "14px", "22px", "600"],
+    ["versionName", "20px", "28px", "400"],
+    ["versionNameEmpty", "14px", "20px", "400"],
+  ])(
+    "draws %s through its own type role without changing the element's heading level",
+    (role, size, lineHeight, weight) => {
+      styled(
+        <Typography variant="h3" sx={{ typography: role }}>
+          Field
+        </Typography>,
+      );
+      const heading = screen.getByRole("heading", { name: "Field", level: 3 });
+      const drawn = getComputedStyle(heading);
+      expect([drawn.fontSize, drawn.lineHeight, drawn.fontWeight]).toEqual([
+        size,
+        lineHeight,
+        weight,
+      ]);
+      expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+    },
+  );
+  it("keeps page, part, message and supporting text in their reading roles without moving heading levels", () => {
+    styled(
+      <>
+        <Typography variant="h1">Claim page</Typography>
+        <Typography variant="h2">Claim details</Typography>
+        <Typography variant="messageHeading">Claim message</Typography>
+        <Typography variant="body1">Claim body</Typography>
+        <Typography variant="body2">Claim control</Typography>
+        <Typography variant="caption">Claim helper</Typography>
+      </>,
+    );
+    const expected = [
+      ["Claim page", "H1", "24px", "32px"],
+      ["Claim details", "H2", "20px", "28px"],
+      ["Claim message", "H2", "16px", "24px"],
+      ["Claim body", "P", "14px", "22px"],
+      ["Claim control", "P", "14px", "20px"],
+      ["Claim helper", "SPAN", "12px", "18px"],
+    ];
+    expect(expected.map(([words]) => screen.getByText(words!).tagName)).toEqual(
+      expected.map(([, tag]) => tag),
+    );
+    expect(
+      expected.map(([words]) => {
+        const style = getComputedStyle(screen.getByText(words!));
+        return [style.fontSize, style.lineHeight];
+      }),
+    ).toEqual(expected.map(([, , size, height]) => [size, height]));
+    expect(screen.getAllByRole("heading", { level: 1 })).toEqual([
+      screen.getByText("Claim page"),
+    ]);
+  });
+});
+
 describe("page container", () => {
   it("uses the same wide measure when a page leaves its width to the theme", () => {
     styled(
@@ -173,6 +281,7 @@ function stateRuleFor(
   element: HTMLElement,
   state: "hover" | "active",
   property: string,
+  within = "",
 ): string | undefined {
   const generated = Array.from(element.classList).find((name) =>
     name.startsWith("css-"),
@@ -184,7 +293,7 @@ function stateRuleFor(
       for (const rule of rules) {
         if (
           rule instanceof CSSStyleRule &&
-          rule.selectorText.includes(`.${generated}:${state}`)
+          rule.selectorText.includes(`.${generated}${within}:${state}`)
         ) {
           const value = rule.style.getPropertyValue(property);
           if (value !== "") applied = value;
@@ -238,7 +347,6 @@ describe("contrastRatio", () => {
    * nothing in this suite could tell the difference.
    */
   it("puts Material's default secondary text, flattened onto white, at 5.74 to 1", () => {
-    // rgba(0, 0, 0, 0.6) over white is 0.4 × 255 = 102 = 0x66 in each channel.
     expect(contrastRatio("#666666", "#ffffff")).toBeCloseTo(5.742, 3);
   });
 });
@@ -258,8 +366,325 @@ describe("composited", () => {
   });
 });
 
-/** The cases below run in the order `theme.ts` declares what they are about. */
 describe("theme", () => {
+  it("lets Material's own transitions follow the reader's setting for less motion", () => {
+    expect(theme.motion.reducedMotion).toBe("system");
+  });
+
+  it("keeps the complete surface, ink, action, code and elevation palette in its approved roles", () => {
+    expect(theme.palette.surface).toEqual({
+      ground: "#ffffff",
+      card: "#ffffff",
+      cardEdge: "#d6e0e4",
+      rule: "#e4ebee",
+      rowHover: "#f3f8fa",
+      subtle: "#f3f7f9",
+      given: "#f6f9fb",
+    });
+    expect(theme.palette.ink).toEqual({
+      primary: "#192024",
+      strong: "#3e4a4f",
+      secondary: "#58666c",
+      controlEdge: "#808f96",
+    });
+    expect(theme.palette.act).toEqual({
+      main: "#1c5b81",
+      pressed: "#144b6c",
+      hover: "#ebf3f9",
+      current: "#daebf7",
+    });
+    expect(theme.palette.quiet).toEqual({
+      ground: "#d3e6f4",
+      hover: "#c7dded",
+      pressed: "#aecce2",
+      text: "#144b6c",
+    });
+    expect(theme.palette.warning).toMatchObject({
+      main: "#9a4f00",
+      noteGround: "#fbf1e1",
+      noteText: "#5c3b00",
+    });
+    expect(theme.palette.keyTag).toEqual({
+      text: "#4b575d",
+      ground: "#ffffff",
+      edge: "#c2cdd2",
+    });
+    expect(theme.palette.factTag).toEqual({
+      text: "#3e4a4f",
+      ground: "#ffffff",
+      edge: "#c2cdd2",
+    });
+    expect(theme.palette.held).toEqual({
+      ground: "#eef2f4",
+      text: "#808f96",
+      edge: "#d6e0e4",
+    });
+    expect(theme.palette.action).toMatchObject({
+      disabled: "#808f96",
+      disabledBackground: "#eef2f4",
+      focus: "#ebf3f9",
+    });
+    expect(theme.palette.code).toEqual({
+      ground: "#f3f7f9",
+      text: "#192024",
+      comment: "#58666c",
+      keyword: "#a1261f",
+      string: "#1f4f99",
+      constant: "#055d7a",
+      entity: "#8a4700",
+      variable: "#0b6b4f",
+      deleted: { text: "#a1261f", ground: "#fbe7e5" },
+      inserted: { text: "#24683a", ground: "#e1f0e4" },
+    });
+    expect(theme.palette.elevation).toEqual({
+      panel: "-8px 0 24px rgba(25, 32, 36, 0.10)",
+      popup: "0 4px 12px rgba(25, 32, 36, 0.12)",
+      scrim: "rgba(25, 32, 36, 0.24)",
+    });
+    expect(theme.shadows).toEqual([
+      "none",
+      ...Array<string>(24).fill("0 4px 12px rgba(25, 32, 36, 0.12)"),
+    ]);
+    expect(theme.vars).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "primary",
+      "contained",
+      "primary",
+      "medium",
+      "--variant-containedBg",
+      "#1c5b81",
+      "#144b6c",
+      "#144b6c",
+      "#fff",
+      null,
+      null,
+    ],
+    [
+      "secondary",
+      "outlined",
+      "primary",
+      "medium",
+      "--variant-outlinedBg",
+      "#ffffff",
+      "#ebf3f9",
+      "#ebf3f9",
+      "#1c5b81",
+      "#1c5b81",
+      "#1c5b81",
+    ],
+    [
+      "neutral",
+      "outlined",
+      "inherit",
+      "medium",
+      "--variant-outlinedBg",
+      "#ffffff",
+      "#ebf3f9",
+      "#ebf3f9",
+      "#3e4a4f",
+      "#808f96",
+      "#58666c",
+    ],
+    [
+      "danger",
+      "outlined",
+      "warning",
+      "medium",
+      "--variant-outlinedBg",
+      "#ffffff",
+      "#fbf1e1",
+      "#fbf1e1",
+      "#9a4f00",
+      "#9a4f00",
+      "#9a4f00",
+    ],
+    [
+      "quiet",
+      "text",
+      "inherit",
+      "small",
+      "--variant-textBg",
+      "#d3e6f4",
+      "#c7dded",
+      "#c7dded",
+      "#144b6c",
+      "rgba(0, 0, 0, 0)",
+      "rgba(0, 0, 0, 0)",
+    ],
+  ] as const)(
+    "draws the complete %s rest, hover and press fill, word and edge roles",
+    (
+      _role,
+      variant,
+      color,
+      size,
+      property,
+      rest,
+      hover,
+      press,
+      text,
+      restingEdge,
+      hoveredEdge,
+    ) => {
+      styled(
+        <Button variant={variant} color={color} size={size}>
+          Act
+        </Button>,
+      );
+      const button = screen.getByRole("button", { name: "Act" });
+      const style = getComputedStyle(button);
+      const resting =
+        variant === "text"
+          ? hexOf(style.backgroundColor)
+          : style.getPropertyValue(property);
+      const words =
+        color === "inherit"
+          ? hexOf(style.color)
+          : style.getPropertyValue(
+              variant === "contained"
+                ? "--variant-containedColor"
+                : "--variant-outlinedColor",
+            );
+      expect([
+        resting,
+        stateRuleFor(button, "hover", property),
+        stateRuleFor(button, "active", property),
+        words,
+      ]).toEqual([rest, hover, press, text]);
+      for (const ground of [rest, hover, press])
+        expect(contrastRatio(words, ground)).toBeGreaterThanOrEqual(4.5);
+      const edgeProperty =
+        color === "inherit" ? "border-color" : "--variant-outlinedBorder";
+      const asWritten = (value: string) =>
+        value.startsWith("rgb(") ? hexOf(value) : value;
+      const edgeAtRest =
+        variant === "contained"
+          ? null
+          : asWritten(style.getPropertyValue(edgeProperty));
+      const edgeUnderPointer =
+        variant === "contained"
+          ? null
+          : asWritten(
+              stateRuleFor(button, "hover", edgeProperty) ?? edgeAtRest!,
+            );
+      expect([edgeAtRest, edgeUnderPointer]).toEqual([
+        restingEdge,
+        hoveredEdge,
+      ]);
+      if (variant === "contained") expect(style.borderWidth).toBe("0px");
+    },
+  );
+
+  it.each([
+    ["toggle", "aria-pressed", "button"],
+    ["choice", "aria-checked", "radio"],
+  ] as const)(
+    "draws a secondary %s that is on in the picked ground under the working edge and words, the same under the pointer and pressed, and one that is off white",
+    (_kind, attribute, role) => {
+      styled(
+        <>
+          <Button role={role} {...{ [attribute]: true }}>
+            On
+          </Button>
+          <Button role={role} {...{ [attribute]: false }}>
+            Off
+          </Button>
+        </>,
+      );
+      const on = screen.getByRole(role, { name: "On" });
+      const off = screen.getByRole(role, { name: "Off" });
+      const property = "--variant-outlinedBg";
+      const drawn = getComputedStyle(on);
+      expect([
+        drawn.getPropertyValue(property),
+        stateRuleFor(on, "hover", property, `[${attribute}='true']`),
+        stateRuleFor(on, "active", property, `[${attribute}='true']`),
+        drawn.getPropertyValue("--variant-outlinedBorder"),
+        drawn.getPropertyValue("--variant-outlinedColor"),
+        drawn.boxShadow,
+      ]).toEqual([
+        "#daebf7",
+        "#daebf7",
+        "#daebf7",
+        "#1c5b81",
+        "#1c5b81",
+        "none",
+      ]);
+      expect(contrastRatio("#1c5b81", "#daebf7")).toBeGreaterThanOrEqual(4.5);
+      expect([
+        getComputedStyle(off).getPropertyValue(property),
+        getComputedStyle(off).getPropertyValue("--variant-outlinedBorder"),
+      ]).toEqual(["#ffffff", "#1c5b81"]);
+    },
+  );
+
+  it("marks a picked table row with the picked ground and a 3px working edge inside its first cell alone", () => {
+    styled(
+      <Table>
+        <TableBody>
+          <TableRow selected>
+            <TableCell>Picked</TableCell>
+            <TableCell>Its kind</TableCell>
+          </TableRow>
+          <TableRow>
+            <TableCell>Not picked</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>,
+    );
+    const picked = screen.getByText("Picked");
+    expect(hexOf(getComputedStyle(picked.parentElement!).backgroundColor)).toBe(
+      "#daebf7",
+    );
+    expect(getComputedStyle(picked).boxShadow).toBe("inset 3px 0 0 #1c5b81");
+    expect(getComputedStyle(screen.getByText("Its kind")).boxShadow).not.toBe(
+      "inset 3px 0 0 #1c5b81",
+    );
+    const other = screen.getByText("Not picked");
+    expect(getComputedStyle(other).boxShadow).not.toBe("inset 3px 0 0 #1c5b81");
+    expect(getComputedStyle(other.parentElement!).backgroundColor).not.toBe(
+      "rgb(218, 235, 247)",
+    );
+  });
+
+  it("marks a picked row headed by a header cell on that cell alone, never on the first data cell after it", () => {
+    styled(
+      <Table>
+        <TableBody>
+          <TableRow selected>
+            <TableCell component="th" scope="row">
+              Attempt 1
+            </TableCell>
+            <TableCell>Cat</TableCell>
+            <TableCell>Waiting</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>,
+    );
+    const [head, first, last] = [
+      ...screen.getByText("Attempt 1").parentElement!.children,
+    ];
+    expect(head!.tagName).toBe("TH");
+    expect(getComputedStyle(head!).boxShadow).toBe("inset 3px 0 0 #1c5b81");
+    expect(first!.tagName).toBe("TD");
+    expect(getComputedStyle(first!).boxShadow).not.toBe(
+      "inset 3px 0 0 #1c5b81",
+    );
+    expect(getComputedStyle(last!).boxShadow).not.toBe("inset 3px 0 0 #1c5b81");
+    const row = head!.parentElement!;
+    row.prepend(document.createElement("style"));
+    head!.after(document.createElement("style"));
+    expect(getComputedStyle(head!).boxShadow).toBe("inset 3px 0 0 #1c5b81");
+    for (const following of [first!, last!]) {
+      expect(getComputedStyle(following).boxShadow).not.toBe(
+        getComputedStyle(head!).boxShadow,
+      );
+    }
+  });
+
   it("provides nonempty autofill keyframes once through the page baseline", () => {
     styled(<TextField label="Name" />);
 
@@ -303,8 +728,15 @@ describe("theme", () => {
     await userEvent.tab();
 
     const ring = getComputedStyle(screen.getByRole("button"));
+    expect(ring.outlineStyle).toBe("solid");
     expect(ring.outlineColor).toBe(PRIMARY_COLOUR);
-    expect(ring.outlineWidth).toBe(MATERIAL_RING_WIDTH);
+    expect(ring.outlineWidth).toBe(RING_WIDTH);
+    expect(ring.outlineOffset).toBe(MATERIAL_RING_OFFSET);
+    expect(
+      getComputedStyle(screen.getByRole("button")).getPropertyValue(
+        "--_focusVisible-offset",
+      ),
+    ).toBe("1");
   });
 
   /**
@@ -334,10 +766,7 @@ describe("theme", () => {
    */
   it("keeps the rule marking generated output visible against the page behind the card", () => {
     expect(
-      contrastRatio(
-        theme.palette.generated.main,
-        theme.palette.background.default,
-      ),
+      contrastRatio(theme.palette.model.text, theme.palette.background.default),
     ).toBeGreaterThanOrEqual(3);
   });
 
@@ -345,34 +774,46 @@ describe("theme", () => {
    * Material grows the keys it knows into a full colour and merges the rest as written, so a colour of the
    * theme's own is typed as written: typed as a full colour, it would promise shades that nothing computes.
    */
-  it("grows the colours Material knows and leaves the mark's, a part's, a step kind's and a step state's colours as written", () => {
-    const written = expect.stringMatching(/^#[0-9a-f]{6}$/);
-    expect(theme.palette.generated).toEqual({ main: "#5b3fa8" });
-    expect(theme.palette.part).toEqual({ mine: written });
-    expect(Object.keys(theme.palette.stepKind).toSorted()).toEqual([
-      "code_step",
-      "question",
-      "route",
-      "search",
-      "workflow",
-    ]);
-    expect(Object.keys(theme.palette.stepState).toSorted()).toEqual([
-      "done",
-      "failed",
-      "held_back",
-      "not_started",
-      "running",
-      "waiting",
-    ]);
-    expect(Object.values(theme.palette.stepKind)).toEqual(
-      Object.keys(theme.palette.stepKind).map(() => ({
-        main: written,
-        ground: written,
-      })),
-    );
-    expect(Object.values(theme.palette.stepState)).toEqual(
-      Object.keys(theme.palette.stepState).map(() => written),
-    );
+  it("grows Material colours while keeping every canonical role exact and no compatibility palettes", () => {
+    expect(theme.palette.model).toEqual({ text: "#5b3fa8", ground: "#efeaf8" });
+    expect(theme.palette.kind).toEqual({
+      workflow: { text: "#403c39", ground: "#e8e6e3", edge: "#8e8a87" },
+      question: { text: "#5c5721", ground: "#f3f2db", edge: "#8f8c62" },
+      route: { text: "#614232", ground: "#f5eae5", edge: "#9e867a" },
+      search: { text: "#8a2c55", ground: "#f8e6ee", edge: "#ba7890" },
+      codeStep: { text: "#324b5a", ground: "#e4edf2", edge: "#7a8d98" },
+      referenceList: { text: "#215e54", ground: "#e1f3ef" },
+    });
+    expect(theme.palette.kind.referenceList).not.toHaveProperty("edge");
+    expect(theme.palette.state).toEqual({
+      draft: { text: "#444f54", ground: "#ffffff", edge: "#a9b6bd" },
+      submitted: { text: "#1f4f99", ground: "#e3ebf7" },
+      inService: { text: "#24683a", ground: "#e1f0e4" },
+      retired: { text: "#5a656b", ground: "#ffffff", edge: "#c2cdd2" },
+      notStarted: { text: "#444f54", ground: "#ffffff", edge: "#a9b6bd" },
+      running: { text: "#1f4f99", ground: "#e3ebf7" },
+      waiting: { text: "#8a4700", ground: "#fbeedb" },
+      blocked: { text: "#3a4449", ground: "#ffffff", edge: "#a9b6bd" },
+      failed: { text: "#a1261f", ground: "#fbe7e5" },
+      done: { text: "#24683a", ground: "#e1f0e4" },
+      stopped: { text: "#5a656b", ground: "#ffffff", edge: "#c2cdd2" },
+      rejectedForLength: {
+        text: "#3a4449",
+        ground: "#ffffff",
+        edge: "#a9b6bd",
+      },
+    });
+    for (const removed of [
+      "generated",
+      "part",
+      "stepKind",
+      "stepState",
+      "stepStateGround",
+      "valueState",
+      "kindMore",
+      "stateMore",
+    ])
+      expect(theme.palette).not.toHaveProperty(removed);
     expect(theme.palette.primary.dark).toBeDefined();
     expect(theme.palette.primary.contrastText).toBeDefined();
   });
@@ -382,11 +823,11 @@ describe("theme", () => {
     ["a card", theme.palette.background.paper],
     ["the page", theme.palette.background.default],
   ])(
-    "lays the reader's own messages on a ground that differs from %s",
+    "lays messages given to the reader on a ground that differs from %s",
     (_neighbour, neighbour) => {
-      expect(contrastRatio(theme.palette.part.mine, neighbour)).toBeGreaterThan(
-        1,
-      );
+      expect(
+        contrastRatio(theme.palette.surface.given, neighbour),
+      ).toBeGreaterThan(1);
     },
   );
 
@@ -394,26 +835,32 @@ describe("theme", () => {
    * A kind's words and icon are drawn only on its own ground, which carries no meaning the words do not. A kind's or
    * a state's icon is in its words' colour, so the 4.5:1 its words are held to holds it over SC 1.4.11's 3:1.
    */
-  it.each(Object.entries(theme.palette.stepKind))(
+  it.each(Object.entries(theme.palette.kind))(
     "keeps the words naming a step that runs %s, and their icon, legible on their own ground",
-    (_kind, { main, ground }) => {
-      expect(contrastRatio(main, ground)).toBeGreaterThanOrEqual(4.5);
+    (_kind, { text, ground }) => {
+      expect(contrastRatio(text, ground)).toBeGreaterThanOrEqual(4.5);
     },
   );
 
   /** The rule down a step's message is a mark beside the words that say its kind, so SC 1.4.11 asks 3:1 of it. */
-  it.each(Object.entries(theme.palette.stepKind))(
+  it.each([
+    ["workflow", "#8e8a87"],
+    ["question", "#8f8c62"],
+    ["route", "#9e867a"],
+    ["search", "#ba7890"],
+    ["codeStep", "#7a8d98"],
+  ] as const)(
     "keeps the rule down the message of a step that runs %s visible against the page it is drawn on",
-    (_kind, { main }) => {
+    (_kind, edge) => {
       expect(
-        contrastRatio(main, theme.palette.background.paper),
+        contrastRatio(edge, theme.palette.background.paper),
       ).toBeGreaterThanOrEqual(3);
     },
   );
 
   /** A state's words, and its icon with them, on every ground they are drawn on. */
   it.each(
-    Object.entries(theme.palette.stepState).flatMap(([state, colour]) =>
+    Object.entries(theme.palette.state).flatMap(([state, { text: colour }]) =>
       READ_ON.map(([surface, ground]) => [state, surface, colour, ground]),
     ),
   )(
@@ -425,8 +872,8 @@ describe("theme", () => {
 
   /** Held back wants nothing of the reader and waiting wants an act, so the two are never drawn alike. */
   it("draws a step held back and a step waiting in colours of their own", () => {
-    expect(theme.palette.stepState.held_back).not.toBe(
-      theme.palette.stepState.waiting,
+    expect(theme.palette.state.blocked.text).not.toBe(
+      theme.palette.state.waiting.text,
     );
   });
 
@@ -462,14 +909,14 @@ describe("theme", () => {
     },
   );
 
-  it("gives the page a pale ground and a roomier spacing step", () => {
+  it("gives the page and its cards one white ground with a roomier spacing step", () => {
     styled(<Typography>Read</Typography>);
 
     expect(theme.spacing(1)).toBe("10px");
-    expect(theme.palette.background.default).toBe("#f5f7fa");
+    expect(theme.palette.background.default).toBe("#ffffff");
     expect(theme.palette.background.paper).toBe("#ffffff");
     expect(getComputedStyle(document.body).backgroundColor).toBe(
-      "rgb(245, 247, 250)",
+      "rgb(255, 255, 255)",
     );
   });
 
@@ -481,9 +928,9 @@ describe("theme", () => {
       </>,
     );
 
-    expect(getComputedStyle(screen.getByText("Body")).lineHeight).toBe("1.65");
+    expect(getComputedStyle(screen.getByText("Body")).lineHeight).toBe("22px");
     expect(getComputedStyle(screen.getByText("Supporting")).lineHeight).toBe(
-      "1.6",
+      "20px",
     );
   });
 
@@ -526,9 +973,11 @@ describe("theme", () => {
     expect(getComputedStyle(sentence).fontWeight).toBe("400");
     expect(getComputedStyle(link).color).toBe(PRIMARY_COLOUR);
     expect(ruleFor(`${selector}:hover`)?.textDecoration).toBe("underline");
-    expect(
-      getComputedStyle(screen.getByRole("link", { name: "Next" })).fontWeight,
-    ).not.toBe("600");
+    const buttonLink = getComputedStyle(
+      screen.getByRole("link", { name: "Next" }),
+    );
+    expect(buttonLink.borderRadius).toBe("8px");
+    expect(buttonLink.textUnderlineOffset).not.toBe("0.18em");
     link.focus();
     expect(link).toHaveFocus();
     expect(
@@ -594,14 +1043,14 @@ describe("theme", () => {
     expect(unpadded.paddingTop).toBe("0");
     expect(unpadded.paddingBottom).toBe("0");
     expect(denseInner.paddingTop).toBe("4px");
-    expect(cell.paddingTop).toBe("16px");
-    expect(smallCell.paddingTop).toBe("12px");
-    expect(cell.paddingLeft).toBe("18px");
+    expect(cell.paddingTop).toBe("11px");
+    expect(smallCell.paddingTop).toBe("11px");
+    expect(cell.paddingLeft).toBe("12px");
     expect(noPadding.paddingTop).toBe("0px");
     expect(noPadding.paddingLeft).toBe("0px");
     expect(checkboxPadding.paddingTop).toBe("0px");
-    expect(inputRoot.borderRadius).toBe("10px");
-    expect(button.minHeight).toBe("40px");
+    expect(inputRoot.borderRadius).toBe("8px");
+    expect(button.minHeight).toBe("36px");
   });
 
   it("sets the page in the reader's system face, never in a face nothing loads", () => {
@@ -637,11 +1086,11 @@ describe("theme", () => {
     );
 
     expect(drawn.map((heading) => heading.textContent)).toEqual(HEADING_LEVELS);
-    expect(sizes).toEqual([28, 22, 20, 18, 17, 16]);
+    expect(sizes).toEqual([24, 20, 16, 16, 16, 16]);
     expect(sizes.filter((size) => size < body)).toEqual([]);
     expect(
       new Set(drawn.map((heading) => getComputedStyle(heading).fontWeight)),
-    ).toEqual(new Set(["600"]));
+    ).toEqual(new Set(["650"]));
   });
 
   it("draws the last heading level in the supporting colour, and every other in the colour of the text around it", () => {
@@ -690,8 +1139,8 @@ describe("theme", () => {
     const drawn = getComputedStyle(name);
 
     expect(name.tagName).toBe("P");
-    expect(drawn.fontSize).toBe("22px");
-    expect(drawn.fontWeight).toBe("600");
+    expect(drawn.fontSize).toBe("20px");
+    expect(drawn.fontWeight).toBe("650");
     expect(screen.getAllByRole("heading")).toEqual([
       screen.getByText("Versions"),
     ]);
@@ -884,17 +1333,23 @@ describe("theme", () => {
     expect(overridden.borderWidth).toBe("0px");
   });
 
-  it("gives ordinary, warning and navigation acts distinct fills, edges and sizes", () => {
+  it("gives primary, secondary, neutral, quiet and danger acts distinct fills, edges and sizes", () => {
     styled(
       <>
         <Button>Rename</Button>
         <Button color="warning">Remove</Button>
         <Button color="inherit">Cancel</Button>
-        <Button color="inherit" size="small">
+        <Button variant="text" color="inherit" size="small">
           Next
         </Button>
         <Button variant="contained">Create</Button>
         <Button variant="text">Expand</Button>
+        <Button variant="text" color="inherit" size="small">
+          Details
+        </Button>
+        <Button variant="contained" color="warning">
+          Retire
+        </Button>
       </>,
     );
 
@@ -906,7 +1361,7 @@ describe("theme", () => {
       "Create",
       "Expand",
     ].map((name) => getComputedStyle(screen.getByRole("button", { name })));
-    const outlined = [ordinary!, warning!, neutral!, navigation!];
+    const outlined = [ordinary!, warning!, neutral!];
     const fills = outlined.map((style) =>
       style.getPropertyValue("--variant-outlinedBg"),
     );
@@ -914,38 +1369,69 @@ describe("theme", () => {
       ordinary!.getPropertyValue("--variant-outlinedBorder"),
       warning!.getPropertyValue("--variant-outlinedBorder"),
       hexOf(neutral!.borderColor),
-      hexOf(navigation!.borderColor),
     ];
     const colours = [
       ordinary!.getPropertyValue("--variant-outlinedColor"),
       warning!.getPropertyValue("--variant-outlinedColor"),
       hexOf(neutral!.color),
-      hexOf(navigation!.color),
     ];
 
-    expect(new Set(fills).size).toBe(3);
+    const leadingFill = leading!.getPropertyValue("--variant-containedBg");
+    const quietFill = hexOf(navigation!.backgroundColor);
+    expect(fills).toEqual(["#ffffff", "#ffffff", "#ffffff"]);
+    expect(leadingFill).not.toBe(fills[0]);
+    expect([leadingFill, ...fills]).not.toContain(quietFill);
     expect(new Set(borders).size).toBe(3);
     expect(outlined.map((style) => style.borderWidth)).toEqual([
       "1px",
       "1px",
       "1px",
-      "1px",
     ]);
-    expect(ordinary!.minHeight).toBe("40px");
-    expect(warning!.minHeight).toBe("40px");
-    expect(neutral!.minHeight).toBe("40px");
-    expect(navigation!.minHeight).toBe("32px");
-    expect(neutral!.color).toBe("rgb(82, 101, 121)");
-    expect(neutral!.borderColor).toBe("rgb(82, 101, 121)");
-    expect(neutral!.getPropertyValue("--variant-outlinedBg")).toBe(
-      navigation!.getPropertyValue("--variant-outlinedBg"),
+    expect(ordinary!.minHeight).toBe("36px");
+    expect(warning!.minHeight).toBe("36px");
+    expect(neutral!.minHeight).toBe("36px");
+    expect(leading!.minHeight).toBe("36px");
+    expect(navigation!.minHeight).toBe("26px");
+    expect(neutral!.color).toBe("rgb(62, 74, 79)");
+    expect(neutral!.borderColor).toBe("rgb(128, 143, 150)");
+    expect(navigation!.color).toBe("rgb(20, 75, 108)");
+    expect(quietFill).toBe("#d3e6f4");
+    expect(navigation!.borderRadius).toBe("6px");
+    expect(ordinary!.borderRadius).toBe("8px");
+    expect(screen.getByRole("button", { name: "Next" })).toHaveClass(
+      "MuiButton-text",
     );
-    expect(navigation!.color).toBe("rgb(82, 101, 121)");
-    expect(navigation!.borderColor).toBe("rgb(82, 101, 121)");
+    expect(screen.getByRole("button", { name: "Next" })).not.toHaveClass(
+      "MuiButton-outlined",
+    );
+    expect(navigation!.borderColor).toBe("rgba(0, 0, 0, 0)");
     expect(leading!.getPropertyValue("--variant-containedBg")).toBe(
       theme.palette.primary.main,
     );
     expect(unframed!.borderWidth).toBe("0px");
+    const quiet = getComputedStyle(
+      screen.getByRole("button", { name: "Details" }),
+    );
+    const confirm = getComputedStyle(
+      screen.getByRole("button", { name: "Retire" }),
+    );
+    expect(ordinary!.minWidth).toBe("88px");
+    expect(quiet.minWidth).toBe("64px");
+    expect(quiet.minHeight).toBe("26px");
+    expect(quiet.color).toBe("rgb(20, 75, 108)");
+    expect(quiet.borderColor).toBe("rgba(0, 0, 0, 0)");
+    expect(confirm.getPropertyValue("--variant-containedBg")).toBe("#9a4f00");
+    expect(leading!.boxShadow).toBe("none");
+    expect(confirm.boxShadow).toBe("none");
+    expect(contrastRatio(hexOf(quiet.color), "#ffffff")).toBeGreaterThanOrEqual(
+      4.5,
+    );
+    expect(
+      contrastRatio(
+        confirm.getPropertyValue("--variant-containedColor"),
+        "#9a4f00",
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
     for (let at = 0; at < outlined.length; at += 1) {
       expect(contrastRatio(borders[at]!, fills[at]!)).toBeGreaterThanOrEqual(3);
       expect(contrastRatio(colours[at]!, fills[at]!)).toBeGreaterThanOrEqual(
@@ -954,19 +1440,19 @@ describe("theme", () => {
     }
   });
 
-  it("changes every outlined act's fill on hover and press", () => {
+  it("changes every outlined act's fill on hover and press and a quiet navigation act's fill on hover", () => {
     styled(
       <>
         <Button>Rename</Button>
         <Button color="warning">Remove</Button>
         <Button color="inherit">Cancel</Button>
-        <Button color="inherit" size="small">
+        <Button variant="text" color="inherit" size="small">
           Next
         </Button>
       </>,
     );
 
-    for (const name of ["Rename", "Remove", "Cancel", "Next"]) {
+    for (const name of ["Rename", "Remove", "Cancel"]) {
       const button = screen.getByRole("button", { name });
       const drawn = getComputedStyle(button);
       const resting = drawn.getPropertyValue("--variant-outlinedBg");
@@ -977,18 +1463,40 @@ describe("theme", () => {
       expect(hovered).not.toBe(resting);
       expect(pressed).not.toBe(resting);
       const words =
-        name === "Next" || name === "Cancel"
+        name === "Cancel"
           ? hexOf(drawn.color)
           : drawn.getPropertyValue("--variant-outlinedColor");
-      const edge =
-        name === "Next" || name === "Cancel"
+      const restingEdge =
+        name === "Cancel"
           ? hexOf(drawn.borderColor)
           : drawn.getPropertyValue("--variant-outlinedBorder");
       for (const ground of [resting, hovered!, pressed!]) {
         expect(contrastRatio(words, ground)).toBeGreaterThanOrEqual(4.5);
-        expect(contrastRatio(edge, ground)).toBeGreaterThanOrEqual(3);
       }
+      const edgeProperty =
+        name === "Cancel" ? "border-color" : "--variant-outlinedBorder";
+      const stateEdge = (state: "hover" | "active") => {
+        const changed = stateRuleFor(button, state, edgeProperty);
+        return changed === undefined
+          ? restingEdge
+          : changed.startsWith("rgb")
+            ? hexOf(changed)
+            : changed;
+      };
+      expect(contrastRatio(restingEdge, resting)).toBeGreaterThanOrEqual(3);
+      expect(
+        contrastRatio(stateEdge("hover"), hovered!),
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        contrastRatio(stateEdge("active"), pressed!),
+      ).toBeGreaterThanOrEqual(3);
     }
+    const next = screen.getByRole("button", { name: "Next" });
+    const hovered = stateRuleFor(next, "hover", "--variant-textBg");
+    expect(hovered).toBe("#c7dded");
+    expect(
+      contrastRatio(hexOf(getComputedStyle(next).color), hovered!),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 
   /**
@@ -1048,26 +1556,11 @@ describe("theme", () => {
   });
 
   /** An icon alone is a non-text mark held to SC 1.4.11's 3:1 contrast. */
-  it.each(
-    READ_ON.flatMap(([surface, ground]) =>
-      (["plain", "warning", "neutral"] as const).map(
-        (colour) => [colour, surface, ground] as const,
-      ),
-    ),
-  )(
-    "keeps a %s act drawn as an icon alone visible on %s",
-    (colour, _surface, ground) => {
+  it.each(READ_ON)(
+    "keeps a borderless icon legible on %s",
+    (_surface, ground) => {
       styled(
-        <IconButton
-          aria-label="Remove"
-          color={
-            colour === "warning"
-              ? "warning"
-              : colour === "neutral"
-                ? "inherit"
-                : undefined
-          }
-        >
+        <IconButton aria-label="Remove">
           <DeleteOutlinedIcon />
         </IconButton>,
       );
@@ -1085,25 +1578,387 @@ describe("theme", () => {
       ).toBeGreaterThanOrEqual(3);
       const button = screen.getByRole("button", { name: "Remove" });
       const style = getComputedStyle(button);
-      expect(style.borderWidth).toBe("1px");
-      expect(
-        contrastRatio(hexOf(style.color), hexOf(style.backgroundColor)),
-      ).toBeGreaterThanOrEqual(4.5);
-      expect(
-        contrastRatio(hexOf(style.borderColor), ground),
-      ).toBeGreaterThanOrEqual(3);
-      for (const state of ["hover", "active"] as const) {
-        const stateGround = stateRuleFor(button, state, "background-color");
-        expect(stateGround).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
-        expect(
-          contrastRatio(hexOf(style.color), hexOf(stateGround!)),
-        ).toBeGreaterThanOrEqual(4.5);
-        expect(
-          contrastRatio(hexOf(style.borderColor), hexOf(stateGround!)),
-        ).toBeGreaterThanOrEqual(3);
-      }
+      expect(style.borderWidth).toBe("0px");
+      expect(style.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(style.color).toBe("rgb(88, 102, 108)");
+      expect([
+        style.width,
+        style.height,
+        style.padding,
+        style.borderRadius,
+      ]).toEqual(["32px", "32px", "0px", "8px"]);
+      expect(getComputedStyle(button.querySelector("svg")!).width).toBe("16px");
+      expect(stateRuleFor(button, "hover", "background-color")).toBe(
+        "rgb(211, 230, 244)",
+      );
+      expect(stateRuleFor(button, "active", "background-color")).toBe(
+        "rgb(199, 221, 237)",
+      );
+      expect(stateRuleFor(button, "hover", "color")).toBe("rgb(25, 32, 36)");
     },
   );
+
+  it("keeps AppBar icons in their inherited colour and fold arrows slightly larger", () => {
+    styled(
+      <div style={{ color: "#ffffff" }}>
+        <IconButton color="inherit" aria-label="Sidebar">
+          <DeleteOutlinedIcon />
+        </IconButton>
+        <IconButton aria-label="Fold" aria-expanded="true">
+          <DeleteOutlinedIcon />
+        </IconButton>
+      </div>,
+    );
+    expect(
+      getComputedStyle(screen.getByRole("button", { name: "Sidebar" })).color,
+    ).toBe("rgb(255, 255, 255)");
+    expect(
+      getComputedStyle(
+        screen.getByRole("button", { name: "Fold" }).querySelector("svg")!,
+      ).width,
+    ).toBe("18px");
+  });
+
+  it("draws toggles in equal columns and marks the chosen segment with colour and pressed state", () => {
+    styled(
+      <ToggleButtonGroup value="conversation" exclusive aria-label="View">
+        <ToggleButton value="conversation">Conversation</ToggleButton>
+        <ToggleButton value="detail">Full detail</ToggleButton>
+      </ToggleButtonGroup>,
+    );
+    const group = screen.getByRole("group", { name: "View" });
+    const chosen = screen.getByRole("button", { name: "Conversation" });
+    const other = screen.getByRole("button", { name: "Full detail" });
+    expect(getComputedStyle(group).display).toBe("inline-grid");
+    expect(getComputedStyle(group).gridAutoColumns).toBe("minmax(0, 1fr)");
+    expect(chosen).toHaveAttribute("aria-pressed", "true");
+    expect(other).toHaveAttribute("aria-pressed", "false");
+    expect(chosen).toHaveStyle({
+      backgroundColor: "#daebf7",
+      color: "#1c5b81",
+    });
+    expect(other).toHaveStyle({
+      color: "#58666c",
+      borderColor: "#808f96",
+      minHeight: "32px",
+    });
+  });
+
+  it("draws a held quiet button in the colours of a control that cannot be pressed, a quiet toggle that is on on its pressed ground inside an act-coloured edge, and one that is off with no edge", () => {
+    styled(
+      <>
+        <Button variant="text" color="inherit" size="small" disabled>
+          Previous
+        </Button>
+        <Button variant="text" color="inherit" size="small" aria-pressed="true">
+          Attempts
+        </Button>
+        <Button
+          variant="text"
+          color="inherit"
+          size="small"
+          aria-pressed="false"
+        >
+          Sources
+        </Button>
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Previous" })).toHaveStyle({
+      color: "#808f96",
+    });
+    expect(
+      getComputedStyle(screen.getByRole("button", { name: "Previous" }))
+        .backgroundColor,
+    ).toBe("rgb(238, 242, 244)");
+    expect(
+      getComputedStyle(screen.getByRole("button", { name: "Previous" }))
+        .borderColor,
+    ).toBe("rgb(214, 224, 228)");
+    const on = getComputedStyle(
+      screen.getByRole("button", { name: "Attempts" }),
+    );
+    const off = getComputedStyle(
+      screen.getByRole("button", { name: "Sources" }),
+    );
+    expect([on.color, on.backgroundColor, on.boxShadow]).toEqual([
+      "rgb(20, 75, 108)",
+      "rgb(174, 204, 226)",
+      "inset 0 0 0 1px #1c5b81",
+    ]);
+    expect([off.color, off.backgroundColor]).toEqual([
+      "rgb(20, 75, 108)",
+      "rgb(211, 230, 244)",
+    ]);
+    expect(off.boxShadow).not.toContain("inset");
+  });
+
+  it("draws a held outlined or filled button in the colours of a control that cannot be pressed", () => {
+    styled(
+      <>
+        <Button disabled>Rename</Button>
+        <Button color="inherit" disabled>
+          Cancel
+        </Button>
+        <Button variant="contained" disabled>
+          Create
+        </Button>
+      </>,
+    );
+
+    for (const name of ["Rename", "Cancel", "Create"]) {
+      const drawn = getComputedStyle(screen.getByRole("button", { name }));
+      expect([
+        drawn.color,
+        drawn.backgroundColor,
+        drawn.borderColor,
+        drawn.opacity,
+      ]).toEqual([
+        "rgb(128, 143, 150)",
+        "rgb(238, 242, 244)",
+        "rgb(214, 224, 228)",
+        "1",
+      ]);
+    }
+  });
+
+  it("draws a held segment in the held colours and a held icon in the held words on no ground", () => {
+    styled(
+      <>
+        <ToggleButtonGroup value="conversation" exclusive aria-label="View">
+          <ToggleButton value="conversation">Conversation</ToggleButton>
+          <ToggleButton value="detail" disabled>
+            Full detail
+          </ToggleButton>
+        </ToggleButtonGroup>
+        <IconButton aria-label="Remove" disabled>
+          <DeleteOutlinedIcon />
+        </IconButton>
+      </>,
+    );
+
+    const segment = getComputedStyle(
+      screen.getByRole("button", { name: "Full detail" }),
+    );
+    const icon = getComputedStyle(
+      screen.getByRole("button", { name: "Remove" }),
+    );
+    expect([
+      segment.color,
+      segment.backgroundColor,
+      segment.borderColor,
+      segment.opacity,
+    ]).toEqual([
+      "rgb(128, 143, 150)",
+      "rgb(238, 242, 244)",
+      "rgb(214, 224, 228)",
+      "1",
+    ]);
+    expect([icon.color, icon.backgroundColor, icon.opacity]).toEqual([
+      "rgb(128, 143, 150)",
+      "rgba(0, 0, 0, 0)",
+      "1",
+    ]);
+  });
+
+  it("draws a held check box and radio, their boxes included, in the held words at full opacity, with their labels", () => {
+    styled(
+      <>
+        <FormControlLabel
+          control={<Checkbox disabled />}
+          label="Copy the notes"
+        />
+        <FormControlLabel
+          control={<Checkbox disabled defaultChecked />}
+          label="Keep the files"
+        />
+        <FormControlLabel control={<Radio disabled />} label="Every step" />
+      </>,
+    );
+
+    for (const name of ["Copy the notes", "Keep the files", "Every step"]) {
+      const input = screen.getByRole(
+        name === "Every step" ? "radio" : "checkbox",
+        { name },
+      );
+      const control = getComputedStyle(input.parentElement!);
+      const box = getComputedStyle(input.parentElement!.querySelector("svg")!);
+      const label = getComputedStyle(screen.getByText(name));
+      expect([
+        control.color,
+        control.backgroundColor,
+        control.opacity,
+        box.color,
+        label.color,
+        label.opacity,
+      ]).toEqual([
+        "rgb(128, 143, 150)",
+        "rgba(0, 0, 0, 0)",
+        "1",
+        "rgb(128, 143, 150)",
+        "rgb(128, 143, 150)",
+        "1",
+      ]);
+    }
+  });
+
+  it.each([false, true])(
+    "draws a held switch, on %s, as a held track and a white thumb each inside the held edge, the thumb where it stands",
+    (on) => {
+      styled(
+        <FormControlLabel
+          control={<Switch disabled checked={on} />}
+          label="Notify"
+        />,
+      );
+
+      const input = screen.getByRole("switch", { name: "Notify" });
+      const base = input.parentElement!;
+      const thumb = getComputedStyle(base.querySelector(".MuiSwitch-thumb")!);
+      const track = getComputedStyle(base.nextElementSibling!);
+      const label = getComputedStyle(screen.getByText("Notify"));
+      expect(base.classList.contains("Mui-checked")).toBe(on);
+      expect(getComputedStyle(base).transform).toBe(
+        on ? "translateX(20px)" : "none",
+      );
+      expect([getComputedStyle(base).color, thumb.boxShadow]).toEqual([
+        "rgb(255, 255, 255)",
+        "0 0 0 1px #d6e0e4",
+      ]);
+      expect([track.backgroundColor, track.boxShadow, track.opacity]).toEqual([
+        "rgb(238, 242, 244)",
+        "inset 0 0 0 1px #d6e0e4",
+        "1",
+      ]);
+      expect([label.color, label.opacity]).toEqual(["rgb(128, 143, 150)", "1"]);
+    },
+  );
+
+  it("draws a held menu item in the held words on no ground, at full opacity", () => {
+    styled(
+      <MenuList>
+        <MenuItem disabled>Archive</MenuItem>
+        <MenuItem>Keep</MenuItem>
+      </MenuList>,
+    );
+
+    const held = getComputedStyle(
+      screen.getByRole("menuitem", { name: "Archive" }),
+    );
+    const open = getComputedStyle(
+      screen.getByRole("menuitem", { name: "Keep" }),
+    );
+    expect([held.color, held.backgroundColor, held.opacity]).toEqual([
+      "rgb(128, 143, 150)",
+      "rgba(0, 0, 0, 0)",
+      "1",
+    ]);
+    expect(open.color).not.toBe(held.color);
+  });
+
+  it("draws a held field on the held ground inside the held edge, its words and label held, its hint still in the supporting ink", () => {
+    styled(
+      <TextField
+        label="Name"
+        defaultValue="Oak crate"
+        helperText="Only an owner can rename it."
+        disabled
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Name" });
+    const root = getComputedStyle(input.parentElement!);
+    const edge = getComputedStyle(
+      input.parentElement!.querySelector("fieldset")!,
+    );
+    const words = getComputedStyle(input);
+    const label = getComputedStyle(
+      screen.getByText("Name", { selector: "label" }),
+    );
+    const hint = getComputedStyle(
+      screen.getByText("Only an owner can rename it."),
+    );
+    expect([root.backgroundColor, root.opacity, edge.borderColor]).toEqual([
+      "rgb(238, 242, 244)",
+      "1",
+      "rgb(214, 224, 228)",
+    ]);
+    expect([
+      words.color,
+      words.getPropertyValue("-webkit-text-fill-color"),
+      words.opacity,
+    ]).toEqual(["rgb(128, 143, 150)", "rgb(128, 143, 150)", "1"]);
+    expect([label.color, label.opacity]).toEqual(["rgb(128, 143, 150)", "1"]);
+    expect([hint.color, hint.opacity]).toEqual(["rgb(88, 102, 108)", "1"]);
+  });
+
+  it.each([
+    [
+      "primary",
+      "contained",
+      "primary",
+      "medium",
+      "--variant-containedBg",
+      "#144b6c",
+    ],
+    ["quiet", "text", "inherit", "small", "--variant-textBg", "#c7dded"],
+  ] as const)(
+    "keeps the actual %s hover fill and text above 4.5:1",
+    (_tier, variant, color, size, property, expectedGround) => {
+      styled(
+        <Button variant={variant} color={color} size={size}>
+          Act
+        </Button>,
+      );
+      const button = screen.getByRole("button", { name: "Act" });
+      const ground = stateRuleFor(button, "hover", property);
+      expect(ground).toBe(expectedGround);
+      const drawn = getComputedStyle(button);
+      const text =
+        variant === "contained"
+          ? drawn.getPropertyValue("--variant-containedColor")
+          : hexOf(drawn.color);
+      expect(contrastRatio(text, ground!)).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each([
+    ["primary hover", "#ffffff", "#144b6c"],
+    ["quiet resting", "#144b6c", "#d3e6f4"],
+    ["quiet hover", "#144b6c", "#c7dded"],
+    ["icon resting", "#58666c", "#ffffff"],
+    ["icon hover", "#192024", "#d3e6f4"],
+    ["icon pressed", "#192024", "#c7dded"],
+    ["quiet toggle on", "#144b6c", "#aecce2"],
+    ["toggle resting", "#58666c", "#ffffff"],
+    ["toggle chosen", "#1c5b81", "#daebf7"],
+    [
+      "rejected value",
+      theme.palette.error.main,
+      theme.palette.state.failed.ground,
+    ],
+    [
+      "running step",
+      theme.palette.state.running.text,
+      theme.palette.state.running.ground,
+    ],
+    [
+      "waiting step",
+      theme.palette.state.waiting.text,
+      theme.palette.state.waiting.ground,
+    ],
+    [
+      "blocked step",
+      theme.palette.state.blocked.text,
+      theme.palette.state.blocked.ground,
+    ],
+    ["running step hover", theme.palette.state.running.text, "#f3f8fa"],
+    ["waiting step hover", theme.palette.state.waiting.text, "#f3f8fa"],
+    ["blocked step hover", theme.palette.state.blocked.text, "#f3f8fa"],
+    ["key tag", "#4b575d", "#ffffff"],
+    ["fact tag", "#3e4a4f", "#ffffff"],
+  ])("keeps %s text above 4.5:1", (_place, text, ground) => {
+    expect(contrastRatio(text, ground)).toBeGreaterThanOrEqual(4.5);
+  });
 
   it("keeps table text readable while making only a table's buttons compact", () => {
     styled(
@@ -1129,12 +1984,146 @@ describe("theme", () => {
       screen.getByRole("button", { name: "Outside" }),
     );
     expect(cell.fontFamily).toBe(SYSTEM_FACE);
-    expect(cell.lineHeight).toBe("1.6");
+    expect(cell.lineHeight).toBe("22px");
     expect(cell.verticalAlign).toBe("top");
     expect(cell.whiteSpace).not.toBe("nowrap");
     expect(inside.minHeight).toBe("32px");
-    expect(outside.minHeight).toBe("40px");
+    expect(outside.minHeight).toBe("36px");
+    expect([inside.fontSize, inside.lineHeight, inside.fontWeight]).toEqual([
+      "13px",
+      "20px",
+      "600",
+    ]);
+    expect(outside.fontSize).toBe(MEDIUM_BUTTON_TEXT);
   });
+
+  it("sets a small secondary or neutral button in the small control's type and every medium tier in the control's", () => {
+    styled(
+      <>
+        <Button size="small">Rename</Button>
+        <Button color="inherit" size="small">
+          Cancel
+        </Button>
+        <Button variant="contained">Create</Button>
+        <Button>Outside</Button>
+        <Button color="inherit">Close</Button>
+        <Button color="warning">Remove</Button>
+      </>,
+    );
+
+    for (const name of ["Rename", "Cancel"]) {
+      const small = getComputedStyle(screen.getByRole("button", { name }));
+      expect([
+        small.minHeight,
+        small.fontSize,
+        small.lineHeight,
+        small.fontWeight,
+      ]).toEqual(["32px", "13px", "20px", "600"]);
+    }
+    for (const name of ["Create", "Outside", "Close", "Remove"]) {
+      const medium = getComputedStyle(screen.getByRole("button", { name }));
+      expect([
+        medium.minHeight,
+        medium.fontSize,
+        medium.lineHeight,
+        medium.fontWeight,
+      ]).toEqual(["36px", MEDIUM_BUTTON_TEXT, "20px", "600"]);
+    }
+  });
+
+  it("keeps a quiet button in a table cell at the quiet height", () => {
+    styled(
+      <Table>
+        <TableBody>
+          <TableRow>
+            <TableCell>
+              <Button variant="text" color="inherit" size="small">
+                Try 2
+              </Button>
+              <Button>Rename</Button>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>,
+    );
+
+    const quiet = getComputedStyle(
+      screen.getByRole("button", { name: "Try 2" }),
+    );
+    const other = getComputedStyle(
+      screen.getByRole("button", { name: "Rename" }),
+    );
+    expect([quiet.minHeight, quiet.paddingTop, quiet.borderRadius]).toEqual([
+      "26px",
+      "0px",
+      "6px",
+    ]);
+    expect([quiet.fontSize, quiet.lineHeight]).toEqual(["12px", "18px"]);
+    expect([other.minHeight, other.paddingTop]).toEqual(["32px", "4px"]);
+    expect([other.fontSize, other.lineHeight]).toEqual(["13px", "20px"]);
+  });
+
+  it.each(["medium", "small"] as const)(
+    "draws a %s table's heading row 36 pixels high over a 2-pixel card-edge rule and its rows 44 over a 1-pixel rule, the words inset 12",
+    (size) => {
+      styled(
+        <Table size={size}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Crate</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            <TableRow>
+              <TableCell>Oak crate</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>,
+      );
+
+      const drawn = (cell: HTMLElement) => {
+        const style = getComputedStyle(cell);
+        return [
+          style.boxSizing,
+          style.height,
+          style.paddingTop,
+          style.paddingBottom,
+          style.paddingLeft,
+          style.paddingRight,
+          style.lineHeight,
+          style.borderBottomWidth,
+          style.borderBottomStyle,
+          style.borderBottomColor,
+        ];
+      };
+      expect(
+        drawn(screen.getByRole("columnheader", { name: "Crate" })),
+      ).toEqual([
+        "border-box",
+        "36px",
+        "7px",
+        "7px",
+        "12px",
+        "12px",
+        "22px",
+        "2px",
+        "solid",
+        "rgb(214, 224, 228)",
+      ]);
+      expect(drawn(screen.getByRole("cell", { name: "Oak crate" }))).toEqual([
+        "border-box",
+        "44px",
+        "11px",
+        "11px",
+        "12px",
+        "12px",
+        "22px",
+        "1px",
+        "solid",
+        "rgb(228, 235, 238)",
+      ]);
+    },
+  );
 
   it("draws a dialog's title, a second-level heading, at the second level's size", () => {
     styled(
@@ -1146,8 +2135,8 @@ describe("theme", () => {
     const title = screen.getByRole("heading", { name: "Add somebody" });
 
     expect(title.tagName).toBe("H2");
-    expect(getComputedStyle(title).fontSize).toBe("22px");
-    expect(getComputedStyle(title).fontWeight).toBe("600");
+    expect(getComputedStyle(title).fontSize).toBe("20px");
+    expect(getComputedStyle(title).fontWeight).toBe("650");
   });
 
   /** A control with its reason under it stands taller than one without. */
@@ -1251,8 +2240,10 @@ describe("theme", () => {
 
     const ring = ruleFor(":focus-visible:not(.MuiButtonBase-root)");
 
+    expect(ring?.outlineStyle).toBe("solid");
     expect(ring?.outlineColor).toBe(PRIMARY_COLOUR);
-    expect(ring?.outlineWidth).toBe(GLOBAL_RING_WIDTH);
+    expect(ring?.outlineWidth).toBe(RING_WIDTH);
+    expect(ring?.outlineOffset).toBe(GLOBAL_RING_OFFSET);
   });
 
   /** Read off the rule as well: this environment has no monospace size of its own for the rule to override. */

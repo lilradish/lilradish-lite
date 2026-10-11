@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { DeclaredField } from "../../api/declaration";
 import {
   addedUnder,
+  candidateFields,
+  rebaseCandidates,
   changedAt,
   draftOf,
   fileBytesOf,
@@ -27,11 +29,10 @@ const TAKES = QUESTION.takes as Demands;
 const GIVES = QUESTION.gives as Demands;
 
 /** A host asking no field what it takes to stand, as a half whose values stood where they were made. */
-const STOOD = WORKFLOW.gives as Demands;
+const WORKFLOW_GIVES = WORKFLOW.gives as Demands;
 
 const LIST = "00000007-0000-4000-8000-000000000c21";
 
-/** A value given back holding fields, one of which is a term. */
 const DETAILS: DeclaredField = {
   fieldId: "details",
   name: "details",
@@ -59,6 +60,7 @@ const DETAILS: DeclaredField = {
       many: false,
       mustBeGiven: true,
       list: {
+        versionName: null,
         name: "Categories",
         versionId: LIST,
         number: 1,
@@ -68,11 +70,273 @@ const DETAILS: DeclaredField = {
   ],
 };
 
+describe("candidate whole-half writes", () => {
+  const first = { ...freshDraft("first"), fieldId: "first", name: "first" };
+  const second = { ...freshDraft("second"), fieldId: "second", name: "second" };
+  it("sends one candidate alongside the other stored field, not its closed raw editor", () => {
+    const raw = [
+      { ...first, label: "Selected" },
+      { ...second, help: "Still only typed" },
+    ];
+    expect(candidateFields([first, second], raw, "first")).toEqual([
+      { ...first, label: "Selected" },
+      second,
+    ]);
+    expect(
+      rebaseCandidates(
+        [first, second],
+        [{ ...first, label: "Selected" }, second],
+        raw,
+        "first",
+      ),
+    ).toEqual(raw);
+  });
+  it("adds a candidate without admitting another new or changed field", () => {
+    const added = { ...freshDraft("new"), name: "new_field" };
+    const another = { ...freshDraft("another"), name: "another_field" };
+    expect(
+      candidateFields(
+        [first],
+        [{ ...first, help: "Not sent" }, added, another],
+        "new",
+      ),
+    ).toEqual([first, added]);
+  });
+  it("saves a child using its stored parent while retaining the parent's raw name afterwards", () => {
+    const parent = {
+      ...freshDraft("parent"),
+      fieldId: "parent",
+      name: "parent",
+      kind: "fields" as const,
+      fields: [first, second],
+    };
+    const raw = [
+      {
+        ...parent,
+        name: "typed_parent",
+        fields: [
+          { ...first, label: "Child" },
+          { ...second, help: "Closed child" },
+        ],
+      },
+    ];
+    const sent = [
+      { ...parent, fields: [{ ...first, label: "Child" }, second] },
+    ];
+    expect(candidateFields([parent], raw, "first")).toEqual(sent);
+    expect(rebaseCandidates([parent], sent, raw, "first")).toEqual(raw);
+  });
+  it("removes only the selected field and preserves the stored neighbour's facts", () => {
+    expect(
+      candidateFields(
+        [first, second],
+        [{ ...second, label: "Not sent" }],
+        "first",
+      ),
+    ).toEqual([second]);
+  });
+  it.each(["new-parent", "new-child"])(
+    "rebases a sent new subtree through %s onto its canonical identities",
+    (applied) => {
+      const child = { ...freshDraft("new-child"), name: "child" };
+      const parent = {
+        ...freshDraft("new-parent"),
+        name: "parent",
+        kind: "fields" as const,
+        fields: [child],
+      };
+      const closed = {
+        ...freshDraft("closed"),
+        name: "closed",
+        longest: "000128",
+      };
+      const canonical = {
+        ...parent,
+        key: "server-parent",
+        fieldId: "server-parent",
+        fields: [{ ...child, key: "server-child", fieldId: "server-child" }],
+      };
+
+      expect(candidateFields([], [parent, closed], applied)).toEqual([parent]);
+      expect(
+        rebaseCandidates([], [canonical], [parent, closed], applied),
+      ).toEqual([canonical, closed]);
+      expect(parent.fields).toEqual([child]);
+      expect(closed.longest).toBe("000128");
+    },
+  );
+  it("keeps a closed parent candidate while a new child receives its canonical identity", () => {
+    const parent = {
+      ...freshDraft("parent"),
+      fieldId: "parent",
+      name: "parent",
+      kind: "fields" as const,
+      fields: [first],
+    };
+    const child = { ...freshDraft("new-child"), name: "child" };
+    const raw = [
+      { ...parent, label: "Closed raw label", fields: [first, child] },
+    ];
+    const canonical = {
+      ...parent,
+      fields: [
+        first,
+        { ...child, key: "server-child", fieldId: "server-child" },
+      ],
+    };
+
+    expect(rebaseCandidates([parent], [canonical], raw, child.key)).toEqual([
+      { ...canonical, label: "Closed raw label" },
+    ]);
+  });
+  it("moves the selected field without mutating the stored input", () => {
+    const stored = [first, second];
+    expect(candidateFields(stored, [second, first], "second")).toEqual([
+      second,
+      first,
+    ]);
+    expect(stored).toEqual([first, second]);
+  });
+  it("keeps a server's sibling order while rebasing a content-only candidate", () => {
+    const typed = { ...first, help: "Only typed, not confirmed" };
+    expect(
+      rebaseCandidates([first, second], [second, first], [typed, second], ""),
+    ).toEqual([second, typed]);
+    expect(
+      rebaseCandidates([first, second], [first, second], [second, typed], ""),
+    ).toEqual([second, typed]);
+  });
+  it("reattaches content candidates to canonical keys by confirmed names within each parent", () => {
+    const parent = {
+      ...freshDraft("parent"),
+      name: "parent",
+      kind: "fields" as const,
+      fields: [first, second],
+    };
+    const other = {
+      ...freshDraft("other"),
+      name: "other",
+      kind: "fields" as const,
+      fields: [{ ...first, key: "other-first", fieldId: null }],
+    };
+    const canonicalSecond = {
+      ...second,
+      key: "canonical-second",
+      fieldId: "canonical-second",
+    };
+    const canonicalFirst = {
+      ...first,
+      key: "canonical-first",
+      fieldId: "canonical-first",
+    };
+    const canonicalParent = {
+      ...parent,
+      key: "canonical-parent",
+      fieldId: "canonical-parent",
+      fields: [canonicalSecond, canonicalFirst],
+    };
+    const canonicalOther = {
+      ...other,
+      key: "canonical-other",
+      fieldId: "canonical-other",
+      fields: [
+        {
+          ...first,
+          key: "canonical-other-first",
+          fieldId: "canonical-other-first",
+        },
+      ],
+    };
+    const typed = [
+      {
+        ...parent,
+        fields: [{ ...first, name: "typed_first", help: "Only typed" }, second],
+      },
+      {
+        ...other,
+        fields: [{ ...other.fields[0]!, label: "Other parent candidate" }],
+      },
+    ];
+    expect(
+      rebaseCandidates(
+        [parent, other],
+        [canonicalOther, canonicalParent],
+        typed,
+        "",
+      ),
+    ).toEqual([
+      {
+        ...canonicalOther,
+        fields: [
+          { ...canonicalOther.fields[0]!, label: "Other parent candidate" },
+        ],
+      },
+      {
+        ...canonicalParent,
+        fields: [
+          canonicalSecond,
+          { ...canonicalFirst, name: "typed_first", help: "Only typed" },
+        ],
+      },
+    ]);
+    expect(typed[0]!.fields[0]!.key).toBe(first.key);
+  });
+  it("keeps server order inside a reordered subtree while retaining parent and child text", () => {
+    const parent = {
+      ...freshDraft("parent"),
+      fieldId: "parent",
+      name: "parent",
+      kind: "fields" as const,
+      fields: [first, second],
+    };
+    const third = { ...freshDraft("third"), fieldId: "third", name: "third" };
+    const typedFirst = { ...first, longest: "000128" };
+    const candidates = [
+      { ...parent, label: "Only typed parent", fields: [typedFirst, second] },
+      third,
+    ];
+    expect(
+      rebaseCandidates(
+        [parent, third],
+        [third, { ...parent, fields: [second, first] }],
+        candidates,
+        "",
+      ),
+    ).toEqual([
+      third,
+      { ...parent, label: "Only typed parent", fields: [second, typedFirst] },
+    ]);
+    expect(parent.fields).toEqual([first, second]);
+    expect(typedFirst.longest).toBe("000128");
+  });
+  it("rebases closed moved parents and children by their positions while retaining the sent response and raw limits", () => {
+    const parent = {
+      ...freshDraft("parent"),
+      fieldId: "parent",
+      name: "parent",
+      kind: "fields" as const,
+      fields: [first, second],
+    };
+    const third = { ...freshDraft("third"), fieldId: "third", name: "third" };
+    const stored = [parent, third];
+    const rawParent = {
+      ...parent,
+      fields: [second, { ...first, longest: "000128" }],
+    };
+    const answered = { ...third, label: "Saved third" };
+    const candidates = [answered, rawParent];
+    expect(
+      rebaseCandidates(stored, [parent, answered], candidates, "third"),
+    ).toEqual(candidates);
+    expect(stored).toEqual([parent, third]);
+    expect(parent.fields).toEqual([first, second]);
+  });
+});
+
 function drafted(changed: Partial<DraftField> = {}): DraftField {
   return { ...freshDraft("row"), name: "summary", longest: "100", ...changed };
 }
 
-/** A row holding one row at each level below it, named in turn from the top down. */
 function chain(names: readonly string[]): DraftField {
   const [name, ...below] = names;
   return below.length === 0
@@ -160,7 +424,7 @@ describe("draftOf and sentOf", () => {
         mustBeGiven: false,
         fields: [drafted({ stands: "always" })],
       }),
-      STOOD,
+      WORKFLOW_GIVES,
     );
 
     expect(Object.keys(sent)).toEqual([
@@ -195,7 +459,7 @@ describe("draftOf and sentOf", () => {
         mustBeGiven: false,
         fields: [drafted({ mustBeGiven: true })],
       }),
-      STOOD,
+      WORKFLOW_GIVES,
     );
 
     expect(sent.mustBeGiven).toBe(false);
@@ -254,7 +518,7 @@ describe("draftOf and sentOf", () => {
       fieldId: "file-1",
       name: "documents",
       kind: "file" as const,
-      types: ["application/pdf", "image/png"],
+      types: [".pdf", ".png"],
       maximumBytes: 10 * 1024 * 1024,
       many: true,
       most: 3,
@@ -264,12 +528,12 @@ describe("draftOf and sentOf", () => {
     const draft = draftOf(field);
     const sent = sentOf(draft, TAKES);
 
-    expect(draft.fileTypes).toBe("application/pdf\nimage/png");
+    expect(draft.fileTypes).toBe(".pdf\n.png");
     expect(draft.fileSize).toBe("10");
     expect(draft.fileSizeUnit).toBe("MB");
     expect(sent).toMatchObject({
       kind: "file",
-      types: ["application/pdf", "image/png"],
+      types: [".pdf", ".png"],
       maximumBytes: 10485760,
       most: 3,
     });
@@ -282,14 +546,14 @@ describe("draftOf and sentOf", () => {
   it("keeps file input while another kind is sent without file members", () => {
     const file = drafted({
       kind: "file",
-      fileTypes: "application/pdf",
+      fileTypes: ".pdf",
       fileSize: "2",
       fileSizeUnit: "GB",
     });
     const other = { ...file, kind: "number" as const };
 
     expect(sentOf(file, TAKES)).toMatchObject({
-      types: ["application/pdf"],
+      types: [".pdf"],
       maximumBytes: 2147483648,
     });
     expect("types" in sentOf(other, TAKES)).toBe(false);
@@ -313,19 +577,16 @@ describe("draftOf and sentOf", () => {
     (fileSize, fileSizeUnit, bytes) => {
       const draft = drafted({
         kind: "file",
-        fileTypes: " APPLICATION/PDF \n image/png ",
+        fileTypes: " .PDF \n .png ",
         fileSize,
         fileSizeUnit,
       });
 
       expect(fileBytesOf(fileSize, fileSizeUnit)).toBe(bytes);
-      expect(fileTypesOf(draft.fileTypes)).toEqual([
-        "application/pdf",
-        "image/png",
-      ]);
+      expect(fileTypesOf(draft.fileTypes)).toEqual([".pdf", ".png"]);
       expect(heldFor([draft], TAKES)).toBeNull();
       expect(sentOf(draft, TAKES)).toMatchObject({
-        types: ["application/pdf", "image/png"],
+        types: [".pdf", ".png"],
         maximumBytes: bytes,
       });
       expect(sentOf(draft, TAKES)).not.toHaveProperty("longest");
@@ -348,7 +609,7 @@ describe("draftOf and sentOf", () => {
     (fileSize, fileSizeUnit, valid) => {
       const draft = drafted({
         kind: "file",
-        fileTypes: "application/pdf",
+        fileTypes: ".pdf",
         fileSize,
         fileSizeUnit,
       });
@@ -470,12 +731,12 @@ describe("heldFor", () => {
 
   it.each([
     ["", "1", "bytes", "declaration.fileTypesInvalid"],
-    ["image/png\nIMAGE/PNG", "1", "bytes", "declaration.fileTypesInvalid"],
+    [".png\n.PNG", "1", "bytes", "declaration.fileTypesInvalid"],
     ["image/*", "1", "bytes", "declaration.fileTypesInvalid"],
-    ["image/png; charset=utf-8", "1", "bytes", "declaration.fileTypesInvalid"],
-    ["image/png", "0", "bytes", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
-    ["image/png", "1.5", "KB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
-    ["image/png", "8388608", "GB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+    [".png; charset=utf-8", "1", "bytes", "declaration.fileTypesInvalid"],
+    [".png", "0", "bytes", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+    [".png", "1.5", "KB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
+    [".png", "8388608", "GB", "refusal.FILE_SIZE_LIMIT_UNUSABLE"],
   ] as const)(
     "holds an invalid file constraint at its row for %s and %s %s",
     (fileTypes, fileSize, fileSizeUnit, why) => {
@@ -490,10 +751,7 @@ describe("heldFor", () => {
   );
 
   it("accepts sixty-four file types and refuses the next before checking their spelling", () => {
-    const types = Array.from(
-      { length: 64 },
-      (_, index) => `application/x${index}`,
-    );
+    const types = Array.from({ length: 64 }, (_, index) => `.x${index}`);
     const accepted = drafted({
       kind: "file",
       fileTypes: types.join("\n"),
@@ -514,16 +772,31 @@ describe("heldFor", () => {
     });
   });
 
+  it.each([
+    [`.${"A".repeat(32)}`, true],
+    [`.${"a".repeat(33)}`, false],
+    [`.${"A".repeat(30)}.B`, true],
+    [`.${"a".repeat(31)}.b`, false],
+  ] as const)("holds or sends the whole extension %s", (extension, fits) => {
+    const file = drafted({ kind: "file", fileTypes: extension, fileSize: "1" });
+    expect(heldFor([file], TAKES)).toEqual(
+      fits ? null : { why: "declaration.fileTypesInvalid", place: [0] },
+    );
+    if (fits) {
+      expect(sentOf(file, TAKES).types).toEqual([extension.toLowerCase()]);
+    }
+  });
+
   it("accepts the largest safe byte count and rejects one more across units", () => {
     const file = drafted({
       kind: "file",
-      fileTypes: "APPLICATION/PDF\nimage/png",
+      fileTypes: ".PDF\n.png",
       fileSize: String(Number.MAX_SAFE_INTEGER),
       fileSizeUnit: "bytes",
     });
 
     expect(heldFor([file], TAKES)).toBeNull();
-    expect(sentOf(file, TAKES).types).toEqual(["application/pdf", "image/png"]);
+    expect(sentOf(file, TAKES).types).toEqual([".pdf", ".png"]);
     expect(sentOf(file, TAKES).maximumBytes).toBe(Number.MAX_SAFE_INTEGER);
     expect(
       heldFor(
@@ -536,7 +809,7 @@ describe("heldFor", () => {
   it("keeps an unchosen file size empty when a draft is read and sends none until a valid size is entered", () => {
     const file = drafted({
       kind: "file",
-      fileTypes: "application/pdf",
+      fileTypes: ".pdf",
       fileSize: "",
       fileSizeUnit: "bytes",
     });
@@ -547,7 +820,7 @@ describe("heldFor", () => {
         fieldId: "file-1",
         name: "documents",
         kind: "file",
-        types: ["application/pdf"],
+        types: [".pdf"],
         many: false,
         mustBeGiven: false,
       }).fileSize,

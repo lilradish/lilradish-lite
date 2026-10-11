@@ -34,8 +34,8 @@ const NOTE_WORDS: ProseWords = {
   hint: "referenceList.noteHint",
   saysNothing: "referenceList.saysNothing",
   save: "referenceList.saveNote",
-  unchanged: "referenceList.noteUnchanged",
   underway: "referenceList.underway",
+  edit: "prose.editNote",
 };
 
 /** Which part a press to read the version afresh came from, which is where the keyboard goes back to. */
@@ -46,6 +46,7 @@ export function ReferenceListContent({
   groupId,
   entryId,
   version,
+  editable,
   readCount,
   onRefused,
   onWritten,
@@ -54,6 +55,7 @@ export function ReferenceListContent({
   readonly groupId: string;
   readonly entryId: string;
   readonly version: Version;
+  readonly editable: boolean;
   /** Changed each time the page reads the entry again, which is when this reads the list again too. */
   readonly readCount: number;
   readonly onRefused: (problem: Problem) => void;
@@ -77,7 +79,6 @@ export function ReferenceListContent({
     false,
     read.loading || noting.running || listing.running,
   );
-  const editable = version.acts.has("write");
   const { versionId } = version;
   const list = shown;
 

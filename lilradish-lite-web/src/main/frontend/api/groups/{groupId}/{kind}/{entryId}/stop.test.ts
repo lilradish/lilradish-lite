@@ -11,7 +11,7 @@ const READ = {
   entryId: ENTRY,
   kind: "question",
   name: "Triage",
-  acts: ["let_go"],
+  stateActs: ["let_go"],
   versions: [],
 };
 
@@ -31,6 +31,6 @@ describe.each([
     expect(init?.method).toBe(method);
     expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
-    expect(read).toEqual({ ...READ, acts: new Set(["let_go"]) });
+    expect(read).toEqual({ ...READ, stateActs: new Set(["let_go"]) });
   });
 });

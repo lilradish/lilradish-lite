@@ -57,10 +57,8 @@ interface Reading {
 }
 
 /**
- * The panel over the real action it is handed, held as a page holds it: the
- * holder settles every change, keeps who asked, and hands a refusal back to
- * the panel while that person is the one shown. The person can be read again.
- * Only the server is stood in for.
+ * The panel over the real action, held as a page holds it, a refusal handed back only while that person is
+ * shown; only the server is stood in for.
  */
 function reading({
   person = GLINN,
@@ -76,7 +74,10 @@ function reading({
     const [shown, setShown] = useState(person);
     readAgain = setShown;
     const [asked, setAsked] = useState<Asked | null>(null);
-    const changing = useAction<Outcome>(settled);
+    const changing = useAction<Outcome>((outcome) => {
+      settled(outcome);
+      if ("changed" in outcome) setShown(outcome.changed);
+    });
     return (
       <PersonPanel
         person={shown}
@@ -164,6 +165,24 @@ describe("PersonPanel", () => {
     expect(parts.some((each) => each.contains(remove()))).toBe(false);
   });
 
+  it("rules every existing business part off from the title and the part before it", () => {
+    reading();
+    const parts = screen.getAllByRole("region");
+    expect(parts).toHaveLength(3);
+    for (const part of parts) {
+      expect(part.parentElement!).toHaveStyle({
+        borderTopStyle: "solid",
+        borderTopWidth: "1px",
+        marginTop: "18px",
+        paddingTop: "18px",
+        marginLeft: "calc(-1 * var(--card-side-padding))",
+        paddingLeft: "var(--card-side-padding)",
+      });
+      expect(part).toHaveStyle({ marginTop: "0" });
+    }
+    expect(parts.some((part) => part.contains(remove()))).toBe(false);
+  });
+
   it("says who they are as a read without editing controls", () => {
     reading();
 
@@ -178,13 +197,22 @@ describe("PersonPanel", () => {
     expect(screen.queryAllByRole("textbox")).toEqual([]);
   });
 
-  /** Laid out as every other label and value are, so the facts read as the same kind of thing. */
-  it("sets each fact's label as a term and its value as the text around it", () => {
+  it("sets readonly facts in the panel's label and value type with a fixed label column", () => {
     reading();
 
-    expect(getComputedStyle(screen.getByText("User number")).fontWeight).toBe(
-      "700",
-    );
+    expect(screen.getByText("User number")).toHaveStyle({
+      fontSize: "13px",
+      lineHeight: "24px",
+      fontWeight: "600",
+    });
+    expect(screen.getByText("User number").parentElement!).toHaveStyle({
+      gridTemplateColumns: "112px minmax(0, 1fr)",
+    });
+    expect(screen.getByText("000140").parentElement!).toHaveStyle({
+      fontSize: "14px",
+      lineHeight: "24px",
+      fontWeight: "400",
+    });
     expect(
       getComputedStyle(screen.getByText("000140").parentElement!).fontWeight,
     ).not.toBe("700");
@@ -336,12 +364,56 @@ describe("PersonPanel", () => {
     },
   );
 
+  /** The server may answer a role granted as one nobody else in the pool could grant without, which offers it no longer. */
+  it("puts the keyboard on the estate roles' heading when the control just pressed is no longer offered once the change answers", async () => {
+    const answer: PoolPersonPanel = {
+      ...HOLDING_NOTHING,
+      estateRoles: new Set(["steward"]),
+      lastGrantingRoles: new Set(["steward"]),
+    };
+    const { settled } = reading({
+      person: HOLDING_NOTHING,
+      routes: {
+        [`PUT ${PERSON}/estate-roles/steward`]: [[documentOf(answer), 200]],
+      },
+    });
+    screen.getByRole("button", { name: "Grant Steward" }).focus();
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("button", { name: "Withdraw Steward" }),
+    ).toBeNull();
+    expect(document.activeElement).toBe(part("Estate roles"));
+  });
+
+  it("leaves the keyboard on the control just pressed where it is still offered once the change answers", async () => {
+    const answer: PoolPersonPanel = {
+      ...GLINN,
+      estateRoles: new Set(["steward", "watcher"]),
+    };
+    const { settled } = reading({
+      routes: {
+        [`PUT ${PERSON}/estate-roles/watcher`]: [[documentOf(answer), 200]],
+      },
+    });
+    screen.getByRole("button", { name: "Grant Watcher" }).focus();
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    const turned = screen.getByRole("button", { name: "Withdraw Watcher" });
+    expect(document.activeElement).toBe(turned);
+    expect(turned).not.toHaveAttribute("aria-disabled");
+  });
+
   /** What else the reader can see is out — the person being read again — holds every control. */
   it("holds every control while something else it is told of is out, asking nothing", async () => {
     const { sent, told } = reading({ person: HOLDING_NOTHING, waiting: true });
 
     for (const control of screen.getAllByRole("button")) {
-      control.focus();
+      await act(() => control.focus());
       await userEvent.keyboard("{Enter}");
     }
 

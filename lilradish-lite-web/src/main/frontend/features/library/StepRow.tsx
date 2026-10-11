@@ -1,25 +1,25 @@
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
+import { buttonClasses } from "@mui/material/Button";
 import Link from "@mui/material/Link";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import TableCell from "@mui/material/TableCell";
 import TableRow from "@mui/material/TableRow";
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { Link as RouterLink } from "react-router";
 
-import type {
-  OfferedCodeStep,
-  OfferedSearchWay,
-} from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
+import type { OfferedCodeStep } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import { say } from "../../i18n/app";
 import { visible } from "../../i18n/visible";
-import { IconPress } from "../../lib/action/IconPress";
+import { readersIntl } from "../../i18n/intl";
+import { heldOr } from "../../lib/action/Press";
 import { FIGURE_SETTING } from "../../lib/collection/SortableTable";
 import { isolatedInText } from "../../lib/direction/isolated";
-import { HEADER_ACTS_SX } from "../../lib/layout/parts";
+import { TOKENS } from "../../lib/theme/tokens";
 import { modelSaid } from "./ModelControls";
-import { PinNote } from "./PinNote";
+import { PinNote, versionShown } from "./PinNote";
 import { producerSaid } from "./StepEditor";
 import { StepKindTag } from "./StepKindTag";
 import { givenBy, type Named, type StepDraft } from "./workflowDrafts";
@@ -32,6 +32,7 @@ const RUNS_SX = {
 };
 
 export function calledOf(step: StepDraft, position: number): string {
+  if (step.label !== "") return isolatedInText(step.label);
   return step.name === ""
     ? say("workflow.unnamed", { position: position + 1 })
     : isolatedInText(step.name);
@@ -42,6 +43,7 @@ export function calledVisibleOf(
   position: number,
   hintColor: "text.secondary" | "inherit" = "text.secondary",
 ) {
+  if (step.label !== "") return <bdi>{step.label}</bdi>;
   return step.name === "" ? (
     visible("workflow.unnamedVisible", {
       name: (
@@ -71,7 +73,7 @@ export function kindSetApart(step: StepDraft) {
 function runsSaid(
   step: StepDraft,
   named: ReadonlyMap<string, Named>,
-): string | null {
+): ReactNode {
   const runs = step.runs;
   switch (runs.kind) {
     case "none":
@@ -81,10 +83,7 @@ function runsSaid(
       const version = named.get(runs.version);
       return version === undefined
         ? say("workflow.runsNothing")
-        : say("workflow.runsVersion", {
-            name: isolatedInText(version.name),
-            number: version.number,
-          });
+        : versionShown(version, runs.version);
     }
     case "code_step":
       return runs.codeStep === "" ? say("workflow.runsNothing") : runs.codeStep;
@@ -114,9 +113,8 @@ function givesSaid(
   step: StepDraft,
   named: ReadonlyMap<string, Named>,
   codeSteps: readonly OfferedCodeStep[],
-  searchWays: readonly OfferedSearchWay[],
 ): string {
-  const gives = givenBy(step, named, codeSteps, searchWays);
+  const gives = givenBy(step, named, codeSteps);
   return gives === undefined
     ? say("workflow.givesUnknown")
     : say("workflow.givesCount", { count: gives.length });
@@ -135,54 +133,48 @@ export const StepRow = memo(function StepRow({
   step,
   position,
   last,
-  focusAfterTakingOut,
   picked,
   href,
   named,
   codeSteps,
-  searchWays,
   editable,
   running,
+  moveHeld,
+  moveReasonId,
   onRegisterRow,
   onRegisterOpen,
   onMove,
-  onTakeOut,
   onTakeVersion,
 }: {
   readonly step: StepDraft;
   /** Counted from zero. */
   readonly position: number;
   readonly last: boolean;
-  /** The step whose link the keyboard goes to once this one is taken out, where any is left. */
-  readonly focusAfterTakingOut: string | undefined;
   readonly picked: boolean;
   readonly href: string;
   readonly named: ReadonlyMap<string, Named>;
   readonly codeSteps: readonly OfferedCodeStep[];
-  readonly searchWays: readonly OfferedSearchWay[];
   readonly editable: boolean;
   readonly running: boolean;
+  readonly moveHeld?: boolean;
+  readonly moveReasonId?: string;
   readonly onRegisterRow: (key: string, row: HTMLElement | null) => void;
   readonly onRegisterOpen: (key: string, open: HTMLElement | null) => void;
   readonly onMove: (key: string, position: number, by: -1 | 1) => void;
-  readonly onTakeOut: (
-    position: number,
-    focusAfter: string | undefined,
-    wasPicked: boolean,
-  ) => void;
   readonly onTakeVersion: (key: string, versionId: string) => void;
 }) {
   const called = calledOf(step, position);
   const pinned = pinnedOf(step, named);
   const up = say("workflow.up", { name: called });
   const down = say("workflow.down", { name: called });
-  const takeOut = say("workflow.remove", { name: called });
   return (
     <TableRow
       ref={(row: HTMLTableRowElement | null) => onRegisterRow(step.key, row)}
       selected={picked}
     >
-      <TableCell {...FIGURE_SETTING}>{position + 1}</TableCell>
+      <TableCell {...FIGURE_SETTING}>
+        {readersIntl.formatNumber(position + 1)}
+      </TableCell>
       <TableCell>
         <Link
           ref={(open: HTMLElement | null) => onRegisterOpen(step.key, open)}
@@ -194,39 +186,6 @@ export const StepRow = memo(function StepRow({
         >
           {calledVisibleOf(step, position)}
         </Link>
-        {editable ? (
-          <Box sx={HEADER_ACTS_SX}>
-            <Box component="span" data-part="up">
-              <IconPress
-                icon={<ArrowUpwardIcon />}
-                label={up}
-                unavailable={running || position === 0}
-                onPress={() => onMove(step.key, position, -1)}
-              >
-                {say("workflow.upTip")}
-              </IconPress>
-            </Box>
-            <Box component="span" data-part="down">
-              <IconPress
-                icon={<ArrowDownwardIcon />}
-                label={down}
-                unavailable={running || last}
-                onPress={() => onMove(step.key, position, 1)}
-              >
-                {say("workflow.downTip")}
-              </IconPress>
-            </Box>
-            <IconPress
-              icon={<DeleteOutlinedIcon />}
-              warns
-              label={takeOut}
-              unavailable={running}
-              onPress={() => onTakeOut(position, focusAfterTakingOut, picked)}
-            >
-              {say("workflow.removeTip")}
-            </IconPress>
-          </Box>
-        ) : null}
       </TableCell>
       <TableCell>
         <Box sx={RUNS_SX}>
@@ -245,9 +204,71 @@ export const StepRow = memo(function StepRow({
           />
         )}
       </TableCell>
-      <TableCell>{producerSaid(step)}</TableCell>
-      <TableCell>{reviewedSaid(step)}</TableCell>
-      <TableCell>{givesSaid(step, named, codeSteps, searchWays)}</TableCell>
+      <TableCell data-compact="true">{producerSaid(step)}</TableCell>
+      <TableCell data-compact="true">{reviewedSaid(step)}</TableCell>
+      <TableCell data-compact="true">
+        {givesSaid(step, named, codeSteps)}
+      </TableCell>
+      {editable ? (
+        <TableCell data-compact="true">
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: TOKENS.table.moveGap,
+            }}
+          >
+            {([-1, 1] as const).map((by) => (
+              <Box
+                component="span"
+                key={by}
+                data-part={by < 0 ? "up" : "down"}
+                sx={{
+                  width: TOKENS.size.controlSmall,
+                  height: TOKENS.size.controlSmall,
+                  flexShrink: 0,
+                }}
+              >
+                {(by < 0 ? position === 0 : last) ? null : (
+                  <Tooltip
+                    title={say(by < 0 ? "workflow.upTip" : "workflow.downTip")}
+                    describeChild
+                  >
+                    <IconButton
+                      size="small"
+                      disableRipple={running || moveHeld === true}
+                      aria-label={by < 0 ? up : down}
+                      aria-describedby={moveHeld ? moveReasonId : undefined}
+                      sx={{
+                        width: TOKENS.size.controlSmall,
+                        height: TOKENS.size.controlSmall,
+                        color: "ink.secondary",
+                        borderRadius: TOKENS.shape.controlRadius,
+                        [`&.${buttonClasses.disabled}`]: {
+                          pointerEvents: "auto",
+                        },
+                        "& .MuiSvgIcon-root": {
+                          width: TOKENS.table.moveIcon,
+                          height: TOKENS.table.moveIcon,
+                        },
+                        "&:hover, &:active": {
+                          bgcolor: "act.hover",
+                          color: "ink.secondary",
+                        },
+                      }}
+                      {...heldOr(running || moveHeld === true, () =>
+                        onMove(step.key, position, by),
+                      )}
+                    >
+                      {by < 0 ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+            ))}
+          </Box>
+        </TableCell>
+      ) : null}
     </TableRow>
   );
 });

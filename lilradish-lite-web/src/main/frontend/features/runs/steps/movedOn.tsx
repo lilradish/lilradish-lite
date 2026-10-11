@@ -1,16 +1,14 @@
+import type { Ended } from "../../../api/stepTries";
 import type { ReactNode } from "react";
 
 import type { StepRow } from "../../../api/groups/{groupId}/runs/{runId}/steps";
-import type {
-  Ended,
-  StepAnswer,
-} from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
+import type { StepAnswer } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import type { Problem } from "../../../api/problem";
 import { ProblemView } from "../../../app/ProblemView";
 import type { Rule } from "../../../app/standing/actRules";
 import { say } from "../../../i18n/app";
 import { Notice } from "../../../lib/notice/Notice";
-import { whoSaid } from "./stepStates";
+import { whoSaid } from "./stepProducersAndReviewers";
 
 const YIELDED: ReadonlySet<string> = new Set([
   "stands",

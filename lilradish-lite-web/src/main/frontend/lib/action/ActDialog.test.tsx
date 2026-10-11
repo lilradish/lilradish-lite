@@ -17,13 +17,13 @@ function themed({ children }: { readonly children: ReactNode }) {
 }
 
 /** The dialog open over a real action, the act settling when the test says, shut as a holder shuts it. */
-function asking(reason?: Reason, warns?: boolean) {
+function asking(reason?: Reason, tier?: "primary" | "dangerConfirm") {
   const answer = deferred<string>();
   const settled = vi.fn();
   const act = vi.fn(() => answer.promise);
   const shut = vi.fn();
   const exited = vi.fn();
-  function Holder() {
+  function Host() {
     const [open, setOpen] = useState(true);
     const action = useAction<string>(settled);
     return (
@@ -38,7 +38,7 @@ function asking(reason?: Reason, warns?: boolean) {
         action={action}
         act={act}
         actLabel="Do it"
-        warns={warns}
+        tier={tier}
         reason={reason}
         abandonLabel="Cancel"
         underway="It is being done."
@@ -48,11 +48,22 @@ function asking(reason?: Reason, warns?: boolean) {
       </ActDialog>
     );
   }
-  render(<Holder />, { wrapper: themed });
+  render(<Host />, { wrapper: themed });
   return { answer, settled, act, shut, exited };
 }
 
 describe("ActDialog", () => {
+  it("puts its equal-width controls in one group so DialogActions adds no sibling margin", () => {
+    asking();
+    const act = screen.getByRole("button", { name: "Do it" });
+    const abandon = screen.getByRole("button", { name: "Cancel" });
+    const group = act.parentElement!.parentElement!;
+    expect(abandon.parentElement!.parentElement).toBe(group);
+    expect(group.parentElement!.children).toHaveLength(1);
+    expect(getComputedStyle(group).gridAutoColumns).toBe("minmax(0, 1fr)");
+    expect(getComputedStyle(abandon).width).toBe("100%");
+    expect(getComputedStyle(act).width).toBe("100%");
+  });
   it("holds its title, what it asks for, and the refusal under it", () => {
     asking();
 
@@ -80,11 +91,11 @@ describe("ActDialog", () => {
     expect(getComputedStyle(abandon).borderWidth).toBe("1px");
     expect(
       getComputedStyle(abandon).getPropertyValue("--variant-outlinedBg"),
-    ).toBe("#f0f3f6");
+    ).toBe("#ffffff");
   });
 
   it("warns only when the caller asks it to", () => {
-    asking(undefined, true);
+    asking(undefined, "dangerConfirm");
 
     const control = screen.getByRole("button", { name: "Do it" });
     const abandon = screen.getByRole("button", { name: "Cancel" });

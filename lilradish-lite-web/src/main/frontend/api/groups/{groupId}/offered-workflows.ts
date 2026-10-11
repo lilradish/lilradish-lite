@@ -10,8 +10,9 @@ import { cursorLoader } from "../../../lib/request/cursorLoader";
 import type { Page } from "../../../lib/request/page";
 import { fillFieldsFrom, type FillField } from "../../filling";
 import { GROUPS } from "../../groups";
+import { isVersionName } from "./{kind}";
 
-/** A workflow a run may be started of. `entryId` addresses it and is never shown. */
+/** `entryId` addresses it and is never shown. */
 export interface OfferedWorkflow {
   readonly entryId: string;
   /** Shown isolated wherever it is shown: a name may carry a directional control. */
@@ -22,15 +23,16 @@ export interface OfferedWorkflow {
   readonly versions: readonly OfferedVersion[];
 }
 
-/** One version in service, with what a run of it takes. `versionId` is what a run is started of. */
+/** A version in service; `versionId` is what a run is started of. */
 export interface OfferedVersion {
+  readonly versionName: string | null;
   readonly versionId: string;
   readonly number: number;
   /** In declared order. */
   readonly takes: readonly FillField[];
 }
 
-/** By name, as the server orders them, one page at a time. */
+/** By name, as the server orders them. */
 export function offeredLoader(
   groupId: string,
   filter = "",
@@ -52,7 +54,7 @@ export function offeredLoader(
     });
 }
 
-/** Built member by member; a workflow missing what it is drawn from is not one this side can show. */
+/** A workflow missing what it is drawn from is not one this side can show. */
 function workflowFrom(body: unknown): OfferedWorkflow | null {
   if (!isUnchecked(body)) {
     return null;
@@ -80,7 +82,10 @@ function versionFrom(body: unknown): OfferedVersion | null {
   const { versionId } = body;
   const number = countFrom(body.number);
   const takes = fillFieldsFrom(body.takes);
-  return typeof versionId === "string" && number !== null && takes !== null
-    ? { versionId, number, takes }
+  return typeof versionId === "string" &&
+    number !== null &&
+    takes !== null &&
+    isVersionName(body.versionName)
+    ? { versionId, number, takes, versionName: body.versionName }
     : null;
 }

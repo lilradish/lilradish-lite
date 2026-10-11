@@ -1,11 +1,12 @@
 import Typography from "@mui/material/Typography";
+import Box from "@mui/material/Box";
 
 import type { ReadField } from "../../../api/filling";
-import type { GaveBack } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { GaveBack } from "../../../api/stepGivenBack";
 import { say } from "../../../i18n/app";
-import { Field, Fields } from "../../../lib/form/Fields";
 import { FilledValue } from "../fill/FilledValue";
 import { fieldAt, labelAt } from "./declared";
+import { ProseScope } from "../../../lib/text/ModelProse";
 
 export function GaveBackPart({
   gaveBack,
@@ -27,17 +28,20 @@ export function GaveBackPart({
     );
   }
   return (
-    <Fields>
-      {standing.map((each) => (
-        <Field key={each.field} label={labelAt(gives, each.field)}>
-          <FilledValue
-            field={fieldAt(gives, each.field)}
-            label={labelAt(gives, each.field)}
-            shown={each}
-            shut={false}
-          />
-        </Field>
-      ))}
-    </Fields>
+    <ProseScope>
+      <Box>
+        {standing.map((each) => (
+          <Box key={each.field}>
+            <FilledValue
+              cards
+              field={fieldAt(gives, each.field)}
+              label={labelAt(gives, each.field)}
+              shown={each}
+              shut={false}
+            />
+          </Box>
+        ))}
+      </Box>
+    </ProseScope>
   );
 }

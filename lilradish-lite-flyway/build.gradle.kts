@@ -14,7 +14,7 @@ plugins {
 
 // The baseline is another project's, and this is the project that runs it — so here, and only here,
 // it does belong on a classpath, at the location Flyway looks in.
-val migrations = Attribute.of("org.lilradish.lite.migrations", String::class.java)
+val migrations = Attribute.of("com.lilradish.lite.migrations", String::class.java)
 
 val baseline = configurations.dependencyScope("baseline")
 val baselineFiles = configurations.resolvable("baselineFiles") {
@@ -29,6 +29,7 @@ val developmentSeedFiles = configurations.resolvable("developmentSeedFiles") {
 }
 
 dependencies {
+    testImplementation(project(":lilradish-lite-test-support"))
     attributesSchema { attribute(migrations) }
     implementation(platform(libs.spring.boot.dependencies))
     implementation(platform(libs.libprunus.bom))
@@ -165,9 +166,9 @@ tasks.named<ProcessResources>("processResources") { from(baselineFiles) { into("
 
 // The fixture and the profile naming it seed whatever database the runner is pointed at: kept in a source set
 // no archive is built from, and held by the check below, which reads the archives after they were written.
-val developmentSources = sourceSets.create("dev")
+val developmentSources = sourceSets.create("local")
 
-tasks.named<ProcessResources>("processDevResources") { from(developmentSeedFiles) { into("db/migration/dev") } }
+tasks.named<ProcessResources>("processLocalResources") { from(developmentSeedFiles) { into("db/migration/local") } }
 
 tasks.named<BootRun>("bootRun") { classpath += developmentSources.output }
 
@@ -175,7 +176,7 @@ sourceSets["test"].runtimeClasspath += developmentSources.output
 
 val developmentSeedIsUnshipped = tasks.register("developmentSeedIsUnshipped") {
     group = "verification"
-    description = "Fails if the development seed or the dev profile reaches a shipped archive."
+    description = "Fails if the development seed or the local/dev profiles reach a shipped archive."
     // Locals only: a script-level name read in the action would store the script in the configuration cache.
     val bootJarArchive = files(tasks.named<BootJar>("bootJar").flatMap { it.archiveFile })
     val plainJarArchive = files(tasks.named<Jar>("jar").flatMap { it.archiveFile })
@@ -197,17 +198,20 @@ val developmentSeedIsUnshipped = tasks.register("developmentSeedIsUnshipped") {
                     .toList()
             }
 
-        val seedNames = development.asFileTree.matching { include("db/migration/dev/*.sql") }.files.map { it.name }
-        val profiles = development.asFileTree.matching { include("application-dev.yaml") }
-        if (seedNames.isEmpty() || profiles.isEmpty) {
+        val seedNames = development.asFileTree.matching { include("db/migration/local/*.sql") }.files.map { it.name }
+        val profiles = development.asFileTree.matching {
+            include("application-local.yaml", "application-dev.yaml")
+        }.files.map { it.name }.toSet()
+        if (seedNames.isEmpty() || !profiles.containsAll(setOf("application-local.yaml", "application-dev.yaml"))) {
             throw GradleException(
-                "the dev source set carries no development seed or no application-dev.yaml, so this check proves " +
+                "the local source set carries no development seed or missing local/dev profile files, so this check proves " +
                     "nothing — and either one moved into src/main would ship")
         }
         val seedName = Regex("R__dev_.*\\.sql")
         fun isDevelopment(path: String): Boolean {
             val name = path.substringAfterLast('/')
-            return path.contains("db/migration/dev/") || name.startsWith("application-dev.") ||
+            return path.contains("db/migration/local/") || path.contains("db/migration/dev/") ||
+                name.startsWith("application-local.") || name.startsWith("application-dev.") ||
                 name in seedNames || seedName.matches(name)
         }
 
@@ -256,12 +260,12 @@ prunus {
 // The entry point starts Spring and hands over to libprunus-flyway, so a ratio taken over it
 // measures whether some test happened to load a main method. It is the denominator that is wrong
 // rather than the number: what this project has to get right is its migrations, and no bytecode
-// counter can see one — SchemaConstraintIntegrationSpec is what holds those, against a real server.
+// counter can see one — the SchemaConstraint specs hold those, against real servers.
 //
 // Excluded by class rather than by package, so the next class written here is counted. Lowering the
 // threshold instead would switch the gate off for good and leave nothing to remind anybody.
 tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     classDirectories.setFrom(files(classDirectories.files.map { root ->
-        fileTree(root) { exclude("org/lilradish/lite/migration/MigrationApplication.class") }
+        fileTree(root) { exclude("com/lilradish/lite/migration/MigrationApplication.class") }
     }))
 }

@@ -7,7 +7,6 @@ import type { Ordering } from "../../lib/collection/ordering";
 import { joinedInCell } from "../people/wordLists";
 import { groupRoleSaid, groupRolesInOrder } from "./groupRoles";
 
-/** Every column a group's members can be sorted by, closed over the union in both directions. */
 export const MEMBER_SORTABLE = {
   userId: true,
   displayName: true,

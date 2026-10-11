@@ -18,13 +18,13 @@ const RUN_ID = "00000008-0000-4000-8000-000000000c61";
 const ADDRESS = `/api/groups/${GROUP}/runs/${RUN_ID}/ceiling`;
 
 const LIMIT =
-  "A ceiling is a whole number from one to 9,007,199,254,740,991, written in digits.";
+  "Enter a whole number from 1 to 9,007,199,254,740,991, in digits.";
 
 const APPROVAL =
-  "A raise, or taking the ceiling away, waits on approval; until then the run keeps the ceiling it has.";
+  "Raising or removing the limit needs approval. Until it is approved, the current limit stays.";
 
 const WITHDRAWS =
-  "A raise waiting on it is withdrawn by any other change asked for here.";
+  "Any change you make here withdraws the request already pending approval.";
 
 const FIVE_THOUSAND: OwnCeiling = {
   inForce: "5000",
@@ -35,6 +35,7 @@ const ANSWERED = JSON.stringify({
   runId: RUN_ID,
   number: 7,
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c61",
     name: "Handle a claim",
     version: 3,
@@ -45,17 +46,13 @@ const ANSWERED = JSON.stringify({
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: FIVE_THOUSAND,
-  acts: ["change_ceiling"],
+  stateActs: ["change_ceiling"],
 });
 
 function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-/**
- * The dialog over the real action it is handed, opened on the ceiling given,
- * shut as the page shuts it; the action refused once already where asked.
- */
 function changing(
   ceiling: OwnCeiling = FIVE_THOUSAND,
   routes: Readonly<Record<string, readonly Reply[]>> = {},
@@ -91,16 +88,18 @@ function changing(
   return {
     sent,
     settled,
-    dialog: screen.getByRole("dialog", { name: "Change the ceiling" }),
+    dialog: screen
+      .getByRole("textbox", { name: "Usage limit" })
+      .closest("form")!,
   };
 }
 
 function ceilingBox(): HTMLElement {
-  return screen.getByRole("textbox", { name: "Ceiling" });
+  return screen.getByRole("textbox", { name: "Usage limit" });
 }
 
 function change(): HTMLElement {
-  return screen.getByRole("button", { name: "Change" });
+  return screen.getByRole("button", { name: "Save" });
 }
 
 async function typedAs(typed: string) {
@@ -116,15 +115,22 @@ describe("ChangeCeiling", () => {
 
     expect(ceilingBox()).toHaveValue("5000");
     expect(document.activeElement).toBe(ceilingBox());
-    expect(change()).toHaveAttribute("aria-disabled", "true");
-    expect(change()).toHaveAccessibleDescription("That is the ceiling it has.");
+    expect(ceilingBox()).toHaveAccessibleDescription(
+      "Leave empty for no limit.",
+    );
+    expect(change()).toBeDisabled();
+    expect(change()).toHaveAccessibleDescription(
+      "That is already the current limit.",
+    );
   });
 
   it("opens empty on a run with no ceiling, which asking for none leaves as it is", () => {
     changing({ raiseNeedsApproval: false });
 
     expect(ceilingBox()).toHaveValue("");
-    expect(change()).toHaveAccessibleDescription("That is the ceiling it has.");
+    expect(change()).toHaveAccessibleDescription(
+      "That is already the current limit.",
+    );
   });
 
   it.each(["0", "007", "5.5", "5 000", "9007199254740992"])(
@@ -135,12 +141,17 @@ describe("ChangeCeiling", () => {
       await typedAs(typed);
 
       expect(ceilingBox()).toHaveAttribute("aria-invalid", "true");
-      expect(change()).toHaveAttribute("aria-disabled", "true");
+      expect(ceilingBox()).toHaveAccessibleDescription(
+        `Leave empty for no limit. ${LIMIT}`,
+      );
+      expect(change()).toBeDisabled();
       expect(change()).toHaveAccessibleDescription(LIMIT);
-      expect(
-        screen.getByText(LIMIT, { selector: ".MuiAlert-message" })
-          .parentElement,
-      ).toHaveClass("MuiAlert-colorWarning");
+      const explanation = document.getElementById(
+        change().getAttribute("aria-describedby")!,
+      )!;
+      expect(explanation).toHaveTextContent(LIMIT);
+      expect(explanation).toBeVisible();
+      expect(getComputedStyle(explanation).color).toBe("rgb(154, 79, 0)");
       expect(requestsTo(sent)).toEqual([]);
     },
   );
@@ -158,7 +169,11 @@ describe("ChangeCeiling", () => {
       await typedAs(typed);
       await userEvent.click(change());
 
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Usage limit" }),
+        ).toBeNull(),
+      );
       expect(requestsTo(sent)).toEqual([`PATCH ${ADDRESS}`]);
       expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
         ceiling,
@@ -172,17 +187,21 @@ describe("ChangeCeiling", () => {
     ["the version does not", false, []],
   ])(
     "says a raise waits on approval only where %s",
-    (_case, needsApproval, notes) => {
+    async (_case, needsApproval, notes) => {
       const { dialog } = changing({
         inForce: "5000",
         raiseNeedsApproval: needsApproval,
       });
 
-      expect(
-        within(dialog)
-          .queryAllByText(APPROVAL)
-          .map((each) => each.textContent),
-      ).toEqual(notes);
+      await userEvent.hover(
+        within(dialog).getByRole("textbox", { name: "Usage limit" }),
+      );
+      const hint = await screen.findByRole("tooltip");
+      expect(ceilingBox()).toHaveAccessibleDescription(
+        `Leave empty for no limit.${needsApproval ? ` ${APPROVAL}` : ""}`,
+      );
+      if (notes.length === 0) expect(hint).not.toHaveTextContent(APPROVAL);
+      else expect(hint).toHaveTextContent(APPROVAL);
     },
   );
 
@@ -203,14 +222,18 @@ describe("ChangeCeiling", () => {
     ["none is", FIVE_THOUSAND, []],
   ])(
     "says a change withdraws the raise waiting only where %s",
-    (_case, ceiling, notes) => {
+    async (_case, ceiling, notes) => {
       const { dialog } = changing(ceiling);
 
-      expect(
-        within(dialog)
-          .queryAllByText(WITHDRAWS)
-          .map((each) => each.textContent),
-      ).toEqual(notes);
+      await userEvent.hover(
+        within(dialog).getByRole("textbox", { name: "Usage limit" }),
+      );
+      const hint = await screen.findByRole("tooltip");
+      expect(ceilingBox()).toHaveAccessibleDescription(
+        `Leave empty for no limit.${notes.length === 0 ? "" : ` ${WITHDRAWS}`}`,
+      );
+      if (notes.length === 0) expect(hint).not.toHaveTextContent(WITHDRAWS);
+      else expect(hint).toHaveTextContent(WITHDRAWS);
     },
   );
 
@@ -225,11 +248,11 @@ describe("ChangeCeiling", () => {
     await userEvent.click(change());
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.",
+      "Only someone in this group who can start runs can start, rename, stop or resume a run, set its usage limit, withdraw a limit change they asked for, or try sending a request that could not be sent.",
     );
-    expect(screen.getByRole("dialog", { name: "Change the ceiling" })).toBe(
-      dialog,
-    );
+    expect(
+      screen.getByRole("textbox", { name: "Usage limit" }).closest("form")!,
+    ).toBe(dialog);
   });
 
   /** The action is the page's, so a refusal of some other act it ran is not this opening's to say. */
@@ -237,7 +260,7 @@ describe("ChangeCeiling", () => {
     const { dialog } = changing(FIVE_THOUSAND, {}, true);
 
     await typedAs("6000");
-    await waitFor(() => expect(change()).not.toHaveAttribute("aria-disabled"));
+    await waitFor(() => expect(change()).toBeEnabled());
 
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });

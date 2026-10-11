@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { GroupSortColumn, RegisteredGroup } from "../../api/groups";
 import { say } from "../../i18n/app";
+import { readersIntl } from "../../i18n/intl";
 import type { Ordering } from "../../lib/collection/ordering";
 
 /** Every column the register can be sorted by, closed over the union in both directions. */
@@ -18,24 +19,19 @@ export const BY_NAME: Ordering<GroupSortColumn> = {
   descending: false,
 };
 
-/**
- * The register, one row per group: four facts about the group, each sortable
- * and none naming anybody in it, and last the one control on the row, which
- * has no order to sort by and no heading of its own.
- */
 export function groupColumns(
   renameControl: (group: RegisteredGroup) => ReactNode,
 ) {
   return [
     {
+      label: say("group.heading"),
+      cell: renameControl,
+      sortKey: "name",
+    },
+    {
       label: say("group.key"),
       cell: (group: RegisteredGroup) => group.key,
       sortKey: "key",
-    },
-    {
-      label: say("group.heading"),
-      cell: (group: RegisteredGroup) => group.name,
-      sortKey: "name",
     },
     {
       label: say("group.canBeAdministered"),
@@ -49,10 +45,10 @@ export function groupColumns(
     },
     {
       label: say("group.members"),
-      cell: (group: RegisteredGroup) => group.memberCount,
+      cell: (group: RegisteredGroup) =>
+        readersIntl.formatNumber(group.memberCount),
       sortKey: "memberCount",
       numeric: true,
     },
-    { label: "", cell: renameControl },
   ] as const;
 }

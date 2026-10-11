@@ -1,23 +1,23 @@
+import type { ConversationEvent } from "../../../api/conversationEvents";
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink, useLocation } from "react-router";
 
-import type {
-  ConversationEvent,
-  Run,
-} from "../../../api/groups/{groupId}/runs/{runId}";
+import type { Run } from "../../../api/groups/{groupId}/runs/{runId}";
 import type {
   RunSteps,
   StepRow,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps";
-import { isTheReader } from "../../../api/standing";
+import { isTheReader, type GroupStanding } from "../../../api/standing";
 import { useStanding } from "../../../app/standing/StandingContext";
 import { say, type MessageId } from "../../../i18n/app";
 import { isolatedInText } from "../../../lib/direction/isolated";
 import { Field, Fields } from "../../../lib/form/Fields";
 import { QUIET_SX } from "../../../lib/layout/parts";
 import { nameOrNumber } from "../../../lib/text/names";
+import { HiddenShown } from "../../../lib/text/HiddenShown";
+import { ModelProse } from "../../../lib/text/ModelProse";
 import { useCalendarNow, whenText } from "../../../lib/time/When";
 import { FilledValue } from "../fill/FilledValue";
 import { listQuery, stepHref } from "../runAddress";
@@ -26,6 +26,7 @@ import { countSaid } from "../spend";
 import { declaredFor, fieldAt, labelAt } from "./declared";
 import { Message } from "./Message";
 import { spokenName } from "./stepTitle";
+import { lengthUnitsSaid } from "./LengthPanel";
 
 const LIST_SX = { m: 0, pl: 2 };
 
@@ -34,13 +35,13 @@ export function ActMessage({
   run,
   reading,
   step,
-  groupId,
+  group,
 }: {
   readonly event: Exclude<ConversationEvent, { readonly kind: "step_reached" }>;
   readonly run: Run;
   readonly reading: RunSteps;
   readonly step?: StepRow;
-  readonly groupId: string;
+  readonly group: GroupStanding;
 }) {
   const standing = useStanding();
   const search = listQuery(useLocation().search);
@@ -92,12 +93,28 @@ export function ActMessage({
         <Box component="ul" sx={LIST_SX}>
           {event.decisions.map((decision) => (
             <li key={decision.field}>
-              {decision.outcome === "assured"
-                ? say("act.assured", { field: labelAt(gives, decision.field) })
-                : say("act.refused", {
+              {decision.outcome === "assured" ? (
+                say("act.assured", { field: labelAt(gives, decision.field) })
+              ) : decision.whyLines === "several" ? (
+                <>
+                  {say("act.refusedHeading", {
                     field: labelAt(gives, decision.field),
-                    reason: isolatedInText(decision.why),
                   })}
+                  <ModelProse
+                    text={decision.why}
+                    plain={
+                      <bdi style={{ whiteSpace: "pre-wrap" }}>
+                        <HiddenShown text={decision.why} />
+                      </bdi>
+                    }
+                  />
+                </>
+              ) : (
+                say("act.refused", {
+                  field: labelAt(gives, decision.field),
+                  reason: isolatedInText(decision.why),
+                })
+              )}
             </li>
           ))}
         </Box>
@@ -108,24 +125,55 @@ export function ActMessage({
             <Typography key={decision.field} variant="body2">
               {say("act.lengthDetail", {
                 field: labelAt(gives, decision.field),
-                step: isolatedInText(spokenName(event.held.stepName)),
+                step: isolatedInText(
+                  event.held.label ?? spokenName(event.held.stepName),
+                ),
                 number: event.held.run.number,
               })}
+              {decision.outcome !== "refused" ||
+              decision.lengthUnits === undefined ||
+              decision.excessUnits === undefined ? null : (
+                <>
+                  <br />
+                  {labelAt(gives, decision.field)}:{" "}
+                  {say("step.lengthAbout", {
+                    length: lengthUnitsSaid(decision.lengthUnits),
+                  })}
+                  <br />
+                  {say("step.lengthExcess")}:{" "}
+                  {say("step.lengthAbout", {
+                    length: lengthUnitsSaid(decision.excessUnits),
+                  })}
+                </>
+              )}
             </Typography>
           ))}
           {event.decisions.map((decision) =>
             decision.outcome === "refused" ? (
-              <Typography key={`why-${decision.field}`} variant="body2">
-                {isolatedInText(decision.why)}
-              </Typography>
+              <Box key={`why-${decision.field}`}>
+                {decision.whyLines === "several" ? (
+                  <ModelProse
+                    text={decision.why}
+                    plain={
+                      <bdi style={{ whiteSpace: "pre-wrap" }}>
+                        <HiddenShown text={decision.why} />
+                      </bdi>
+                    }
+                  />
+                ) : (
+                  isolatedInText(decision.why)
+                )}
+              </Box>
             ) : null,
           )}
           <Link
             component={RouterLink}
-            to={`${stepHref(groupId, event.held.run.runId, event.held.stepId)}${search}`}
+            to={`${stepHref(group, event.held.run.runId, event.held.stepId)}${search}`}
           >
             {say("act.openHeldStep", {
-              step: isolatedInText(spokenName(event.held.stepName)),
+              step: isolatedInText(
+                event.held.label ?? spokenName(event.held.stepName),
+              ),
             })}
           </Link>
         </>

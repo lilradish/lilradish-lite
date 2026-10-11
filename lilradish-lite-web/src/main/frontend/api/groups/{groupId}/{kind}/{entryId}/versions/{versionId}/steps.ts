@@ -5,12 +5,11 @@ import {
   workflowFrom,
   type BindingSource,
   type SearchField,
-  type SearchSource,
   type SearchStanding,
   type WorkflowVersion,
 } from "../{versionId}";
 
-/** What fills one input; a step is read from by its place among the steps sent. */
+/** A step is read from by its place among the steps sent. */
 export interface SentBinding {
   readonly target: string;
   readonly source: BindingSource;
@@ -39,16 +38,13 @@ export interface SentCase {
   readonly bindings: readonly SentBinding[];
 }
 
-export type SentSearchPart =
-  { readonly text: string } | { readonly from: SearchSource };
-
 export type SentRuns =
   | { readonly kind: "question" | "workflow"; readonly version: string }
   | { readonly kind: "code_step"; readonly codeStep: string | null }
   | {
       readonly kind: "search";
       readonly searchWay: string | null;
-      readonly question: readonly SentSearchPart[];
+      readonly version: string | null;
       readonly standings: Record<SearchField, SearchStanding | null>;
     }
   | {
@@ -66,6 +62,7 @@ export interface SentStep {
   /** The key it was read under, which keeps what it pins; none for a step added. */
   readonly stepId: string | null;
   readonly name: string;
+  readonly label?: string | null;
   readonly runs: SentRuns | null;
   readonly producer?: SentProducer | null;
   readonly tries?: number | null;
@@ -74,8 +71,8 @@ export interface SentStep {
 }
 
 /**
- * Every step of a workflow draft in the order it runs, and what fills each value it gives back, written whole in
- * place of what it held and naming the revision the page read; answered with the version as it then reads.
+ * Replaces draft steps in run order and all output bindings, naming the revision read.
+ * Returns the version as it then reads.
  */
 export function writeSteps(
   groupId: string,

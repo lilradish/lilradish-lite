@@ -9,27 +9,28 @@ import Typography from "@mui/material/Typography";
 import { Link as RouterLink, useLocation } from "react-router";
 
 import type { RunSteps } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { GroupStanding } from "../../../api/standing";
 import { say } from "../../../i18n/app";
+import { readersIntl } from "../../../i18n/intl";
 import { QUIET_SX, TITLE_LINE_SX } from "../../../lib/layout/parts";
 import { useCalendarNow } from "../../../lib/time/When";
 import { StepKindTag } from "../../library/StepKindTag";
 import { listQuery, stepHref, WITHIN_THE_RUN } from "../runAddress";
 import { CostDrawn } from "../spend";
 import { BeneathLinks } from "./BeneathLinks";
-import { declaredFor, takenSaid, type Declaring } from "./declared";
+import { declaredFor, labelAt, fromSaid, type Declaring } from "./declared";
+import { Field, Fields } from "../../../lib/form/Fields";
 import { StepStateBadge } from "./StepStateBadge";
-import { whereSaid } from "./stepStates";
 import { spokenName } from "./stepTitle";
-
-const TAKEN_SX = { m: 0, pl: 2 };
+import { whereSaid } from "./stepWhereabouts";
 
 /** One row per step in the order they run, which is what the order means, so nothing sorts it. */
 export function StepsTable({
-  groupId,
+  group,
   reading,
   labelledBy,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly reading: RunSteps;
   readonly labelledBy: string;
 }) {
@@ -46,11 +47,11 @@ export function StepsTable({
     <Table size="small" aria-labelledby={labelledBy}>
       <TableHead>
         <TableRow>
-          <TableCell>{say("step.order")}</TableCell>
+          <TableCell data-compact="true">{say("step.order")}</TableCell>
           <TableCell>{say("step.name")}</TableCell>
           <TableCell>{say("step.takesFrom")}</TableCell>
-          <TableCell>{say("run.where")}</TableCell>
-          <TableCell>{say("step.cost")}</TableCell>
+          <TableCell data-compact="true">{say("run.where")}</TableCell>
+          <TableCell data-compact="true">{say("run.usage")}</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
@@ -60,18 +61,21 @@ export function StepsTable({
             declaredFor(step, declarations)?.gives,
             undefined,
             now,
+            "",
           );
           return (
             <TableRow key={step.stepId}>
-              <TableCell>{step.order}</TableCell>
+              <TableCell data-compact="true">
+                {readersIntl.formatNumber(step.order)}
+              </TableCell>
               <TableCell component="th" scope="row">
                 <Box sx={TITLE_LINE_SX}>
                   <Link
                     component={RouterLink}
-                    to={`${stepHref(groupId, reading.run.runId, step.stepId)}${listQuery(search)}`}
+                    to={`${stepHref(group, reading.run.runId, step.stepId)}${listQuery(search)}`}
                     state={WITHIN_THE_RUN}
                   >
-                    <bdi>{spokenName(step.name)}</bdi>
+                    <bdi>{step.label ?? spokenName(step.name)}</bdi>
                   </Link>
                   <StepKindTag kind={step.runs.kind} />
                 </Box>
@@ -80,16 +84,22 @@ export function StepsTable({
                 {step.takesFrom.length === 0 ? (
                   say("step.takesNothing")
                 ) : (
-                  <Box component="ul" sx={TAKEN_SX}>
+                  <Fields>
                     {step.takesFrom.map((taken) => (
-                      <li key={taken.sourcePartId ?? taken.input}>
-                        {takenSaid(taken, step, declaring)}
-                      </li>
+                      <Field
+                        key={taken.input}
+                        label={labelAt(
+                          declaredFor(step, declarations)?.takes,
+                          taken.input,
+                        )}
+                      >
+                        {fromSaid(taken.from, declaring)}
+                      </Field>
                     ))}
-                  </Box>
+                  </Fields>
                 )}
               </TableCell>
-              <TableCell>
+              <TableCell data-compact="true">
                 <StepStateBadge state={step.state} />
                 {why.map((line, at) => (
                   <Typography key={at} variant="body2" sx={QUIET_SX}>
@@ -98,11 +108,11 @@ export function StepsTable({
                 ))}
                 {step.beneath === undefined ? null : (
                   <Typography variant="body2">
-                    <BeneathLinks groupId={groupId} beneath={step.beneath} />
+                    <BeneathLinks group={group} beneath={step.beneath} />
                   </Typography>
                 )}
               </TableCell>
-              <TableCell>
+              <TableCell data-compact="true">
                 <CostDrawn cost={step.cost} />
               </TableCell>
             </TableRow>

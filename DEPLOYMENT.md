@@ -1,5 +1,13 @@
 # Deployment requirements
 
+Before running migrations, a database administrator must install the standard `pg_trgm` extension
+in each target PostgreSQL database. Install it in the application schema, or another schema on which
+the migration and application roles each have `USAGE`. The administrator creates the intended schema
+before installing the extension and grants access to both roles if they are different. The first
+migration checks the installation and the migration role's schema access before creating business
+objects; migrations do not install or move the extension or grant access to it. An installation in
+one database does not prepare other databases on the same server.
+
 Run the migration application against the intended PostgreSQL database before starting the web
 application. Set `SPRING_DATASOURCE_URL` and `SPRING_DATASOURCE_USERNAME`, with credentials (a password,
 or a client certificate configured through the datasource URL), for both applications. Set
@@ -8,16 +16,26 @@ web application has no default database connection, and its URL must put the app
 search path. If migration is skipped, either application connects to the wrong database, or that schema
 is absent from the search path, web queries fail.
 
-Configure `lilradish.model-calls.endpoint.base-url`, positive `connect-timeout` and `read-timeout`, and
-an endpoint model list matching the deployed model catalog. Supply `LILRADISH_MODEL_API_KEY` in the
-process environment rather than a configuration file. The application refuses startup without a model
-caller, with invalid endpoint settings, with mismatched models, or without the key. The configured
-`read-timeout` also determines the shutdown budget below.
+Set `lilradish.model-calls.endpoint.enabled=true`, positive `connect-timeout` and `read-timeout`, and
+an endpoint model list matching the deployed model catalog. Each model needs its own `base-url` and
+`api-key-variable`, alongside its vendor `id`, modes and call routes. The named variable must exist
+in the process environment and hold that model's bearer token; configuration files never supply the
+token. Ordinary and tool calls use the selected model's address and key, including when models share
+an address. The application validates every configured model at startup. A missing address or key,
+invalid settings, a catalog mismatch or a missing caller prevents startup.
+
+For an invented deployment, model `cedar_model` could name `CEDAR_MODEL_KEY` and model `birch_model`
+could name `BIRCH_MODEL_KEY`. Set the tokens through the process manager's secret facility, and place
+only those variable names in `endpoint.models[0].api-key-variable` and
+`endpoint.models[1].api-key-variable`. Supply each address in the corresponding model's `base-url`;
+no address or token has a deployment default. Addresses must use HTTP or HTTPS and carry no user
+information, query or fragment. Variable names use letters, digits and underscores, beginning with
+a letter or underscore. The common `read-timeout` also determines the shutdown budget below.
 
 ## Provide user identification
 
 Supply exactly one production implementation of
-`org.lilradish.lite.app.identification.UserIdentification` and register it as a Spring bean.
+`com.lilradish.lite.app.identification.UserIdentification` and register it as a Spring bean.
 Include the implementation and its bean registration configuration in the application's runtime
 classpath or release package, and ensure the startup context loads that configuration.
 
@@ -195,3 +213,130 @@ PostgreSQL host's [TCP support](https://github.com/postgres/postgres/blob/REL_18
 Until the old session is reaped, the replacement cannot acquire the lock and may fail its startup
 deadline. Check that the database host supports these TCP settings and measure failover in the deployed
 network.
+
+## Select one environment
+
+`application.yaml` holds shared configuration. Activate exactly one environment with
+`--spring.profiles.active=local`, `--spring.profiles.active=dev` or
+`--spring.profiles.active=prod`. Each environment file contains its own environment-specific settings;
+no profile group or configuration import combines them.
+
+The development source set is `local`. Its local and dev profiles currently provide the same invented
+model catalog, model-call routes and demonstration seed, alongside the development identity, ordinary
+model calls, tool model calls and search way. Edit each environment's own file independently. Run
+migrations with the selected profile before starting the web application with it.
+
+Production uses `prod` and receives its real model catalog, endpoint settings, credentials and identity
+implementation through deployment configuration as described above. No production addresses or tokens
+are kept here. Shipped archives contain only the shared and prod configuration, excluding development
+classes, local/dev profile files and seed SQL.
+
+Run prod from a shipped archive or an application runtime classpath without the development source set.
+`bootRun` adds the local source-set output for development. Selecting prod on that classpath registers
+both development and production model callers, so startup refuses the ambiguous caller configuration.
+
+The web prod file supplies two complete model templates. Provide every placeholder below through
+the process environment or external configuration. Values have no repository defaults. Each model
+has two custom modes, two price currencies and two tools with two price currencies each. Supply
+distinct names and ISO currencies within each corresponding list. Prices are independent amounts,
+not currency conversions. The endpoint is explicitly enabled in prod so startup must assemble
+production callers. Each model's bearer token is supplied only in the process variable named by its
+API-key-variable placeholder. Tool routes require deployment-supplied converters supporting their
+read-only kind; the built-in `openai_compatible` converter supports ordinary calls only.
+
+Each model retains both singleton tool routes and a route offering the pair. Catalog and endpoint
+names and modes must agree. The table gives every placeholder and every configuration location
+where it is used; repeated names denote one value, not an additional placeholder.
+
+| Placeholder | Configuration item | Required value |
+|---|---|---|
+| `LILRADISH_MODEL_NAME` | `lilradish.deployed.models[0].name`, `lilradish.model-calls.endpoint.models[0].name` | Distinct valid deployment model name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_MODE` | `lilradish.deployed.models[0].modes[0]`, `lilradish.model-calls.endpoint.models[0].modes[0].mode` | Distinct supported custom mode name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_MODE_2` | `lilradish.deployed.models[0].modes[1]`, `lilradish.model-calls.endpoint.models[0].modes[1].mode` | Distinct supported custom mode name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_SENT_PER_CALL_LIMIT` | `lilradish.deployed.models[0].sent-per-call-limit` | Positive count |
+| `LILRADISH_MODEL_CHARACTERS_PER_UNIT` | `lilradish.deployed.models[0].characters-per-unit` | Positive decimal measure |
+| `LILRADISH_MODEL_CAME_BACK_PER_CALL_LIMIT` | `lilradish.deployed.models[0].came-back-per-call-limit` | Positive count |
+| `LILRADISH_MODEL_PRICE_CURRENCY` | `lilradish.deployed.models[0].prices-per-million[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_SENT_PER_MILLION` | `lilradish.deployed.models[0].prices-per-million[0].sent-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_CAME_BACK_PER_MILLION` | `lilradish.deployed.models[0].prices-per-million[0].came-back-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_PRICE_CURRENCY_2` | `lilradish.deployed.models[0].prices-per-million[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_SENT_PER_MILLION_2` | `lilradish.deployed.models[0].prices-per-million[1].sent-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_CAME_BACK_PER_MILLION_2` | `lilradish.deployed.models[0].prices-per-million[1].came-back-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_TOOL_NAME` | `lilradish.deployed.models[0].tools[0].name`, `lilradish.model-calls.endpoint.models[0].calls[0].tools[0]`, `lilradish.model-calls.endpoint.models[0].calls[2].tools[0]` | Distinct valid tool name, paired with its singleton and paired endpoint routes |
+| `LILRADISH_MODEL_TOOL_KIND` | `lilradish.deployed.models[0].tools[0].kind` | Supported read-only kind, currently web_search |
+| `LILRADISH_MODEL_TOOL_MAX_USES` | `lilradish.deployed.models[0].tools[0].max-uses-per-call` | Positive maximum uses per call |
+| `LILRADISH_MODEL_TOOL_PRICE_CURRENCY` | `lilradish.deployed.models[0].tools[0].prices-per-use[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_TOOL_PRICE_PER_USE` | `lilradish.deployed.models[0].tools[0].prices-per-use[0].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_TOOL_PRICE_CURRENCY_2` | `lilradish.deployed.models[0].tools[0].prices-per-use[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_TOOL_PRICE_PER_USE_2` | `lilradish.deployed.models[0].tools[0].prices-per-use[1].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_TOOL_2_NAME` | `lilradish.deployed.models[0].tools[1].name`, `lilradish.model-calls.endpoint.models[0].calls[1].tools[0]`, `lilradish.model-calls.endpoint.models[0].calls[2].tools[1]` | Distinct valid tool name, paired with its singleton and paired endpoint routes |
+| `LILRADISH_MODEL_TOOL_2_KIND` | `lilradish.deployed.models[0].tools[1].kind` | Supported read-only kind, currently web_search |
+| `LILRADISH_MODEL_TOOL_2_MAX_USES` | `lilradish.deployed.models[0].tools[1].max-uses-per-call` | Positive maximum uses per call |
+| `LILRADISH_MODEL_TOOL_2_PRICE_CURRENCY` | `lilradish.deployed.models[0].tools[1].prices-per-use[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_TOOL_2_PRICE_PER_USE` | `lilradish.deployed.models[0].tools[1].prices-per-use[0].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_TOOL_2_PRICE_CURRENCY_2` | `lilradish.deployed.models[0].tools[1].prices-per-use[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_TOOL_2_PRICE_PER_USE_2` | `lilradish.deployed.models[0].tools[1].prices-per-use[1].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_NAME` | `lilradish.deployed.models[1].name`, `lilradish.model-calls.endpoint.models[1].name` | Distinct valid deployment model name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_2_MODE` | `lilradish.deployed.models[1].modes[0]`, `lilradish.model-calls.endpoint.models[1].modes[0].mode` | Distinct supported custom mode name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_2_MODE_2` | `lilradish.deployed.models[1].modes[1]`, `lilradish.model-calls.endpoint.models[1].modes[1].mode` | Distinct supported custom mode name, paired across catalog and endpoint |
+| `LILRADISH_MODEL_2_SENT_PER_CALL_LIMIT` | `lilradish.deployed.models[1].sent-per-call-limit` | Positive count |
+| `LILRADISH_MODEL_2_CHARACTERS_PER_UNIT` | `lilradish.deployed.models[1].characters-per-unit` | Positive decimal measure |
+| `LILRADISH_MODEL_2_CAME_BACK_PER_CALL_LIMIT` | `lilradish.deployed.models[1].came-back-per-call-limit` | Positive count |
+| `LILRADISH_MODEL_2_PRICE_CURRENCY` | `lilradish.deployed.models[1].prices-per-million[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_SENT_PER_MILLION` | `lilradish.deployed.models[1].prices-per-million[0].sent-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_CAME_BACK_PER_MILLION` | `lilradish.deployed.models[1].prices-per-million[0].came-back-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_PRICE_CURRENCY_2` | `lilradish.deployed.models[1].prices-per-million[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_SENT_PER_MILLION_2` | `lilradish.deployed.models[1].prices-per-million[1].sent-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_CAME_BACK_PER_MILLION_2` | `lilradish.deployed.models[1].prices-per-million[1].came-back-per-million` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_TOOL_NAME` | `lilradish.deployed.models[1].tools[0].name`, `lilradish.model-calls.endpoint.models[1].calls[0].tools[0]`, `lilradish.model-calls.endpoint.models[1].calls[2].tools[0]` | Distinct valid tool name, paired with its singleton and paired endpoint routes |
+| `LILRADISH_MODEL_2_TOOL_KIND` | `lilradish.deployed.models[1].tools[0].kind` | Supported read-only kind, currently web_search |
+| `LILRADISH_MODEL_2_TOOL_MAX_USES` | `lilradish.deployed.models[1].tools[0].max-uses-per-call` | Positive maximum uses per call |
+| `LILRADISH_MODEL_2_TOOL_PRICE_CURRENCY` | `lilradish.deployed.models[1].tools[0].prices-per-use[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_TOOL_PRICE_PER_USE` | `lilradish.deployed.models[1].tools[0].prices-per-use[0].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_TOOL_PRICE_CURRENCY_2` | `lilradish.deployed.models[1].tools[0].prices-per-use[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_TOOL_PRICE_PER_USE_2` | `lilradish.deployed.models[1].tools[0].prices-per-use[1].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_TOOL_2_NAME` | `lilradish.deployed.models[1].tools[1].name`, `lilradish.model-calls.endpoint.models[1].calls[1].tools[0]`, `lilradish.model-calls.endpoint.models[1].calls[2].tools[1]` | Distinct valid tool name, paired with its singleton and paired endpoint routes |
+| `LILRADISH_MODEL_2_TOOL_2_KIND` | `lilradish.deployed.models[1].tools[1].kind` | Supported read-only kind, currently web_search |
+| `LILRADISH_MODEL_2_TOOL_2_MAX_USES` | `lilradish.deployed.models[1].tools[1].max-uses-per-call` | Positive maximum uses per call |
+| `LILRADISH_MODEL_2_TOOL_2_PRICE_CURRENCY` | `lilradish.deployed.models[1].tools[1].prices-per-use[0].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_TOOL_2_PRICE_PER_USE` | `lilradish.deployed.models[1].tools[1].prices-per-use[0].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_MODEL_2_TOOL_2_PRICE_CURRENCY_2` | `lilradish.deployed.models[1].tools[1].prices-per-use[1].currency` | Distinct ISO currency code for each price in the same list |
+| `LILRADISH_MODEL_2_TOOL_2_PRICE_PER_USE_2` | `lilradish.deployed.models[1].tools[1].prices-per-use[1].per-use` | Nonnegative decimal price, independent of the other currency |
+| `LILRADISH_ENDPOINT_CONNECT_TIMEOUT` | `lilradish.model-calls.endpoint.connect-timeout` | Positive duration |
+| `LILRADISH_ENDPOINT_READ_TIMEOUT` | `lilradish.model-calls.endpoint.read-timeout` | Positive duration |
+| `LILRADISH_MODEL_ID` | `lilradish.model-calls.endpoint.models[0].id` | Vendor model identifier |
+| `LILRADISH_MODEL_BASE_URL` | `lilradish.model-calls.endpoint.models[0].base-url` | HTTP(S) base URL without credentials, query or fragment |
+| `LILRADISH_MODEL_API_KEY_VARIABLE` | `lilradish.model-calls.endpoint.models[0].api-key-variable` | Name of the process variable holding this model's bearer token |
+| `LILRADISH_MODEL_REASONING_EFFORT` | `lilradish.model-calls.endpoint.models[0].modes[0].reasoning-effort` | An effort supported by the deployed endpoint |
+| `LILRADISH_MODEL_REASONING_EFFORT_2` | `lilradish.model-calls.endpoint.models[0].modes[1].reasoning-effort` | An effort supported by the deployed endpoint |
+| `LILRADISH_MODEL_CALL_PATH` | `lilradish.model-calls.endpoint.models[0].calls[0].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_CALL_OUTBOUND` | `lilradish.model-calls.endpoint.models[0].calls[0].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_CALL_INBOUND` | `lilradish.model-calls.endpoint.models[0].calls[0].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_CALL_2_PATH` | `lilradish.model-calls.endpoint.models[0].calls[1].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_CALL_2_OUTBOUND` | `lilradish.model-calls.endpoint.models[0].calls[1].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_CALL_2_INBOUND` | `lilradish.model-calls.endpoint.models[0].calls[1].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_CALL_PAIR_PATH` | `lilradish.model-calls.endpoint.models[0].calls[2].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_CALL_PAIR_OUTBOUND` | `lilradish.model-calls.endpoint.models[0].calls[2].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_CALL_PAIR_INBOUND` | `lilradish.model-calls.endpoint.models[0].calls[2].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_ID` | `lilradish.model-calls.endpoint.models[1].id` | Vendor model identifier |
+| `LILRADISH_MODEL_2_BASE_URL` | `lilradish.model-calls.endpoint.models[1].base-url` | HTTP(S) base URL without credentials, query or fragment |
+| `LILRADISH_MODEL_2_API_KEY_VARIABLE` | `lilradish.model-calls.endpoint.models[1].api-key-variable` | Name of the process variable holding this model's bearer token |
+| `LILRADISH_MODEL_2_REASONING_EFFORT` | `lilradish.model-calls.endpoint.models[1].modes[0].reasoning-effort` | An effort supported by the deployed endpoint |
+| `LILRADISH_MODEL_2_REASONING_EFFORT_2` | `lilradish.model-calls.endpoint.models[1].modes[1].reasoning-effort` | An effort supported by the deployed endpoint |
+| `LILRADISH_MODEL_2_CALL_PATH` | `lilradish.model-calls.endpoint.models[1].calls[0].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_2_CALL_OUTBOUND` | `lilradish.model-calls.endpoint.models[1].calls[0].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_CALL_INBOUND` | `lilradish.model-calls.endpoint.models[1].calls[0].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_CALL_2_PATH` | `lilradish.model-calls.endpoint.models[1].calls[1].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_2_CALL_2_OUTBOUND` | `lilradish.model-calls.endpoint.models[1].calls[1].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_CALL_2_INBOUND` | `lilradish.model-calls.endpoint.models[1].calls[1].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_CALL_PAIR_PATH` | `lilradish.model-calls.endpoint.models[1].calls[2].path` | Absolute route path without query, fragment or parent traversal |
+| `LILRADISH_MODEL_2_CALL_PAIR_OUTBOUND` | `lilradish.model-calls.endpoint.models[1].calls[2].outbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_MODEL_2_CALL_PAIR_INBOUND` | `lilradish.model-calls.endpoint.models[1].calls[2].inbound` | Registered converter ID supporting the route's tool set |
+| `LILRADISH_RESEND_TIMES` | `lilradish.model-calls.resend.times` | Nonnegative count |
+| `LILRADISH_RESEND_FIRST_WAIT` | `lilradish.model-calls.resend.first-wait` | Positive duration |
+| `LILRADISH_RESEND_LONGEST_WAIT` | `lilradish.model-calls.resend.longest-wait` | Duration at least as long as first wait |
+
+External configuration may replace either complete model list. Spring configuration lists replace
+the template in full; adding only another item does not extend it. Keep the catalog and endpoint
+lists consistent. A model with no modes or tools supplies empty lists explicitly and still needs
+an ordinary endpoint. Supply the key for each model through its own named process variable.

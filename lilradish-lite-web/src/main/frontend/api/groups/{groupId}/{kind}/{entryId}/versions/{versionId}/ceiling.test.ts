@@ -23,9 +23,6 @@ const ANSWER = {
   problems: [],
   sendsPast: [],
   offered: {
-    lists: [],
-    questions: [],
-    workflows: [],
     codeSteps: [],
     searchWays: [],
     models: [],

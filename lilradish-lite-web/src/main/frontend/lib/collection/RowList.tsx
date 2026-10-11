@@ -16,7 +16,7 @@ const ROW_SX = {
 };
 
 /**
- * Rows that go somewhere. Each is an anchor, so opening one in a new tab,
+ * Each is an anchor, so opening one in a new tab,
  * copying its address and reading the destination off the status bar all work
  * without this component doing anything — none of which a button can offer.
  */

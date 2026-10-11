@@ -17,12 +17,14 @@ import {
   type ShownValue,
   type ShownValues,
 } from "../../../api/filling";
-import type { WentIn } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { WentIn } from "../../../api/stepSources";
 import { say } from "../../../i18n/app";
 import { codePointsIn } from "../../../lib/filling/writing";
 import { Field, Fields } from "../../../lib/form/Fields";
 import { HEADING_SX, UNSEEN_SX } from "../../../lib/layout/parts";
 import { drawingTooDeep } from "../../../lib/text/drawingDepth";
+import { ProseScope } from "../../../lib/text/ModelProse";
+import "../../../lib/text/modelProseMarkdown.css";
 import {
   holdsMark,
   markPlaceholders,
@@ -83,7 +85,6 @@ interface Drawn {
 
 const DrawnContext = createContext<Drawn | null>(null);
 
-/** How one placeholder's place is drawn. */
 type Placed =
   | { readonly as: "written"; readonly text: string }
   | { readonly as: "none" }
@@ -95,7 +96,7 @@ type Placed =
       readonly given: readonly WentIn[];
     };
 
-// Value text is inserted after Markdown parsing, so it cannot become markup or a link address.
+// Values are inserted after drawing parsing, so their markup cannot reach the drawing or its addresses.
 export const DrawnInputs = memo(function DrawnInputs({
   drawing,
   wentIn,
@@ -118,7 +119,7 @@ export const DrawnInputs = memo(function DrawnInputs({
     [drawing],
   );
   const plugins = useMemo(
-    () => [[valuesAsText, marked] as [typeof valuesAsText, Marked]],
+    () => [[placeValues, marked] as [typeof placeValues, Marked]],
     [marked],
   );
   const drawn = useMemo(
@@ -156,15 +157,17 @@ export const DrawnInputs = memo(function DrawnInputs({
   );
   return (
     <DrawnContext value={drawn}>
-      <Box sx={DRAWING_SX}>
-        {tooDeep ? (
-          listed
-        ) : (
-          <LaidOutOrListed key={drawing} listed={listed}>
-            {laidOut}
-          </LaidOutOrListed>
-        )}
-      </Box>
+      <ProseScope key={drawing}>
+        <Box className="drawn-inputs-markdown" sx={DRAWING_SX}>
+          {tooDeep ? (
+            listed
+          ) : (
+            <LaidOutOrListed key={drawing} listed={listed}>
+              {laidOut}
+            </LaidOutOrListed>
+          )}
+        </Box>
+      </ProseScope>
     </DrawnContext>
   );
 });
@@ -193,17 +196,25 @@ function useDrawn(): Drawn {
   return drawn;
 }
 
-function Paragraph({ node, children }: ExtraProps & { children?: ReactNode }) {
+function Paragraph({
+  node,
+  children,
+  className,
+}: ExtraProps & { children?: ReactNode; className?: string }) {
   const drawn = useDrawn();
   const holdsBlock = (node?.children ?? []).some((child) => {
     const placed = placedBy(child, drawn);
     return (
       placed?.as === "within" ||
-      (placed?.as === "given" && drawnAsBlock(placed.given))
+      (placed?.as === "given" &&
+        (drawnAsBlock(placed.given) ||
+          (child.type === "element" &&
+            child.properties.dataFormatted === true &&
+            fieldAt(drawn.takes, placed.name)?.lines === "several")))
     );
   });
   return (
-    <Box component={holdsBlock ? "div" : "p"} sx={PARAGRAPH_SX}>
+    <Box component={holdsBlock ? "div" : "p"} className={className}>
       {children}
     </Box>
   );
@@ -217,9 +228,9 @@ function DrawnHeading({
   const written = HEADINGS.indexOf(node?.tagName as Heading) + 1;
   const tag = HEADINGS[Math.min(HEADINGS.length, under + written) - 1]!;
   return (
-    <Typography variant={tag} sx={DRAWN_HEADING_SX}>
+    <Box component={tag} className={`drawn-markdown-h${written}`}>
       {children}
-    </Typography>
+    </Box>
   );
 }
 
@@ -274,6 +285,10 @@ function DrawnSegment({ node, ...rest }: ExtraProps & ComponentProps<"span">) {
           shown={placed.given}
           shut={false}
           inLine={inLine}
+          formatted={
+            node?.properties.dataFormatted === true &&
+            fieldAt(takes, placed.name)?.lines === "several"
+          }
         />
       );
     case "within": {
@@ -284,6 +299,7 @@ function DrawnSegment({ node, ...rest }: ExtraProps & ComponentProps<"span">) {
           shown={each}
           shut={false}
           inLine={inLine}
+          formatted={false}
         />
       ));
       return inLine ? (
@@ -426,7 +442,6 @@ function placedBy(child: Content, drawn: Drawn): Placed | null {
     : { as: "within", name, given };
 }
 
-/** What went in by a name: by it alone, or else field by field within it. */
 function givenFor(name: string, wentIn: readonly WentIn[]): readonly WentIn[] {
   const exact = wentIn.find((each) => each.input === name);
   return exact === undefined
@@ -507,10 +522,18 @@ function writtenPast(
   );
 }
 
-function valuesAsText({ source, segments }: Marked) {
+function placeValues({ source, segments }: Marked) {
+  const alone = new Set(
+    source.split(/\r\n|\r|\n/).flatMap((line) => {
+      const pieces = marksIn(line.replace(/^[ \t]*|[ \t]*$/g, ""));
+      return pieces.length === 1 && typeof pieces[0] === "number"
+        ? [pieces[0]]
+        : [];
+    }),
+  );
   return (tree: Parent) => {
     const named = new Set<string>();
-    within(tree, false, { source, segments, named });
+    within(tree, false, { source, segments, named, alone });
     tree.children.push({
       type: "element",
       tagName: REST,
@@ -525,6 +548,7 @@ interface Walk {
   readonly segments: readonly Segment[];
   /** Every name a value has been drawn by so far, in the order the drawing is read. */
   readonly named: Set<string>;
+  readonly alone: ReadonlySet<number>;
 }
 
 function within(parent: Parent, inLine: boolean, walk: Walk) {
@@ -552,7 +576,7 @@ function namesAValue(element: Element): boolean {
 }
 
 function drawnAs(child: Content, inLine: boolean, walk: Walk): Content[] {
-  const { source, segments, named } = walk;
+  const { source, segments, named, alone } = walk;
   switch (child.type) {
     case "text":
       return marksIn(child.value).map((piece): Content => {
@@ -571,6 +595,7 @@ function drawnAs(child: Content, inLine: boolean, walk: Walk): Content[] {
             dataSegment: piece,
             dataInLine: inLine,
             dataAgain: again,
+            dataFormatted: !inLine && alone.has(piece),
           },
           children: [],
         };
@@ -595,6 +620,16 @@ function drawnAs(child: Content, inLine: boolean, walk: Walk): Content[] {
           delete child.properties[key];
         }
       }
+      // Only the drawing's parsed nodes carry its styles; inserted values keep their own presentation.
+      const classes = child.properties.className;
+      child.properties.className = [
+        ...(Array.isArray(classes)
+          ? classes.map(String)
+          : typeof classes === "string"
+            ? [classes]
+            : []),
+        `drawn-markdown-${child.tagName}`,
+      ];
       within(child, inLine || !HOLDS_BLOCKS.has(child.tagName), walk);
       return [child];
     }

@@ -14,8 +14,7 @@ import {
 import { theme } from "../theme/theme";
 import { PagingControls } from "./PagingControls";
 
-/** `theme.palette.action.disabled`, which `theme.ts` leaves at Material's own value. */
-const DISABLED_COLOUR = "rgba(0, 0, 0, 0.26)";
+const DISABLED_COLOUR = "rgb(128, 143, 150)";
 
 function themed({ children }: { children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
@@ -147,7 +146,7 @@ describe("PagingControls", () => {
     expect(container.textContent).toBe("First pageNext page");
   });
 
-  it("draws both directions in the compact navigation role", () => {
+  it("draws both directions as quiet compact controls", () => {
     render(
       <PagingControls page={paged({ onFirstPage: false, hasNext: true })} />,
       { wrapper: themed },
@@ -155,13 +154,12 @@ describe("PagingControls", () => {
 
     for (const label of ["First page", "Next page"]) {
       const control = screen.getByRole("button", { name: label });
-      expect(control).toHaveClass(buttonClasses.outlined);
+      expect(control).toHaveClass(buttonClasses.text);
       expect(control).toHaveClass(buttonClasses.sizeSmall);
       expect(control).toHaveClass(buttonClasses.colorInherit);
-      expect(getComputedStyle(control).minHeight).toBe("32px");
-      expect(
-        getComputedStyle(control).getPropertyValue("--variant-outlinedColor"),
-      ).not.toBe(theme.palette.primary.main);
+      expect(getComputedStyle(control).minHeight).toBe("26px");
+      expect(getComputedStyle(control).color).toBe("rgb(20, 75, 108)");
+      expect(getComputedStyle(control).borderColor).toBe("rgba(0, 0, 0, 0)");
     }
   });
 
@@ -211,6 +209,8 @@ describe("PagingControls", () => {
     );
 
     expect(first.color).toBe(DISABLED_COLOUR);
+    expect(first.backgroundColor).toBe("rgb(238, 242, 244)");
+    expect(first.borderColor).toBe("rgb(214, 224, 228)");
     expect(first.pointerEvents).toBe("none");
     expect(next.color).not.toBe(DISABLED_COLOUR);
     expect(next.pointerEvents).not.toBe("none");

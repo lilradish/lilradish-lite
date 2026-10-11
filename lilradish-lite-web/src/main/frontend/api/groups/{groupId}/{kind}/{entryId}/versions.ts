@@ -11,6 +11,7 @@ import {
 import { postNothing } from "../../../../../lib/request/http";
 import { servedAmong, type Problem } from "../../../../problem";
 import { entryFrom, type Entry, type EntryKind } from "../../{kind}";
+import { isVersionName } from "../../{kind}";
 import { atEntry } from "../{entryId}";
 
 const PINS_RETIRED: ReadonlySet<string> = new Set(["VERSION_PINS_RETIRED"]);
@@ -32,6 +33,7 @@ const MEMBERS_BESIDE_FIELDS: ReadonlySet<string> = new Set([
  */
 export type ContentProblemCode =
   | "instruction_missing"
+  | "instruction_names_unknown"
   | "drawing_names_unknown"
   | "nothing_given_back"
   | "name_repeated"
@@ -49,6 +51,7 @@ export type ContentProblemCode =
   | "floor_missing"
   | "no_steps"
   | "step_name_repeated"
+  | "step_label_repeated"
   | "runs_missing"
   | "pin_elsewhere"
   | "code_step_not_published"
@@ -100,7 +103,7 @@ export type ContentProblemCode =
   | "search_review_past_largest"
   | "search_tool_not_offered"
   | "search_way_not_held"
-  | "search_question_may_be_empty"
+  | "search_question_no_longer_matches"
   | "search_standing_missing";
 
 /** Which part of a version's content a problem is in, spelt and held level as `ContentProblemCode` is. */
@@ -123,7 +126,7 @@ export interface ContentProblem {
   readonly part: string;
   /**
    * A field's key in the version's or route's declaration, or beside a step or case. There the problem code
-   * distinguishes an input from a case target output or required route output. Replaced when its owner is written.
+   * distinguishes an input from a case target output or required route output. Replaced when its owner's fields are rewritten.
    */
   readonly fieldId?: string;
   /** The term's key where a term is the place, which it keeps until it is removed. */
@@ -131,7 +134,7 @@ export interface ContentProblem {
   readonly stepId?: string;
   readonly caseId?: string;
   readonly bindingId?: string;
-  /** The unheld input name named in a drawing. */
+  /** The unknown instruction or drawing input, or the other step's human name in a display-name collision. */
   readonly name?: string;
   /** Fields of what the step runs, as what declares them names them, in its order; never none. */
   readonly fields?: readonly string[];
@@ -146,6 +149,7 @@ export interface ContentProblem {
 
 /** One version of an entry, by the number a member reads it by. */
 export interface NumberedVersion {
+  readonly versionName: string | null;
   readonly versionId: string;
   readonly number: number;
 }
@@ -209,8 +213,8 @@ export function contentProblemTotalIn(problem: Problem): number | null {
 }
 
 /**
- * Built member by member; a key or a figure that arrived and cannot be read refuses the whole place, and so
- * does a place naming fields that holds anything but its step beside them.
+ * An unreadable key or figure refuses the whole place; a place naming fields
+ * may hold only its step beside them.
  */
 export function contentProblemFrom(body: unknown): ContentProblem | null {
   if (!isUnchecked(body)) {
@@ -225,13 +229,26 @@ export function contentProblemFrom(body: unknown): ContentProblem | null {
     bindingId: optional(body, "bindingId", textFrom),
     name: optional(body, "name", textFrom),
     fields: optional(body, "fields", namesFrom),
-    excess: optional(body, "excess", excessFrom),
+    excess: optional(body, "excess", positiveWholeFrom),
     fileLimits: optional(body, "fileLimits", fileLimitsFrom),
   };
   if (
     typeof code !== "string" ||
     typeof part !== "string" ||
     !allMembersRead(keys) ||
+    (code === "instruction_names_unknown" &&
+      (part !== "instruction" ||
+        keys.name === undefined ||
+        Object.keys(body).some(
+          (member) => !["code", "part", "name"].includes(member),
+        ))) ||
+    (code === "step_label_repeated" &&
+      (part !== "steps" ||
+        keys.name === undefined ||
+        keys.name === "" ||
+        Object.keys(body).some(
+          (member) => !["code", "part", "stepId", "name"].includes(member),
+        ))) ||
     (code === "file_limit_past_deployment" ||
       code === "file_total_past_deployment") !==
       (keys.fileLimits !== undefined) ||
@@ -248,9 +265,9 @@ function fileLimitsFrom(body: unknown): ContentProblem["fileLimits"] | null {
   if (!isUnchecked(body)) {
     return null;
   }
-  const maximumBytes = excessFrom(body.maximumBytes);
-  const maximumPerField = excessFrom(body.maximumPerField);
-  const maximumTotalBytes = excessFrom(body.maximumTotalBytes);
+  const maximumBytes = positiveWholeFrom(body.maximumBytes);
+  const maximumPerField = positiveWholeFrom(body.maximumPerField);
+  const maximumTotalBytes = positiveWholeFrom(body.maximumTotalBytes);
   return maximumBytes === null ||
     maximumPerField === null ||
     maximumTotalBytes === null
@@ -258,7 +275,6 @@ function fileLimitsFrom(body: unknown): ContentProblem["fileLimits"] | null {
     : { maximumBytes, maximumPerField, maximumTotalBytes };
 }
 
-/** At least one name, none of them empty. */
 function namesFrom(said: unknown): string[] | null {
   const names = listOf(said, textFrom);
   return names === null ||
@@ -269,7 +285,7 @@ function namesFrom(said: unknown): string[] | null {
 }
 
 /** A whole number above none, kept as it arrived: one past a double's exact integers is still read, rounded. */
-function excessFrom(said: unknown): number | null {
+function positiveWholeFrom(said: unknown): number | null {
   return typeof said === "number" && Number.isInteger(said) && said > 0
     ? said
     : null;
@@ -298,13 +314,17 @@ function retiredPinFrom(body: unknown): RetiredPin | null {
 function numberedFrom(body: unknown): NumberedVersion | null {
   return isUnchecked(body) &&
     typeof body.versionId === "string" &&
+    isVersionName(body.versionName) &&
     Number.isSafeInteger(body.number) &&
     (body.number as number) > 0
-    ? { versionId: body.versionId, number: body.number as number }
+    ? {
+        versionId: body.versionId,
+        number: body.number as number,
+        versionName: body.versionName,
+      }
     : null;
 }
 
-/** The entry's versions' address handed to `ask`. */
 function atVersions<T>(
   groupId: string,
   kind: EntryKind,
@@ -314,7 +334,7 @@ function atVersions<T>(
   return atEntry(groupId, kind, entryId, (entry) => ask(`${entry}/versions`));
 }
 
-/** One version's address handed to `ask`, each identifier escaped as `atSegment` escapes one. */
+/** Each identifier escaped as `atSegment` escapes one. */
 export function atVersion<T>(
   groupId: string,
   kind: EntryKind,
@@ -327,7 +347,7 @@ export function atVersion<T>(
   );
 }
 
-/** The entry's next version, a draft; answered with the entry, the draft newest in it. */
+/** Answered with the entry, the draft newest in it. */
 export function makeDraft(
   groupId: string,
   kind: EntryKind,

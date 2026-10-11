@@ -4,8 +4,8 @@ import { workflowFrom, type WorkflowVersion } from "../{versionId}";
 import type { SentChoice } from "./steps";
 
 /**
- * Whether runs of a workflow draft may be helped, and the model helping them, null where they may not be or none
- * is chosen yet, naming the revision the page read; answered with the version as it then reads.
+ * Helper is null if helping is disallowed or no model is chosen. Names the
+ * revision read and returns the version as it then reads.
  */
 export function writeHelp(
   groupId: string,

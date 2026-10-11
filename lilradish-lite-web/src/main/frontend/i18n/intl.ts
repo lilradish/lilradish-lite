@@ -23,3 +23,18 @@ export const readersIntl: IntlShape = createIntl(
   { locale: navigator.language, defaultLocale: "en" },
   cache,
 );
+
+// Messages retain English plural rules; only their numeric formatter follows the reader.
+intl.formatters.getNumberFormat = (_locale, options) =>
+  readersIntl.formatters.getNumberFormat(readersIntl.locale, options);
+
+/** A validated plain decimal is formatted directly, without losing digits through Number. */
+export function decimalSaid(written: string): string {
+  const fraction = written.split(".")[1]?.length ?? 0;
+  // ECMA-402 accepts exact decimal strings; TypeScript's Intl declaration omits that overload.
+  const format = readersIntl.formatters.getNumberFormat(readersIntl.locale, {
+    minimumFractionDigits: fraction,
+    maximumFractionDigits: fraction,
+  }).format as (value: string) => string;
+  return format(written);
+}

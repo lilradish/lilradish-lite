@@ -1,9 +1,13 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requestsTo, serving, type Reply } from "../../../testutil/answering";
+import { KEY } from "../../../testutil/runPage";
 import { openStepPage } from "../../../testutil/stepPage";
 import { accountOpened } from "../../../testutil/stateAccount";
+import { tryReplies } from "../../../testutil/tryReplies";
+import { deferred } from "../../../testutil/deferred";
 
 const GROUP = "00000003-0000-4000-8000-000000000d11";
 
@@ -15,7 +19,7 @@ const QUESTION_VERSION = "00000007-0000-4000-8000-000000000d12";
 
 const SUMMARISE = "00000009-0000-4000-8000-000000000d11";
 
-const PAGE = `/groups/${GROUP}/work/${RUN_ID}`;
+const PAGE = `/groups/${KEY}/work/${RUN_ID}`;
 
 const RUN = `/api/groups/${GROUP}/runs/${RUN_ID}`;
 
@@ -29,12 +33,13 @@ const DAN = { userId: "000d12", displayName: "Dan" };
 
 /** What is said where the ask is refused for the act itself: the rule of who may answer a step and ask again. */
 const ASK_RULE =
-  "A group's steps are answered, and asked for again, only by a role in it that may answer one.";
+  "Only someone in this group who can answer steps can answer a step or ask again.";
 
 const CLAIM = {
   runId: RUN_ID,
   number: 7,
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000d11",
     name: "Handle a claim",
     version: 3,
@@ -55,7 +60,7 @@ const CLAIM = {
   at: { stepId: SUMMARISE, name: "summarise" },
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["stop"],
+  stateActs: ["stop"],
 };
 
 const SUMMARY = {
@@ -77,15 +82,18 @@ const HEADER = {
   versionId: VERSION,
   state: "running",
   at: { stepId: SUMMARISE, name: "summarise" },
-  acts: ["stop"],
+  stateActs: ["stop"],
   progress: { done: 0, of: 1 },
 };
 
 const OWED_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
   runs: {
+    versionName: null,
     kind: "question",
     entryId: "00000006-0000-4000-8000-000000000d12",
     name: "Summarise",
@@ -107,8 +115,8 @@ const OWED_ROW = {
   cost: { callsAModel: false },
   gaveBack: [{ field: "summary", value: "A fire.", now: "refused" }],
   next: { number: 2, beyond: false },
-  acts: ["answer", "ask_again"],
-  withheld: [],
+  stateActs: ["answer", "ask_again"],
+  stateRefusals: [],
 };
 
 const FIRST_TRY = {
@@ -120,7 +128,7 @@ const FIRST_TRY = {
       field: "summary",
       value: "A fire.",
       now: "refused",
-      decision: { outcome: "refused", why: "Too short." },
+      decision: { outcome: "refused", whyLines: "several", why: "Too short." },
     },
   ],
   review: { asked: true, by: { kind: "person", person: DAN } },
@@ -151,7 +159,7 @@ function askedRead(askedBy: object | undefined): Reply {
       ...OWED_ROW,
       where: { ...OWED_ROW.where, open: true, since: "2026-09-26T10:00:00Z" },
       tries: { current: 2, declared: 2, beyond: false },
-      acts: ["answer"],
+      stateActs: ["answer"],
     },
     cameOut: [{ field: "summary", now: "refused" }],
     triesMade: [
@@ -179,11 +187,10 @@ function askedRead(askedBy: object | undefined): Reply {
 
 const ASKED = askedRead(DAN);
 
-/** A reply the server never sends. */
 const UNANSWERED: Reply = new Promise(() => {});
 
 function reply(body: object): Reply {
-  return [JSON.stringify(body), 200];
+  return tryReplies(body).summary;
 }
 
 function refusal(code: string, status: number): Reply {
@@ -214,11 +221,12 @@ function conversing(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
       [`GET ${RUN}`]: [reply(CLAIM), UNANSWERED],
       [`GET ${STEPS}`]: [stepsRead(), UNANSWERED],
       ...routes,
+      // The current refusal is read before the original action response sequence.
+      [`GET ${STEP}`]: [OWED_READ, ...(routes[`GET ${STEP}`] ?? [UNANSWERED])],
     },
   });
 }
 
-/** What is in flight let land a turn at a time, until `landed` holds; failing where it never does. */
 async function landing(landed: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100 && !landed(); turn += 1) {
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -236,11 +244,33 @@ async function messageDrawn(): Promise<HTMLElement> {
   await landing(
     () => screen.queryByRole("list", { name: "The conversation" }) !== null,
   );
+  await act(() => vi.advanceTimersByTimeAsync(0));
   return message();
 }
 
-function press(control: HTMLElement): void {
-  act(() => control.click());
+let reader: ReturnType<typeof userEvent.setup>;
+
+async function press(control: HTMLElement): Promise<void> {
+  const pressed = reader.click(control);
+  if (vi.isFakeTimers()) {
+    let finished = false;
+    void pressed.then(
+      () => {
+        finished = true;
+      },
+      () => {
+        finished = true;
+      },
+    );
+    // RTL drains its async wrapper with another timeout after user-event's own timer advancement.
+    for (let turn = 0; turn < 100 && !finished; turn += 1) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(finished).toBe(true);
+  }
+  await pressed;
+  // Flush only after RTL has restored its act environment.
+  await act(async () => {});
 }
 
 function puts(sent: ReturnType<typeof serving>): [string, RequestInit][] {
@@ -255,6 +285,12 @@ function asked(sent: ReturnType<typeof serving>, request: string): number {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  reader = userEvent.setup({
+    advanceTimers: (milliseconds) =>
+      vi.isFakeTimers()
+        ? act(() => vi.advanceTimersByTimeAsync(milliseconds))
+        : Promise.resolve(),
+  });
 });
 
 afterEach(() => {
@@ -262,6 +298,124 @@ afterEach(() => {
 });
 
 describe("AskAgainButton", () => {
+  it("discards a late permission refusal after permission is revoked and restored", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding, readAgain } = conversing({
+      [`PUT ${STEP}/tries/2`]: [later.promise],
+    });
+    const drawn = await messageDrawn();
+    await press(within(drawn).getByRole("button", { name: "Ask again" }));
+    await landing(() => puts(sent).length === 1);
+    act(() => changeStanding([]));
+    expect(
+      within(message()).queryByRole("button", { name: "Ask again" }),
+    ).toBeNull();
+    act(() => changeStanding(["answer_step"]));
+    await act(async () =>
+      later.settle(await refusal("ACT_NOT_PERMITTED", 403)),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByText(ASK_RULE)).toBeNull();
+    expect(readAgain).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])(
+    "discards a late reread %s and focus after permission is revoked and restored",
+    async (outcome) => {
+      const later = deferred<readonly [string, number]>();
+      const consumed = vi.spyOn(later.promise, "then");
+      const { sent, changeStanding } = conversing({
+        [`PUT ${STEP}/tries/2`]: [refusal("STEP_MOVED_ON", 409)],
+        [`GET ${STEP}`]: [later.promise],
+      });
+      const drawn = await messageDrawn();
+      await press(
+        within(drawn).getByRole("button", { name: "Answer it yourself" }),
+      );
+      const form = screen.getByRole("region", { name: "Your answer" });
+      fireEvent.change(
+        within(form).getByRole("textbox", { name: "Summary \u00b7 summary" }),
+        {
+          target: { value: "A fuller account of the invented ticket." },
+        },
+      );
+      fireEvent.change(
+        within(form).getByRole("textbox", { name: "Your reason" }),
+        {
+          target: { value: "The account needs more detail." },
+        },
+      );
+      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(consumed).not.toHaveBeenCalled();
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await landing(() => asked(sent, `GET ${STEP}`) === 2);
+      expect(consumed).toHaveBeenCalledTimes(1);
+      expect(puts(sent)).toHaveLength(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+      act(() => changeStanding([]));
+      expect(
+        within(message()).queryByRole("button", { name: "Ask again" }),
+      ).toBeNull();
+      act(() => changeStanding(["answer_step"]));
+      const restored = within(message()).getByRole("button", {
+        name: "Ask again",
+      });
+      act(() => restored.focus());
+      await act(async () =>
+        later.settle(
+          outcome === "success"
+            ? await ASKED
+            : await refusal("READ_FAILED", 503),
+        ),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.queryByText("The server refused this request.")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        screen.queryByText(`Already asked again by ${setApart("Dan")}.`),
+      ).toBeNull();
+      expect(screen.queryByText("Attempt 2 has been requested.")).toBeNull();
+      expect(document.activeElement).toBe(restored);
+      expect(restored).toBeVisible();
+      expect(restored).not.toHaveAttribute("aria-disabled");
+      expect(
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
+      ).toBeVisible();
+      const kept = screen.getByRole("region", { name: "Your answer" });
+      expect(
+        within(kept).getByRole("textbox", { name: "Summary \u00b7 summary" }),
+      ).toHaveValue("A fuller account of the invented ticket.");
+      expect(
+        within(kept).getByRole("textbox", { name: "Your reason" }),
+      ).toHaveValue("The account needs more detail.");
+      expect(asked(sent, `GET ${STEP}`)).toBe(2);
+      expect(asked(sent, `GET ${RUN}`)).toBe(1);
+      expect(asked(sent, `GET ${STEPS}`)).toBe(1);
+      expect(puts(sent)).toHaveLength(1);
+    },
+  );
+
+  it("discards an ask reply after its permission was revoked, even if that permission returns before the reply", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding } = conversing({
+      [`PUT ${STEP}/tries/2`]: [later.promise],
+    });
+    const drawn = await messageDrawn();
+    await press(within(drawn).getByRole("button", { name: "Ask again" }));
+    await landing(() => puts(sent).length === 1);
+    act(() => changeStanding([]));
+    expect(
+      within(message()).queryByRole("button", { name: "Ask again" }),
+    ).toBeNull();
+    act(() => changeStanding(["answer_step"]));
+    await act(async () => later.settle(await ASKED));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(asked(sent, `GET ${RUN}`)).toBe(1);
+    expect(
+      within(message()).getByRole("button", { name: "Ask again" }),
+    ).toBeVisible();
+    expect(puts(sent)).toHaveLength(1);
+  });
   describe("in a run's conversation", () => {
     it("asks for the try the step owes with nothing sent, then shows the step as asked, reads the run again and gives the keyboard to its message", async () => {
       const { sent } = conversing({
@@ -271,8 +425,8 @@ describe("AskAgainButton", () => {
 
       expect(
         within(drawn).getByRole("button", { name: "Ask again" }),
-      ).toHaveClass("MuiButton-contained");
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      ).toHaveClass("MuiButton-outlined");
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(() => asked(sent, `GET ${RUN}`) === 2);
 
       const [[address, init]] = puts(sent) as [[string, RequestInit]];
@@ -283,14 +437,14 @@ describe("AskAgainButton", () => {
         within(message()).queryByRole("button", { name: "Ask again" }),
       ).toBeNull();
       expect(
-        within(message()).getByRole("button", { name: "Answer it here" }),
+        within(message()).getByRole("button", { name: "Answer it yourself" }),
       ).toBeVisible();
       expect(asked(sent, `GET ${RUN}`)).toBe(2);
       expect(document.activeElement).toBe(message());
       expect(screen.queryByRole("alert")).toBeNull();
       expect(
         within(accountOpened(message(), "Waiting")).getByText(
-          "Try 2 has been asked for.",
+          "Attempt 2 has been requested.",
         ),
       ).toBeVisible();
     });
@@ -302,21 +456,21 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
 
       const alert = screen.getByRole("alert");
       expect(alert).toHaveTextContent(
-        `Asked for already, by ${setApart("Dan")}.`,
+        `Already asked again by ${setApart("Dan")}.`,
       );
-      expect(alert).not.toHaveTextContent("That step has moved on");
+      expect(alert).not.toHaveTextContent("This step has changed");
       expect(screen.getAllByRole("alert")).toHaveLength(1);
       expect(document.activeElement).toBe(alert.closest("[tabindex='-1']"));
-      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(asked(sent, `GET ${STEP}`)).toBe(3);
       expect(puts(sent)).toHaveLength(1);
       expect(
         within(accountOpened(message(), "Waiting")).getByText(
-          "Try 2 has been asked for.",
+          "Attempt 2 has been requested.",
         ),
       ).toBeVisible();
     });
@@ -328,17 +482,21 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
 
       await landing(
-        () => screen.queryByText("That run is not in view.") !== null,
+        () =>
+          screen.queryByText("That run isn't here, or you can't see it.") !==
+          null,
       );
-      expect(screen.getByText("That run is not in view.")).toBeVisible();
+      expect(
+        screen.getByText("That run isn't here, or you can't see it."),
+      ).toBeVisible();
       expect(
         screen.queryByRole("list", { name: "The conversation" }),
       ).toBeNull();
       expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
-      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(asked(sent, `GET ${STEP}`)).toBe(2);
     });
 
     it("keeps the moved-on answer visible when reading the step again is refused", async () => {
@@ -348,7 +506,7 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(
         () => screen.queryByText("The server refused this request.") !== null,
       );
@@ -358,10 +516,10 @@ describe("AskAgainButton", () => {
         .closest("[role='alert']")!;
       expect(alert).toHaveTextContent("The server refused this request.");
       expect(
-        screen.getByText("That step has moved on since it was read."),
+        screen.getByText("This step has changed since you opened it."),
       ).toBeVisible();
       expect(document.activeElement).toBe(alert.closest("[tabindex='-1']"));
-      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(asked(sent, `GET ${STEP}`)).toBe(2);
       expect(puts(sent)).toHaveLength(1);
       expect(
         within(message()).getByRole("button", { name: "Ask again" }),
@@ -375,8 +533,8 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
-      await landing(() => asked(sent, `GET ${STEP}`) === 1);
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await landing(() => asked(sent, `GET ${STEP}`) === 2);
 
       expect(screen.queryByRole("alert")).toBeNull();
       expect(
@@ -392,13 +550,13 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "That step has moved on since it was read.",
+        "This step has changed since you opened it.",
       );
-      expect(screen.queryByText(/already, by/)).toBeNull();
+      expect(screen.queryByText(/Already .* by/)).toBeNull();
     });
 
     it("forgets a refusal once the step owes a later try than the one it was about", async () => {
@@ -416,40 +574,38 @@ describe("AskAgainButton", () => {
       });
       const drawn = await messageDrawn();
       accountOpened(drawn, "Waiting");
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(() => screen.queryByRole("alert") !== null);
 
       await act(() => vi.advanceTimersByTimeAsync(5000));
       await landing(
         () =>
           screen.queryByRole("alert") === null &&
-          within(message()).queryByText("Try 2 of the 3 it allows") !== null,
+          within(message()).queryByText("Attempt 2 of 3") !== null,
       );
 
-      expect(
-        within(message()).getByText("Try 2 of the 3 it allows"),
-      ).toBeVisible();
+      expect(within(message()).getByText("Attempt 2 of 3")).toBeVisible();
       expect(
         within(message()).getByRole("button", { name: "Ask again" }),
       ).not.toHaveAttribute("aria-disabled");
       expect(screen.queryByText(ASK_RULE)).toBeNull();
     });
 
-    it("says the ask is refused by the rule of who may answer a step and reads the reader's standing again, reading nothing of the step", async () => {
+    it("says the ask is refused by the rule of who may answer a step and reads the reader's standing again without another step read", async () => {
       const { sent, readAgain } = conversing({
         [`PUT ${STEP}/tries/2`]: [refusal("ACT_NOT_PERMITTED", 403)],
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: "Ask again" }));
+      await press(within(drawn).getByRole("button", { name: "Ask again" }));
       await landing(() => screen.queryByRole("alert") !== null);
 
       expect(screen.getByRole("alert")).toHaveTextContent(ASK_RULE);
       expect(screen.getByRole("alert")).not.toHaveTextContent(
-        "This is done only by a role that reaches it.",
+        "You don't have permission to do this.",
       );
       expect(readAgain).toHaveBeenCalledTimes(1);
-      expect(asked(sent, `GET ${STEP}`)).toBe(0);
+      expect(asked(sent, `GET ${STEP}`)).toBe(1);
       expect(asked(sent, `GET ${RUN}`)).toBe(1);
       expect(asked(sent, `GET ${STEPS}`)).toBe(1);
     });
@@ -458,7 +614,11 @@ describe("AskAgainButton", () => {
       conversing({
         [`GET ${STEPS}`]: [
           stepsRead({
-            runs: { kind: "code_step", codeStep: "file_claim" },
+            runs: {
+              versionName: null,
+              kind: "code_step",
+              codeStep: "file_claim",
+            },
             producer: { kind: "code" },
             reviewer: { kind: "person" },
             gaveBack: undefined,
@@ -470,8 +630,8 @@ describe("AskAgainButton", () => {
             },
             tries: { current: 2, declared: 2, beyond: false },
             next: { number: 3, beyond: true },
-            acts: ["ask_again"],
-            withheld: [
+            stateActs: ["ask_again"],
+            stateRefusals: [
               {
                 act: "answer",
                 refusal: "CODE_STEP_GIVES_OTHERWISE",
@@ -493,10 +653,12 @@ describe("AskAgainButton", () => {
         within(drawn).getByRole("button", { name: "Ask again" }),
       ).toBeVisible();
       expect(
-        within(drawn).getByText("Try 3 goes past the 2 tries its step allows."),
+        within(drawn).getByText(
+          "Attempt 3 goes beyond the 2 attempts this step allows.",
+        ),
       ).toBeVisible();
       expect(
-        within(drawn).queryByRole("button", { name: "Answer it here" }),
+        within(drawn).queryByRole("button", { name: "Answer it yourself" }),
       ).toBeNull();
     });
   });
@@ -515,16 +677,16 @@ describe("AskAgainButton", () => {
       });
       await landing(() => screen.queryByRole("heading", { level: 1 }) !== null);
 
-      press(screen.getByRole("button", { name: "Ask again" }));
+      await press(screen.getByRole("button", { name: "Ask again" }));
       await landing(() => asked(sent, `GET ${STEP}`) === 2);
 
       expect(puts(sent).map(([address]) => address)).toEqual([
         `${STEP}/tries/2`,
       ]);
       expect(screen.queryByRole("button", { name: "Ask again" })).toBeNull();
-      expect(screen.getByText("Try 2 has been asked for.")).toBeVisible();
+      expect(screen.getByText("Attempt 2 has been requested.")).toBeVisible();
       expect(document.activeElement).toBe(
-        screen.getByRole("heading", { name: "What came out" }),
+        screen.getByRole("heading", { name: "Output" }),
       );
     });
   });

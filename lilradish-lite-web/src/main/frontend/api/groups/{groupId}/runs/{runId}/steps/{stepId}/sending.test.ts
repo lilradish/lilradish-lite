@@ -27,7 +27,7 @@ const HELD = {
     versionId: VERSION,
     state: "running",
     at: { stepId: STEP, name: "summarise" },
-    acts: ["stop"],
+    stateActs: ["stop"],
     progress: { done: 0, of: 1 },
   },
   declarations: {
@@ -39,10 +39,13 @@ const HELD = {
     },
   },
   step: {
+    producedByUserId: null,
+    producedByKind: null,
     stepId: STEP,
     order: 1,
     name: "summarise",
     runs: {
+      versionName: null,
       kind: "question",
       name: "Summarise",
       version: 2,
@@ -59,16 +62,26 @@ const HELD = {
     takesFrom: [],
     tries: { current: 1, declared: 2, beyond: false },
     cost: NOTHING_SPENT,
-    acts: ["try_sending"],
-    withheld: [],
+    stateActs: ["try_sending"],
+    stateRefusals: [],
   },
   triesMade: [
     {
+      wentWrongPresent: false,
+      returnedPresent: false,
+      declinedPresent: false,
+      unreadableResponsePresent: false,
+      modelReplyPresent: false,
       number: 1,
       beyond: false,
       producedBy: { kind: "model", model: "small" },
       values: [],
-      review: { asked: false },
+      review: {
+        declinedPresent: false,
+        unreadableResponsePresent: false,
+        modelReplyPresent: false,
+        asked: false,
+      },
       ended: "open",
       cost: NOTHING_SPENT,
     },
@@ -95,7 +108,7 @@ describe("trySending", () => {
     expect(new Headers(init?.headers).has("Content-Type")).toBe(false);
     expect(sent).toHaveBeenCalledTimes(1);
     expect(read.step.where?.reason).toBe("turned_away");
-    expect(read.step.acts).toEqual(["try_sending"]);
+    expect(read.step.stateActs).toEqual(new Set(["try_sending"]));
     expect(read.triesMade.map((each) => each.ended)).toEqual(["open"]);
   });
 

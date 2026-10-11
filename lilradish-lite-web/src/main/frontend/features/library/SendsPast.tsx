@@ -67,8 +67,8 @@ export function SendsPast({
 }
 
 function pastSaid(each: SendPast, steps: readonly Step[]) {
-  const step =
-    steps.find((held) => held.stepId === each.stepId)?.name ?? each.stepId;
+  const found = steps.find((held) => held.stepId === each.stepId);
+  const step = found?.label ?? found?.name.replaceAll("_", " ") ?? each.stepId;
   const model = each.model;
   // Past a double's exact integers the count arrived rounded, so only that it passed them is said.
   const id =

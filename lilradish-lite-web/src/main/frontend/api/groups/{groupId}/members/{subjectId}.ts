@@ -11,7 +11,6 @@ const MOVED: ReadonlySet<string> = new Set([
   "PERSON_ALREADY_IN_GROUP",
 ] satisfies readonly WordedRefusal[]);
 
-/** The member's address handed to `ask`, each identifier escaped as `atSegment` escapes one. */
 export function atMember<T>(
   groupId: string,
   subjectId: string,
@@ -30,7 +29,6 @@ export function readMember(
   );
 }
 
-/** Answered with no content: there is nothing of them left in the group to read. */
 export function takeOut(
   groupId: string,
   subjectId: string,
@@ -42,10 +40,8 @@ export function takeOut(
 }
 
 /**
- * Whether a change was refused for how the group stands now, which somebody
- * else moved since the page read it: what the page shows is out of date, and
- * reading it again is what shows why. The status is read before the code, as
- * `Problem` requires.
+ * A refusal because the group moved since it was read means the page is stale;
+ * re-reading shows why. Read status before code, as `Problem` requires.
  */
 export function refusedForWhatMoved(problem: Problem): boolean {
   return servedAmong(problem, MOVED);

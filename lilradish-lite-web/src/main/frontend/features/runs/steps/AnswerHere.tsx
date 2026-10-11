@@ -1,5 +1,4 @@
 import Box from "@mui/material/Box";
-import Button, { buttonClasses } from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import {
@@ -42,10 +41,11 @@ import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
+import { Press } from "../../../lib/action/Press";
 import { ACTS_SX, QUIET_SX, SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
-import { useAction } from "../../../lib/request/useAction";
 import { withoutMarkedIn } from "../../../lib/text/hidden";
+import { InstructionText } from "../../../lib/text/InstructionText";
 import { reasonRefused } from "../../../lib/text/legibility";
 import { STEP_ACT_RULES } from "../actRules";
 import { useRunReadAccess } from "../RunReadAccess";
@@ -55,9 +55,10 @@ import { useFillDraft } from "../fill/useFillDraft";
 import { DecisionDrawn } from "./DecisionDrawn";
 import { declaredFor, type Declaring } from "./declared";
 import { actedFirstSaid, movedOnNotice, staleFor } from "./movedOn";
-import { REASON_WORDS, standingSaid } from "./stepStates";
+import { REASON_WORDS } from "./stepActs";
+import { standingSaid } from "./stepTries";
+import { stepOffers, useStepActValidity, useStepAction } from "./stepActs";
 import { WentInValues } from "./WentInValues";
-import { SearchText } from "./SearchRecord";
 
 const STARTS_SX = { ...QUIET_SX, mt: 2 };
 
@@ -105,16 +106,14 @@ export function AnswerHere({
   readonly groupId: string;
   readonly runId: string;
   readonly step: StepRow;
-  /** The step as it is read beside the form, where it is; none where it is not read. */
   readonly inHand: StepAnswer | null;
   /** Whether an ask for the step's next try is out, which the answer waits on. */
   readonly held: boolean;
   readonly onRunning: (running: boolean) => void;
   readonly declaring: Declaring;
-  /** Whether what went in is drawn beside it already, as the step's own page draws it. */
   readonly wentInDrawn: boolean;
   readonly heading: "h2" | "h3";
-  /** The element the keyboard goes to once the answer's answer is shown, as the form goes with it. */
+  /** The element id the keyboard goes to once the step's answer is shown, as the form goes with it. */
   readonly landsOn: string;
   readonly onShown: (answer: StepAnswer) => void;
 }) {
@@ -123,7 +122,9 @@ export function AnswerHere({
   const headingId = useId();
   const reasonId = useId();
   const noticeId = useId();
-  const reloadStanding = useStandingRead().reload;
+  const standingRead = useStandingRead();
+  const reloadStanding = standingRead.reload;
+  const standing = standingRead.value;
   const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const keyboardWithin = useRef(false);
@@ -131,14 +132,13 @@ export function AnswerHere({
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [overtaken, setOvertaken] = useState<Overtaken | null>(null);
-  const [readRefusal, setReadRefusal] = useState<Problem | null>(null);
   const [sentFor, setSentFor] = useState<number | null>(null);
   const [readAgainAt, setReadAgainAt] = useState<number | null>(null);
   const [firstSaid, setFirstSaid] = useState<string | null>(null);
   const [withdrawnAfter, setWithdrawnAfter] = useState<Problem | null>(null);
   const kept = opened?.answer.answering;
   const fresher = inHand !== null && inHand !== opened?.over ? inHand : null;
-  // Ruled: a fresher read replaces the one the form opened from only while it answers the same try the same way.
+  // A fresher read replaces the one the form opened from only while it answers the same try the same way.
   const read =
     kept !== undefined &&
     fresher?.answering !== undefined &&
@@ -169,7 +169,9 @@ export function AnswerHere({
     setWhyTried(false);
     setWhyRefused(null);
   }
-  const offered = step.acts.includes("answer");
+  const offered = stepOffers(step, "answer", standing, groupId);
+  const validity = useStepActValidity(step, "answer", standing, groupId, runId);
+  const requestVersion = useRef<number | null>(null);
   const drawn = open && offered && answering !== undefined;
   const stale = staleFor(step, sentFor, readAgainAt);
 
@@ -181,8 +183,10 @@ export function AnswerHere({
     setOpen(true);
   };
 
-  const reading = useAction<StepAnswer>(
+  const reading = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       if (answer.answering === undefined) {
         setOpened({ answer, over: inHand });
         focusNext.current = landsOn;
@@ -191,15 +195,17 @@ export function AnswerHere({
         opening(answer);
       }
     },
-    (problem) => {
-      setReadRefusal(problem);
+    () => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = noticeId;
     },
   );
 
-  const rereading = useAction<StepAnswer>(
+  const rereading = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
-      // Ruled as `read` is: a read that offers no answer to the try still owed keeps the draft until one does again.
+      if (!validity.still(requestVersion.current)) return;
+      // A read that offers no answer to the try still owed keeps the draft until one does again.
       if (
         answer.answering !== undefined ||
         answer.step.next?.number !== kept?.number
@@ -216,17 +222,35 @@ export function AnswerHere({
     },
   );
 
-  const sending = useAction<StepAnswer>(
+  const completesSentTry = (answer: StepAnswer) =>
+    sentFor !== null &&
+    answer.run.runId === runId &&
+    answer.step.stepId === step.stepId &&
+    answer.triesMade.some(
+      (tried) =>
+        tried.number === sentFor &&
+        tried.producedBy.kind === "person" &&
+        tried.producedBy.person?.userId === standing.userId,
+    );
+
+  const sending = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      // Once a quiet read includes this production, its review or a later try can be fresher than the PUT reply.
+      const shown =
+        inHand !== null && inHand !== opened?.over && completesSentTry(inHand)
+          ? inHand
+          : answer;
       setOpen(false);
-      setOpened({ answer, over: inHand });
+      setOpened({ answer: shown, over: inHand });
       setOvertaken(null);
       setWhy("");
       setWhyTried(false);
       focusNext.current = landsOn;
-      onShown(answer);
+      if (shown === answer) onShown(answer);
     },
     (problem) => {
+      if (!validity.still(requestVersion.current)) return;
       if (movesTheReader(problem)) {
         reloadStanding();
       }
@@ -249,6 +273,7 @@ export function AnswerHere({
         focusNext.current = noticeId;
       }
     },
+    completesSentTry,
   );
 
   const running = sending.running || rereading.running;
@@ -304,8 +329,9 @@ export function AnswerHere({
   });
 
   const press = () => {
+    requestVersion.current = validity.begin();
     setOvertaken(null);
-    setReadRefusal(null);
+    reading.forgetProblem();
     if (drawn) {
       setOpen(false);
     } else if (owes(inHand, step)) {
@@ -322,6 +348,7 @@ export function AnswerHere({
   };
 
   const act = (signal: AbortSignal) => {
+    requestVersion.current = validity.begin();
     const number = answering?.number ?? 0;
     draft.sending();
     setWhyRefused(null);
@@ -364,7 +391,7 @@ export function AnswerHere({
   const refusal = draft.saying(sending.problem);
   // A refused reason is said at the reason alone, and changing it, or the draft starting again, says nothing aloud.
   const saidApart = refusal !== null && refusedForTheReason(refusal);
-  // Ruled: a refusal is forgotten once the step offers the answer again after withdrawing it, and once the try it
+  // A refusal is forgotten once the step offers the answer again after withdrawing it, and once the try it
   // was about is said to be overtaken, which is all that is said of it.
   const forgotten =
     (offered &&
@@ -382,6 +409,7 @@ export function AnswerHere({
           ANSWER_RULE,
         );
   const rereadRefusal = stale ? null : rereading.problem;
+  const readRefusal = reading.problem;
   const owed = drawn ? answering : step.next;
   const beyondSaid =
     owed?.beyond === true && step.tries !== undefined
@@ -397,16 +425,15 @@ export function AnswerHere({
     <>
       {!offered ? null : (
         <Box sx={SPACED_ABOVE_SX}>
-          <Button
-            variant="contained"
+          <Press
+            tier="secondary"
             aria-expanded={drawn}
             aria-controls={drawn ? sectionId : undefined}
-            aria-disabled={reading.running || undefined}
-            className={reading.running ? buttonClasses.disabled : undefined}
-            onClick={reading.running ? undefined : press}
+            busy={reading.running}
+            onPress={press}
           >
             {say("step.answerHere")}
-          </Button>
+          </Press>
           {beyondSaid === null ? null : (
             <Typography variant="body2">{beyondSaid}</Typography>
           )}
@@ -459,26 +486,11 @@ export function AnswerHere({
                 {say("step.theInstruction")}
               </Typography>
               <Typography variant="body1" dir="auto" sx={INSTRUCTION_SX}>
-                {answering.instruction}
+                <InstructionText
+                  text={answering.instruction}
+                  takes={declared?.takes ?? []}
+                />
               </Typography>
-            </Box>
-          )}
-          {answering.searchQuestion === undefined ? null : "withheld" in
-            answering.searchQuestion ? (
-            <Typography variant="body2">
-              {say("step.searchWithheld")}
-            </Typography>
-          ) : (
-            <Box sx={SPACED_ABOVE_SX}>
-              <Typography variant="subtitle2" component="p">
-                {say("hand.searchQuestion")}
-              </Typography>
-              {answering.searchQuestion.sent ? null : (
-                <Typography variant="body2" sx={QUIET_SX}>
-                  {say("step.notYetSent")}
-                </Typography>
-              )}
-              <SearchText text={answering.searchQuestion.text} />
             </Box>
           )}
           {lastRefused === undefined ? null : (
@@ -520,7 +532,7 @@ export function AnswerHere({
           />
           <Box sx={{ ...ACTS_SX, ...SPACED_ABOVE_SX }}>
             <ActButton
-              variant="contained"
+              tier="primary"
               action={{ ...sending, run }}
               waiting={rereading.running || held}
               act={act}
@@ -572,7 +584,6 @@ function passed(step: StepRow, number: number): boolean {
     : next.number > number;
 }
 
-/** Whether `answer` puts to the reader the try the step owes now. */
 function owes(
   answer: StepAnswer | null | undefined,
   step: StepRow,

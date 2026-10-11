@@ -1,8 +1,16 @@
+import { libraryLaidOutAt as laidOutAt } from "./libraryLayout.testHelper";
 import { ThemeProvider } from "@mui/material/styles";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../../api/groups/{groupId}/{kind}";
 import type { ReferenceListVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
@@ -25,12 +33,13 @@ const BILLING = "0000000c-0000-4000-8000-000000000f11";
 const DELIVERY = "0000000c-0000-4000-8000-000000000f12";
 
 const DRAFT: Version = {
+  versionName: null,
   versionId: VERSION,
   number: 2,
   standing: "draft",
   writers: [{ userId: "000f11" }],
   writtenByMigration: false,
-  acts: new Set(["write", "submit"]),
+  stateActs: new Set(["write", "submit"]),
   pinnedBy: [],
 };
 
@@ -68,6 +77,7 @@ function opening(
       groupId={GROUP}
       entryId={ENTRY}
       version={version}
+      editable={version.stateActs?.has("write") === true}
       readCount={readCount}
       onRefused={refused}
       onWritten={written}
@@ -120,7 +130,7 @@ async function refusedAsWrittenSince() {
   });
   await opened();
   await userEvent.type(
-    within(part("The note")).getByRole("textbox", { name: "The note" }),
+    within(editNote()).getByRole("textbox", { name: "The note" }),
     " Now.",
   );
   await userEvent.type(
@@ -138,9 +148,21 @@ async function refusedAsWrittenSince() {
   return handles;
 }
 
+function editNote(): HTMLElement {
+  const region = part("The note");
+  const edit = within(region).queryByRole("button", { name: "Edit the note" });
+  if (edit !== null) fireEvent.click(edit);
+  return region;
+}
+
 describe("ReferenceListContent", () => {
+  beforeEach(() => laidOutAt(1800, 2000));
   it("reads the note above the terms of a version the reader may not write, and offers nothing to change", async () => {
-    opening({ ...DRAFT, standing: "in_service", acts: new Set(["retire"]) });
+    opening({
+      ...DRAFT,
+      standing: "in_service",
+      stateActs: new Set(["retire"]),
+    });
     await opened();
 
     expect(screen.getAllByRole("region")).toEqual([
@@ -163,7 +185,7 @@ describe("ReferenceListContent", () => {
       ],
     });
     await opened();
-    const box = within(part("The note")).getByRole("textbox", {
+    const box = within(editNote()).getByRole("textbox", {
       name: "The note",
     });
 
@@ -189,7 +211,7 @@ describe("ReferenceListContent", () => {
       ],
     });
     await opened();
-    const box = within(part("The note")).getByRole("textbox", {
+    const box = within(editNote()).getByRole("textbox", {
       name: "The note",
     });
 
@@ -206,7 +228,7 @@ describe("ReferenceListContent", () => {
   it("holds a note the server would refuse, saying why in the refusal's own words, and sends nothing", async () => {
     const { sent } = opening(DRAFT);
     await opened();
-    const box = within(part("The note")).getByRole("textbox", {
+    const box = within(editNote()).getByRole("textbox", {
       name: "The note",
     });
 
@@ -330,7 +352,7 @@ describe("ReferenceListContent", () => {
     });
     await opened();
     await userEvent.type(
-      within(part("The note")).getByRole("textbox", { name: "The note" }),
+      within(editNote()).getByRole("textbox", { name: "The note" }),
       " Now.",
     );
     await userEvent.click(
@@ -340,7 +362,9 @@ describe("ReferenceListContent", () => {
       name: `Remove: ${setApart("Billing")}`,
     });
 
-    remove.focus();
+    await act(async () => {
+      remove.focus();
+    });
     await userEvent.keyboard("{Enter}");
 
     expect(remove).toHaveAttribute("aria-disabled", "true");
@@ -357,7 +381,7 @@ describe("ReferenceListContent", () => {
       "Somebody changed this draft since it was read; nothing was saved.",
     );
     expect(
-      within(part("The note")).getByRole("textbox", { name: "The note" }),
+      within(editNote()).getByRole("textbox", { name: "The note" }),
     ).toHaveValue(`${LIST.note} Now.`);
     expect(
       within(part("The terms")).getByRole("textbox", {
@@ -370,11 +394,13 @@ describe("ReferenceListContent", () => {
     expect(written).not.toHaveBeenCalled();
   });
 
-  it("lets go of everything typed only once Reload is pressed, drawing the list as read afresh", async () => {
+  it("lets go of everything typed only once Load the saved draft is pressed, drawing the list as read afresh", async () => {
     const { sent, written } = await refusedAsWrittenSince();
 
     await userEvent.click(
-      within(part("The terms")).getByRole("button", { name: "Reload" }),
+      within(part("The terms")).getByRole("button", {
+        name: "Load the saved draft",
+      }),
     );
 
     await waitFor(() =>
@@ -388,7 +414,7 @@ describe("ReferenceListContent", () => {
       within(part("The terms")).queryByRole("textbox", { name: "Term 2" }),
     ).toBeNull();
     expect(
-      within(part("The note")).getByRole("textbox", { name: "The note" }),
+      within(editNote()).getByRole("textbox", { name: "The note" }),
     ).toHaveValue("");
     expect(within(part("The terms")).queryByRole("alert")).toBeNull();
     expect(requestsTo(sent).filter((each) => each.startsWith("GET"))).toEqual([
@@ -398,11 +424,13 @@ describe("ReferenceListContent", () => {
     expect(written).toHaveBeenCalledTimes(1);
   });
 
-  it("puts the keyboard on the heading of the part Reload was pressed in once the list is read afresh", async () => {
+  it("puts the keyboard on the heading of the part Load the saved draft was pressed in once the list is read afresh", async () => {
     await refusedAsWrittenSince();
 
     await userEvent.click(
-      within(part("The terms")).getByRole("button", { name: "Reload" }),
+      within(part("The terms")).getByRole("button", {
+        name: "Load the saved draft",
+      }),
     );
 
     await waitFor(() =>
@@ -416,7 +444,7 @@ describe("ReferenceListContent", () => {
   });
 
   /** Drawing the parts anew would lose the answer of the note's write still out. */
-  it("holds Reload in the terms while the note is being saved, and reads nothing afresh until it lands", async () => {
+  it("holds Load the saved draft in the terms while the note is being saved, and reads nothing afresh until it lands", async () => {
     const held = deferred<readonly [string, number]>();
     const { sent } = opening(DRAFT, {
       [`POST ${ADDRESS}/terms/${BILLING}/removal`]: [
@@ -431,17 +459,19 @@ describe("ReferenceListContent", () => {
       }),
     );
     const reload = await within(part("The terms")).findByRole("button", {
-      name: "Reload",
+      name: "Load the saved draft",
     });
     await userEvent.type(
-      within(part("The note")).getByRole("textbox", { name: "The note" }),
+      within(editNote()).getByRole("textbox", { name: "The note" }),
       " Now.",
     );
     await userEvent.click(
       screen.getByRole("button", { name: "Save the note" }),
     );
 
-    reload.focus();
+    await act(async () => {
+      reload.focus();
+    });
     await userEvent.keyboard("{Enter}");
 
     expect(reload).toHaveAttribute("aria-disabled", "true");
@@ -456,7 +486,7 @@ describe("ReferenceListContent", () => {
   it("reads the list again each time the page reads the entry again, and at no other redraw", async () => {
     const renamed = { ...LIST, revision: 4, note: "Pick again." };
     const { sent, readAgain } = opening(
-      { ...DRAFT, standing: "in_service", acts: new Set() },
+      { ...DRAFT, standing: "in_service", stateActs: new Set() },
       { [`GET ${ADDRESS}`]: [reply(LIST), reply(renamed)] },
     );
     await opened();
@@ -474,7 +504,7 @@ describe("ReferenceListContent", () => {
   it("tells the page what it shows, as first read and as read again", async () => {
     const renamed = { ...LIST, revision: 4, note: "Pick again." };
     const { shown, readAgain } = opening(
-      { ...DRAFT, standing: "in_service", acts: new Set() },
+      { ...DRAFT, standing: "in_service", stateActs: new Set() },
       { [`GET ${ADDRESS}`]: [reply(LIST), reply(renamed)] },
     );
     await opened();
@@ -510,7 +540,7 @@ describe("ReferenceListContent", () => {
   });
 
   /** What is drawn while it is read afresh is the revision being replaced, which a write would be refused over. */
-  it("holds every change while the list is read afresh after Reload, and sends nothing until the read lands", async () => {
+  it("holds every change while the list is read afresh after Load the saved draft, and sends nothing until the read lands", async () => {
     const afresh = deferred<readonly [string, number]>();
     const { sent } = opening(DRAFT, {
       [`GET ${ADDRESS}`]: [reply(LIST), afresh.promise],
@@ -525,17 +555,23 @@ describe("ReferenceListContent", () => {
       }),
     );
     await userEvent.click(
-      await within(part("The terms")).findByRole("button", { name: "Reload" }),
+      await within(part("The terms")).findByRole("button", {
+        name: "Load the saved draft",
+      }),
     );
     const held = [
       within(part("The terms")).getByRole("button", {
         name: `Remove: ${setApart("Delivery")}`,
       }),
-      within(part("The note")).getByRole("button", { name: "Save the note" }),
     ];
+    expect(
+      within(editNote()).queryByRole("button", { name: "Save the note" }),
+    ).toBeNull();
 
     for (const control of held) {
-      control.focus();
+      await act(async () => {
+        control.focus();
+      });
       await userEvent.keyboard("{Enter}");
     }
 
@@ -597,9 +633,7 @@ describe("ReferenceListContent", () => {
       reread.settle(reply(LIST));
     });
 
-    await waitFor(() =>
-      expect(screen.queryByText("Still reading…")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByText("Loading…")).toBeNull());
     expect(
       within(part("The terms")).getByRole("textbox", {
         name: "What term 1 means",
@@ -671,7 +705,9 @@ describe("ReferenceListContent", () => {
     const newTerm = within(part("The terms")).getByRole("textbox", {
       name: "New term",
     });
-    newTerm.focus();
+    await act(async () => {
+      newTerm.focus();
+    });
 
     readAgain(2);
 

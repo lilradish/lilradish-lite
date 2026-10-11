@@ -14,8 +14,7 @@ const QUIET_MS = 300;
  * pauses. Nothing is handed on mid-composition, where the text is not yet what
  * the reader means to type.
  *
- * `field` goes onto the box whole: the value, and both events that can end a
- * stretch of typing. A single-line box: the handlers read an input's value.
+ * Spread `field` onto a single-line input: composition guards need every handler.
  */
 export function useTypingPause(
   initial: string,

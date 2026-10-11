@@ -1,4 +1,10 @@
+import { screen } from "@testing-library/react";
 import { onTestFinished } from "vitest";
+
+/** What every status region on the page says, in the order drawn; a group's page holds its gate's first. */
+export function regionsSaid(): string[] {
+  return screen.queryAllByRole("status").map((each) => each.textContent ?? "");
+}
 
 /**
  * Watches for `words` being put into the document, and reports each time they

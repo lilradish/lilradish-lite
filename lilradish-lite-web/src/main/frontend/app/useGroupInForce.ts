@@ -2,10 +2,16 @@ import { useState } from "react";
 import { useMatch, useNavigate } from "react-router";
 
 import type { GroupStanding } from "../api/standing";
-import { GROUP_ITEMS, IN_A_GROUP, groupPage, opensIn } from "./destinations";
+import {
+  GROUP_ITEMS,
+  IN_A_GROUP,
+  groupNamed,
+  groupPage,
+  opensIn,
+} from "./destinations";
 
 // Matches a row picked on the page too; `choose` opens the page alone, the row being this group's.
-const ON_A_GROUP_PAGE = `${IN_A_GROUP}/:groupId/:segment/*` as const;
+const ON_A_GROUP_PAGE = `${IN_A_GROUP}/:group/:segment/*` as const;
 
 export interface GroupInForce {
   /** Null only for a reader in no group at all. */
@@ -26,7 +32,7 @@ export function useGroupInForce(
 
   // Adjusted while rendering, so the render in which the address moves is
   // drawn again with it before anything is shown.
-  const named = groups.find((each) => each.groupId === on?.groupId);
+  const named = groupNamed(groups, on?.group);
   if (named !== undefined && named.groupId !== last) {
     setLast(named.groupId);
   }
@@ -43,7 +49,7 @@ export function useGroupInForce(
       ? page
       : GROUP_ITEMS.find((each) => opensIn(next, each));
     if (opened !== undefined) {
-      navigate(groupPage(next.groupId, opened.segment));
+      navigate(groupPage(next, opened.segment));
     }
   }
 

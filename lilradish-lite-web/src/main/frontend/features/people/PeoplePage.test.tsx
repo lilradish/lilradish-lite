@@ -2,7 +2,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { PEOPLE_DESTINATION } from "../../app/destinations";
 import { StandingProvider } from "../../app/standing/StandingContext";
@@ -97,6 +97,15 @@ interface Opening {
   readonly acts?: readonly string[];
   readonly routes?: Readonly<Record<string, readonly Reply[]>>;
   readonly width?: number;
+}
+
+function keptExpanded() {
+  const kept = localStorage.getItem("lilradish.panel.row");
+  localStorage.setItem("lilradish.panel.row", "expanded");
+  onTestFinished(() => {
+    if (kept === null) localStorage.removeItem("lilradish.panel.row");
+    else localStorage.setItem("lilradish.panel.row", kept);
+  });
 }
 
 /**
@@ -277,6 +286,25 @@ async function bringingIn(name: string) {
 }
 
 describe("PeoplePage", () => {
+  it.each(["expanded", "collapsed"])(
+    "keeps the filter and pool together beside the person's %s panel",
+    async (kept) => {
+      localStorage.setItem("lilradish.panel.row", kept);
+      onTestFinished(() => localStorage.removeItem("lilradish.panel.row"));
+      opening(`${PEOPLE_PAGE}/${GLINN.subjectId}?sort=userId`);
+      await listed();
+      const panel = await screen.findByRole("region", { name: "Glinn Havven" });
+      const list = panel.previousElementSibling!;
+      expect(list).toContainElement(filterBox());
+      expect(list).toContainElement(table());
+      expect(panel).not.toContainElement(filterBox());
+      expect(list.nextElementSibling).toBe(panel);
+      expect(getComputedStyle(panel).width).toBe(
+        kept === "collapsed" ? "56px" : "360px",
+      );
+    },
+  );
+
   it("lists the pool by user number ascending, and asks for it in that order", async () => {
     const { sent } = opening("/system/people");
 
@@ -364,6 +392,7 @@ describe("PeoplePage", () => {
   ])(
     "takes somebody out from a panel %s: their row leaves, the panel shuts, the address goes back to the list in place of theirs, and the keyboard lands on the list",
     async (_where, width) => {
+      keptExpanded();
       const { sent, at, reached, readAgain } = opening(
         `/system/people/${GLINN.subjectId}?sort=userId`,
         {
@@ -397,8 +426,43 @@ describe("PeoplePage", () => {
     },
   );
 
+  it.each(["Close", "Escape", "backdrop"] as const)(
+    "lets the row go when the panel over a narrow list is shut by %s: no panel or strip is left, the address loses the row, and the keyboard is back on its row",
+    async (shutting) => {
+      localStorage.setItem("lilradish.panel.row", "collapsed");
+      onTestFinished(() => localStorage.removeItem("lilradish.panel.row"));
+      const { at } = opening(`${PEOPLE_PAGE}?sort=userId`, { width: NARROW });
+      await listed();
+      const link = screen.getByRole("link", { name: "000140" });
+      await userEvent.click(link);
+      const panel = await screen.findByRole("dialog", { name: "Glinn Havven" });
+      expect(at()).toBe(`/system/people/${GLINN.subjectId}?sort=userId`);
+
+      if (shutting === "Close")
+        await userEvent.click(
+          within(panel).getByRole("button", { name: "Close" }),
+        );
+      else if (shutting === "Escape") await userEvent.keyboard("{Escape}");
+      else
+        await userEvent.click(
+          document.querySelector<HTMLElement>(".MuiBackdrop-root")!,
+        );
+      await settled();
+
+      expect(at()).toBe(`${PEOPLE_PAGE}?sort=userId`);
+      expect(
+        screen.queryAllByRole("button", { name: "Glinn Havven", hidden: true }),
+      ).toEqual([]);
+      expect(screen.queryByRole("region", { name: "Glinn Havven" })).toBeNull();
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: "000140" })).toHaveFocus(),
+      );
+    },
+  );
+
   /** While the panel covers the list, everything around it is hidden, and a line written then is never heard. */
   it("says somebody is out of the pool only once the covering panel they were taken out from has gone", async () => {
+    keptExpanded();
     const { at } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
       routes: { [`DELETE ${personAt(GLINN)}`]: [["", 204]] },
@@ -437,6 +501,7 @@ describe("PeoplePage", () => {
 
   /** The row that opened it is gone once the list is read again, and the focus trap would hand the keyboard to it. */
   it("puts the keyboard on the list, not on the row that opened it, once the person it covered is taken out", async () => {
+    keptExpanded();
     opening("/system/people", {
       width: NARROW,
       routes: {
@@ -483,6 +548,7 @@ describe("PeoplePage", () => {
   });
 
   it("reads the list again when a grant lands after a covering panel was shut, leaving the list open", async () => {
+    keptExpanded();
     const granted = deferred<readonly [string, number]>();
     const { sent, at } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
@@ -598,6 +664,7 @@ describe("PeoplePage", () => {
    * it; a line said again once the reader shut it would come late and twice.
    */
   it("says somebody brought in over a narrow list is in the pool inside the panel that answered it, and never again once it is shut", async () => {
+    keptExpanded();
     opening("/system/people", {
       width: NARROW,
       routes: { [`POST ${POOL}`]: [[panelOf(HAVO)[0], 201]] },
@@ -637,6 +704,7 @@ describe("PeoplePage", () => {
 
   /** Only what the shut panel itself answered ends with it. */
   it("still says a line about somebody out of view once the reader shuts another person's covering panel", async () => {
+    keptExpanded();
     const removal = deferred<readonly [string, number]>();
     const { go } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
@@ -846,6 +914,79 @@ describe("PeoplePage", () => {
     ]);
   });
 
+  it.each([
+    ["a service refusal", "SERVICE_BUSY", 503],
+    ["a missing person", "NOT_FOUND", 404],
+    ["a network failure", null, null],
+    ["an empty set of holds", null, 200],
+  ])(
+    "keeps the departed removal's original refusal after %s on its extra read",
+    async (_case, code, status) => {
+      const refusal = deferred<readonly [string, number]>();
+      const extraRead = deferred<readonly [string, number]>();
+      const { sent, go, at, readAgain } = opening(
+        `/system/people/${GLINN.subjectId}`,
+        {
+          routes: {
+            [`GET ${personAt(GLINN)}`]: [panelOf(GLINN), extraRead.promise],
+            [`DELETE ${personAt(GLINN)}`]: [refusal.promise],
+          },
+        },
+      );
+      try {
+        await listed();
+        await confirmRemove();
+        await go(`/system/people/${AVO.subjectId}`);
+        const current = await screen.findByRole("region", {
+          name: AVO.displayName,
+        });
+        await act(async () =>
+          refusal.settle(['{"code":"PERSON_IN_GROUPS"}', 409]),
+        );
+        await waitFor(() =>
+          expect(
+            requestsTo(sent).filter(
+              (each) => each === `GET ${personAt(GLINN)}`,
+            ),
+          ).toHaveLength(2),
+        );
+        await act(async () => {
+          if (status === null)
+            extraRead.refuse(
+              new TypeError("The extra read could not connect."),
+            );
+          else
+            extraRead.settle(
+              status === 200
+                ? panelOf(GLINN)
+                : [JSON.stringify({ code }), status],
+            );
+        });
+        const original = `${setApart(GLINN.displayName)} is still in the pool: Somebody in a group cannot be taken out of the pool until they are in none.`;
+        await heard(original);
+        expect(saidAs()).toEqual([{ severity: "error", words: original }]);
+        expect(at()).toBe(`/system/people/${AVO.subjectId}`);
+        expect(current).toBeInTheDocument();
+        expect(within(current).queryByRole("alert")).toBeNull();
+        expect(
+          screen.queryByRole("region", { name: GLINN.displayName }),
+        ).toBeNull();
+        expect(readAgain).not.toHaveBeenCalled();
+        expect(requestsTo(sent)).toEqual([
+          `GET ${POOL}?sort=userId`,
+          `GET ${personAt(GLINN)}`,
+          `DELETE ${personAt(GLINN)}`,
+          `GET ${personAt(AVO)}`,
+          `GET ${personAt(GLINN)}`,
+          `GET ${POOL}?sort=userId`,
+        ]);
+      } finally {
+        refusal.settle(['{"code":"PERSON_IN_GROUPS"}', 409]);
+        extraRead.settle(panelOf(GLINN));
+      }
+    },
+  );
+
   /** The read out began before this answer and would land over it; one begun now lands after. */
   it("reads the person again when a change to them lands while a read of them is out", async () => {
     const granted = deferred<readonly [string, number]>();
@@ -1002,6 +1143,7 @@ describe("PeoplePage", () => {
 
   /** Opened from an address there is no row it was opened from, and the list is what comes next. */
   it("opens the same address over the list where there is no room, and shutting it goes back to the list with its query, the keyboard on the list", async () => {
+    keptExpanded();
     const { at, reached } = opening(
       `/system/people/${GLINN.subjectId}?filter=r`,
       { width: NARROW },
@@ -1020,6 +1162,7 @@ describe("PeoplePage", () => {
   });
 
   it("hands the keyboard back to the row a covering panel was opened from once it is shut", async () => {
+    keptExpanded();
     opening("/system/people", { width: NARROW });
     const link = await screen.findByRole("link", { name: "000140" });
     await userEvent.click(link);
@@ -1033,6 +1176,7 @@ describe("PeoplePage", () => {
 
   /** Emptied as it goes, a panel on its way out would flash a wait for somebody nobody asked for. */
   it("keeps the person in a covering panel for as long as it is leaving", async () => {
+    keptExpanded();
     const { sent } = opening(`/system/people/${GLINN.subjectId}`, {
       width: NARROW,
     });
@@ -1042,7 +1186,7 @@ describe("PeoplePage", () => {
 
     expect(panel.isConnected).toBe(true);
     expect(within(panel).getByText("000140")).toBeInTheDocument();
-    expect(within(panel).queryByText("Still reading…")).toBeNull();
+    expect(within(panel).queryByText("Loading…")).toBeNull();
     expect(requestsTo(sent)).toEqual([
       `GET ${POOL}?sort=userId`,
       `GET ${personAt(GLINN)}`,
@@ -1115,9 +1259,10 @@ describe("PeoplePage", () => {
     const panel = await screen.findByRole("region", { name: "Avo Lumerace" });
 
     expect(within(panel).getByText("Held")).toBeVisible();
+    expect(within(panel).queryAllByRole("switch")).toEqual([]);
     expect(
       within(panel)
-        .queryAllByRole("button")
+        .queryAllByRole("button", { name: /^(Grant|Remove from the pool)/ })
         .map((each) => each.textContent),
     ).toEqual(["Remove from the pool"]);
   });

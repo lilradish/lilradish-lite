@@ -1,11 +1,12 @@
 [versions]
 springBoot = "4.1.1"
 nodeGradle = "7.1.0"
-libprunus = "0.4.0-SNAPSHOT"
+libprunus = "0.4.1-SNAPSHOT"
 embeddedPostgres = "2.2.2"
 # Pinned exactly to the PostgreSQL version the application targets. A suite that proves a constraint
 # bites on a newer engine than the one targeted has proved it about a different engine.
 embeddedPostgresBinaries = "18.4.0"
+checkerQual = "3.55.1"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
@@ -29,6 +30,8 @@ flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql
 postgresql = { module = "org.postgresql:postgresql" }
 embedded-postgres = { module = "io.zonky.test:embedded-postgres", version.ref = "embeddedPostgres" }
 embedded-postgres-binaries-bom = { module = "io.zonky.test.postgres:embedded-postgres-binaries-bom", version.ref = "embeddedPostgresBinaries" }
+checker-qual = { module = "org.checkerframework:checker-qual", version.ref = "checkerQual" }
+hikari-cp = { module = "com.zaxxer:HikariCP" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }

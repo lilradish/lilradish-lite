@@ -1,3 +1,4 @@
+import type { GroupStanding } from "../../api/standing";
 import { groupPage } from "../../app/destinations";
 import { isUnchecked } from "../../lib/request/document";
 import type { LibraryKind } from "./libraryKinds";
@@ -18,12 +19,12 @@ export function justMade(state: unknown): boolean {
 
 /** An entry's own page, on the version named or else on the newest. Identifiers are escaped all the same. */
 export function entryHref(
-  groupId: string,
+  group: GroupStanding,
   of: LibraryKind,
   entryId: string,
   versionId?: string,
 ): string {
-  const entry = `${groupPage(groupId, of.item.segment)}/${encodeURIComponent(entryId)}`;
+  const entry = `${groupPage(group, of.item.segment)}/${encodeURIComponent(entryId)}`;
   return versionId === undefined
     ? entry
     : `${entry}?${new URLSearchParams({ [OPEN_VERSION]: versionId })}`;

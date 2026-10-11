@@ -9,7 +9,13 @@ import {
   textFrom,
 } from "../lib/request/document";
 import { oneLineWithin, showsInProse } from "../lib/text/legibility";
-import { textLinesFrom, type FieldKind, type TextLines } from "./declaration";
+import {
+  fileTypeFits,
+  MOST_FILE_TYPES,
+  textLinesFrom,
+  type FieldKind,
+  type TextLines,
+} from "./declaration";
 import { servedAmong, type Problem } from "./problem";
 
 /** Why one filled value does not fit its field, spelt as the server publishes it. */
@@ -25,7 +31,6 @@ export type FillReason =
   | "tag"
   | "unusable";
 
-/** Every reason, closed over the union in both directions. */
 const KNOWN_REASONS = {
   missing: true,
   malformed: true,
@@ -39,7 +44,6 @@ const KNOWN_REASONS = {
   unusable: true,
 } satisfies Record<FillReason, true>;
 
-/** Every kind a field may be, closed as `KNOWN_REASONS` is. */
 const KNOWN_KINDS = {
   text: true,
   number: true,
@@ -51,15 +55,12 @@ const KNOWN_KINDS = {
   file: true,
 } satisfies Record<FieldKind, true>;
 
-const MEDIA_TYPE =
-  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/;
-
 const FILE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const VALUE_DOES_NOT_FIT: ReadonlySet<string> = new Set(["VALUE_DOES_NOT_FIT"]);
 
-/** One term a field offers, with what it means. Both are shown isolated: a term may carry a direction mark. */
+/** Both are shown isolated: a term may carry a direction mark. */
 interface FillTerm {
   readonly term: string;
   readonly meaning: string;
@@ -108,7 +109,6 @@ export type FillValue =
 export interface FileValue {
   readonly id: string;
   readonly name: string;
-  readonly type: string;
   readonly size: number;
 }
 
@@ -157,7 +157,6 @@ export function multipartOf(
   return body;
 }
 
-/** Every field of one level by name. */
 export interface FillValues {
   readonly [name: string]: FillValue;
 }
@@ -171,8 +170,7 @@ export interface FillProblem {
 }
 
 /**
- * Built as `readFieldsFrom` builds one; a field of a kind this build cannot draw, at any level, is not one it can
- * put to anybody, so the document is refused.
+ * As `readFieldsFrom`, but unknown kinds at any depth refuse a document intended for filling.
  */
 export function fillFieldFrom(body: unknown): FillField | null {
   const field = readFieldFrom(body);
@@ -258,7 +256,7 @@ function drawable(field: ReadField): field is FillField {
   );
 }
 
-/** What a refusal of values names: the places it lists, and how many it found in all, which may be more. */
+/** The total found may exceed the listed places. */
 export interface FillProblemsNamed {
   readonly listed: readonly FillProblem[];
   readonly found: number;
@@ -328,16 +326,13 @@ export function isShownValue(value: unknown): value is ShownValue {
     : Object.values(value).every(isShownValue);
 }
 
-export function isBareMediaType(type: string): boolean {
-  return MEDIA_TYPE.test(type);
-}
-
 function fileTypesFrom(body: unknown): string[] | null {
   const types = listOf(body, textFrom);
   return types !== null &&
     types.length > 0 &&
-    new Set(types.map((type) => type.toLowerCase())).size === types.length &&
-    types.every(isBareMediaType)
+    types.length <= MOST_FILE_TYPES &&
+    new Set(types).size === types.length &&
+    types.every(fileTypeFits)
     ? types
     : null;
 }
@@ -345,14 +340,12 @@ function fileTypesFrom(body: unknown): string[] | null {
 export function isFileValue(body: unknown): body is FileValue {
   return (
     isUnchecked(body) &&
-    Object.keys(body).length === 4 &&
+    Object.keys(body).length === 3 &&
     typeof body.id === "string" &&
     body.id.length > 0 &&
     typeof body.name === "string" &&
     oneLineWithin(body.name, 255) &&
     showsInProse(body.name) &&
-    typeof body.type === "string" &&
-    isBareMediaType(body.type) &&
     Number.isSafeInteger(body.size) &&
     (body.size as number) >= 0
   );

@@ -1,9 +1,9 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { Problem } from "../../api/problem";
-import type { PoolPersonPanel } from "../../api/pool/people";
+import type { EstateRole, PoolPersonPanel } from "../../api/pool/people";
 import {
   refusedForWhatStillHolds,
   takeOut,
@@ -14,13 +14,13 @@ import {
 } from "../../api/pool/people/{subjectId}/estate-roles/{role}";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { ActButton } from "../../lib/action/ActButton";
 import { ActDialog } from "../../lib/action/ActDialog";
 import { Press } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
 import type { Reason } from "../../lib/action/Press";
 import { Field, Fields } from "../../lib/form/Fields";
 import { Part } from "../../lib/layout/Part";
+import { PANEL_PART_SX } from "../../lib/layout/SidePanelHost";
 import { LIST_SX } from "../../lib/layout/parts";
 import type { Action } from "../../lib/request/useAction";
 import { nameOrNumber } from "../../lib/text/names";
@@ -31,19 +31,8 @@ import {
   isEstateRole,
   roleSaid,
 } from "./estateRoles";
+import { RoleLine, useKeyboardKeptAfterChange } from "./RoleLine";
 import { whatHasToGoFirst } from "./whatHasToGoFirst";
-
-const QUIET_SX = { color: "text.secondary" };
-
-const ROLE_SX = {
-  display: "flex",
-  flexWrap: "wrap",
-  alignItems: "center",
-  gap: 1,
-  py: 0.5,
-};
-
-const ROLE_NAME_SX = { flexGrow: 1 };
 
 const STACKED_SX = { display: "flex", flexDirection: "column", gap: 1 };
 
@@ -77,7 +66,6 @@ export function PersonPanel({
   readonly waiting: boolean;
   readonly mayChangeRoles: boolean;
   readonly refused: Refused | null;
-  /** Told which control asked, as it asks. */
   readonly onAsk: (asked: Asked) => void;
 }) {
   const { subjectId } = person;
@@ -102,89 +90,97 @@ export function PersonPanel({
       : null;
   const confirmOpen =
     confirmation !== null && confirmation.seenProblem === changing.problem;
+  const rolesHeading = useRef<HTMLHeadingElement>(null);
+  const isOffered = (role: EstateRole) =>
+    mayChangeRoles && !person.lastGrantingRoles.has(role);
+  const asking = useKeyboardKeptAfterChange(
+    rolesHeading,
+    changing.running,
+    isOffered,
+  );
 
   return (
     <>
-      <Part title={say("person.who")} level="h3" depth={3}>
-        <Fields>
-          <Field label={say("person.userId")}>
-            <bdi>{person.userId}</bdi>
-          </Field>
-          <Field label={say("person.name")}>
-            {person.displayName === undefined ? (
-              say("person.nameless")
-            ) : (
-              <bdi>{person.displayName}</bdi>
-            )}
-          </Field>
-        </Fields>
-      </Part>
-      <Part title={say("person.estateRoles")} level="h3" depth={3}>
-        <Box component="ul" role="list" sx={LIST_SX}>
-          {rows.map((role) => {
-            const holds = person.estateRoles.has(role);
-            const offered =
-              mayChangeRoles &&
-              isEstateRole(role) &&
-              !person.lastGrantingRoles.has(role);
-            return (
-              <Box component="li" key={role} sx={ROLE_SX}>
-                <Box component="span" sx={ROLE_NAME_SX}>
-                  <bdi>{roleSaid(role)}</bdi>
-                </Box>
-                <Typography component="span" variant="body2" sx={QUIET_SX}>
-                  {say(holds ? "person.holds" : "person.holdsNot")}
-                </Typography>
-                {offered ? (
-                  // One element whichever way it points, so the control just
-                  // pressed is the one that still has the keyboard after.
-                  <ActButton
-                    action={changing}
-                    warns={holds}
-                    waiting={waiting}
-                    act={(signal) => {
-                      onAsk({ place: "roles", of: person });
-                      return (holds ? withdraw : grant)(
-                        subjectId,
-                        role,
-                        signal,
-                      ).then((changed) => ({ changed }));
-                    }}
-                  >
-                    {say(holds ? "person.withdraw" : "person.grant", {
-                      role: roleSaid(role),
-                    })}
-                  </ActButton>
-                ) : null}
-              </Box>
-            );
-          })}
-        </Box>
-        {rolesRefused === null ? null : (
-          <ProblemView
-            problem={rolesRefused}
-            rule={{ act: "grant_estate_role" }}
-          />
-        )}
-      </Part>
-      <Part title={say("person.groups")} level="h3" depth={3}>
-        {person.groups.length === 0 ? (
-          <Typography variant="body2">{say("person.inNoGroup")}</Typography>
-        ) : (
+      <Box data-panel-part sx={PANEL_PART_SX}>
+        <Part title={say("person.who")} level="h3" depth={3}>
+          <Fields inPanel>
+            <Field label={say("person.userId")}>
+              <bdi>{person.userId}</bdi>
+            </Field>
+            <Field label={say("person.name")}>
+              {person.displayName === undefined ? (
+                say("person.nameless")
+              ) : (
+                <bdi>{person.displayName}</bdi>
+              )}
+            </Field>
+          </Fields>
+        </Part>
+      </Box>
+      <Box data-panel-part sx={PANEL_PART_SX}>
+        <Part
+          title={say("person.estateRoles")}
+          level="h3"
+          depth={3}
+          headingRef={rolesHeading}
+        >
           <Box component="ul" role="list" sx={LIST_SX}>
-            {/* Keyed by position: a list read whole and never reordered, whose
-                names nothing here promises are distinct. */}
-            {person.groups.map((group, at) => (
-              <li key={at}>
-                <bdi>{group}</bdi>
-              </li>
-            ))}
+            {rows.map((role) => {
+              const holds = person.estateRoles.has(role);
+              return (
+                <RoleLine
+                  key={role}
+                  said={roleSaid(role)}
+                  holds={holds}
+                  change={
+                    isEstateRole(role) && isOffered(role)
+                      ? {
+                          action: changing,
+                          waiting,
+                          act: (signal) => {
+                            asking(role);
+                            onAsk({ place: "roles", of: person });
+                            return (holds ? withdraw : grant)(
+                              subjectId,
+                              role,
+                              signal,
+                            ).then((changed) => ({ changed }));
+                          },
+                        }
+                      : null
+                  }
+                />
+              );
+            })}
           </Box>
-        )}
-      </Part>
+          {rolesRefused === null ? null : (
+            <ProblemView
+              problem={rolesRefused}
+              rule={{ act: "grant_estate_role" }}
+            />
+          )}
+        </Part>
+      </Box>
+      <Box data-panel-part sx={PANEL_PART_SX}>
+        <Part title={say("person.groups")} level="h3" depth={3}>
+          {person.groups.length === 0 ? (
+            <Typography variant="body2">{say("person.inNoGroup")}</Typography>
+          ) : (
+            <Box component="ul" role="list" sx={LIST_SX}>
+              {/* Keyed by position: a list read whole and never reordered, whose
+                names nothing here promises are distinct. */}
+              {person.groups.map((group, at) => (
+                <li key={at}>
+                  <bdi>{group}</bdi>
+                </li>
+              ))}
+            </Box>
+          )}
+        </Part>
+      </Box>
       <Box sx={ROW_SX}>
         <Press
-          warns
+          tier="danger"
           unavailable={waiting || changing.running}
           reason={asReason(firstToGo)}
           onPress={() => setConfirmation({ seenProblem: changing.problem })}
@@ -207,7 +203,7 @@ export function PersonPanel({
             });
           }}
           actLabel={say("confirm.remove")}
-          warns
+          tier="dangerConfirm"
           reason={asReason(firstToGo)}
           abandonLabel={say("confirm.cancel")}
           underway={say("person.removeUnderway")}

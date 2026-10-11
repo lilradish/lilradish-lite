@@ -1,38 +1,44 @@
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useState } from "react";
+import { useId, useRef } from "react";
 
 import type { GroupRule } from "../../app/standing/actRules";
 import { say, type MessageId } from "../../i18n/app";
-import { ActButton } from "../../lib/action/ActButton";
+import { EditableText } from "../../lib/action/EditableText";
+import { InfoMark } from "../../lib/action/InfoMark";
+import { heldOr, QUIET } from "../../lib/action/Press";
+import { SaveButton } from "../../lib/action/SaveButton";
 import { Part } from "../../lib/layout/Part";
 import { QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import type { Action } from "../../lib/request/useAction";
 import { usePartFocus } from "./usePartFocus";
 import { useDraftPartStatus } from "./useDraftStatus";
+import { useHeardRefusal } from "./useHeardRefusal";
+import { useProseEdit } from "./useProseEdit";
 import { WriteRefused } from "./WriteRefused";
 
-// Prose keeps its lines, and takes its direction from what is in it.
 const PROSE_SX = { whiteSpace: "pre-wrap", overflowWrap: "anywhere", m: 0 };
 
-/** The words a prose part is drawn with, each said where the reader meets it. */
 export interface ProseWords {
-  /** Heads the part and names its text box. */
   readonly title: MessageId;
   readonly hint: MessageId;
-  /** Said where it is read and holds nothing. */
   readonly saysNothing: MessageId;
+  readonly emptyExplanation?: MessageId;
+  /** Said behind an information mark beside the title wherever it may be written. */
+  readonly explained?: { readonly about: MessageId; readonly hint: MessageId };
   readonly save: MessageId;
-  readonly unchanged: MessageId;
   readonly underway: MessageId;
+  readonly edit: MessageId;
 }
 
 /** Optional prose is saved as none when emptied. */
 export function ProsePart<T>({
   words,
   said,
+  rewritten,
   editable,
   waiting,
   refusalOf,
@@ -45,6 +51,8 @@ export function ProsePart<T>({
   readonly words: ProseWords;
   /** As the server last read it; absent where it says nothing. */
   readonly said: string | undefined;
+  /** A successful related change rewrites only its references in any unsaved text. */
+  readonly rewritten?: (text: string) => string;
   /** Whether the host may write it now, as the server said. */
   readonly editable: boolean;
   /** Whether another write of the version's is out, which this one would be refused beside. */
@@ -60,92 +68,145 @@ export function ProsePart<T>({
   readonly onReadAfresh: () => void;
 }) {
   const { section, heading } = usePartFocus(focusOnArrival, editable);
-  const [typed, setTyped] = useState(said ?? "");
-  const [readAs, setReadAs] = useState(said);
-  if (said !== readAs) {
-    setReadAs(said);
-    setTyped(said ?? "");
-  }
-  const [asked, setAsked] = useState(false);
+  const titleId = useId();
+  const { typed, editing, trigger, begin, cancel, saved, change } =
+    useProseEdit(said, rewritten, editable, action.running, section);
   const refused = typed === "" ? null : refusalOf(typed);
   const unsaved = typed !== (said ?? "");
-  useDraftPartStatus(words.title, unsaved, action.running || waiting);
+  const refusalAt = useRef<HTMLDivElement>(null);
+  const heard = useHeardRefusal(action, unsaved, refusalAt);
+  useDraftPartStatus(words.title, unsaved, action.running || waiting, {
+    saving: action.running,
+    node: section,
+    locate: begin,
+  });
   return (
     <Part
       title={say(words.title)}
-      actions={
-        editable && unsaved ? (
-          <Typography component="span" variant="body2" color="text.secondary">
-            {say("draft.unsaved")}
-          </Typography>
-        ) : undefined
-      }
+      unsaved={editable && unsaved}
       level="h3"
       depth={2}
+      headingId={titleId}
       headingRef={heading}
       ref={section}
+      marker={
+        editable && words.explained !== undefined ? (
+          <InfoMark
+            about={say(words.explained.about)}
+            hint={say(words.explained.hint)}
+          />
+        ) : undefined
+      }
     >
       {!editable ? (
         said === undefined ? (
-          <Typography variant="body2" sx={QUIET_SX}>
-            {say(words.saysNothing)}
-          </Typography>
+          words.emptyExplanation === undefined ? (
+            <Typography
+              variant="body2"
+              sx={{ ...QUIET_SX, typography: "systemHint" }}
+            >
+              {say(words.saysNothing)}
+            </Typography>
+          ) : (
+            <Box component="details" sx={QUIET_SX}>
+              <summary>{say(words.saysNothing)}</summary>
+              <Typography
+                variant="body2"
+                sx={{ typography: "systemHint", mt: 1 }}
+              >
+                {say(words.emptyExplanation)}
+              </Typography>
+            </Box>
+          )
         ) : (
           <Typography component="p" variant="body1" dir="auto" sx={PROSE_SX}>
             {said}
           </Typography>
         )
+      ) : !editing ? (
+        <EditableText ref={trigger} label={say(words.edit)} onEdit={begin}>
+          {said === undefined ? (
+            <Typography
+              variant="body2"
+              sx={{ ...QUIET_SX, mb: 0, typography: "systemHint" }}
+            >
+              {say(words.saysNothing)}
+            </Typography>
+          ) : (
+            <Typography component="p" variant="body1" dir="auto" sx={PROSE_SX}>
+              {said}
+            </Typography>
+          )}
+        </EditableText>
       ) : (
         <>
           <TextField
-            label={say(words.title)}
             value={typed}
-            onChange={(edit) => {
+            onChange={(event) => {
               if (!action.running) {
-                setTyped(edit.target.value);
+                change(event.target.value);
               }
             }}
             error={refused !== null}
             helperText={say(refused ?? words.hint)}
             slotProps={{
-              htmlInput: { dir: "auto", readOnly: action.running },
+              htmlInput: {
+                dir: "auto",
+                readOnly: action.running,
+                "aria-labelledby": titleId,
+              },
             }}
             multiline
             minRows={4}
             fullWidth
           />
           <Box sx={{ mt: 1 }}>
-            <ActButton
+            <SaveButton
+              unsaved={unsaved}
               action={action}
-              variant={unsaved ? "contained" : undefined}
               waiting={waiting}
               reason={
-                refused !== null
-                  ? { severity: "warning", words: say(refused) }
-                  : typed === (said ?? "")
-                    ? { severity: "info", words: say(words.unchanged) }
-                    : undefined
+                refused === null
+                  ? undefined
+                  : { severity: "warning", words: say(refused) }
               }
               act={(signal) => {
-                setAsked(true);
-                return save(typed === "" ? null : typed, signal);
+                heard.sent();
+                return save(typed === "" ? null : typed, signal).then(
+                  (answer) => {
+                    saved();
+                    return answer;
+                  },
+                );
               }}
             >
               {say(words.save)}
-            </ActButton>
+            </SaveButton>
+            <Button
+              {...QUIET}
+              {...heldOr(action.running, () => {
+                heard.letGo();
+                cancel();
+              })}
+            >
+              {say("entry.abandon")}
+            </Button>
           </Box>
           {action.running ? (
             <Notice severity="info">{say(words.underway)}</Notice>
           ) : null}
         </>
       )}
-      {!asked || action.problem === null ? null : (
-        <WriteRefused
-          problem={action.problem}
-          rule={rule}
-          waiting={waiting}
-          onReadAfresh={onReadAfresh}
-        />
+      {heard.problem === null ? null : (
+        <div ref={refusalAt} tabIndex={-1}>
+          <WriteRefused
+            settled={heard.settled}
+            problem={heard.problem}
+            rule={rule}
+            waiting={waiting}
+            onReadAfresh={onReadAfresh}
+          />
+        </div>
       )}
     </Part>
   );

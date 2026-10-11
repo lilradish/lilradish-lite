@@ -1,0 +1,15 @@
+export const MEASUREMENTS_EN = {
+  "measurements.models": "The models",
+  "measurements.system": "This system",
+  "measurements.model": "Model",
+  "measurements.mode": "Mode",
+  "measurements.productions": "Productions",
+  "measurements.refusedOnReview": "Refused on review",
+  "measurements.reviews": "Reviews",
+  "measurements.refusing": "Refusing",
+  "measurements.didNotFit": "Did not fit",
+  "measurements.wentWrong": "Went wrong",
+  "measurements.neverCameBack": "Never came back",
+  "measurements.turnedAway": "Turned away",
+  "measurements.nothingCalled": "No model has been called yet.",
+};

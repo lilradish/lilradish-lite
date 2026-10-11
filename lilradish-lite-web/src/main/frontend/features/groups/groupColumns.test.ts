@@ -26,19 +26,17 @@ function cellsOf(group: RegisteredGroup) {
 }
 
 describe("groupColumns", () => {
-  /** Which columns there are, and which of them sort, is the rule itself. */
-  it("heads the register with its key, its name, whether it can be administered and how many are in it, all sorting, then a control that does not", () => {
+  it("heads the register with its four sortable facts, editing in its name column", () => {
     expect(
       groupColumns(() => null).map((column) => [
         column.label,
         "sortKey" in column ? column.sortKey : null,
       ]),
     ).toEqual([
-      ["Key", "key"],
       ["Group", "name"],
+      ["Key", "key"],
       ["Can be administered", "canBeAdministered"],
       ["Members", "memberCount"],
-      ["", null],
     ]);
   });
 
@@ -51,10 +49,10 @@ describe("groupColumns", () => {
   });
 
   it.each([
-    [PAYROLL, ["PAYROLL", "Payroll", "Yes", 2, "control for PAYROLL"]],
-    [EMPTY_ROOM, ["VOID", "Empty room", "No", 0, "control for VOID"]],
+    [PAYROLL, ["control for PAYROLL", "PAYROLL", "Yes", "2"]],
+    [EMPTY_ROOM, ["control for VOID", "VOID", "No", "0"]],
   ])(
-    "shows %o's facts in the reader's words, and the control it is handed for that row last",
+    "shows %o's facts with its editable name in the name column",
     (group, cells) => {
       expect(cellsOf(group)).toEqual(cells);
     },
@@ -63,7 +61,7 @@ describe("groupColumns", () => {
   it("asks for the row's control with that row's group, and with no other", () => {
     const control = vi.fn(() => null);
 
-    groupColumns(control)[4].cell(PAYROLL);
+    groupColumns(control)[0].cell(PAYROLL);
 
     expect(control.mock.calls).toEqual([[PAYROLL]]);
   });

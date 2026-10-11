@@ -9,9 +9,8 @@ export function reportCaught(error: unknown): void {
 }
 
 /**
- * The router's errors, into the one entry. A render error reaches React's
- * `onCaughtError` as well; only one that never rendered (a loader's, an
- * action's) comes without `errorInfo`, so only that one is reported here.
+ * Render errors also reach React's `onCaughtError`; report here only errors
+ * without `errorInfo`, which never rendered, to avoid recording them twice.
  */
 export const reportRouterError: ClientOnErrorFunction = (
   error,

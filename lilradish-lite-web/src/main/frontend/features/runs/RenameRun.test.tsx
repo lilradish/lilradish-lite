@@ -17,13 +17,14 @@ const RUN_ID = "00000008-0000-4000-8000-000000000c71";
 const ADDRESS = `/api/groups/${GROUP}/runs/${RUN_ID}`;
 
 const LIMIT =
-  "A run's name is one to 128 characters on one line, with something in it that shows.";
+  "Use 1 to 128 characters on one line, with at least one visible character.";
 
 const SENT = {
   runId: RUN_ID,
   number: 7,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c71",
     name: "Handle a claim",
     version: 3,
@@ -34,7 +35,7 @@ const SENT = {
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["rename"],
+  stateActs: ["rename"],
 };
 
 const CLAIM = runFrom(SENT)!;
@@ -43,7 +44,6 @@ function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 
-/** The dialog over the real action it is handed, opened on the run, shut as the page shuts it. */
 function renaming(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   const sent = serving(routes);
   const settled = vi.fn();
@@ -64,7 +64,7 @@ function renaming(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   return {
     sent,
     settled,
-    dialog: screen.getByRole("dialog", { name: "Rename this run" }),
+    dialog: screen.getByRole("textbox", { name: "Name" }).closest("form")!,
   };
 }
 
@@ -73,7 +73,7 @@ function nameBox(): HTMLElement {
 }
 
 function rename(): HTMLElement {
-  return screen.getByRole("button", { name: "Rename" });
+  return screen.getByRole("button", { name: "Save" });
 }
 
 async function renamedTo(name: string) {
@@ -88,8 +88,9 @@ describe("RenameRun", () => {
     renaming();
 
     expect(nameBox()).toHaveValue("Claim from Avo");
+    expect(nameBox().tagName).toBe("TEXTAREA");
     expect(document.activeElement).toBe(nameBox());
-    expect(rename()).toHaveAttribute("aria-disabled", "true");
+    expect(rename()).toBeDisabled();
     expect(rename()).toHaveAccessibleDescription("Change the name first.");
   });
 
@@ -102,9 +103,21 @@ describe("RenameRun", () => {
     async (_case, typed) => {
       const { sent } = renaming();
 
-      await renamedTo(typed);
+      if (typed.length === 129) {
+        const user = userEvent.setup();
+        const input = nameBox();
+        await user.clear(input);
+        await user.paste(typed.slice(0, -1));
+        expect(input).toHaveValue(typed.slice(0, -1));
+        expect(rename()).toBeEnabled();
+        expect(requestsTo(sent)).toEqual([]);
+        await user.type(input, typed.slice(-1));
+        expect(input).toHaveValue(typed);
+      } else {
+        await renamedTo(typed);
+      }
 
-      expect(rename()).toHaveAttribute("aria-disabled", "true");
+      expect(rename()).toBeDisabled();
       expect(rename()).toHaveAccessibleDescription(LIMIT);
       expect(requestsTo(sent)).toEqual([]);
     },
@@ -121,7 +134,9 @@ describe("RenameRun", () => {
     await renamedTo(" Claim  again");
     await userEvent.click(rename());
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+    );
     expect(requestsTo(sent)).toEqual([`PATCH ${ADDRESS}`]);
     expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
       name: " Claim  again",
@@ -130,7 +145,7 @@ describe("RenameRun", () => {
   });
 
   it("says a refusal of the name under the box, and stays open", async () => {
-    const { dialog } = renaming({
+    const { dialog, sent } = renaming({
       [`PATCH ${ADDRESS}`]: [
         [JSON.stringify({ code: "RUN_NAME_UNUSABLE" }), 400],
       ],
@@ -138,11 +153,48 @@ describe("RenameRun", () => {
     expect(within(dialog).queryByRole("alert")).toBeNull();
 
     await renamedTo("Claim again");
-    await userEvent.click(rename());
+    await userEvent.click(document.body);
 
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(LIMIT);
-    expect(screen.getByRole("dialog", { name: "Rename this run" })).toBe(
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Use 1 to 128 characters on one line, with at least one visible character.",
+    );
+    expect(screen.getByRole("textbox", { name: "Name" }).closest("form")!).toBe(
       dialog,
     );
+    expect(nameBox()).toHaveValue("Claim again");
+    await waitFor(() => expect(nameBox()).toHaveFocus());
+    expect(requestsTo(sent)).toEqual([`PATCH ${ADDRESS}`]);
+    expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
+      name: "Claim again",
+    });
+  });
+
+  it("can still save after a Cancel pointer press is released over the name without cancelling", async () => {
+    const user = userEvent.setup();
+    const { sent, settled } = renaming({
+      [`PATCH ${ADDRESS}`]: [
+        [JSON.stringify({ ...SENT, name: "Claim again" }), 200],
+      ],
+    });
+    await renamedTo("Claim again");
+    await user.pointer([
+      {
+        target: screen.getByRole("button", { name: "Cancel" }),
+        keys: "[MouseLeft>]",
+      },
+      { target: nameBox() },
+      { target: nameBox(), keys: "[/MouseLeft]" },
+    ]);
+    expect(nameBox()).toHaveValue("Claim again");
+    expect(requestsTo(sent)).toEqual([]);
+    await user.click(rename());
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull(),
+    );
+    expect(requestsTo(sent)).toEqual([`PATCH ${ADDRESS}`]);
+    expect(JSON.parse(String(sent.mock.calls[0]![1]?.body))).toEqual({
+      name: "Claim again",
+    });
+    expect(settled).toHaveBeenCalledOnce();
   });
 });

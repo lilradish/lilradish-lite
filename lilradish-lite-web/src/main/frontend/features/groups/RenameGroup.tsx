@@ -1,22 +1,16 @@
-import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import TextField from "@mui/material/TextField";
-import Typography from "@mui/material/Typography";
 import { useState } from "react";
 
 import type { RegisteredGroup } from "../../api/groups";
 import { renameGroup } from "../../api/groups/{groupId}";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { ActDialog } from "../../lib/action/ActDialog";
+import { InlineEdit } from "../../lib/action/InlineEdit";
 import type { Reason } from "../../lib/action/Press";
-import { Field, Fields } from "../../lib/form/Fields";
 import type { Action } from "../../lib/request/useAction";
 import type { Outcome } from "./changes";
 import { nameFits } from "../../lib/text/legibility";
-
-const FIELDS_SX = { pt: 1 };
-
-const KEY_KEPT_SX = { color: "text.secondary" };
 
 // A name may carry a bidirectional control, so its box takes its direction from it.
 const NAME_INPUT = { htmlInput: { dir: "auto" } };
@@ -38,29 +32,28 @@ export function RenameGroup({
   readonly group: RegisteredGroup;
   readonly open: boolean;
   readonly changing: Action<Outcome>;
-  readonly onShut: () => void;
+  readonly onShut: (returnFocus?: boolean) => void;
 }) {
   const [name, setName] = useState(group.name);
   const [asked, setAsked] = useState(false);
   const holds = nameFits(name);
 
   return (
-    <ActDialog
+    <InlineEdit
+      characters={128}
+      readValue={group.name}
+      underway={say("group.renameUnderway")}
       open={open}
-      title={say("group.renameTitle")}
       onShut={onShut}
       action={changing}
+      unchanged={name === group.name}
       act={(signal) => {
         setAsked(true);
         return renameGroup(group.groupId, name, signal).then((renamed) => {
-          onShut();
           return { renamed };
         });
       }}
-      actLabel={say("group.rename")}
       reason={heldFor(holds, name === group.name)}
-      abandonLabel={say("group.abandon")}
-      underway={say("group.renameUnderway")}
       refusal={
         !asked || changing.problem === null ? null : (
           <ProblemView
@@ -70,31 +63,36 @@ export function RenameGroup({
         )
       }
     >
-      <Stack spacing={1} sx={FIELDS_SX}>
+      <Tooltip
+        title={
+          <>
+            <bdi>{group.key}</bdi>
+            {" · "}
+            {say("group.keyKept")}
+          </>
+        }
+        describeChild
+      >
         <TextField
-          label={say("group.name")}
+          multiline
           value={name}
           onChange={(edit) => setName(edit.target.value)}
           error={!holds}
           helperText={holds ? undefined : say("group.nameLimit")}
-          slotProps={NAME_INPUT}
+          slotProps={{
+            htmlInput: {
+              ...NAME_INPUT.htmlInput,
+              "aria-label": say("group.name"),
+            },
+          }}
           autoFocus
           fullWidth
         />
-        <Fields>
-          <Field label={say("group.key")}>
-            <bdi>{group.key}</bdi>
-          </Field>
-        </Fields>
-        <Typography variant="body2" sx={KEY_KEPT_SX}>
-          {say("group.keyKept")}
-        </Typography>
-      </Stack>
-    </ActDialog>
+      </Tooltip>
+    </InlineEdit>
   );
 }
 
-/** A name the group cannot have, and the name it has, are both nothing to rename to. */
 function heldFor(holds: boolean, unchanged: boolean): Reason | undefined {
   if (!holds) {
     return { severity: "info", words: say("group.nameLimit") };

@@ -17,7 +17,7 @@ const READ = {
   entryId: ENTRY,
   kind: "workflow",
   name: "Handle",
-  acts: [],
+  stateActs: [],
   versions: [],
 };
 
@@ -58,7 +58,7 @@ describe("readEntry", () => {
     expect(sent.mock.calls[0]![0]).toBe(
       `/api/groups/${GROUP}/workflows/${ENTRY}`,
     );
-    expect(read).toEqual({ ...READ, acts: new Set() });
+    expect(read).toEqual({ ...READ, stateActs: new Set() });
   });
 });
 
@@ -84,7 +84,7 @@ describe("editEntry", () => {
       name: "Handle",
       purpose: "Handles a claim.",
     });
-    expect(read).toEqual({ ...READ, acts: new Set() });
+    expect(read).toEqual({ ...READ, stateActs: new Set() });
   });
 });
 

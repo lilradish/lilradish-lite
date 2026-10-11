@@ -38,7 +38,9 @@ describe("usePickedRow", () => {
         from: "one",
       }),
     );
-    hooked.rerender({ picked: undefined, reading: read });
+    await act(async () => {
+      hooked.rerender({ picked: undefined, reading: read });
+    });
 
     expect(read.mock.calls.map(([key]) => key)).toEqual(["k1"]);
     expect(hooked.result.current.read.loading).toBe(false);

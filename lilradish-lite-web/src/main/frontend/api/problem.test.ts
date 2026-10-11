@@ -158,6 +158,39 @@ describe("requestFailed", () => {
     expect("extensions" in plain.problem).toBe(false);
   });
 
+  it.each(["INSTRUCTION_NAMES_UNKNOWN", "INPUT_STILL_MENTIONED"])(
+    "reads %s names in their raw order, apart from unchecked extensions",
+    async (code) => {
+      const names = ["sender.name", "", "<b>", "\u202e"];
+      const { problem } = await requestFailed(
+        jsonResponse({ code, names, extra: "unchecked" }, 400),
+      );
+      expect(problem.status).toBe(400);
+      expect(problem.names).toEqual(names);
+      expect(problem.extensions).toEqual({ extra: "unchecked" });
+    },
+  );
+
+  it.each([null, "complaint", [], {}, [1], ["valid", null], ["valid", {}]])(
+    "keeps a refusal but drops unreadable input names: %j",
+    async (names) => {
+      const { problem } = await requestFailed(
+        jsonResponse(
+          {
+            code: "INSTRUCTION_NAMES_UNKNOWN",
+            detail: "Keep this detail",
+            names,
+          },
+          400,
+        ),
+      );
+      expect(problem.code).toBe("INSTRUCTION_NAMES_UNKNOWN");
+      expect(problem.detail).toBe("Keep this detail");
+      expect(problem).not.toHaveProperty("names");
+      expect(problem).not.toHaveProperty("extensions");
+    },
+  );
+
   it("takes the status from the response rather than from the document", async () => {
     const response = jsonResponse({ code: "SOME_REFUSAL", status: 500 }, 404);
 

@@ -18,6 +18,7 @@ import {
   offsetWritten,
   oneDraftOf,
   placedAt,
+  type FileDraft,
   type LevelDraft,
 } from "./fillDrafts";
 
@@ -103,7 +104,7 @@ const ITEMS: FillField = {
 const ATTACHMENT: FillField = {
   name: "attachment",
   kind: "file",
-  types: ["application/vnd.demo-sample+json", "text/plain"],
+  types: [".json", ".txt"],
   maximumBytes: 8,
   mustBeGiven: true,
 };
@@ -138,9 +139,9 @@ describe("file drafts", () => {
     const kept = {
       id: "stored-one",
       name: "Demo Sample.txt",
-      type: "text/plain",
       size: 4,
     };
+    const other = { id: "stored-two", name: "Imaginary dispatch.txt", size: 8 };
     const fields = [
       ATTACHMENT,
       ATTACHMENTS,
@@ -160,12 +161,15 @@ describe("file drafts", () => {
     expect(
       draftFrom(fields, {
         attachment: kept,
-        attachments: [kept],
+        attachments: [kept, other],
         details: { attachment: kept },
       }),
     ).toEqual({
       attachment: { kept, originalIndex: 0 },
-      attachments: [{ kept, originalIndex: 0 }],
+      attachments: [
+        { kept, originalIndex: 0 },
+        { kept: other, originalIndex: 1 },
+      ],
       details: { attachment: { kept, originalIndex: 0 } },
     });
   });
@@ -180,7 +184,6 @@ describe("file drafts", () => {
     const kept = {
       id: "stored-one",
       name: "Demo Sample kept.txt",
-      type: "text/plain",
       size: 4,
     };
     const nested: FillField = {
@@ -214,17 +217,61 @@ describe("file drafts", () => {
     expect(JSON.stringify(start.values)).not.toContain("keep");
   });
 
+  it.each([
+    ["an ending no longer accepted", "Demo Sample.pdf", 4],
+    ["a byte limit now smaller than the file", "Demo Sample.txt", 9],
+  ] as const)(
+    "refuses an already kept file with %s at its current position",
+    (_case, name, size) => {
+      const before: readonly FillField[] = [
+        { ...ATTACHMENTS, types: [".txt", ".pdf"], maximumBytes: 16 },
+      ];
+      const first = {
+        id: "stored-first",
+        name: "Demo Sample first.txt",
+        size: 1,
+      };
+      const kept = { id: "stored-second", name, size };
+      const draft = draftFrom(before, { attachments: [first, kept] });
+      const reordered = {
+        attachments: (draft.attachments as readonly FileDraft[]).slice(1),
+      };
+      const read = draftReader(true)([ATTACHMENTS], reordered, NONE_UNREADABLE);
+
+      expect(reordered.attachments).toEqual([{ kept, originalIndex: 1 }]);
+      expect(read.problems).toEqual([
+        { path: ["attachments", 0], reason: "malformed" },
+      ]);
+      expect(read.values).toEqual({ attachments: [null] });
+      expect(read.uploads).toEqual([]);
+      expect(read.hasFilePositions).toBe(false);
+
+      const fitting = { ...kept, name: "Demo Sample.txt", size: 4 };
+      const accepted = draftFrom(before, { attachments: [first, fitting] });
+      const retained = {
+        attachments: (accepted.attachments as readonly FileDraft[]).slice(1),
+      };
+      const allowed = draftReader(true)(
+        [ATTACHMENTS],
+        retained,
+        NONE_UNREADABLE,
+      );
+      expect(allowed.problems).toEqual([]);
+      expect(allowed.values).toEqual({ attachments: [{ keep: 1 }] });
+      expect(allowed.uploads).toEqual([]);
+      expect(allowed.hasFilePositions).toBe(true);
+    },
+  );
+
   it("retains the old many-file index after removing and reordering entries beside new uploads", () => {
     const first = {
       id: "stored-first",
       name: "Demo Sample first.txt",
-      type: "text/plain",
       size: 5,
     };
     const second = {
       id: "stored-second",
       name: "Demo Sample second.txt",
-      type: "text/plain",
       size: 6,
     };
     const pending = new File(["new"], "Demo Sample new.txt", {
@@ -271,8 +318,8 @@ describe("file drafts", () => {
 
   it.each([
     [
-      "valid arbitrary type",
-      new File(["x"], "Demo Sample.dat", {
+      "an accepted extension with an arbitrary MIME type",
+      new File(["x"], "Demo Sample.JSON", {
         type: "application/vnd.demo-sample+json",
       }),
       null,
@@ -290,27 +337,29 @@ describe("file drafts", () => {
       "type_not_taken",
     ],
     [
-      "parameter without value",
+      "an accepted ending despite an invalid MIME parameter",
       new File(["x"], "Demo Sample.txt", { type: "text/plain;bad" }),
-      "type_malformed",
+      null,
     ],
     [
-      "unclosed parameter quote",
+      "an accepted ending despite an unclosed MIME parameter quote",
       new File(["x"], "Demo Sample.txt", {
         type: 'text/plain;name="unfinished',
       }),
-      "type_malformed",
+      null,
     ],
     [
       "bad name",
       new File(["x"], "Demo\nSample.txt", { type: "text/plain" }),
       "name",
     ],
-    ["missing type", new File(["x"], "Demo Sample.txt"), "type_missing"],
+    ["missing MIME type", new File(["x"], "Demo Sample.txt"), null],
+    ["missing extension", new File(["x"], "Demo Sample"), "type_missing"],
+    ["trailing dot", new File(["x"], "Demo Sample."), "type_missing"],
     [
-      "malformed type",
+      "an accepted ending despite a malformed MIME type",
       new File(["x"], "Demo Sample.txt", { type: "wrong" }),
-      "type_malformed",
+      null,
     ],
     [
       "type not taken",
@@ -357,9 +406,12 @@ describe("draftFrom", () => {
     urgent: "true",
     at: "2026-09-26T10:15:30+02:00",
     tags: ["kettle", "lid"],
-    contact: { email: "avo@example.org", phones: ["0123"] },
+    contact: { email: "avo@example.org", phones: ["0123", "0456"] },
     address: { street: "1 Main" },
-    items: [{ name: "kettle", count: null }],
+    items: [
+      { name: "kettle", count: null },
+      { name: "lid", count: "2" },
+    ],
   };
 
   it("holds each value as its control holds it, a moment in its own offset, and none as nothing chosen", () => {
@@ -369,9 +421,12 @@ describe("draftFrom", () => {
       urgent: "true",
       at: { date: "2026-09-26", time: "10:15:30", offset: "+02:00" },
       tags: ["kettle", "lid"],
-      contact: { email: "avo@example.org", phones: ["0123"] },
+      contact: { email: "avo@example.org", phones: ["0123", "0456"] },
       address: { street: "1 Main" },
-      items: [{ name: "kettle", count: "" }],
+      items: [
+        { name: "kettle", count: "" },
+        { name: "lid", count: "2" },
+      ],
     });
   });
 
@@ -526,8 +581,12 @@ describe("draftReader", () => {
       complaint: " Broken\n",
       amount: "12.50",
       urgent: "false",
+      tags: ["kettle", "lid"],
       contact: { email: "avo@example.org", phones: [] },
-      items: [{ name: "kettle", count: "" }],
+      items: [
+        { name: "kettle", count: "" },
+        { name: "lid", count: "2" },
+      ],
     });
 
     expect(read.values).toEqual({
@@ -535,10 +594,13 @@ describe("draftReader", () => {
       amount: "12.50",
       urgent: "false",
       at: null,
-      tags: ["kettle"],
+      tags: ["kettle", "lid"],
       contact: { email: "avo@example.org", phones: [] },
       address: { street: "1 Main" },
-      items: [{ name: "kettle", count: null }],
+      items: [
+        { name: "kettle", count: null },
+        { name: "lid", count: "2" },
+      ],
     });
     expect(read.problems).toEqual([]);
   });

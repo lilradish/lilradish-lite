@@ -62,10 +62,6 @@ export function constantKindOf(target: Shape | undefined): ConstantKind {
     : "written";
 }
 
-/**
- * A constant's JSON text as a person reads and edits it filling {@code target}: text as itself, anything else
- * as it is written.
- */
 export function constantTyped(
   written: string,
   target: Shape | undefined,
@@ -253,7 +249,7 @@ function numbersWhy(
     : null;
 }
 
-/** Whether one value typed is not written as a value of its kind is, judged as a value filled in is. */
+/** Whether a typed value is refused by the same check as a filled-in value of its kind. */
 function refusedAs(
   kind: "number" | "date" | "moment" | "yes_no",
   typed: string,
@@ -264,7 +260,6 @@ function refusedAs(
   );
 }
 
-/** Each number JSON text holds, as the text it is written in. */
 function numbersIn(written: string): string[] {
   return [...written.matchAll(STRING_OR_NUMBER)]
     .map(([token]) => token)

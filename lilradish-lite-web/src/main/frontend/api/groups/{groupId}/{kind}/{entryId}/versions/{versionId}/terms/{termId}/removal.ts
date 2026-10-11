@@ -5,7 +5,7 @@ import {
 } from "../../../{versionId}";
 import { atTerm } from "../{termId}";
 
-/** A term taken out of a draft, over the revision the page read; answered with the list as it then reads. */
+/** Guarded by the revision read; returns the list as it then reads. */
 export function removeTerm(
   groupId: string,
   entryId: string,

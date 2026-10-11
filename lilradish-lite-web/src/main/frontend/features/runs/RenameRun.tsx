@@ -1,17 +1,14 @@
-import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import { useState } from "react";
 
 import { renameRun, type Run } from "../../api/groups/{groupId}/runs/{runId}";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { ActDialog } from "../../lib/action/ActDialog";
+import { InlineEdit } from "../../lib/action/InlineEdit";
 import type { Reason } from "../../lib/action/Press";
 import type { Action } from "../../lib/request/useAction";
 import { RUN_ACT_RULES } from "./actRules";
-import { runNameFits } from "./runName";
-
-const FIELDS_SX = { pt: 1 };
+import { MOST_IN_A_RUN_NAME, runNameFits } from "./runName";
 
 // A name may carry a bidirectional control, so its box takes its direction from it.
 const NAME_INPUT = { htmlInput: { dir: "auto" } };
@@ -31,7 +28,7 @@ export function RenameRun({
   readonly run: Run;
   readonly open: boolean;
   readonly changing: Action<Run>;
-  readonly onShut: () => void;
+  readonly onShut: (returnFocus?: boolean) => void;
 }) {
   const named = run.name ?? "";
   const [name, setName] = useState(named);
@@ -39,22 +36,19 @@ export function RenameRun({
   const fits = runNameFits(name);
 
   return (
-    <ActDialog
+    <InlineEdit
+      characters={MOST_IN_A_RUN_NAME}
+      readValue={run.name ?? say("run.title", { number: run.number })}
+      underway={say("runName.underway")}
       open={open}
-      title={say("runName.title")}
       onShut={onShut}
       action={changing}
+      unchanged={name === named}
       act={(signal) => {
         setAsked(true);
-        return renameRun(groupId, run.runId, name, signal).then((renamed) => {
-          onShut();
-          return renamed;
-        });
+        return renameRun(groupId, run.runId, name, signal);
       }}
-      actLabel={say("run.rename")}
       reason={heldFor(fits, name === named)}
-      abandonLabel={say("run.abandon")}
-      underway={say("runName.underway")}
       refusal={
         !asked || changing.problem === null ? null : (
           <ProblemView
@@ -64,19 +58,22 @@ export function RenameRun({
         )
       }
     >
-      <Stack spacing={1} sx={FIELDS_SX}>
-        <TextField
-          label={say("runName.label")}
-          value={name}
-          onChange={(edit) => setName(edit.target.value)}
-          error={name !== "" && !fits}
-          helperText={name !== "" && !fits ? say("runName.limit") : undefined}
-          slotProps={NAME_INPUT}
-          autoFocus
-          fullWidth
-        />
-      </Stack>
-    </ActDialog>
+      <TextField
+        multiline
+        value={name}
+        onChange={(edit) => setName(edit.target.value)}
+        error={!fits}
+        helperText={!fits ? say("runName.limit") : undefined}
+        slotProps={{
+          htmlInput: {
+            ...NAME_INPUT.htmlInput,
+            "aria-label": say("runName.label"),
+          },
+        }}
+        autoFocus
+        fullWidth
+      />
+    </InlineEdit>
   );
 }
 

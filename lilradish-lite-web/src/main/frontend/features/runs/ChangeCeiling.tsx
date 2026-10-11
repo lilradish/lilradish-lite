@@ -1,20 +1,17 @@
-import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import TextField from "@mui/material/TextField";
-import Typography from "@mui/material/Typography";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { OwnCeiling, Run } from "../../api/groups/{groupId}/runs/{runId}";
 import { changeCeiling } from "../../api/groups/{groupId}/runs/{runId}/ceiling";
 import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { ActDialog } from "../../lib/action/ActDialog";
+import { InlineEdit } from "../../lib/action/InlineEdit";
 import type { Reason } from "../../lib/action/Press";
-import { QUIET_SX } from "../../lib/layout/parts";
 import type { Action } from "../../lib/request/useAction";
 import { RUN_ACT_RULES } from "./actRules";
 import { ceilingFits } from "./ceilingTyped";
-
-const FIELDS_SX = { pt: 1 };
+import { countSaid } from "./spend";
 
 // Digits alone, so a phone offers its number pad; the box stays text, a number box rounding what it holds.
 const DIGITS_INPUT = { htmlInput: { inputMode: "numeric" } } as const;
@@ -27,7 +24,6 @@ export function ChangeCeiling({
   groupId,
   runId,
   targetRunId,
-  targetRunNumber,
   ceiling,
   open,
   changing,
@@ -36,27 +32,38 @@ export function ChangeCeiling({
   readonly groupId: string;
   readonly runId: string;
   readonly targetRunId?: string;
-  readonly targetRunNumber?: number;
   readonly ceiling: OwnCeiling;
   readonly open: boolean;
   readonly changing: Action<Run>;
-  readonly onShut: () => void;
+  readonly onShut: (returnFocus?: boolean) => void;
 }) {
   const inForce = ceiling.inForce ?? "";
   const [typed, setTyped] = useState(inForce);
   const [asked, setAsked] = useState(false);
   const fits = typed === "" || ceilingFits(typed);
+  const inputId = useId();
+  const hintId = `${inputId}-hint`;
+  const hint = (
+    <>
+      {say("ceiling.hint")}
+      {ceiling.raiseNeedsApproval ? <> {say("ceiling.approval")}</> : null}
+      {ceiling.waiting === undefined ? null : <> {say("ceiling.withdraws")}</>}
+    </>
+  );
 
   return (
-    <ActDialog
-      open={open}
-      title={
-        targetRunNumber === undefined
-          ? say("ceiling.title")
-          : say("ceiling.titleOf", { number: targetRunNumber })
+    <InlineEdit
+      characters={String(Number.MAX_SAFE_INTEGER).length}
+      readValue={
+        ceiling.inForce === undefined
+          ? say("run.noCeiling")
+          : countSaid(ceiling.inForce)
       }
+      underway={say("ceiling.underway")}
+      open={open}
       onShut={onShut}
       action={changing}
+      unchanged={typed === inForce}
       act={(signal) => {
         setAsked(true);
         return changeCeiling(
@@ -65,15 +72,9 @@ export function ChangeCeiling({
           typed === "" ? null : typed,
           signal,
           targetRunId,
-        ).then((changed) => {
-          onShut();
-          return changed;
-        });
+        );
       }}
-      actLabel={say("ceiling.change")}
       reason={heldFor(fits, typed === inForce)}
-      abandonLabel={say("run.abandon")}
-      underway={say("ceiling.underway")}
       refusal={
         !asked || changing.problem === null ? null : (
           <ProblemView
@@ -83,33 +84,31 @@ export function ChangeCeiling({
         )
       }
     >
-      <Stack spacing={1} sx={FIELDS_SX}>
+      <span id={hintId} hidden>
+        {hint}
+      </span>
+      <Tooltip title={hint} describeChild>
         <TextField
-          label={say("ceiling.label")}
+          id={inputId}
           value={typed}
           onChange={(edit) => setTyped(edit.target.value)}
           error={!fits}
-          helperText={fits ? say("ceiling.hint") : say("ceiling.limit")}
-          slotProps={DIGITS_INPUT}
+          helperText={fits ? undefined : say("ceiling.limit")}
+          slotProps={{
+            htmlInput: {
+              ...DIGITS_INPUT.htmlInput,
+              "aria-label": say("ceiling.label"),
+              "aria-describedby": `${hintId}${fits ? "" : ` ${inputId}-helper-text`}`,
+            },
+          }}
           autoFocus
           fullWidth
         />
-        {ceiling.raiseNeedsApproval ? (
-          <Typography variant="body2" sx={QUIET_SX}>
-            {say("ceiling.approval")}
-          </Typography>
-        ) : null}
-        {ceiling.waiting === undefined ? null : (
-          <Typography variant="body2" sx={QUIET_SX}>
-            {say("ceiling.withdraws")}
-          </Typography>
-        )}
-      </Stack>
-    </ActDialog>
+      </Tooltip>
+    </InlineEdit>
   );
 }
 
-/** A count the server would refuse, and the ceiling the run has, are both nothing to change to. */
 function heldFor(fits: boolean, unchanged: boolean): Reason | undefined {
   if (!fits) {
     return { severity: "warning", words: say("ceiling.limit") };

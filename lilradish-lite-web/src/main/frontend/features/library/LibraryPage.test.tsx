@@ -11,9 +11,11 @@ import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
+import { RequireGroup } from "../../app/standing/RequireGroup";
 import { StandingProvider } from "../../app/standing/StandingContext";
 import { theme } from "../../lib/theme/theme";
 import { requestsTo, serving, type Reply } from "../../testutil/answering";
+import { namingGroupsByKeyAlone } from "../../testutil/groupAddresses";
 import { answered, inGroup } from "../../testutil/standingRead";
 import { deferred } from "../../testutil/deferred";
 import { justMade } from "./entryAddress";
@@ -24,13 +26,16 @@ const GROUP = "00000003-0000-4000-8000-000000000b41";
 
 const OTHER_GROUP = "00000003-0000-4000-8000-000000000b43";
 
-const PAGE = `/groups/${GROUP}/questions`;
+const KEY = "CLAIMS";
+
+const PAGE = `/groups/${KEY}/questions`;
 
 const LIST = `/api/groups/${GROUP}/questions`;
 
 const WRITES = ["read_membership", "author_entry"];
 
 const TRIAGE = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000b41",
   name: "Triage",
   purpose: "Sorts claims.",
@@ -40,6 +45,7 @@ const TRIAGE = {
 };
 
 const HANDLE = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000b42",
   name: "Handle",
   submitted: false,
@@ -67,18 +73,23 @@ function opening(
   const router = createMemoryRouter(
     [
       {
-        path: "/groups/:groupId/questions",
-        element: <LibraryPage of={LIBRARY_KINDS.question} />,
+        path: "/groups/:group/questions",
+        element: (
+          <RequireGroup reachedBy={LIBRARY_KINDS.question.item.reachedBy}>
+            <LibraryPage of={LIBRARY_KINDS.question} />
+          </RequireGroup>
+        ),
       },
-      { path: "/groups/:groupId/questions/:entryId", element: <p>Entry</p> },
+      { path: "/groups/:group/questions/:entryId", element: <p>Entry</p> },
     ],
     { initialEntries: [address] },
   );
+  namingGroupsByKeyAlone(router, [GROUP, OTHER_GROUP]);
   const readAgain = vi.fn();
   const standing = answered(
     [],
     [
-      inGroup(GROUP, "CLAIMS", "Claims", permissions),
+      inGroup(GROUP, KEY, "Claims", permissions),
       ...(otherGroup
         ? [inGroup(OTHER_GROUP, "SAMPLE", "Demo Sample", permissions)]
         : []),
@@ -212,7 +223,7 @@ describe("LibraryPage", () => {
               entryId: "00000006-0000-4000-8000-000000000b49",
               kind: "question",
               name: "Intake",
-              acts: [],
+              stateActs: [],
               versions: [],
             }),
             201,
@@ -236,7 +247,7 @@ describe("LibraryPage", () => {
   });
 
   it("does not open an entry made in the previous group under the group now shown", async () => {
-    const otherPage = `/groups/${OTHER_GROUP}/questions`;
+    const otherPage = "/groups/SAMPLE/questions";
     const otherList = `/api/groups/${OTHER_GROUP}/questions`;
     const { go, at, state } = opening(PAGE, {
       otherGroup: true,
@@ -277,7 +288,7 @@ describe("LibraryPage", () => {
             entryId: "00000006-0000-4000-8000-000000000b49",
             kind: "question",
             name: "Demo Sample",
-            acts: [],
+            stateActs: [],
             versions: [],
           }),
           { status: 201, headers: { "Content-Type": "application/json" } },

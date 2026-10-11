@@ -9,8 +9,7 @@ import { atTerm } from "../{termId}";
 export type TermWay = "up" | "down";
 
 /**
- * A term swapped with the one before it or after it, over the revision the
- * page read; answered with the list as it then reads.
+ * Swaps with the adjacent term, guarded by the revision read; returns the list as it then reads.
  */
 export function moveTerm(
   groupId: string,

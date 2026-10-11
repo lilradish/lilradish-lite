@@ -14,8 +14,13 @@ const REPLACED = {
   entryId: "00000006-0000-4000-8000-000000000aa2",
   kind: "reference_list",
   name: "Regions",
-  pinned: { versionId: "00000007-0000-4000-8000-000000000aa2", number: 1 },
+  pinned: {
+    versionName: null,
+    versionId: "00000007-0000-4000-8000-000000000aa2",
+    number: 1,
+  },
   newestInService: {
+    versionName: null,
     versionId: "00000007-0000-4000-8000-000000000aa3",
     number: 3,
   },
@@ -25,7 +30,11 @@ const UNREPLACED = {
   entryId: "00000006-0000-4000-8000-000000000aa4",
   kind: "question",
   name: "Triage",
-  pinned: { versionId: "00000007-0000-4000-8000-000000000aa4", number: 2 },
+  pinned: {
+    versionName: null,
+    versionId: "00000007-0000-4000-8000-000000000aa4",
+    number: 2,
+  },
 };
 
 function pinsRetired(pins: unknown) {
@@ -198,6 +207,55 @@ describe("contentProblemTotalIn", () => {
 });
 
 describe("contentProblemsIn", () => {
+  it.each(["", "a.b", "items[0]", " name ", "<b>", "\u540d\u524d"])(
+    "reads the raw unknown instruction reference %j only at its instruction place",
+    (name) => {
+      const named = {
+        code: "instruction_names_unknown",
+        part: "instruction",
+        name,
+      };
+      expect(contentProblemsIn(contentRefused([named]))).toEqual([named]);
+      for (const malformed of [
+        { ...named, name: undefined },
+        { ...named, name: 7 },
+        { ...named, part: "drawing" },
+        { ...named, fieldId: AT_FIELD.fieldId },
+      ]) {
+        expect(contentProblemsIn(contentRefused([malformed]))).toBeNull();
+      }
+    },
+  );
+  it.each([undefined, "0000000c-0000-4000-8000-000000000aa1"])(
+    "reads the named collision of a new or stored step %s",
+    (stepId) => {
+      const named = {
+        code: "step_label_repeated",
+        part: "steps",
+        name: "確認する",
+        ...(stepId === undefined ? {} : { stepId }),
+      };
+
+      expect(contentProblemsIn(contentRefused([named]))).toEqual([named]);
+      expect(
+        contentProblemsIn(contentRefused([{ ...named, stepId: null }])),
+      ).toBeNull();
+      expect(
+        contentProblemsIn(contentRefused([{ ...named, name: undefined }])),
+      ).toBeNull();
+      expect(
+        contentProblemsIn(contentRefused([{ ...named, name: "" }])),
+      ).toBeNull();
+      expect(
+        contentProblemsIn(
+          contentRefused([{ ...named, fieldId: AT_FIELD.fieldId }]),
+        ),
+      ).toBeNull();
+      expect(
+        contentProblemsIn(contentRefused([{ ...named, extra: true }])),
+      ).toBeNull();
+    },
+  );
   it("reads an unknown input name at the drawing and refuses a malformed name", () => {
     const named = {
       code: "drawing_names_unknown",
@@ -519,7 +577,7 @@ describe("makeDraft", () => {
         entryId: ENTRY,
         kind: "question",
         name: "Triage",
-        acts: [],
+        stateActs: [],
         versions: [],
       }),
       201,

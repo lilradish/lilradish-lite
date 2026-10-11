@@ -12,6 +12,7 @@ const READ = {
   number: 1,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c21",
     name: "Handle a claim",
     version: 1,
@@ -23,7 +24,7 @@ const READ = {
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["stop"],
+  stateActs: ["stop"],
 };
 
 describe.each([
@@ -39,6 +40,6 @@ describe.each([
     expect(address).toBe(`/api/groups/${GROUP}/runs/${RUN}/stop`);
     expect(init?.method).toBe(method);
     expect(init?.body).toBeUndefined();
-    expect(read).toEqual({ ...READ, acts: new Set(["stop"]) });
+    expect(read).toEqual({ ...READ, stateActs: new Set(["stop"]) });
   });
 });

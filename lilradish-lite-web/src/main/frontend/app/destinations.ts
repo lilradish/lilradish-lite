@@ -28,13 +28,8 @@ interface Destination {
   readonly label: MessageId;
   readonly icon: typeof SvgIcon;
   /**
-   * What the server has to let this reader do before the place is worth
-   * offering. Required, because an entry gating on nothing is offered to
-   * everyone and so is one row that survives the emptying below — which tells a
-   * reader holding nothing that there is a section here they are not in.
-   *
-   * Which act a screen needs is written on its declaration rather than in a
-   * table beside it.
+   * Each page declares its required act. An ungated entry survives emptying
+   * and discloses its section to a reader with no grants.
    */
   readonly act: SurfaceAct;
 }
@@ -74,16 +69,9 @@ export const MEASUREMENTS_DESTINATION = {
 } as const satisfies Destination;
 
 /**
- * Everywhere a person can go in the estate, and nothing else.
- *
- * Every entry is gated, which is what makes a reader holding nothing see no
- * group heading rather than an empty one — and so learn nothing about what this
- * system would have offered somebody else. The start page is deliberately not
- * among them: it is where a reader already is, and an entry leading there would
- * be the one row that survives the emptying.
- *
- * Labels are message ids, so the words sit with every other sentence while the
- * grouping and the order stay here, where they are structure rather than text.
+ * Gating every entry hides even the heading from readers with no grants.
+ * The start page is excluded: they are already there, and its entry would survive emptying.
+ * Labels are message ids; grouping and order stay here so translation cannot change structure.
  */
 export const DESTINATION_GROUPS: readonly DestinationGroup[] = [
   {
@@ -104,7 +92,6 @@ export const MY_WORK = {
   icon: Inbox,
 } as const satisfies Omit<Destination, "act">;
 
-/** What the address of every page of a group begins with, before the group. */
 export const IN_A_GROUP = "/groups";
 
 export interface GroupItem {
@@ -116,7 +103,6 @@ export interface GroupItem {
   readonly reachedBy: GroupPermission | null;
 }
 
-/** Who is in the group and what each of them holds there. */
 export const MEMBERS_ITEM = {
   segment: "members",
   label: "destination.members",
@@ -124,7 +110,7 @@ export const MEMBERS_ITEM = {
   reachedBy: "read_membership",
 } as const satisfies GroupItem;
 
-/** The group's library, one page per kind of entry, each at the segment its entries are addressed under. */
+/** Each library page sits at the segment its entries are addressed under. */
 export const WORKFLOWS_ITEM = {
   segment: SEGMENTS.workflow,
   label: "destination.workflows",
@@ -146,7 +132,7 @@ export const REFERENCE_LISTS_ITEM = {
   reachedBy: null,
 } as const satisfies GroupItem;
 
-/** What the group has running, each run opening as a page of its own under it. */
+/** Each run opens as a page of its own under it. */
 export const WORK_ITEM = {
   segment: "work",
   label: "destination.work",
@@ -166,12 +152,40 @@ export const GROUP_ITEMS = [
 /** A permission some group page is reached by: a rule a refusal has words for. */
 export type GroupGate = NonNullable<(typeof GROUP_ITEMS)[number]["reachedBy"]>;
 
-/** One page of one group. The identifier is one the server sent, escaped all the same. */
-export function groupPage(groupId: string, segment: string): string {
-  return `${IN_A_GROUP}/${encodeURIComponent(groupId)}/${segment}`;
+/** One page of one group, named by its key: what a reader can say and write down. Escaped all the same. */
+export function groupPage(group: GroupStanding, segment: string): string {
+  return `${IN_A_GROUP}/${encodeURIComponent(group.key)}/${segment}`;
 }
 
-/** Whether the reader's grants in the group reach the page. */
+/**
+ * The reader's own group an address names, by its key in any case or by its identifier; none for any
+ * other, so a group they are not in reads exactly as one that does not exist.
+ */
+export function groupNamed(
+  groups: readonly GroupStanding[],
+  named: string | undefined,
+): GroupStanding | undefined {
+  if (named === undefined) {
+    return undefined;
+  }
+  // English letters alone: `toUpperCase` on the whole would let a letter outside them pass as the capital it folds to.
+  const folded = named.replace(/[a-z]/g, (letter) => letter.toUpperCase());
+  return groups.find((each) => each.key === folded || each.groupId === named);
+}
+
+const GROUP_SEGMENT = IN_A_GROUP.split("/").length;
+
+/** Whatever follows the group in the path is kept as written. */
+export function groupAddressed(group: GroupStanding, pathname: string): string {
+  return groupPage(
+    group,
+    pathname
+      .split("/")
+      .slice(GROUP_SEGMENT + 1)
+      .join("/"),
+  );
+}
+
 export function opensIn(group: GroupStanding, item: GroupItem): boolean {
   return item.reachedBy === null || mayIn(group, item.reachedBy);
 }

@@ -8,6 +8,7 @@ import { theme } from "../../lib/theme/theme";
 import { BY_NAME, LIBRARY_SORTABLE, libraryColumns } from "./libraryColumns";
 
 const WAITING: EntryRow = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000b01",
   name: "Triage",
   purpose: "Sorts claims.",
@@ -17,6 +18,7 @@ const WAITING: EntryRow = {
 };
 
 const STOPPED: EntryRow = {
+  versionName: null,
   entryId: "00000006-0000-4000-8000-000000000b02",
   name: "Handle",
   submitted: false,
@@ -84,10 +86,10 @@ describe("libraryColumns", () => {
     ).toEqual(["Triage", "Sorts claims."]);
   });
 
-  it("shows an em dash where neither status holds", () => {
+  it("leaves the status cell empty where neither status holds", () => {
     const cells = cellsOf({ ...STOPPED, stopped: false });
 
-    expect(cells[2]).toHaveTextContent("—");
+    expect(cells[2]).toBeEmptyDOMElement();
     expect(
       within(cells[2]!).queryByText(/Waiting for approval|Stopped/),
     ).toBeNull();

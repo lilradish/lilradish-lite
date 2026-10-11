@@ -1,10 +1,10 @@
 import type { PoolPerson, PoolSortColumn } from "../../api/pool/people";
 import { say } from "../../i18n/app";
+import { readersIntl } from "../../i18n/intl";
 import type { Ordering } from "../../lib/collection/ordering";
 import { heldInOrder, roleSaid } from "./estateRoles";
 import { joinedInCell } from "./wordLists";
 
-/** Every column the pool can be sorted by, closed over the union in both directions. */
 export const POOL_SORTABLE = {
   userId: true,
   displayName: true,
@@ -41,7 +41,7 @@ export function poolColumns() {
     },
     {
       label: say("person.groups"),
-      cell: (person: PoolPerson) => person.groupCount,
+      cell: (person: PoolPerson) => readersIntl.formatNumber(person.groupCount),
       sortKey: "groupCount",
       numeric: true,
     },

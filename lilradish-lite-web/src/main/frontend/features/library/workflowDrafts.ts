@@ -4,14 +4,13 @@ import type {
   PinnedList,
   TextLines,
 } from "../../api/declaration";
+import type { VersionDetail } from "../../api/groups/{groupId}/versions/{versionId}";
 import type { ContentProblem } from "../../api/groups/{groupId}/{kind}/{entryId}/versions";
 import type {
   Binding,
   BindingSource,
   OfferedCodeStep,
-  OfferedSearchWay,
   SearchField,
-  SearchPart,
   SearchStanding,
   Step,
   WorkflowVersion,
@@ -27,14 +26,13 @@ import type {
   SentChoice,
   SentProducer,
   SentRuns,
-  SentSearchPart,
   SentStep,
 } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
 import { say, type MessageId } from "../../i18n/app";
 import {
   fieldNameFits,
+  nameFits,
   oneLineWithin,
-  proseCharactersRefused,
 } from "../../lib/text/legibility";
 import { problemWords } from "./ContentProblems";
 import {
@@ -73,10 +71,7 @@ const JUDGED_HERE: ReadonlySet<string> = new Set([
   "output_unbound",
 ]);
 
-/**
- * Where a binding reads: nothing chosen yet, what the workflow takes, a step by its row, or a constant as typed.
- * A step is named by its row and not its place, so moving it keeps what reads it.
- */
+/** A step is named by its row and not its place, so moving it keeps what reads it. */
 export type SourceDraft =
   | { readonly from: "none" }
   | { readonly from: "input"; readonly path: string }
@@ -107,18 +102,10 @@ export interface CaseDraft {
   readonly bindings: readonly BindingDraft[];
 }
 
-export type SearchPartDraft =
-  | { readonly key: string; readonly text: string }
-  | {
-      readonly key: string;
-      readonly source: SourceDraft;
-      readonly partId?: string;
-    };
-
 export interface SearchDraft {
   readonly kind: "search";
   readonly searchWay: string;
-  readonly question: readonly SearchPartDraft[];
+  readonly version: string;
   readonly standings: Record<SearchField, SearchStanding | "">;
 }
 
@@ -144,6 +131,7 @@ export interface StepDraft {
   /** The key the server read it under, sent back so what it pins is kept; none for a step added. */
   readonly stepId: string | null;
   readonly name: string;
+  readonly label: string;
   readonly runs: RunsDraft;
   readonly producer: "" | "person" | "model" | "code";
   readonly model: string;
@@ -161,9 +149,52 @@ export interface FlowDraft {
   readonly outputs: readonly BindingDraft[];
 }
 
-/** What a field is, as far as whether a value fits it and whether it is always there ask. */
+/** Details remain owned by the references still held in this draft, including fields kept while their kind is changed. */
+export function referencedFieldDetails(
+  fields: readonly DraftField[],
+  details: Map<string, VersionDetail>,
+): Map<string, VersionDetail> {
+  const referenced = new Set<string>();
+  collectFieldReferences(fields, referenced);
+  if ([...details.keys()].every((id) => referenced.has(id))) return details;
+  return new Map([...details].filter(([id]) => referenced.has(id)));
+}
+
+function collectFieldReferences(
+  fields: readonly DraftField[],
+  referenced: Set<string>,
+) {
+  for (const field of fields) {
+    if (field.list !== "") referenced.add(field.list);
+    collectFieldReferences(field.fields, referenced);
+  }
+}
+
+export function referencedVersionDetails(
+  flow: FlowDraft,
+  details: Map<string, VersionDetail>,
+): Map<string, VersionDetail> {
+  const referenced = new Set<string>();
+  for (const step of flow.steps) {
+    const runs = step.runs;
+    if (
+      runs.kind === "question" ||
+      runs.kind === "workflow" ||
+      runs.kind === "search"
+    ) {
+      referenced.add(runs.version);
+    } else if (runs.kind === "route") {
+      for (const routeCase of runs.cases) referenced.add(routeCase.workflow);
+      collectFieldReferences(runs.gives, referenced);
+    }
+  }
+  if ([...details.keys()].every((id) => referenced.has(id))) return details;
+  return new Map([...details].filter(([id]) => referenced.has(id)));
+}
+
 export interface Shape {
   readonly name: string;
+  readonly label?: string;
   readonly kind: FieldKind;
   readonly many: boolean;
   readonly mustBeGiven: boolean;
@@ -180,18 +211,22 @@ export interface Shape {
 export interface Named {
   readonly name: string;
   readonly number: number;
+  readonly versionName: string | null;
   readonly takes: readonly DeclaredField[];
   readonly gives: readonly DeclaredField[];
   /** The version's own standing and the newest of its entry in service, where it is one a step pins already. */
   readonly pinned?: PinnedList;
 }
 
-/** A place a value may be read from: what the workflow takes, or a step by its row, with what it declares. */
 export interface SourceOffered {
   /** "input", or the step's row. */
   readonly value: string;
   readonly words: string;
-  readonly step?: { readonly position: number; readonly name: string };
+  readonly step?: {
+    readonly position: number;
+    readonly name: string;
+    readonly label: string;
+  };
   /** What it declares, none where that is not known here. */
   readonly fields: readonly Shape[] | undefined;
 }
@@ -203,18 +238,18 @@ export interface Reached {
   readonly given: boolean;
 }
 
-/** A field a binding may fill, how deep it sits, what fills it, and what does not hold of it. */
 export interface TargetRow {
   readonly path: string;
+  readonly label?: string;
   readonly depth: number;
   readonly target: Shape;
   readonly binding: BindingDraft | undefined;
   readonly flags: readonly MessageId[];
 }
 
-/** What keeps a flow from being sent, and the row it is in. */
 interface FlowHeld {
   readonly why: MessageId;
+  readonly name?: string;
   /** The step's row, where it is one step's. */
   readonly step?: string;
 }
@@ -254,6 +289,7 @@ function stepDraftOf(step: Step, keys: readonly string[]): StepDraft {
     key: step.stepId,
     stepId: step.stepId,
     name: step.name,
+    label: step.label ?? "",
     runs:
       runs === undefined
         ? { kind: "none" }
@@ -261,15 +297,7 @@ function stepDraftOf(step: Step, keys: readonly string[]): StepDraft {
           ? {
               kind: "search",
               searchWay: runs.searchWay ?? "",
-              question: (runs.question ?? []).map((part: SearchPart, index) =>
-                "text" in part
-                  ? { key: `text-${index}`, text: part.text }
-                  : {
-                      key: part.partId,
-                      partId: part.partId,
-                      source: sourceDraftOf(part.from, keys, undefined),
-                    },
-              ),
+              version: runs.version?.versionId ?? "",
               standings: {
                 title: runs.standings?.title ?? "",
                 body: runs.standings?.body ?? "",
@@ -342,10 +370,10 @@ function sourceDraftOf(
   };
 }
 
-/** A field read, as whether a value fits it asks. */
 function shapeOf(field: DeclaredField): Shape {
   return {
     name: field.name,
+    ...(field.label === undefined ? {} : { label: field.label }),
     kind: field.kind,
     many: field.many,
     mustBeGiven: field.mustBeGiven,
@@ -365,7 +393,7 @@ function shapeOf(field: DeclaredField): Shape {
   };
 }
 
-/** A field being typed, as whether a value fits it asks; a limit not a whole number yet is none. */
+/** A limit not a whole number yet is none. */
 function draftShapeOf(draft: DraftField): Shape {
   const most = WHOLE.test(draft.most) ? Number(draft.most) : undefined;
   const longest = WHOLE.test(draft.longest) ? Number(draft.longest) : undefined;
@@ -373,6 +401,7 @@ function draftShapeOf(draft: DraftField): Shape {
     fileBytesOf(draft.fileSize, draft.fileSizeUnit) ?? undefined;
   return {
     name: draft.name,
+    ...(draft.label === "" ? {} : { label: draft.label }),
     kind: draft.kind,
     many: draft.many,
     mustBeGiven: draft.mustBeGiven,
@@ -392,10 +421,7 @@ function draftShapeOf(draft: DraftField): Shape {
   };
 }
 
-/**
- * Whether every value {@code source} may hold is one {@code target} takes, as the server judges it: the same kind,
- * one or many alike, nothing longer, more numerous or from another list, and the same names held.
- */
+/** Whether every value `source` may hold is one `target` takes, as the server judges it. */
 export function fits(source: Shape, target: Shape): boolean {
   if (source.kind !== target.kind || source.many !== target.many) {
     return false;
@@ -498,18 +524,13 @@ export function namedVersions(workflow: WorkflowVersion): Map<string, Named> {
       named.set(pinned.versionId, {
         name: pinned.name,
         number: pinned.number,
+        versionName: pinned.versionName,
         takes: takes ?? [],
         gives: gives ?? [],
         pinned,
       });
     }
   };
-  for (const offered of [
-    ...workflow.offered.questions,
-    ...workflow.offered.workflows,
-  ]) {
-    named.set(offered.versionId, offered);
-  }
   for (const step of workflow.steps) {
     add(step.runs?.version, step.runs?.takes, step.runs?.gives);
     for (const routeCase of step.runs?.cases ?? []) {
@@ -531,8 +552,8 @@ export function takesOf(
   const runs = step.runs;
   switch (runs.kind) {
     case "route":
-    case "search":
       return [];
+    case "search":
     case "question":
     case "workflow":
       return named.get(runs.version)?.takes;
@@ -551,7 +572,6 @@ export function givenBy(
   step: StepDraft,
   named: ReadonlyMap<string, Named>,
   codeSteps: readonly OfferedCodeStep[],
-  searchWays: readonly OfferedSearchWay[],
 ): readonly Shape[] | undefined {
   const runs = step.runs;
   switch (runs.kind) {
@@ -565,9 +585,7 @@ export function givenBy(
         .find((offered) => offered.name === runs.codeStep)
         ?.gives.map(shapeOf);
     case "search":
-      return searchWays
-        .find((offered) => offered.name === runs.searchWay)
-        ?.gives.map(shapeOf);
+      return named.get(runs.version)?.gives.map(shapeOf);
     case "none":
       return undefined;
   }
@@ -587,12 +605,7 @@ export function sourcesFor(
 ): SourceOffered[] {
   const fieldsOf = (each: StepDraft) => {
     if (givenCache?.has(each.key)) return givenCache.get(each.key);
-    const fields = givenBy(
-      each,
-      named,
-      workflow.offered.codeSteps,
-      workflow.offered.searchWays,
-    );
+    const fields = givenBy(each, named, workflow.offered.codeSteps);
     givenCache?.set(each.key, fields);
     return fields;
   };
@@ -603,11 +616,6 @@ export function sourcesFor(
     }
   };
   step?.bindings.forEach((binding) => readBy(binding.source));
-  if (step?.runs.kind === "search") {
-    step.runs.question.forEach((part) => {
-      if ("source" in part) readBy(part.source);
-    });
-  }
   if (step?.runs.kind === "route") {
     readBy(step.runs.discriminator);
     step.runs.cases.forEach((routeCase) =>
@@ -632,88 +640,94 @@ export function sourcesFor(
       )
       .map(({ each, index }) => ({
         value: each.key,
-        step: { position: index + 1, name: each.name },
+        step: { position: index + 1, name: each.name, label: each.label },
         words: say("workflow.fromStep", {
           position: index + 1,
           name:
-            each.name === ""
-              ? say("workflow.unnamed", { position: index + 1 })
-              : each.name,
+            each.label !== ""
+              ? `${each.label} (${each.name})`
+              : each.name === ""
+                ? say("workflow.unnamed", { position: index + 1 })
+                : each.name,
         }),
         fields: fieldsOf(each),
       })),
   ];
 }
 
-/** The field a source reads, where it is a place and the page knows what that place declares. */
-function reachedBy(
-  source: SourceDraft,
-  sources: readonly SourceOffered[],
-): Reached | undefined {
-  if (source.from !== "input" && source.from !== "step") {
-    return undefined;
-  }
-  const place = source.from === "input" ? "input" : source.stepKey;
-  const fields = sources.find((each) => each.value === place)?.fields;
-  return fields === undefined
-    ? undefined
-    : pointers(fields).find((pointer) => pointer.path === source.path);
-}
-
-/**
- * What to say against one binding: that it reads a step not before it, what the server said of it as read, and
- * what does not fit or may be empty where what it fills must be given.
- */
-export function flagsOf(
-  binding: BindingDraft,
-  target: Shape,
+/** Required ancestors can change without a leaf's path changing, so paths must not outlive this validation batch. */
+export function bindingFlagsFor(
   flow: FlowDraft,
   position: number,
-  problems: readonly ContentProblem[],
   sources: readonly SourceOffered[],
-): MessageId[] {
-  const reached = reachedBy(binding.source, sources);
-  const source = binding.source;
-  const offered =
-    source.from === "input" || source.from === "step"
-      ? sources.find(
-          (each) =>
-            each.value === (source.from === "input" ? "input" : source.stepKey),
-        )
-      : undefined;
-  const missingSource =
-    (source.from === "step" &&
-      !flow.steps.some((step) => step.key === source.stepKey)) ||
-    ((source.from === "input" || source.from === "step") &&
-      source.path !== "" &&
+): (
+  binding: BindingDraft,
+  target: Shape,
+  problems: readonly ContentProblem[],
+) => MessageId[] {
+  const places = new Map<string, SourceOffered>();
+  for (const source of sources) {
+    if (!places.has(source.value)) places.set(source.value, source);
+  }
+  const pathsByPlace = new Map<SourceOffered, Map<string, Reached>>();
+  return (binding, target, problems) => {
+    const source = binding.source;
+    const place =
+      source.from === "input"
+        ? "input"
+        : source.from === "step"
+          ? source.stepKey
+          : undefined;
+    const offered = place === undefined ? undefined : places.get(place);
+    let reached: Reached | undefined;
+    if (
       offered?.fields !== undefined &&
-      reached === undefined);
-  const said = problems
-    .filter(
-      (problem) =>
-        binding.bindingId !== undefined &&
-        problem.bindingId === binding.bindingId,
-    )
-    .map(problemWords);
-  return [
-    ...(pointsForward(flow, position, binding.source)
-      ? (["workflow.pointsForward"] as const)
-      : []),
-    ...said,
-    ...(missingSource && !said.includes("contentProblem.source_unknown")
-      ? (["contentProblem.source_unknown"] as const)
-      : []),
-    ...(reached !== undefined &&
-    !fits(reached.field, target) &&
-    !said.includes("contentProblem.source_does_not_fit")
-      ? (["contentProblem.source_does_not_fit"] as const)
-      : []),
-    ...(reached !== undefined &&
-    ((target.mustBeGiven && !reached.given) ||
-      !givenWithin(reached.field, target))
-      ? (["contentProblem.source_may_be_empty"] as const)
-      : []),
-  ];
+      (source.from === "input" || source.from === "step")
+    ) {
+      let paths = pathsByPlace.get(offered);
+      if (paths === undefined) {
+        paths = new Map();
+        for (const pointer of pointers(offered.fields)) {
+          if (!paths.has(pointer.path)) paths.set(pointer.path, pointer);
+        }
+        pathsByPlace.set(offered, paths);
+      }
+      reached = paths.get(source.path);
+    }
+    const missingSource =
+      (source.from === "step" &&
+        !flow.steps.some((step) => step.key === source.stepKey)) ||
+      ((source.from === "input" || source.from === "step") &&
+        source.path !== "" &&
+        offered?.fields !== undefined &&
+        reached === undefined);
+    const said = problems
+      .filter(
+        (problem) =>
+          binding.bindingId !== undefined &&
+          problem.bindingId === binding.bindingId,
+      )
+      .map(problemWords);
+    return [
+      ...(pointsForward(flow, position, binding.source)
+        ? (["workflow.pointsForward"] as const)
+        : []),
+      ...said,
+      ...(missingSource && !said.includes("contentProblem.source_unknown")
+        ? (["contentProblem.source_unknown"] as const)
+        : []),
+      ...(reached !== undefined &&
+      !fits(reached.field, target) &&
+      !said.includes("contentProblem.source_does_not_fit")
+        ? (["contentProblem.source_does_not_fit"] as const)
+        : []),
+      ...(reached !== undefined &&
+      ((target.mustBeGiven && !reached.given) ||
+        !givenWithin(reached.field, target))
+        ? (["contentProblem.source_may_be_empty"] as const)
+        : []),
+    ];
+  };
 }
 
 /**
@@ -769,6 +783,7 @@ export function targetRows(
       const unbound = judging && !whole.has(path) && !(opens && held.has(path));
       rows.push({
         path,
+        ...(field.label === undefined ? {} : { label: field.label }),
         depth,
         target,
         binding,
@@ -822,24 +837,17 @@ export function termsChosenBy(
       ? workflow.takes.map(shapeOf)
       : read === undefined
         ? undefined
-        : givenBy(
-            read,
-            named,
-            workflow.offered.codeSteps,
-            workflow.offered.searchWays,
-          );
+        : givenBy(read, named, workflow.offered.codeSteps);
   const field = level === undefined ? undefined : fieldAt(level, source.path);
   return field?.kind === "term" && field.list !== undefined
     ? workflow.terms.get(field.list)
     : undefined;
 }
 
-/** How many cases a route may hold: one on each term its list offers, and a fallback. */
 export function mostCases(terms: readonly string[] | undefined): number {
   return (terms?.length ?? MOST_TERMS) + 1;
 }
 
-/** The flow with the step at {@code index} swapped with the one {@code by} rows from it; none past either end. */
 export function movedStep(
   flow: FlowDraft,
   index: number,
@@ -872,27 +880,16 @@ export function removedStep(flow: FlowDraft, index: number): FlowDraft {
         ...step,
         bindings: step.bindings.map(unbound),
         runs:
-          step.runs.kind === "search"
+          step.runs.kind === "route"
             ? {
                 ...step.runs,
-                question: step.runs.question.map((part) =>
-                  "source" in part &&
-                  part.source.from === "step" &&
-                  part.source.stepKey === gone
-                    ? { key: part.key, source: { from: "none" } }
-                    : part,
-                ),
+                discriminator: unread(step.runs.discriminator),
+                cases: step.runs.cases.map((routeCase) => ({
+                  ...routeCase,
+                  bindings: routeCase.bindings.map(unbound),
+                })),
               }
-            : step.runs.kind === "route"
-              ? {
-                  ...step.runs,
-                  discriminator: unread(step.runs.discriminator),
-                  cases: step.runs.cases.map((routeCase) => ({
-                    ...routeCase,
-                    bindings: routeCase.bindings.map(unbound),
-                  })),
-                }
-              : step.runs,
+            : step.runs,
       })),
     outputs: flow.outputs.map(unbound),
   };
@@ -904,12 +901,16 @@ export function tookVersion(
   versionId: string,
   named: ReadonlyMap<string, Named>,
 ): StepDraft {
-  if (step.runs.kind !== "question" && step.runs.kind !== "workflow") {
+  if (
+    step.runs.kind !== "question" &&
+    step.runs.kind !== "workflow" &&
+    step.runs.kind !== "search"
+  ) {
     return step;
   }
   return {
     ...step,
-    runs: { kind: step.runs.kind, version: versionId },
+    runs: { ...step.runs, version: versionId },
     bindings: stillDeclared(step.bindings, versionId, named),
   };
 }
@@ -952,6 +953,7 @@ export function freshStep(key: string): StepDraft {
     key,
     stepId: null,
     name: "",
+    label: "",
     runs: { kind: "none" },
     producer: "",
     model: "",
@@ -1049,11 +1051,6 @@ function stepReads(step: StepDraft): ReadonlySet<string> {
     if (source.from === "step") reads.add(source.stepKey);
   };
   step.bindings.forEach((binding) => take(binding.source));
-  if (step.runs.kind === "search") {
-    step.runs.question.forEach((part) => {
-      if ("source" in part) take(part.source);
-    });
-  }
   if (step.runs.kind === "route") {
     take(step.runs.discriminator);
     step.runs.cases.forEach((routeCase) =>
@@ -1070,7 +1067,6 @@ function compileFlow(
   previous: CompiledFlow | null,
 ): { readonly sent: SentFlow; readonly cache: CompiledFlow } {
   const places = new Map(flow.steps.map((step, index) => [step.key, index]));
-  const givenCache = new Map<string, readonly Shape[] | undefined>();
   const held: FlowHeld[] = [];
   let stepHeld: FlowHeld[] | null = null;
   const hold = (why: MessageId, step?: string) => {
@@ -1162,6 +1158,9 @@ function compileFlow(
     if (!fieldNameFits(step.name)) {
       hold("refusal.STEP_NAME_UNUSABLE", step.key);
     }
+    if (step.label !== "" && !nameFits(step.label)) {
+      hold("refusal.STEP_LABEL_UNUSABLE", step.key);
+    }
     const produces =
       step.runs.kind === "question" ||
       step.runs.kind === "code_step" ||
@@ -1172,16 +1171,8 @@ function compileFlow(
     if (produces && step.reviewer === "model" && step.reviewerModel === "") {
       hold("workflow.reviewerUnchosen", step.key);
     }
-    const runs = runsOf(
-      step,
-      position,
-      flow,
-      workflow,
-      named,
-      places,
-      givenCache,
-      hold,
-      (bindings, takes) => bindingsOf(bindings, takes, undefined, step.key),
+    const runs = runsOf(step, flow, workflow, named, hold, (bindings, takes) =>
+      bindingsOf(bindings, takes, undefined, step.key),
     );
     const discriminator =
       step.runs.kind === "route"
@@ -1190,6 +1181,7 @@ function compileFlow(
     const sent: SentStep = {
       stepId: step.stepId,
       name: step.name,
+      label: step.label === "" ? null : step.label,
       runs:
         runs !== null && runs.kind === "route"
           ? { ...runs, discriminator }
@@ -1218,6 +1210,18 @@ function compileFlow(
     return compiled;
   });
   const steps = compiledSteps.map((step) => step.sent);
+  // Other rows may have changed a readable name while this row's compiled answer was reused.
+  const names = stepsByReadableName(flow.steps);
+  for (const step of flow.steps) {
+    const name = clashingName(step, names);
+    if (name !== undefined) {
+      held.push({
+        why: "contentProblem.step_label_repeated",
+        step: step.key,
+        name,
+      });
+    }
+  }
   const outputs = bindingsOf(
     flow.outputs,
     workflow.gives.map(shapeOf),
@@ -1235,14 +1239,51 @@ function compileFlow(
   };
 }
 
+export function labelClashOf(
+  step: StepDraft,
+  steps: readonly StepDraft[],
+): string | undefined {
+  return clashingName(step, stepsByReadableName(steps));
+}
+
+function stepsByReadableName(
+  steps: readonly StepDraft[],
+): Map<string, StepDraft[]> {
+  const names = new Map<string, StepDraft[]>();
+  for (const step of steps) {
+    for (const name of [step.name.replaceAll("_", " "), step.label].filter(
+      (name) => name !== "",
+    )) {
+      const folded = foldedForPrecheck(name);
+      const existing = names.get(folded);
+      if (existing === undefined) names.set(folded, [step]);
+      else existing.push(step);
+    }
+  }
+  return names;
+}
+
+function clashingName(
+  step: StepDraft,
+  names: ReadonlyMap<string, readonly StepDraft[]>,
+): string | undefined {
+  if (step.label === "") return undefined;
+  const folded = foldedForPrecheck(step.label);
+  const other = names.get(folded)?.find((each) => each.key !== step.key);
+  return other === undefined
+    ? undefined
+    : other.label || other.name.replaceAll("_", " ");
+}
+
+function foldedForPrecheck(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 function runsOf(
   step: StepDraft,
-  position: number,
   flow: FlowDraft,
   workflow: WorkflowVersion,
   named: ReadonlyMap<string, Named>,
-  places: ReadonlyMap<string, number>,
-  givenCache: Map<string, readonly Shape[] | undefined>,
   hold: (why: MessageId, step?: string) => void,
   bindingsOf: (
     bindings: readonly BindingDraft[],
@@ -1258,74 +1299,11 @@ function runsOf(
       return runs.version === ""
         ? null
         : { kind: runs.kind, version: runs.version };
-    case "search": {
-      if (runs.question.length > 256) {
-        hold("workflow.searchPartsFull", step.key);
-      }
-      const sources = runs.question.some(
-        (part) => "source" in part && part.source.from !== "constant",
-      )
-        ? sourcesFor(flow, position, workflow, named, step, givenCache)
-        : [];
-      const fieldsBySource = new Map(
-        sources.map((source) => [source.value, source.fields]),
-      );
-      const pointersBySource = new Map<string, Map<string, Reached>>();
-      const reachedFrom = (source: SourceDraft): Reached | undefined => {
-        if (source.from !== "input" && source.from !== "step") return undefined;
-        const place = source.from === "input" ? "input" : source.stepKey;
-        let paths = pointersBySource.get(place);
-        if (paths === undefined) {
-          const fields = fieldsBySource.get(place);
-          if (fields === undefined) return undefined;
-          paths = new Map(
-            pointers(fields).map((pointer) => [pointer.path, pointer]),
-          );
-          pointersBySource.set(place, paths);
-        }
-        return paths.get(source.path);
-      };
-      const question = runs.question.flatMap((part): SentSearchPart[] => {
-        if ("text" in part) {
-          const refused = searchTextRefused(part.text);
-          if (refused !== null) hold(refused, step.key);
-          return [{ text: part.text }];
-        }
-        const partSource = part.source;
-        if (partSource.from === "constant") {
-          hold("workflow.sourceItself", step.key);
-          return [];
-        }
-        const reached = reachedFrom(partSource);
-        if (reached !== undefined && shapeHasFile(reached.field)) {
-          hold("contentProblem.question_takes_file", step.key);
-        }
-        const source =
-          partSource.from === "input"
-            ? partSource.path === ""
-              ? null
-              : { input: partSource.path }
-            : partSource.from === "step"
-              ? partSource.path === ""
-                ? null
-                : (() => {
-                    const sourcePosition = places.get(partSource.stepKey);
-                    return sourcePosition === undefined ||
-                      sourcePosition === position
-                      ? null
-                      : { step: sourcePosition, path: partSource.path };
-                  })()
-              : null;
-        if (source === null) {
-          hold("workflow.pointerNone", step.key);
-          return [];
-        }
-        return [{ from: source }];
-      });
+    case "search":
       return {
         kind: "search",
         searchWay: runs.searchWay === "" ? null : runs.searchWay,
-        question,
+        version: runs.version === "" ? null : runs.version,
         standings: {
           title: runs.standings.title || null,
           body: runs.standings.body || null,
@@ -1333,7 +1311,6 @@ function runsOf(
           other: runs.standings.other || null,
         },
       };
-    }
     case "code_step":
       return {
         kind: "code_step",
@@ -1390,7 +1367,6 @@ function counted(level: readonly Shape[]): number {
   return level.reduce((sum, field) => sum + 1 + counted(field.fields ?? []), 0);
 }
 
-/** A question's values are produced by a model or a person, a code step's by code or a person saying so. */
 function producerOf(step: StepDraft): SentProducer | null {
   if (step.producer === "person") {
     return { kind: "person" };
@@ -1422,23 +1398,10 @@ export function shapeHasFile(shape: Shape): boolean {
   return shape.kind === "file" || (shape.fields?.some(shapeHasFile) ?? false);
 }
 
-export function searchTextRefused(typed: string): MessageId | null {
-  const reason = proseCharactersRefused(typed);
-  if (reason === "crlf") return "refusal.PROSE_LINE_BREAK_CRLF";
-  if (reason === "direction_control") return "refusal.PROSE_DIRECTION_CONTROL";
-  if (reason === "tag") return "refusal.PROSE_TAG_CHARACTER";
-  let length = 0;
-  for (const _character of typed) length += 1;
-  return reason === "unusable" || length < 1 || length > 8192
-    ? "refusal.SEARCH_TEXT_UNUSABLE"
-    : null;
-}
-
 export function triesFit(typed: string): boolean {
   return WHOLE.test(typed) && Number(typed) <= LARGEST_TRIES;
 }
 
-/** One to the column's bound in characters, on one line, as a list's term is. */
 export function termFits(typed: string): boolean {
   return oneLineWithin(typed, LONGEST_TERM);
 }

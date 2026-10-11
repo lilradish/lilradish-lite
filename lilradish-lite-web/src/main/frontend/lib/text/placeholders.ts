@@ -1,4 +1,3 @@
-/** What one mark stands for, and the text it was written as. */
 export type Segment = { readonly written: string } & (
   { readonly name: string } | { readonly text: string }
 );
@@ -11,7 +10,7 @@ export interface Marked {
 }
 
 // Plane 15's private use: one code point a parser cannot split, neither punctuation nor space, so text around one
-// parses as around a letter; and as many as any text has characters to mark.
+// parses as around a letter.
 const FIRST_MARK = 0xf0000;
 
 const LAST_MARK = 0xffffd;
@@ -29,45 +28,95 @@ const ENCODED_MARK = /%F3%B[0-9A-F]%[89AB][0-9A-F]%[89AB][0-9A-F]/i;
  * else is plain text. A character already in the marks' range, or a numeric reference to one, is marked as itself.
  */
 export function markPlaceholders(text: string): Marked {
+  return marked(text, false);
+}
+
+/** Every complete, unescaped brace pair in an instruction is a reference, including an unknown name. */
+export function markInstruction(text: string): Marked {
+  return marked(text, true);
+}
+
+function marked(text: string, instruction: boolean): Marked {
   const segments: Segment[] = [];
-  let source = "";
-  const mark = (segment: Segment) => {
+  const pieces: string[] = [];
+  let plainFrom = 0;
+  scan(text, instruction, (segment, start, end) => {
     if (FIRST_MARK + segments.length > LAST_MARK) {
       throw new RangeError("more to mark than there are marks");
     }
-    source += String.fromCodePoint(FIRST_MARK + segments.length);
+    pieces.push(text.slice(plainFrom, start));
+    pieces.push(String.fromCodePoint(FIRST_MARK + segments.length));
     segments.push(segment);
-  };
+    plainFrom = end;
+  });
+  pieces.push(text.slice(plainFrom));
+  return { source: pieces.join(""), segments };
+}
+
+function scan(
+  text: string,
+  instruction: boolean,
+  found: (segment: Segment, start: number, end: number) => void,
+): void {
   let at = 0;
+  let mayClose = true;
   while (at < text.length) {
     if (text.startsWith("\\{{", at)) {
-      mark({ written: "\\{{", text: "{{" });
+      found({ written: "\\{{", text: "{{" }, at, at + 3);
       at += 3;
       continue;
     }
-    const placeholder = matchAt(PLACEHOLDER, text, at);
+    if (instruction && mayClose && text.startsWith("{{", at)) {
+      const end = text.indexOf("}}", at + 2);
+      if (end !== -1) {
+        found(
+          { written: text.slice(at, end + 2), name: text.slice(at + 2, end) },
+          at,
+          end + 2,
+        );
+        at = end + 2;
+        continue;
+      }
+      mayClose = false;
+    }
+    const placeholder = instruction ? null : matchAt(PLACEHOLDER, text, at);
     if (placeholder !== null) {
-      mark({ written: placeholder[0], name: placeholder[1]! });
+      found(
+        { written: placeholder[0], name: placeholder[1]! },
+        at,
+        at + placeholder[0].length,
+      );
       at += placeholder[0].length;
       continue;
     }
     const reference = matchAt(NUMERIC_REFERENCE, text, at);
     if (reference !== null && isMark(referenced(reference))) {
-      mark({ written: reference[0], text: reference[0] });
+      found(
+        { written: reference[0], text: reference[0] },
+        at,
+        at + reference[0].length,
+      );
       at += reference[0].length;
       continue;
     }
     const codePoint = text.codePointAt(at)!;
     if (isMark(codePoint)) {
       const character = String.fromCodePoint(codePoint);
-      mark({ written: character, text: character });
+      found({ written: character, text: character }, at, at + character.length);
       at += character.length;
       continue;
     }
-    source += text[at];
     at += 1;
   }
-  return { source, segments };
+}
+
+/** Names of complete instruction references, as written rather than as marks. */
+export function instructionNames(text: string): readonly string[] {
+  const names = new Set<string>();
+  scan(text, true, (segment) => {
+    if ("name" in segment) names.add(segment.name);
+  });
+  return [...names];
 }
 
 /** Text cut where each mark stands: the text between as it is, each mark as the number it carries. */
@@ -97,6 +146,39 @@ export function writtenAgain(
       typeof piece === "string" ? piece : segments[piece]!.written,
     )
     .join("");
+}
+
+/** Instruction references change together, preserving every other character of the author's text. */
+export function renamedInstruction(
+  text: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  return renamed(text, names, true);
+}
+
+/** Only a drawing's complete field references change; escapes and all other written text stay as they were. */
+export function renamedPlaceholders(
+  text: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  return renamed(text, names, false);
+}
+
+function renamed(
+  text: string,
+  names: ReadonlyMap<string, string>,
+  instruction: boolean,
+): string {
+  const pieces: string[] = [];
+  let plainFrom = 0;
+  scan(text, instruction, (segment, start, end) => {
+    const name = "name" in segment ? names.get(segment.name) : undefined;
+    if (name === undefined) return;
+    pieces.push(text.slice(plainFrom, start), `{{${name}}}`);
+    plainFrom = end;
+  });
+  pieces.push(text.slice(plainFrom));
+  return pieces.join("");
 }
 
 /** Whether `text` holds a mark, as it is or percent-encoded. */

@@ -2,20 +2,18 @@ import { isUnchecked, type Unchecked } from "./document";
 import { get } from "./http";
 import { pageFrom, type Page } from "./page";
 
-/** How a reader asked for a list. An empty filter narrows nothing. */
+/** An empty filter narrows nothing. */
 export interface ListQuery<O extends string> {
   readonly filter: string;
   /**
-   * Always sent, so the table knows which column it is sorted by from what it
-   * asked rather than from a copy of the server's default.
+   * Always sent: the table knows its sort without duplicating the server's default.
    */
   readonly order: O;
 }
 
 /**
- * The list at `path` asked for as `query` asks, in the shape
- * `usePagedResource` reads: a changed query is a new loader, which starts the
- * read again at its first page. Nothing typed is rewritten.
+ * A changed query needs a new loader, restarting `usePagedResource` at page one.
+ * Nothing typed is rewritten.
  */
 export function pagedLoader<T, O extends string>(
   path: string,
@@ -26,10 +24,8 @@ export function pagedLoader<T, O extends string>(
 }
 
 /**
- * As `pagedLoader`, the page also carrying what the list says beside its
- * rows, read by `besideFrom`; what it cannot read fails the page, as a row
- * does. Its type keeps it from naming the rows or the cursor, which a last
- * page, having no cursor, would otherwise let it supply.
+ * `besideFrom` failures refuse the page just as unreadable rows do.
+ * Its type excludes rows and cursor, preventing it supplying a cursor for a last page.
  */
 export function pagedLoaderSaying<T, O extends string, B extends object>(
   path: string,

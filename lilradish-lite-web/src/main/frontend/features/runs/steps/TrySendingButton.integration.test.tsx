@@ -1,11 +1,14 @@
 import { act, screen, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { whenText } from "../../../lib/time/When";
 import { requestsTo, serving, type Reply } from "../../../testutil/answering";
 import { deferred } from "../../../testutil/deferred";
+import { KEY } from "../../../testutil/runPage";
 import { openStepPage } from "../../../testutil/stepPage";
 import { accountOpened } from "../../../testutil/stateAccount";
+import { tryReplies } from "../../../testutil/tryReplies";
 
 const GROUP = "00000003-0000-4000-8000-000000000d21";
 
@@ -17,7 +20,7 @@ const QUESTION_VERSION = "00000007-0000-4000-8000-000000000d22";
 
 const SUMMARISE = "00000009-0000-4000-8000-000000000d21";
 
-const PAGE = `/groups/${GROUP}/work/${RUN_ID}`;
+const PAGE = `/groups/${KEY}/work/${RUN_ID}`;
 
 const RUN = `/api/groups/${GROUP}/runs/${RUN_ID}`;
 
@@ -35,29 +38,29 @@ const AVO = { userId: "000d21", displayName: "Avo" };
 
 const TRY_SENDING = "Try sending";
 
-const SENT =
-  "It will be sent if it can be. What comes of it shows here once it is known.";
+const SENT = "It will be sent if it can be. The result shows here once known.";
 
-const PENDING = "Asking for it to be sent.";
+const PENDING = "Asking for it to be sent…";
 
 const START_RULE =
-  "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.";
+  "Only someone in this group who can start runs can start, rename, stop or resume a run, set its usage limit, withdraw a limit change they asked for, or try sending a request that could not be sent.";
 
 const NOT_OFFERED =
-  "Try sending is only for a call to a model that could not be sent: the model turned it away, it was too long for the model, or it is to a model, or a mode of one, that this deployment does not offer.";
+  "Try sending is only for a model request that could not be sent: the model service turned it away, it was too long for the model, or the model or its mode isn't available on this system.";
 
 const ENTRY_STOPPED =
-  "What this step runs, or the workflow itself, is stopped, so no try is made on it until that is let go.";
+  "What this step runs, or the workflow itself, has been stopped. No attempt can be made until it is allowed to be used again.";
 
-const MOVED_ON = "That step has moved on since it was read.";
+const MOVED_ON = "This step has changed since you opened it.";
 
 const TOO_LONG =
-  "What it would send is longer than the model it names takes, so it was not sent, and nothing was spent on it.";
+  "Its request is too long for the model, so it was not sent and nothing was spent.";
 
 const CLAIM = {
   runId: RUN_ID,
   number: 7,
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000d21",
     name: "Handle a claim",
     version: 3,
@@ -78,7 +81,7 @@ const CLAIM = {
   at: { stepId: SUMMARISE, name: "summarise" },
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: ["stop"],
+  stateActs: ["stop"],
 };
 
 const SUMMARY = {
@@ -100,7 +103,7 @@ const HEADER = {
   versionId: VERSION,
   state: "running",
   at: { stepId: SUMMARISE, name: "summarise" },
-  acts: ["stop"],
+  stateActs: ["stop"],
   progress: { done: 0, of: 1 },
 };
 
@@ -113,10 +116,13 @@ const NOTHING_SPENT = {
 };
 
 const HELD_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
   runs: {
+    versionName: null,
     kind: "question",
     entryId: "00000006-0000-4000-8000-000000000d22",
     name: "Summarise",
@@ -134,8 +140,8 @@ const HELD_ROW = {
   takesFrom: [],
   tries: { current: 1, declared: 2, beyond: false },
   cost: NOTHING_SPENT,
-  acts: ["try_sending"],
-  withheld: [],
+  stateActs: ["try_sending"],
+  stateRefusals: [],
 };
 
 const REVIEW_TURNED_AWAY_ROW = {
@@ -153,7 +159,7 @@ const OUT_ROW = {
   ...HELD_ROW,
   state: "running",
   where: { kind: "running", on: "call" },
-  acts: [],
+  stateActs: [],
 };
 
 const STOPPED_ROW = {
@@ -162,8 +168,8 @@ const STOPPED_ROW = {
     ...HELD_ROW.where,
     stopped: { what: "entry", by: AVO, at: STOPPED_AT },
   },
-  acts: [],
-  withheld: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
+  stateActs: [],
+  stateRefusals: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
 };
 
 const HELD_TRY = {
@@ -176,11 +182,10 @@ const HELD_TRY = {
   cost: NOTHING_SPENT,
 };
 
-/** A reply the server never sends. */
 const UNANSWERED: Reply = new Promise(() => {});
 
 function reply(body: object): Reply {
-  return [JSON.stringify(body), 200];
+  return tryReplies(body).summary;
 }
 
 function refusal(code: string, status: number): Reply {
@@ -210,12 +215,15 @@ function stepsRead(row: object = {}): Reply {
   });
 }
 
-function conversing(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
+function conversing(
+  routes: Readonly<Record<string, readonly Reply[]>> = {},
+  permissions: readonly string[] = ["start_run"],
+) {
   return openStepPage({
     groupId: GROUP,
     view: "run",
     address: PAGE,
-    permissions: ["start_run"],
+    permissions,
     routes: {
       [`GET ${RUN}`]: [reply(CLAIM), reply(CLAIM), UNANSWERED],
       [`GET ${STEPS}`]: [stepsRead(), UNANSWERED],
@@ -224,7 +232,6 @@ function conversing(routes: Readonly<Record<string, readonly Reply[]>> = {}) {
   });
 }
 
-/** What is in flight let land a turn at a time, until `landed` holds; failing where it never does. */
 async function landing(landed: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100 && !landed(); turn += 1) {
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -249,12 +256,33 @@ function sendButton(): HTMLElement | null {
   return within(message()).queryByRole("button", { name: TRY_SENDING });
 }
 
-/** Pressed from the keyboard's place on it, as a reader pressing it would be. */
-function press(control: HTMLElement): void {
-  act(() => {
-    control.focus();
-    control.click();
-  });
+let reader: ReturnType<typeof userEvent.setup>;
+
+async function press(control: HTMLElement): Promise<void> {
+  const pressed = reader.click(control);
+  if (vi.isFakeTimers()) {
+    let finished = false;
+    void pressed.then(
+      () => {
+        finished = true;
+      },
+      () => {
+        finished = true;
+      },
+    );
+    // RTL drains its async wrapper with another timeout after user-event's own timer advancement.
+    for (let turn = 0; turn < 100 && !finished; turn += 1) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(finished).toBe(true);
+  }
+  await pressed;
+  // Flush only after RTL has restored its act environment.
+  await act(async () => {});
+}
+
+function dispatchClick(control: HTMLElement): void {
+  act(() => control.click());
 }
 
 function puts(sent: ReturnType<typeof serving>): [string, RequestInit][] {
@@ -275,6 +303,12 @@ function noticeBox(): HTMLElement | null {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  reader = userEvent.setup({
+    advanceTimers: (milliseconds) =>
+      vi.isFakeTimers()
+        ? act(() => vi.advanceTimersByTimeAsync(milliseconds))
+        : Promise.resolve(),
+  });
 });
 
 afterEach(() => {
@@ -282,6 +316,74 @@ afterEach(() => {
 });
 
 describe("TrySendingButton", () => {
+  it.each(["success", "failure"])(
+    "discards an already issued sending reread's late %s after permission returns",
+    async (outcome) => {
+      const later = deferred<readonly [string, number]>();
+      const { sent, changeStanding } = conversing({
+        [`PUT ${SENDING}`]: [refusal("STEP_MOVED_ON", 409)],
+        [`GET ${STEP}`]: [later.promise],
+      });
+      await messageDrawn();
+      await press(sendButton()!);
+      await landing(() => asked(sent, `GET ${STEP}`) === 1);
+      act(() => changeStanding([]));
+      act(() => changeStanding(["start_run"]));
+      const restored = sendButton()!;
+      act(() => restored.focus());
+      await act(async () =>
+        later.settle(
+          outcome === "success"
+            ? await stepRead(OUT_ROW)
+            : await refusal("READ_FAILED", 503),
+        ),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.activeElement).toBe(restored);
+      expect(sendButton()).not.toBeNull();
+      expect(asked(sent, `GET ${STEP}`)).toBe(1);
+      expect(puts(sent)).toHaveLength(1);
+    },
+  );
+  it("discards a late refusal after start permission was revoked and restored", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding, readAgain } = conversing({
+      [`PUT ${SENDING}`]: [later.promise],
+    });
+    await messageDrawn();
+    await press(sendButton()!);
+    await landing(() => puts(sent).length === 1);
+    act(() => changeStanding([]));
+    expect(sendButton()).toBeNull();
+    act(() => changeStanding(["start_run"]));
+    await act(async () =>
+      later.settle(await refusal("ACT_NOT_PERMITTED", 403)),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(readAgain).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(noticeBox());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(START_RULE)).toBeNull();
+    expect(sendButton()).toBeEnabled();
+  });
+  it("discards a sending reply after start permission was revoked and restored", async () => {
+    const later = deferred<readonly [string, number]>();
+    const { sent, changeStanding } = conversing({
+      [`PUT ${SENDING}`]: [later.promise],
+    });
+    await messageDrawn();
+    await press(sendButton()!);
+    await landing(() => puts(sent).length === 1);
+    act(() => changeStanding([]));
+    expect(sendButton()).toBeNull();
+    act(() => changeStanding(["start_run"]));
+    await act(async () => later.settle(await stepRead()));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(asked(sent, `GET ${RUN}`)).toBe(1);
+    expect(within(message()).queryByText(SENT)).toBeNull();
+    expect(sendButton()).toBeEnabled();
+  });
   describe("in a run's conversation", () => {
     it("sends the try the step is held on with nothing sent, says in a region there before it that it will be sent, reads the run and its steps again and leaves the keyboard on the button", async () => {
       const { sent } = conversing({
@@ -290,7 +392,7 @@ describe("TrySendingButton", () => {
       const drawn = await messageDrawn();
       const regions = within(drawn).getAllByRole("status");
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
 
       const [[address, init]] = puts(sent) as [[string, RequestInit]];
@@ -310,9 +412,9 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
-      press(sendButton()!);
+      dispatchClick(sendButton()!);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(sendButton()).toHaveAttribute("aria-disabled", "true");
@@ -338,8 +440,8 @@ describe("TrySendingButton", () => {
 
         expect(
           within(drawn).getByRole("button", { name: TRY_SENDING }),
-        ).toHaveClass("MuiButton-contained");
-        press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+        ).toHaveClass("MuiButton-outlined");
+        await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
         await landing(() => within(message()).queryByText(SENT) !== null);
         await act(async () => {
           again.settle(stepsRead(row) as readonly [string, number]);
@@ -360,14 +462,14 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(
         () => asked(sent, `GET ${STEPS}`) === 2 && sendButton() === null,
       );
 
       expect(
         within(accountOpened(message(), "Running")).getByText(
-          "A call to the model it names is out.",
+          "A request to the model is in progress.",
         ),
       ).toBeVisible();
       expect(within(message()).queryByText(SENT)).toBeNull();
@@ -379,13 +481,16 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
-      press(within(message()).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      dispatchClick(
+        within(message()).getByRole("button", { name: TRY_SENDING }),
+      );
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(puts(sent)).toHaveLength(1);
       expect(sendButton()).toHaveAttribute("aria-disabled", "true");
-      expect(sendButton()).toHaveAccessibleDescription(PENDING);
+      expect(sendButton()).not.toHaveAccessibleDescription();
+      expect(within(message()).getByText(PENDING)).toBeVisible();
       expect(within(message()).queryByText(SENT)).toBeNull();
     });
 
@@ -397,7 +502,7 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => asked(sent, `GET ${STEPS}`) === 2);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
@@ -418,9 +523,9 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => asked(sent, `GET ${STEP}`) === 1);
-      press(sendButton()!);
+      dispatchClick(sendButton()!);
       await act(() => vi.advanceTimersByTimeAsync(0));
 
       expect(puts(sent)).toHaveLength(1);
@@ -436,7 +541,7 @@ describe("TrySendingButton", () => {
       const drawn = await messageDrawn();
       const button = within(drawn).getByRole("button", { name: TRY_SENDING });
 
-      press(button);
+      await press(button);
       await landing(() => asked(sent, `GET ${STEP}`) === 1);
 
       expect(screen.queryByRole("alert")).toBeNull();
@@ -460,10 +565,12 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => screen.queryAllByRole("alert").length > 0);
 
-      expect(noticeBox()).toHaveTextContent("That step is not in view.");
+      expect(noticeBox()).toHaveTextContent(
+        "That step isn't here, or you can't see it.",
+      );
       expect(document.activeElement).toBe(noticeBox());
       expect(asked(sent, `GET ${STEP}`)).toBe(1);
       expect(within(message()).queryByText(SENT)).toBeNull();
@@ -483,7 +590,7 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(
         () =>
           asked(sent, `GET ${STEPS}`) === 2 &&
@@ -510,12 +617,12 @@ describe("TrySendingButton", () => {
       });
       const drawn = await messageDrawn();
 
-      press(within(drawn).getByRole("button", { name: TRY_SENDING }));
+      await press(within(drawn).getByRole("button", { name: TRY_SENDING }));
       await landing(() => screen.queryByRole("alert") !== null);
 
       expect(screen.getByRole("alert")).toHaveTextContent(START_RULE);
       expect(screen.getByRole("alert")).not.toHaveTextContent(
-        "This is done only by a role that reaches it.",
+        "You don't have permission to do this.",
       );
       expect(document.activeElement).toBe(noticeBox());
       expect(readAgain).toHaveBeenCalledTimes(1);
@@ -526,25 +633,28 @@ describe("TrySendingButton", () => {
     });
 
     it.each([
-      ["offered it", { acts: ["try_sending"], withheld: [] }, true],
+      ["offered it", { stateActs: ["try_sending"], stateRefusals: [] }, true],
       [
         "whose roles do not reach it",
         {
-          acts: [],
-          withheld: [{ act: "try_sending", refusal: "ACT_NOT_PERMITTED" }],
+          stateActs: ["try_sending"],
+          stateRefusals: [],
         },
         false,
       ],
     ])(
       "draws Try sending for a reader %s, and otherwise says they may not",
       async (_case, row, drawnFor) => {
-        conversing({ [`GET ${STEPS}`]: [stepsRead(row), UNANSWERED] });
+        conversing(
+          { [`GET ${STEPS}`]: [stepsRead(row), UNANSWERED] },
+          drawnFor ? ["start_run"] : [],
+        );
         await messageDrawn();
 
         expect(sendButton() !== null).toBe(drawnFor);
         expect(
-          within(accountOpened(message(), "Held back")).queryByText(
-            "You may not try sending it.",
+          within(accountOpened(message(), "Blocked")).queryByText(
+            "You don't have permission to try sending it.",
           ) !== null,
         ).toBe(!drawnFor);
       },
@@ -561,17 +671,17 @@ describe("TrySendingButton", () => {
               stopped: { what: "entry", by: AVO, at: STOPPED_AT },
               waitsOn: "starter",
             },
-            acts: [],
-            withheld: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
+            stateActs: [],
+            stateRefusals: [{ act: "try_sending", refusal: "ENTRY_STOPPED" }],
           }),
           UNANSWERED,
         ],
       });
       await messageDrawn();
-      accountOpened(message(), "Held back");
+      accountOpened(message(), "Blocked");
 
       const stop = within(message()).getByText(
-        "What it runs was stopped, so nothing is produced until that is undone.",
+        "What this step runs has been stopped, so nothing will be produced until it is allowed to be used again.",
       );
       const tooLong = within(message()).getByText(TOO_LONG);
       expect(sendButton()).toBeNull();
@@ -604,7 +714,7 @@ describe("TrySendingButton", () => {
       await landing(() => screen.queryByRole("heading", { level: 1 }) !== null);
       const button = screen.getByRole("button", { name: TRY_SENDING });
 
-      press(button);
+      await press(button);
       await landing(() => asked(sent, `GET ${STEP}`) === 2);
 
       expect(puts(sent).map(([address]) => address)).toEqual([SENDING]);

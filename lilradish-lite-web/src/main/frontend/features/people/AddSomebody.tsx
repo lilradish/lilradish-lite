@@ -27,9 +27,7 @@ export function AddSomebody({
   onAsk,
 }: {
   readonly changing: Action<Outcome>;
-  /** Bringing somebody in, refused. */
   readonly refused: Problem | null;
-  /** Told who is being brought in, as it is asked. */
   readonly onAsk: (asked: Asked) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -40,7 +38,7 @@ export function AddSomebody({
   return (
     <>
       <Press
-        variant="contained"
+        tier="primary"
         unavailable={changing.running}
         onPress={() => {
           setOpening((count) => count + 1);

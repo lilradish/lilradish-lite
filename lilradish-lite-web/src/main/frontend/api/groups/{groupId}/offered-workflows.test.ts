@@ -19,11 +19,13 @@ const HANDLE = {
   purpose: "Sorts a claim out.",
   versions: [
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c32",
       number: 2,
       takes: [COMPLAINT],
     },
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c31",
       number: 1,
       takes: [],
@@ -36,6 +38,7 @@ const REFUND = {
   name: "Pay a refund",
   versions: [
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c33",
       number: 4,
       takes: [],
@@ -65,7 +68,7 @@ describe("offeredLoader", () => {
   });
 
   it("reads each version in the order sent, with what it takes in declared order", async () => {
-    answering([JSON.stringify({ items: [HANDLE] }), 200]);
+    answering([JSON.stringify({ items: [HANDLE, REFUND] }), 200]);
 
     const [offered] = (
       await offeredLoader(GROUP)(null, new AbortController().signal)
@@ -77,12 +80,14 @@ describe("offeredLoader", () => {
   });
 
   it("hands the server the unaltered name filter and opaque cursor without a sort or limit", async () => {
-    const sent = answering([JSON.stringify({ items: [REFUND] }), 200]);
+    const sent = answering([JSON.stringify({ items: [REFUND, HANDLE] }), 200]);
     const load = offeredLoader(GROUP, "  A%_ß  ");
     const signal = new AbortController().signal;
 
-    expect(await load(null, signal)).toEqual({ items: [REFUND] });
-    expect(await load("next/page", signal)).toEqual({ items: [REFUND] });
+    expect(await load(null, signal)).toEqual({ items: [REFUND, HANDLE] });
+    expect(await load("next/page", signal)).toEqual({
+      items: [REFUND, HANDLE],
+    });
     expect(sent.mock.calls.map(([input]) => String(input))).toEqual([
       `/api/groups/${GROUP}/offered-workflows?filter=++A%25_%C3%9F++`,
       `/api/groups/${GROUP}/offered-workflows?filter=++A%25_%C3%9F++&cursor=next%2Fpage`,
@@ -93,7 +98,7 @@ describe("offeredLoader", () => {
   });
 
   it.each([
-    ["the old envelope", { workflows: [HANDLE] }],
+    ["a page with workflows instead of items", { workflows: [HANDLE] }],
     ["a null cursor", { items: [HANDLE], nextCursor: null }],
     ["a malformed cursor", { items: [HANDLE], nextCursor: 4 }],
   ])("refuses %s as an unreadable page", async (_case, body) => {
@@ -122,6 +127,31 @@ describe("offeredLoader", () => {
 
   it.each([
     ["no list of workflows", {}],
+    ["a null workflow", { items: [REFUND, null] }],
+    ["a numeric workflow", { items: [REFUND, 4] }],
+    ["a text workflow", { items: [REFUND, "workflow"] }],
+    ["a boolean workflow", { items: [REFUND, false] }],
+    ["an array workflow", { items: [REFUND, []] }],
+    [
+      "a null version",
+      { items: [{ ...REFUND, versions: [...REFUND.versions, null] }] },
+    ],
+    [
+      "a numeric version",
+      { items: [{ ...REFUND, versions: [...REFUND.versions, 4] }] },
+    ],
+    [
+      "a text version",
+      { items: [{ ...REFUND, versions: [...REFUND.versions, "version"] }] },
+    ],
+    [
+      "a boolean version",
+      { items: [{ ...REFUND, versions: [...REFUND.versions, false] }] },
+    ],
+    [
+      "an array version",
+      { items: [{ ...REFUND, versions: [...REFUND.versions, []] }] },
+    ],
     [
       "a workflow with no identifier",
       { items: [{ ...REFUND, entryId: undefined }] },

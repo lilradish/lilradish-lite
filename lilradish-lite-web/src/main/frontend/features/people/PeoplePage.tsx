@@ -36,7 +36,7 @@ import { BY_USER_NUMBER, POOL_SORTABLE, poolColumns } from "./poolColumns";
 import { usePickedPerson } from "./usePickedPerson";
 import { whatHasToGoFirst } from "./whatHasToGoFirst";
 
-/** Where the page is, and what every address naming somebody on it begins with. */
+/** What every address naming somebody on the page begins with. */
 export { PEOPLE_PAGE } from "../../app/addresses";
 
 const SAID_SX = { mb: 1 };
@@ -191,12 +191,6 @@ export function PeoplePage({ title }: { readonly title: MessageId }) {
           />
         }
       />
-      <FilterField
-        label={say("person.numberOrName")}
-        value={filter}
-        onChange={onFilter}
-      />
-      <StatusLine said={said} sx={SAID_SX} />
       <RowPanel
         open={subjectId !== undefined}
         onClose={() => {
@@ -208,6 +202,12 @@ export function PeoplePage({ title }: { readonly title: MessageId }) {
         saidOver={said === answeredByPanel ? said : null}
         list={
           <>
+            <FilterField
+              label={say("person.numberOrName")}
+              value={filter}
+              onChange={onFilter}
+            />
+            <StatusLine said={said} sx={SAID_SX} />
             {page.problem === null ? null : (
               <ProblemView problem={page.problem} rule={{ act: "keep_pool" }} />
             )}

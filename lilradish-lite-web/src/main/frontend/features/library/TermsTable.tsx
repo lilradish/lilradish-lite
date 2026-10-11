@@ -8,7 +8,6 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 
@@ -21,6 +20,7 @@ import { ActButton } from "../../lib/action/ActButton";
 import { IconPress } from "../../lib/action/IconPress";
 import { Press, type Reason } from "../../lib/action/Press";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { LabelledTextField } from "../../lib/form/LabelledTextField";
 import { Part } from "../../lib/layout/Part";
 import { ACTS_SX, HEADER_ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
@@ -51,7 +51,6 @@ const ADDING_SX = {
   mb: 1,
 };
 
-/** Each reason the server refuses a term, said as the refusal it would answer with. */
 const TERM_REFUSALS = {
   direction_control: "refusal.PROSE_DIRECTION_CONTROL",
   invisible: "refusal.PROSE_INVISIBLE_CHARACTER",
@@ -103,9 +102,7 @@ export function TermsTable<T>({
   focusOnArrival,
   onReadAfresh,
 }: {
-  /** As the server last read them. */
   readonly terms: readonly ListTerm[];
-  /** Whether the host may write them now, as the server said. */
   readonly editable: boolean;
   /** Whether another write of the host's is out, which any of these would be refused beside. */
   readonly waiting: boolean;
@@ -231,7 +228,10 @@ export function TermsTable<T>({
     }) ||
     adding.term !== "" ||
     adding.meaning !== "";
-  useDraftPartStatus("terms", unsaved, action.running || waiting);
+  useDraftPartStatus("terms", unsaved, action.running || waiting, {
+    saving: action.running,
+    node: section,
+  });
   const addHeld: Reason | undefined =
     terms.length >= MOST_TERMS
       ? {
@@ -247,13 +247,7 @@ export function TermsTable<T>({
   return (
     <Part
       title={say("referenceList.terms")}
-      actions={
-        editable && unsaved ? (
-          <Typography component="span" variant="body2" color="text.secondary">
-            {say("draft.unsaved")}
-          </Typography>
-        ) : undefined
-      }
+      unsaved={editable && unsaved}
       level="h3"
       depth={2}
       headingId={headingId}
@@ -311,7 +305,7 @@ export function TermsTable<T>({
       {editable ? (
         <>
           <Box sx={ADDING_SX}>
-            <TextField
+            <LabelledTextField
               label={say("referenceList.newTerm")}
               value={adding.term}
               onChange={(edit) => {
@@ -323,7 +317,7 @@ export function TermsTable<T>({
               slotProps={{ htmlInput: { dir: "auto", readOnly: running } }}
               size="small"
             />
-            <TextField
+            <LabelledTextField
               label={say("referenceList.newMeaning")}
               value={adding.meaning}
               onChange={(edit) => {
@@ -340,10 +334,10 @@ export function TermsTable<T>({
           <Box sx={ACTS_SX}>
             <ActButton
               action={action}
-              variant={
+              tier={
                 adding.term !== "" || adding.meaning !== ""
-                  ? "contained"
-                  : undefined
+                  ? "primary"
+                  : "secondary"
               }
               waiting={waiting}
               reason={addHeld}
@@ -421,7 +415,7 @@ const EditedRow = memo(function EditedRow({
   return (
     <TableRow ref={(row) => onRegister(term.termId, row)}>
       <TableCell>
-        <TextField
+        <LabelledTextField
           value={worded.term}
           onChange={(edit) =>
             onType(term, { ...worded, term: edit.target.value })
@@ -440,7 +434,7 @@ const EditedRow = memo(function EditedRow({
         />
       </TableCell>
       <TableCell>
-        <TextField
+        <LabelledTextField
           value={worded.meaning}
           onChange={(edit) =>
             onType(term, { ...worded, meaning: edit.target.value })
@@ -462,7 +456,7 @@ const EditedRow = memo(function EditedRow({
           {changed ? (
             <Press
               label={named("referenceList.save")}
-              variant="contained"
+              tier="primary"
               unavailable={held}
               reason={
                 refused === null
@@ -492,7 +486,6 @@ const EditedRow = memo(function EditedRow({
           </IconPress>
           <IconPress
             icon={<DeleteOutlinedIcon />}
-            warns
             label={named("referenceList.remove")}
             unavailable={held}
             onPress={() => onRemove(term)}

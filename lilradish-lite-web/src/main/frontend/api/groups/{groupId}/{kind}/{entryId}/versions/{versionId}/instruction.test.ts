@@ -9,7 +9,13 @@ const ENTRY = "00000006-0000-4000-8000-000000000c61";
 
 const VERSION = "00000007-0000-4000-8000-000000000c61";
 
-const ANSWER = { revision: 8, takes: [], gives: [], lists: [] };
+const ANSWER = {
+  revision: 8,
+  takes: [],
+  gives: [],
+  searchWays: [],
+  searchShapeNeedsRefresh: false,
+};
 
 describe("instruct", () => {
   it.each([

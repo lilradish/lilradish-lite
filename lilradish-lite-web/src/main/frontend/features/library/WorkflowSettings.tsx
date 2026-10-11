@@ -1,28 +1,49 @@
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import Box from "@mui/material/Box";
-import IconButton from "@mui/material/IconButton";
-import Tooltip from "@mui/material/Tooltip";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useEffect, useId, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 import type { WorkflowVersion } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}";
 import type { SentChoice } from "../../api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}/steps";
-import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
-import { ActButton } from "../../lib/action/ActButton";
 import { Disclosure } from "../../lib/action/Disclosure";
+import { InfoMark } from "../../lib/action/InfoMark";
+import { SaveButton } from "../../lib/action/SaveButton";
+import { UnsavedMark } from "../../lib/layout/UnsavedMark";
 import { Part } from "../../lib/layout/Part";
 import { DEPTH_SX, HEADING_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import type { Action } from "../../lib/request/useAction";
 import { ceilingFits } from "../runs/ceilingTyped";
+import { countSaid } from "../runs/spend";
 import { VERSION_ACT_RULES } from "./actRules";
 import { problemSaid } from "./ContentProblems";
 import { ModelControls, modelSaid } from "./ModelControls";
-import { useDraftPartStatus } from "./useDraftStatus";
+import { locatePart, useDraftPartStatus } from "./useDraftStatus";
+import { useHeardRefusal, type HeardRefusal } from "./useHeardRefusal";
+import { WriteRefused } from "./WriteRefused";
+
+// A Save drawn only while something is unsaved is gone once it saves, and
+// the keyboard it held would fall to the page: it goes to the part's title.
+function headingTakesKeyboard<T>(
+  section: RefObject<HTMLElement | null>,
+  heading: RefObject<HTMLHeadingElement | null>,
+) {
+  return (answer: T) => {
+    if (section.current?.contains(document.activeElement))
+      heading.current?.focus();
+    return answer;
+  };
+}
 
 const ROW_SX = {
   display: "flex",
@@ -65,12 +86,35 @@ export function RunSettings({
   const headingId = useId();
   const contentId = useId();
   const [shown, setShown] = useState(false);
+  const pendingFocus = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (shown && pendingFocus.current !== null) {
+      locatePart(pendingFocus.current);
+      pendingFocus.current = null;
+    }
+  }, [shown]);
+  const locate = (target: HTMLElement | null) => {
+    if (target === null) return;
+    if (shown) locatePart(target);
+    else {
+      pendingFocus.current = target;
+      setShown(true);
+    }
+  };
   const [ceilingUnsaved, setCeilingUnsaved] = useState(false);
   const [helpUnsaved, setHelpUnsaved] = useState(false);
+  const spendingRefusal = useRef<HTMLDivElement>(null);
+  const helpingRefusal = useRef<HTMLDivElement>(null);
+  const spendingHeard = useHeardRefusal(
+    spending,
+    ceilingUnsaved,
+    spendingRefusal,
+  );
+  const helpingHeard = useHeardRefusal(helping, helpUnsaved, helpingRefusal);
   const ceiling =
     workflow.ceiling === undefined
       ? say("workflow.ceilingNoneShort")
-      : say("workflow.ceilingShort", { ceiling: workflow.ceiling });
+      : say("workflow.ceilingShort", { ceiling: countSaid(workflow.ceiling) });
   const help = !workflow.mayBeHelped
     ? say("workflow.notHelpedShort")
     : workflow.helper === undefined
@@ -80,8 +124,10 @@ export function RunSettings({
         });
   return (
     <Box component="section" aria-labelledby={headingId} sx={DEPTH_SX[2]}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Typography id={headingId} variant="h3" sx={HEADING_SX}>
+      <Box
+        sx={{ display: "flex", alignItems: "center", gap: 1, ...HEADING_SX }}
+      >
+        <Typography id={headingId} variant="h3">
           <Disclosure
             open={shown}
             controls={contentId}
@@ -90,16 +136,13 @@ export function RunSettings({
             {say("workflow.runSettings")}
           </Disclosure>
         </Typography>
+        <InfoMark
+          about={say("workflow.runSettingsAbout")}
+          hint={say("workflow.runSettingsHint")}
+        />
         {editable && !shown && (ceilingUnsaved || helpUnsaved) ? (
-          <Typography component="span" variant="body2" color="text.secondary">
-            {say("draft.unsaved")}
-          </Typography>
+          <UnsavedMark />
         ) : null}
-        <Tooltip title={say("workflow.ceilingHint")}>
-          <IconButton size="small" aria-label={say("workflow.ceilingHint")}>
-            <InfoOutlinedIcon />
-          </IconButton>
-        </Tooltip>
       </Box>
       <Typography variant="body2" sx={{ color: "text.secondary" }}>
         {say("workflow.runSettingsSummary", { ceiling, help })}
@@ -111,34 +154,41 @@ export function RunSettings({
             {problemSaid(problem)}
           </Notice>
         ))}
-      {spending.problem === null ? null : (
-        <ProblemView
-          problem={spending.problem}
-          rule={{ inGroup: VERSION_ACT_RULES.write }}
-        />
-      )}
-      {helping.problem === null ? null : (
-        <ProblemView
-          problem={helping.problem}
-          rule={{ inGroup: VERSION_ACT_RULES.write }}
-        />
+      {[
+        { heard: spendingHeard, action: spending, refusalAt: spendingRefusal },
+        { heard: helpingHeard, action: helping, refusalAt: helpingRefusal },
+      ].map(({ heard, action, refusalAt }, at) =>
+        heard.problem === null ? null : (
+          <div key={at} ref={refusalAt} tabIndex={-1}>
+            <WriteRefused
+              settled={heard.settled}
+              problem={heard.problem}
+              rule={VERSION_ACT_RULES.write}
+              waiting={waiting(action)}
+            />
+          </div>
+        ),
       )}
       <div id={contentId} hidden={!shown}>
         <CeilingPart
           workflow={workflow}
           editable={editable}
           action={spending}
+          heard={spendingHeard}
           waiting={waiting(spending)}
           save={saveCeiling}
           onUnsaved={setCeilingUnsaved}
+          onLocate={locate}
         />
         <HelpPart
           workflow={workflow}
           editable={editable}
           action={helping}
+          heard={helpingHeard}
           waiting={waiting(helping)}
           save={saveHelp}
           onUnsaved={setHelpUnsaved}
+          onLocate={locate}
         />
       </div>
     </Box>
@@ -153,18 +203,28 @@ function CeilingPart({
   workflow,
   editable,
   action,
+  heard,
   waiting,
   save,
   onUnsaved,
+  onLocate,
 }: {
   readonly workflow: WorkflowVersion;
   readonly editable: boolean;
   readonly action: Action<WorkflowVersion>;
+  readonly heard: HeardRefusal;
   /** Whether another write of the host's, or its read, is out, which saving this would be refused beside. */
   readonly waiting: boolean;
   readonly save: SaveCeiling;
   readonly onUnsaved: (unsaved: boolean) => void;
+  readonly onLocate: (target: HTMLElement | null) => void;
 }) {
+  const inputId = useId();
+  const section = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
+  const hintId = useId();
+  const helperId = `${inputId}-helper-text`;
   const read = {
     typed: workflow.ceiling?.toString() ?? "",
     keeps: workflow.keepsOwnCeiling,
@@ -180,39 +240,69 @@ function CeilingPart({
   const fits = typed.typed === "" || ceilingFits(typed.typed);
   const running = action.running;
   const unsaved = JSON.stringify(typed) !== readAs;
-  useDraftPartStatus("ceiling", unsaved, running || waiting);
+  useDraftPartStatus("ceiling", unsaved, running || waiting, {
+    saving: running,
+    node: section,
+    locate: () => onLocate(controls.current),
+  });
   useEffect(() => onUnsaved(unsaved), [onUnsaved, unsaved]);
   return (
     <Part
       title={say("workflow.ceilingPart")}
-      actions={
-        editable && unsaved ? (
-          <Typography component="span" variant="body2" color="text.secondary">
-            {say("draft.unsaved")}
-          </Typography>
-        ) : undefined
-      }
+      unsaved={editable && unsaved}
       level="h4"
       depth={3}
+      headingRef={heading}
+      ref={section}
     >
       {editable ? (
-        <>
+        <Box ref={controls}>
           <Box sx={ROW_SX}>
-            <TextField
-              size="small"
-              label={say("workflow.ceiling")}
-              value={typed.typed}
-              error={!fits}
-              helperText={fits ? undefined : say("refusal.CEILING_UNUSABLE")}
-              slotProps={{
-                htmlInput: { inputMode: "numeric", readOnly: running },
-              }}
-              onChange={(edit) => {
-                if (!running) {
-                  setTyped({ ...typed, typed: edit.target.value });
-                }
-              }}
-            />
+            <Box sx={{ width: "100%" }}>
+              <Box
+                component="label"
+                htmlFor={inputId}
+                sx={{
+                  display: "block",
+                  typography: "controlLabel",
+                  color: "text.secondary",
+                  mb: "4px",
+                }}
+              >
+                {say("workflow.ceiling")}
+              </Box>
+              <Box
+                id={hintId}
+                sx={{
+                  typography: "supportingProse",
+                  color: "text.secondary",
+                  mb: "6px",
+                }}
+              >
+                {say("workflow.ceilingHint")}
+              </Box>
+              <TextField
+                id={inputId}
+                sx={{ width: 240, maxWidth: "100%" }}
+                size="small"
+                fullWidth
+                value={typed.typed}
+                error={!fits}
+                helperText={fits ? undefined : say("refusal.CEILING_UNUSABLE")}
+                slotProps={{
+                  htmlInput: {
+                    inputMode: "numeric",
+                    readOnly: running,
+                    "aria-describedby": `${hintId}${fits ? "" : ` ${helperId}`}`,
+                  },
+                }}
+                onChange={(edit) => {
+                  if (!running) {
+                    setTyped({ ...typed, typed: edit.target.value });
+                  }
+                }}
+              />
+            </Box>
           </Box>
           <FormControlLabel
             control={
@@ -241,42 +331,43 @@ function CeilingPart({
             label={say("workflow.raiseNeedsApproval")}
           />
           <Box>
-            <ActButton
+            <SaveButton
+              unsaved={unsaved}
               action={action}
-              variant={unsaved ? "contained" : undefined}
               waiting={waiting}
               reason={
-                !fits
-                  ? {
+                fits
+                  ? undefined
+                  : {
                       severity: "warning",
                       words: say("refusal.CEILING_UNUSABLE"),
                     }
-                  : !unsaved
-                    ? { severity: "info", words: say("workflow.unchanged") }
-                    : undefined
               }
-              act={(signal) =>
-                save(
+              act={(signal) => {
+                heard.sent();
+                return save(
                   typed.typed === "" ? null : typed.typed,
                   typed.keeps,
                   typed.raise,
                   signal,
-                )
-              }
+                ).then(headingTakesKeyboard(section, heading));
+              }}
             >
               {say("workflow.saveCeiling")}
-            </ActButton>
+            </SaveButton>
           </Box>
           {running ? (
             <Notice severity="info">{say("workflow.underway")}</Notice>
           ) : null}
-        </>
+        </Box>
       ) : (
         <>
           <Typography variant="body2">
             {workflow.ceiling === undefined
               ? say("workflow.ceilingNone")
-              : say("workflow.ceilingSaid", { ceiling: workflow.ceiling })}
+              : say("workflow.ceilingSaid", {
+                  ceiling: countSaid(workflow.ceiling),
+                })}
           </Typography>
           {workflow.keepsOwnCeiling ? (
             <Typography variant="body2">{say("workflow.keepsOwn")}</Typography>
@@ -300,18 +391,25 @@ function HelpPart({
   workflow,
   editable,
   action,
+  heard,
   waiting,
   save,
   onUnsaved,
+  onLocate,
 }: {
   readonly workflow: WorkflowVersion;
   readonly editable: boolean;
   readonly action: Action<WorkflowVersion>;
+  readonly heard: HeardRefusal;
   /** Whether another write of the host's, or its read, is out, which saving this would be refused beside. */
   readonly waiting: boolean;
   readonly save: SaveHelp;
   readonly onUnsaved: (unsaved: boolean) => void;
+  readonly onLocate: (target: HTMLElement | null) => void;
 }) {
+  const section = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
   const read = {
     may: workflow.mayBeHelped,
     model: workflow.helper?.model ?? "",
@@ -340,23 +438,23 @@ function HelpPart({
             },
       );
   const running = action.running;
-  useDraftPartStatus("help", !unchanged, running || waiting);
+  useDraftPartStatus("help", !unchanged, running || waiting, {
+    saving: running,
+    node: section,
+    locate: () => onLocate(controls.current),
+  });
   useEffect(() => onUnsaved(!unchanged), [onUnsaved, unchanged]);
   return (
     <Part
       title={say("workflow.helpPart")}
-      actions={
-        editable && !unchanged ? (
-          <Typography component="span" variant="body2" color="text.secondary">
-            {say("draft.unsaved")}
-          </Typography>
-        ) : undefined
-      }
+      unsaved={editable && !unchanged}
       level="h4"
       depth={3}
+      headingRef={heading}
+      ref={section}
     >
       {editable ? (
-        <>
+        <Box ref={controls}>
           <FormControlLabel
             control={
               <Switch
@@ -385,24 +483,24 @@ function HelpPart({
             </Box>
           ) : null}
           <Box>
-            <ActButton
+            <SaveButton
+              unsaved={!unchanged}
               action={action}
-              variant={!unchanged ? "contained" : undefined}
               waiting={waiting}
-              reason={
-                unchanged
-                  ? { severity: "info", words: say("workflow.unchanged") }
-                  : undefined
-              }
-              act={(signal) => save(typed.may, helper, signal)}
+              act={(signal) => {
+                heard.sent();
+                return save(typed.may, helper, signal).then(
+                  headingTakesKeyboard(section, heading),
+                );
+              }}
             >
               {say("workflow.saveHelp")}
-            </ActButton>
+            </SaveButton>
           </Box>
           {running ? (
             <Notice severity="info">{say("workflow.underway")}</Notice>
           ) : null}
-        </>
+        </Box>
       ) : (
         <Typography variant="body2">
           {!workflow.mayBeHelped

@@ -25,6 +25,11 @@ export function listOf<T>(
     return null;
   }
   const items = listed.map(itemFrom);
+  for (let at = 0; at < items.length; at++) {
+    if (!Object.hasOwn(items, at)) {
+      return null;
+    }
+  }
   return items.every((item): item is T => item !== null) ? items : null;
 }
 
@@ -65,4 +70,17 @@ export function wordsIn(listed: unknown): string[] | null {
   return Array.isArray(listed)
     ? listed.filter((word): word is string => typeof word === "string")
     : null;
+}
+
+/** Present only as true; one sent as false is no member the server sends. */
+export function trueFrom(said: unknown): true | null {
+  return said === true ? true : null;
+}
+
+export function flagFrom(said: unknown): boolean | null {
+  return typeof said === "boolean" ? said : null;
+}
+
+export function severalFrom(said: unknown): "several" | null {
+  return said === "several" ? said : null;
 }

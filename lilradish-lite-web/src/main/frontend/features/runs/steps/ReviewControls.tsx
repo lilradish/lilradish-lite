@@ -1,20 +1,13 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import FormControlLabel from "@mui/material/FormControlLabel";
-import Radio from "@mui/material/Radio";
-import RadioGroup from "@mui/material/RadioGroup";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 
-import type {
-  StepRow,
-  Who,
-} from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { StepRow } from "../../../api/groups/{groupId}/runs/{runId}/steps";
 import {
   readStep,
   type StepAnswer,
-  type Try,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}";
 import {
   refusedAsMovedOn,
@@ -23,25 +16,38 @@ import {
   reviewTry,
   type ReviewDecision,
 } from "../../../api/groups/{groupId}/runs/{runId}/steps/{stepId}/tries/{number}/review";
+import type { Standing } from "../../../api/standing";
 import type { Problem } from "../../../api/problem";
+import type { Who } from "../../../api/stepProducersAndReviewers";
+import type { Try } from "../../../api/stepTries";
 import { ProblemView } from "../../../app/ProblemView";
 import { movesTheReader, refusalSentence } from "../../../app/refusal";
 import type { Rule } from "../../../app/standing/actRules";
 import { useStandingRead } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
+import { ActGroup } from "../../../lib/action/ActGroup";
+import { heldOr, OnWords, Press } from "../../../lib/action/Press";
 import { Fields } from "../../../lib/form/Fields";
 import { ACTS_SX, SPACED_ABOVE_SX } from "../../../lib/layout/parts";
+import { BLOCK_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
-import { useAction } from "../../../lib/request/useAction";
 import { reasonRefused } from "../../../lib/text/legibility";
 import { STEP_ACT_RULES } from "../actRules";
 import { useRunReadAccess } from "../RunReadAccess";
 import { FilledValue } from "../fill/FilledValue";
 import { declaredFor, fieldAt, labelAt, type Declaring } from "./declared";
-import { REASON_WORDS, whoSaid } from "./stepStates";
+import {
+  REASON_WORDS,
+  stepOffers,
+  useStepActValidity,
+  useStepAction,
+} from "./stepActs";
+import { whoSaid } from "./stepProducersAndReviewers";
 import { WentInValues } from "./WentInValues";
 import { SearchRecord, SearchesCountedRows } from "./SearchRecord";
+import { ProseScope } from "../../../lib/text/ModelProse";
+import { TryMaterial } from "./TryRead";
 
 const REVIEW_RULE: Rule = { inGroup: STEP_ACT_RULES.review };
 
@@ -65,9 +71,13 @@ function blank(number: number): Draft {
 }
 
 /** The fields of the try waiting on the reader's review, by name; none where the step offers the reader no review. */
-export function waitingOnReader(step: StepRow): readonly string[] {
+export function waitingOnReader(
+  step: StepRow,
+  standing: Standing,
+  groupId: string,
+): readonly string[] {
   const where = step.where;
-  return step.acts.includes("review") &&
+  return stepOffers(step, "review", standing, groupId) &&
     where?.kind === "waiting_on_review" &&
     where.number !== undefined
     ? (where.values ?? []).map(({ field }) => field)
@@ -77,10 +87,12 @@ export function waitingOnReader(step: StepRow): readonly string[] {
 export function searchWaitingOnReader(
   step: StepRow,
   inHand: StepAnswer | null | undefined,
+  standing: Standing,
+  groupId: string,
 ): Try | undefined {
   if (
     step.runs.kind !== "search" ||
-    waitingOnReader(step).length === 0 ||
+    waitingOnReader(step, standing, groupId).length === 0 ||
     inHand?.step.stepId !== step.stepId ||
     inHand.step.where?.kind !== "waiting_on_review" ||
     inHand.step.where.number !== step.where?.number
@@ -102,6 +114,7 @@ export function ReviewControls({
   heading,
   landsOn,
   onShown,
+  message = false,
 }: {
   readonly groupId: string;
   readonly runId: string;
@@ -113,16 +126,21 @@ export function ReviewControls({
   /** The element the keyboard goes to once the review's answer is shown, as its controls go with it. */
   readonly landsOn: string;
   readonly onShown: (answer: StepAnswer) => void;
+  readonly message?: boolean;
 }) {
   const baseId = useId();
   const wentInId = useId();
   const headingId = useId();
   const noticeId = useId();
-  const reloadStanding = useStandingRead().reload;
+  const standingRead = useStandingRead();
+  const reloadStanding = standingRead.reload;
+  const standing = standingRead.value;
   const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
-  const waiting = waitingOnReader(step);
+  const waiting = waitingOnReader(step, standing, groupId);
   const number = step.where?.number ?? 0;
+  const validity = useStepActValidity(step, "review", standing, groupId, runId);
+  const requestVersion = useRef<number | null>(null);
   const [draft, setDraft] = useState(() => blank(number));
   const [marked, setMarked] = useState<Marked | null>(null);
   const [firstBy, setFirstBy] = useState<Who | null>(null);
@@ -135,11 +153,13 @@ export function ReviewControls({
   const shown = draft.number === number ? draft : blank(number);
   const declared = declaredFor(step, declaring.declarations);
   const gives = declared?.gives;
-  const searchTry = searchWaitingOnReader(step, inHand);
+  const searchTry = searchWaitingOnReader(step, inHand, standing, groupId);
   const several = waiting.length > 1;
 
-  const rereading = useAction<StepAnswer>(
+  const rereading = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = noticeId;
       setReadAgainAt(answer.step.where?.number ?? null);
       setFirstBy(
@@ -153,12 +173,15 @@ export function ReviewControls({
     },
   );
 
-  const reviewing = useAction<StepAnswer>(
+  const reviewing = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = landsOn;
       onShown(answer);
     },
     (problem) => {
+      if (!validity.still(requestVersion.current)) return;
       if (movesTheReader(problem)) {
         reloadStanding();
       }
@@ -235,6 +258,7 @@ export function ReviewControls({
     signal: AbortSignal,
   ) => {
     setSentFor(number);
+    requestVersion.current = validity.begin();
     setMarked(null);
     setFirstBy(null);
     return reviewTry(
@@ -266,164 +290,250 @@ export function ReviewControls({
     : noticesOf(reviewing.problem, rereading.running, firstBy, marked !== null);
   const rereadRefusal = stale ? null : rereading.problem;
 
+  if (waiting.length === 0 && notices === null && rereadRefusal === null)
+    return null;
+
   return (
-    <>
-      {waiting.length === 0 || step.wentIn === undefined ? null : (
-        <Box
-          component="section"
-          aria-labelledby={wentInId}
-          sx={SPACED_ABOVE_SX}
-        >
-          <Typography id={wentInId} variant={heading}>
-            {say("step.wentIn")}
-          </Typography>
-          <WentInValues
-            wentIn={step.wentIn}
-            takes={declared?.takes}
-            declaring={declaring}
-          />
-        </Box>
-      )}
-      {waiting.length === 0 ? null : (
-        <Box
-          component="section"
-          aria-labelledby={headingId}
-          sx={SPACED_ABOVE_SX}
-        >
-          <Typography id={headingId} variant={heading}>
-            {say("step.yourReview")}
-          </Typography>
-          {searchDrawn || searchTry?.search === undefined ? null : (
-            <>
-              <SearchRecord said={searchTry.search.said} />
-              {searchTry.search.counted === undefined ? null : (
-                <Fields>
-                  <SearchesCountedRows counted={searchTry.search.counted} />
-                </Fields>
-              )}
-            </>
-          )}
-          {waiting.map((field, index) => {
-            const label = labelAt(gives, field);
-            const labelId = `${baseId}-label-${index}`;
-            const given = step.gaveBack?.find((each) => each.field === field);
-            const choice = shown.chosen.get(field);
-            const typed = shown.reasons.get(field) ?? "";
-            const judged = typed === "" ? null : reasonRefused(typed);
-            const problem =
-              !stale && marked?.field === field && marked.words !== null
-                ? marked.words
-                : judged === null
-                  ? null
-                  : say(REASON_WORDS[judged]);
-            return (
-              <Box key={field} sx={SPACED_ABOVE_SX}>
-                <Typography id={labelId} variant="subtitle2" component="p">
-                  {label}
-                </Typography>
-                {given === undefined ? null : (
-                  <FilledValue
-                    field={fieldAt(gives, field)}
-                    label={label}
-                    shown={given}
-                    shut={false}
-                  />
+    <Box component={message ? "li" : "div"} sx={BLOCK_SX}>
+      <ProseScope independent>
+        {waiting.length === 0 || step.wentIn === undefined ? null : (
+          <Box
+            component="section"
+            aria-labelledby={wentInId}
+            sx={SPACED_ABOVE_SX}
+          >
+            <Typography id={wentInId} variant={heading}>
+              {say("step.wentIn")}
+            </Typography>
+            <WentInValues
+              wentIn={step.wentIn}
+              takes={declared?.takes}
+              declaring={declaring}
+            />
+          </Box>
+        )}
+        {waiting.length === 0 ? null : (
+          <Box
+            component="section"
+            aria-labelledby={headingId}
+            sx={SPACED_ABOVE_SX}
+          >
+            <Typography id={headingId} variant={heading}>
+              {say("step.needsReview")}
+            </Typography>
+            {searchDrawn || searchTry?.search === undefined ? null : (
+              <>
+                <TryMaterial number={searchTry.number}>
+                  {(material) =>
+                    material?.search === undefined ? null : (
+                      <SearchRecord said={material.search.said} />
+                    )
+                  }
+                </TryMaterial>
+                {searchTry.search.counted === undefined ? null : (
+                  <Fields>
+                    <SearchesCountedRows counted={searchTry.search.counted} />
+                  </Fields>
                 )}
-                {several ? (
-                  <RadioGroup
-                    row
-                    aria-labelledby={labelId}
-                    value={choice ?? ""}
-                    onChange={(_event, value) =>
-                      choose(field, value === "refused" ? "refused" : "assured")
-                    }
+              </>
+            )}
+            {waiting.map((field, index) => {
+              const label = labelAt(gives, field);
+              const labelId = `${baseId}-label-${index}`;
+              const given = step.gaveBack?.find((each) => each.field === field);
+              const choice = shown.chosen.get(field);
+              const typed = shown.reasons.get(field) ?? "";
+              const judged = typed === "" ? null : reasonRefused(typed);
+              const problem =
+                !stale && marked?.field === field && marked.words !== null
+                  ? marked.words
+                  : judged === null
+                    ? null
+                    : say(REASON_WORDS[judged]);
+              return (
+                <Box key={field} sx={SPACED_ABOVE_SX}>
+                  <Typography
+                    hidden={given !== undefined}
+                    id={labelId}
+                    variant="subtitle2"
+                    component="p"
                   >
-                    <FormControlLabel
-                      value="assured"
-                      control={<Radio />}
-                      label={say("step.assure")}
+                    {label}
+                  </Typography>
+                  {given === undefined ? null : (
+                    <FilledValue
+                      cards
+                      field={fieldAt(gives, field)}
+                      label={label}
+                      shown={given}
+                      status={given.now}
+                      shut={false}
                     />
-                    <FormControlLabel
-                      value="refused"
-                      control={<Radio />}
-                      label={say("step.refuse")}
-                    />
-                  </RadioGroup>
-                ) : (
-                  <Box role="group" aria-labelledby={labelId} sx={ACTS_SX}>
-                    <ActButton
-                      variant="contained"
-                      action={reviewing}
-                      waiting={rereading.running}
-                      act={(signal) =>
-                        send(() => ({ outcome: "assured" }), signal)
-                      }
-                    >
-                      {say("step.assure")}
-                    </ActButton>
-                    <Button
-                      aria-pressed={choice === "refused"}
-                      onClick={() => {
-                        // Only at this press: a radio moving the keyboard would pull arrow keys out of its group.
-                        if (choice !== "refused") {
+                  )}
+                  {several ? (
+                    <Decision
+                      label={say("step.decisionFor", { field: label })}
+                      choice={choice}
+                      held={reviewing.running || rereading.running}
+                      onChoose={(next, pressed) => {
+                        if (next === choice) return;
+                        if (next === "refused" && pressed)
                           focusNext.current = reasonInputId(index);
-                        }
-                        choose(field, choice === "refused" ? null : "refused");
+                        choose(field, next);
                       }}
-                    >
-                      {say("step.refuse")}
-                    </Button>
-                  </Box>
-                )}
-                {choice === "refused" ? (
-                  <TextField
-                    id={reasonInputId(index)}
-                    label={say("step.whyRefuse", { field: label })}
-                    value={typed}
-                    onChange={(edit) => write(field, edit.target.value)}
-                    error={problem !== null}
-                    helperText={problem ?? undefined}
-                    required
-                    multiline
-                    minRows={2}
-                    fullWidth
-                    sx={SPACED_ABOVE_SX}
-                  />
-                ) : null}
+                    />
+                  ) : (
+                    <Box role="group" aria-labelledby={labelId} sx={ACTS_SX}>
+                      <ActGroup>
+                        <ActButton
+                          tier="secondary"
+                          fill
+                          action={reviewing}
+                          waiting={rereading.running}
+                          act={(signal) =>
+                            send(() => ({ outcome: "assured" }), signal)
+                          }
+                        >
+                          {say("step.assure")}
+                        </ActButton>
+                        <Press
+                          tier="secondary"
+                          fill
+                          aria-pressed={choice === "refused"}
+                          unavailable={reviewing.running || rereading.running}
+                          onPress={() => {
+                            if (choice !== "refused") {
+                              focusNext.current = reasonInputId(index);
+                            }
+                            choose(
+                              field,
+                              choice === "refused" ? null : "refused",
+                            );
+                          }}
+                        >
+                          {say("step.refuse")}
+                        </Press>
+                      </ActGroup>
+                    </Box>
+                  )}
+                  {choice === "refused" ? (
+                    <TextField
+                      id={reasonInputId(index)}
+                      label={say("step.whyRefuse", { field: label })}
+                      value={typed}
+                      onChange={(edit) => write(field, edit.target.value)}
+                      error={problem !== null}
+                      helperText={problem ?? undefined}
+                      required
+                      multiline
+                      minRows={2}
+                      fullWidth
+                      sx={SPACED_ABOVE_SX}
+                    />
+                  ) : null}
+                </Box>
+              );
+            })}
+            {several || shown.chosen.get(waiting[0]!) === "refused" ? (
+              <Box sx={{ ...ACTS_SX, ...SPACED_ABOVE_SX }}>
+                <ActButton
+                  tier="primary"
+                  action={reviewing}
+                  waiting={rereading.running}
+                  reason={
+                    ready
+                      ? undefined
+                      : {
+                          severity: "info",
+                          words: say(
+                            several ? "step.chooseEach" : "step.sayWhy",
+                          ),
+                        }
+                  }
+                  act={(signal) => send(decisionOf, signal)}
+                >
+                  {say("step.submitReview")}
+                </ActButton>
               </Box>
-            );
-          })}
-          {several || shown.chosen.get(waiting[0]!) === "refused" ? (
-            <Box sx={{ ...ACTS_SX, ...SPACED_ABOVE_SX }}>
-              <ActButton
-                variant="contained"
-                action={reviewing}
-                waiting={rereading.running}
-                reason={
-                  ready
-                    ? undefined
-                    : {
-                        severity: "info",
-                        words: say(several ? "step.chooseEach" : "step.sayWhy"),
-                      }
-                }
-                act={(signal) => send(decisionOf, signal)}
-              >
-                {say("step.submitReview")}
-              </ActButton>
-            </Box>
-          ) : null}
-        </Box>
-      )}
-      {notices === null && rereadRefusal === null ? null : (
-        <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
-          {notices}
-          {rereadRefusal === null ? null : (
-            <ProblemView problem={rereadRefusal} />
-          )}
-        </Box>
-      )}
-    </>
+            ) : null}
+          </Box>
+        )}
+        {notices === null && rereadRefusal === null ? null : (
+          <Box id={noticeId} tabIndex={-1} sx={SPACED_ABOVE_SX}>
+            {notices}
+            {rereadRefusal === null ? null : (
+              <ProblemView problem={rereadRefusal} />
+            )}
+          </Box>
+        )}
+      </ProseScope>
+    </Box>
+  );
+}
+
+const CHOICES = ["assured", "refused"] as const;
+
+const CHOICE_WORDS = {
+  assured: "step.assure",
+  refused: "step.refuse",
+} as const;
+
+const ARROW_STEPS: Readonly<Record<string, number>> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+/** One value's decision: one stop for the keyboard, an arrow moving and choosing, and nothing pressed undoing it. */
+function Decision({
+  label,
+  choice,
+  held,
+  onChoose,
+}: {
+  readonly label: string;
+  readonly choice: Choice | undefined;
+  readonly held: boolean;
+  /** Pressed, rather than reached by an arrow, which leaves the keyboard on the choice. */
+  readonly onChoose: (choice: Choice, pressed: boolean) => void;
+}) {
+  const radios = useRef<(HTMLButtonElement | null)[]>([]);
+  const stop = choice === undefined ? 0 : CHOICES.indexOf(choice);
+  return (
+    <Box role="radiogroup" aria-label={label} sx={ACTS_SX}>
+      <ActGroup>
+        {CHOICES.map((each, index) => {
+          const checked = choice === each;
+          return (
+            <Button
+              key={each}
+              ref={(radio: HTMLButtonElement | null) => {
+                radios.current[index] = radio;
+              }}
+              variant="outlined"
+              color="primary"
+              fullWidth
+              role="radio"
+              aria-checked={checked}
+              tabIndex={index === stop ? 0 : -1}
+              {...heldOr(held, () => onChoose(each, true))}
+              onKeyDown={(event) => {
+                const step = ARROW_STEPS[event.key];
+                if (step === undefined) return;
+                event.preventDefault();
+                if (held) return;
+                const next = (index + step + CHOICES.length) % CHOICES.length;
+                radios.current[next]?.focus();
+                onChoose(CHOICES[next]!, false);
+              }}
+            >
+              <OnWords on={checked}>{say(CHOICE_WORDS[each])}</OnWords>
+            </Button>
+          );
+        })}
+      </ActGroup>
+    </Box>
   );
 }
 

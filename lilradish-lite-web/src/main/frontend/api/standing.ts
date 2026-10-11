@@ -6,13 +6,9 @@ import type { Person } from "./person";
 const STANDING = "/api/standing";
 
 /**
- * The estate's acts, spelt the way the server publishes them. A surface is
- * gated on an act and never on a role: roles bundle acts, and a side reading
- * roles would be keeping a second copy of that table.
- *
- * No compiler ties this list to the server's — one is erased before anything
- * runs and the other is in another language — so what holds the two level is a
- * spec beside the server's own table, which reads this declaration as text.
+ * Acts use the server's spelling. Gate on acts, never duplicate role bundles here.
+ * No compiler ties the languages together: a spec beside the server's table
+ * reads this erased declaration as text to hold the two level.
  */
 export type SurfaceAct =
   | "keep_pool"
@@ -22,8 +18,8 @@ export type SurfaceAct =
   | "read_measurements";
 
 /**
- * A group's permissions as published, held level with the server's the way
- * `SurfaceAct` is; a group's page is gated on one and never on a role.
+ * Permissions use the server's spelling, held level as `SurfaceAct` is.
+ * Group pages are gated on a permission, never a role.
  */
 export type GroupPermission =
   | "read_membership"
@@ -38,7 +34,7 @@ export type GroupPermission =
   | "approve_entry"
   | "revoke_entry";
 
-/** A group the reader is in, addressed by `groupId` and never by `key`. */
+/** A group the reader is in, asked about by `groupId` and never by `key`; a page's address names it by `key`. */
 export interface GroupStanding {
   readonly groupId: string;
   readonly key: string;
@@ -67,7 +63,6 @@ export function holds(standing: Standing, act: SurfaceAct): boolean {
   return standing.acts.has(act);
 }
 
-/** The same question inside one group, answered by that group's grants alone. */
 export function mayIn(
   group: GroupStanding,
   permission: GroupPermission,
@@ -114,7 +109,6 @@ function standingFrom(body: unknown): Standing {
     : standing;
 }
 
-/** A group that cannot be addressed or shown is left out, and the rest kept. */
 function groupFrom(listed: unknown): GroupStanding[] {
   if (
     !isUnchecked(listed) ||
@@ -135,13 +129,8 @@ function groupFrom(listed: unknown): GroupStanding[] {
 }
 
 /**
- * Who the reader is, learnt in the one place it is learnt. Nothing downstream
- * asks for its own: a second read is a second answer, and two screens
- * disagreeing about what somebody may do is the shape that gets debugged as a
- * permissions bug.
- *
- * A refusal takes the standing with it and the frame renders a reader who may
- * go nowhere, which is the direction this has to fail in.
+ * Downstream shares this read: separate answers could disagree about permissions.
+ * A refusal discards the standing, so the frame fails with no destinations.
  */
 export function useStandingResource(): Resource<Standing> {
   return useResource(readStanding, NOTHING);

@@ -5,19 +5,15 @@ import { pagedLoader, type ListQuery } from "../lib/request/pagedLoader";
 
 export const GROUPS = "/api/groups";
 
-/** The columns the register can be sorted by, spelt as the server takes them. */
+/** Spelt as the server takes them. */
 export type GroupSortColumn =
   "key" | "name" | "canBeAdministered" | "memberCount";
 
-/** One column, led by a hyphen for descending. */
 export type GroupOrder = GroupSortColumn | `-${GroupSortColumn}`;
 
 export type GroupQuery = ListQuery<GroupOrder>;
 
-/**
- * One group in the register: facts about the group, and nobody in it.
- * `groupId` addresses it and is never shown.
- */
+/** `groupId` addresses it and is never shown. */
 export interface RegisteredGroup {
   readonly groupId: string;
   readonly key: string;
@@ -32,8 +28,7 @@ export interface RegisteredGroup {
 }
 
 /**
- * A group to be made, and who in the pool is its first member. The key is sent
- * as typed: holding it in capitals is the server's.
+ * The key is sent as typed: holding it in capitals is the server's.
  */
 export interface NewGroup {
   readonly name: string;
@@ -59,7 +54,6 @@ export function createGroup(
   return post(GROUPS, { name, key, subjectId }, signal, groupFrom);
 }
 
-/** Built member by member; a group missing any of them is not one this side can show. */
 export function groupFrom(body: unknown): RegisteredGroup | null {
   if (!isUnchecked(body)) {
     return null;

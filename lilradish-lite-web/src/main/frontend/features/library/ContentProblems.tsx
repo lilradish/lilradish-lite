@@ -2,7 +2,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import { Children, Fragment, useId, type ReactElement } from "react";
 
-import type { DeclaredField } from "../../api/declaration";
+import type { DeclaredField, ListVersion } from "../../api/declaration";
 import type {
   ContentPart,
   ContentProblem,
@@ -21,10 +21,12 @@ import { say, type MessageId } from "../../i18n/app";
 import { intl } from "../../i18n/intl";
 import { visible } from "../../i18n/visible";
 import { isolatedInText } from "../../lib/direction/isolated";
+import { VersionLabel, versionLabelText } from "../../lib/text/VersionLabel";
+import { FieldName } from "../../lib/form/FieldName";
 import { joinedInSentence } from "../people/wordLists";
 import { spokenName } from "../runs/steps/stepTitle";
 import ASKING from "./askingLimit.json";
-import { fileSizeSaid } from "./declarationWords";
+import { sizeSaid } from "../../lib/text/sizeSaid";
 
 // Its markers taken away, so it is named a list outright.
 const LIST_SX = { listStyleType: "none", m: 0, mb: 2, p: 0 };
@@ -53,6 +55,7 @@ const CASE_OUTPUT_PROBLEMS = {
 
 const PROBLEMS = {
   instruction_missing: "contentProblem.instruction_missing",
+  instruction_names_unknown: "contentProblem.instruction_names_unknown",
   drawing_names_unknown: "contentProblem.drawing_names_unknown",
   nothing_given_back: "contentProblem.nothing_given_back",
   name_repeated: "contentProblem.name_repeated",
@@ -70,6 +73,7 @@ const PROBLEMS = {
   floor_missing: "contentProblem.floor_missing",
   no_steps: "contentProblem.no_steps",
   step_name_repeated: "contentProblem.step_name_repeated",
+  step_label_repeated: "contentProblem.step_label_repeated",
   runs_missing: "contentProblem.runs_missing",
   pin_elsewhere: "contentProblem.pin_elsewhere",
   code_step_not_published: "contentProblem.code_step_not_published",
@@ -120,7 +124,8 @@ const PROBLEMS = {
   search_review_past_largest: "contentProblem.search_review_past_largest",
   search_tool_not_offered: "contentProblem.search_tool_not_offered",
   search_way_not_held: "contentProblem.search_way_not_held",
-  search_question_may_be_empty: "contentProblem.search_question_may_be_empty",
+  search_question_no_longer_matches:
+    "contentProblem.search_question_no_longer_matches",
   search_standing_missing: "contentProblem.search_standing_missing",
 } as const satisfies Record<ContentProblemCode, MessageId>;
 
@@ -137,7 +142,6 @@ export interface ReadContent {
   readonly terms: readonly ListTerm[];
 }
 
-/** What the page names a version's content by, whichever part of it was last written. */
 export function contentOf(
   version: QuestionVersion | WorkflowVersion | ReferenceListVersion,
 ): ReadContent {
@@ -172,8 +176,8 @@ export function contentOf(
 }
 
 /**
- * Each listed place a submission was refused for, in the server's order, each level found by its key in what was read:
- * a field named down to it, a term with its place. A part, a problem or a place the page cannot name is still listed.
+ * Each listed place a submission was refused for, in the server's order, each level found by its key in what was read.
+ * A part, a problem or a place the page cannot name is still listed.
  */
 export function ContentProblems({
   problems,
@@ -219,7 +223,7 @@ export function ContentProblems({
   );
 }
 
-/** What is wrong, by the words for it; one this build has none for is said generally. */
+/** A problem code this build has no words for is said generally. */
 export function problemWords(problem: ContentProblem): MessageId {
   return Object.hasOwn(PROBLEMS, problem.code)
     ? PROBLEMS[problem.code as ContentProblemCode]
@@ -227,7 +231,39 @@ export function problemWords(problem: ContentProblem): MessageId {
 }
 
 /** What is wrong, in words carrying every figure the problem's words say; wherever a problem is shown, it is said so. */
-export function problemSaid(problem: ContentProblem, kind?: RunsKind): string {
+export function problemSaid(
+  problem: ContentProblem,
+  kind?: RunsKind,
+  searchWay?: string,
+  question?: Pick<ListVersion, "name" | "number" | "versionName">,
+): string {
+  if (problem.code === "instruction_names_unknown") {
+    return problem.name === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.instruction_names_unknown", {
+          count: 1,
+          names: isolatedInText(`{{${problem.name}}}`),
+        });
+  }
+  if (problem.code === "search_question_no_longer_matches") {
+    return searchWay === undefined
+      ? say("contentProblem.unknown")
+      : question === undefined
+        ? say("contentProblem.searchQuestionNoLongerMatchesUnnamed", {
+            way: isolatedInText(searchWay),
+          })
+        : say("contentProblem.search_question_no_longer_matches", {
+            way: isolatedInText(searchWay),
+            question: namedQuestion(question).words,
+          });
+  }
+  if (problem.code === "step_label_repeated") {
+    return problem.name === undefined
+      ? say("contentProblem.unknown")
+      : say("contentProblem.step_label_repeated", {
+          name: isolatedInText(problem.name),
+        });
+  }
   if (problem.code === "asking_past_largest") {
     return askingPastSaid(
       problem.excess,
@@ -244,7 +280,7 @@ export function problemSaid(problem: ContentProblem, kind?: RunsKind): string {
     return problem.fileLimits === undefined
       ? say("contentProblem.unknown")
       : say("contentProblem.file_limit_past_deployment", {
-          size: fileSizeSaid(problem.fileLimits.maximumBytes),
+          size: sizeSaid(problem.fileLimits.maximumBytes),
           count: problem.fileLimits.maximumPerField,
         });
   }
@@ -252,7 +288,7 @@ export function problemSaid(problem: ContentProblem, kind?: RunsKind): string {
     return problem.fileLimits === undefined
       ? say("contentProblem.unknown")
       : say("contentProblem.file_total_past_deployment", {
-          total: fileSizeSaid(problem.fileLimits.maximumTotalBytes),
+          total: sizeSaid(problem.fileLimits.maximumTotalBytes),
         });
   }
   if (problem.code === "limit_past_largest") {
@@ -305,7 +341,6 @@ function askingPastSaid(excess: number | undefined, atStep: boolean): string {
       );
 }
 
-/** Said at the step, which names it: by how much its code step's review could send too much, as asking's is said. */
 function codeStepReviewPastSaid(excess: number | undefined): string {
   if (excess === undefined) {
     return say("contentProblem.unknown");
@@ -348,9 +383,15 @@ function placeSaid(
       : Object.hasOwn(PARTS, problem.part)
         ? say(PARTS[problem.part as ContentPart])
         : { words: problem.part, node: <bdi>{problem.part}</bdi> };
-  const kind = content?.steps.find((step) => step.stepId === problem.stepId)
-    ?.runs?.kind;
-  const said = problemLocated(problem, kind);
+  const runs = content?.steps.find(
+    (step) => step.stepId === problem.stepId,
+  )?.runs;
+  const said = problemLocated(
+    problem,
+    runs?.kind,
+    runs?.kind === "search" ? runs.searchWay : undefined,
+    runs?.kind === "search" ? runs.version : undefined,
+  );
   if (problem.part === "drawing") {
     return located("contentProblems.atDrawing", { part, problem: said });
   }
@@ -381,7 +422,7 @@ function placeSaid(
   if (problem.stepId !== undefined) {
     const step = steps.find((each) => each.stepId === problem.stepId);
     if (step !== undefined) {
-      const stepName = named(step.name);
+      const stepName = named(step.label ?? step.name);
       const routeCase = step.runs?.cases?.find(
         (each) => each.caseId === problem.caseId,
       );
@@ -460,7 +501,6 @@ function placeSaid(
       });
 }
 
-/** The fields a part holds by their own keys: a half's, or every route's what it gives back. */
 function fieldsOfPart(
   part: string,
   content: ReadContent,
@@ -476,7 +516,7 @@ function fieldsOfPart(
   return [];
 }
 
-/** Where a binding is, said by what it fills, or by the route choosing by it; none where no read binding has the key. */
+/** None where no read binding has the key. */
 function bindingSaid(
   bindingId: string,
   content: ReadContent | null,
@@ -491,19 +531,7 @@ function bindingSaid(
     });
   }
   for (const step of steps) {
-    const stepName = named(step.name);
-    const questionPosition =
-      step.runs?.question?.findIndex(
-        (part) => "partId" in part && part.partId === bindingId,
-      ) ?? -1;
-    if (questionPosition >= 0) {
-      return located("workflow.readAt", {
-        place: stepName,
-        path: located("workflow.searchPart", {
-          position: questionPosition + 1,
-        }),
-      });
-    }
+    const stepName = named(step.label ?? step.name);
     if (step.runs?.discriminator?.bindingId === bindingId) {
       return located("contentProblems.chosenBy", { step: stepName });
     }
@@ -554,14 +582,28 @@ function namesDownTo(
         (fellow) => fellow !== field && fellow.name === field.name,
       );
       const text = useLabel
-        ? (field.label ?? field.name.replaceAll("_", " "))
+        ? field.label && field.label !== field.name
+          ? `${field.label} · ${field.name}`
+          : field.name
         : field.name;
+      const fieldName = useLabel
+        ? {
+            words: isolatedInText(text),
+            node: (
+              <FieldName
+                name={field.name}
+                label={field.label}
+                context="author"
+              />
+            ),
+          }
+        : named(text);
       const name = shared
         ? located("contentProblems.sameNamed", {
-            name: named(text),
+            name: fieldName,
             position: index + 1,
           })
-        : named(text);
+        : fieldName;
       return [
         {
           words: shared
@@ -588,6 +630,20 @@ interface Located {
 
 function named(words: string): Located {
   return { words: isolatedInText(words), node: <bdi>{words}</bdi> };
+}
+
+function namedQuestion(
+  question: Pick<ListVersion, "name" | "number" | "versionName">,
+): Located {
+  const labelled = {
+    entry: question.name,
+    number: question.number,
+    name: question.versionName,
+  };
+  return {
+    words: versionLabelText(labelled),
+    node: <VersionLabel {...labelled} />,
+  };
 }
 
 function hint(words: string): ReactElement {
@@ -648,8 +704,50 @@ function pathOf(names: readonly Located[]): Located {
   };
 }
 
-function problemLocated(problem: ContentProblem, kind?: RunsKind): Located {
-  const words = problemSaid(problem, kind);
+function problemLocated(
+  problem: ContentProblem,
+  kind?: RunsKind,
+  searchWay?: string,
+  question?: Pick<ListVersion, "name" | "number" | "versionName">,
+): Located {
+  const words = problemSaid(problem, kind, searchWay, question);
+  if (
+    problem.code === "instruction_names_unknown" &&
+    problem.name !== undefined
+  ) {
+    return {
+      words,
+      node: located("contentProblem.instruction_names_unknown", {
+        count: 1,
+        names: named(`{{${problem.name}}}`),
+      }).node,
+    };
+  }
+  if (
+    problem.code === "search_question_no_longer_matches" &&
+    searchWay !== undefined
+  ) {
+    return {
+      words,
+      node:
+        question === undefined
+          ? located("contentProblem.searchQuestionNoLongerMatchesUnnamed", {
+              way: named(searchWay),
+            }).node
+          : located("contentProblem.search_question_no_longer_matches", {
+              way: named(searchWay),
+              question: namedQuestion(question),
+            }).node,
+    };
+  }
+  if (problem.code === "step_label_repeated" && problem.name !== undefined) {
+    return {
+      words,
+      node: located("contentProblem.step_label_repeated", {
+        name: named(problem.name),
+      }).node,
+    };
+  }
   if (problem.code === "drawing_names_unknown" && problem.name !== undefined) {
     return {
       words,

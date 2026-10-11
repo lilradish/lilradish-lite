@@ -3,12 +3,12 @@ import { get } from "../lib/request/http";
 
 const DIRECTORY = "/api/people";
 
-/** Somebody in the directory. `subjectId` is present exactly while they are in the pool. */
+/** `subjectId` is present exactly while they are in the pool. */
 export interface PersonInDirectory {
   readonly userId: string;
   /**
-   * May carry a bidirectional control, so always shown isolated. Absent where
-   * the directory holds no name for them.
+   * Always show isolated: it may carry a bidirectional control.
+   * Absent where the directory holds no name.
    */
   readonly displayName?: string;
   readonly subjectId?: string;
@@ -21,9 +21,8 @@ interface FoundInDirectory {
 }
 
 /**
- * What was typed, sent as typed: which part of it matches a user number and
- * which a name is the server's to say. A module function, so it is one value
- * for whoever keys a read on it.
+ * Sent as typed; only the server decides what matches a user number or a name.
+ * A module function keeps its identity stable for callers keying reads on it.
  */
 export function searchDirectory(
   typed: string,
@@ -36,7 +35,6 @@ export function searchDirectory(
   );
 }
 
-/** Built member by member; one match that cannot be read refuses the whole answer. */
 function foundFrom(body: unknown): FoundInDirectory | null {
   if (
     !isUnchecked(body) ||

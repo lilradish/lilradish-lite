@@ -96,7 +96,7 @@ describe("RequireStanding", () => {
   it("waits on a read still out rather than refusing on the nothing it holds so far", () => {
     gated(stillReading());
 
-    expect(screen.getByText("Still reading…")).toBeInTheDocument();
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(SCREEN)).toBeNull();
   });
@@ -127,7 +127,7 @@ describe("RequireStanding", () => {
     expect(screen.getByText(SCREEN)).toBe(drawn);
     expect(screen.getByRole("status")).toBe(status);
     expect(status.textContent).toBe("");
-    expect(screen.queryByText("Still reading…")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 

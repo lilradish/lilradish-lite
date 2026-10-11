@@ -16,7 +16,7 @@ import { FindOne, type Found } from "./FindOne";
 const QUIET_MS = 300;
 
 /** `theme.palette.text.secondary`, as a resolved colour is reported back. */
-const SECONDARY_COLOUR = "rgb(89, 89, 89)";
+const SECONDARY_COLOUR = "rgb(88, 102, 108)";
 
 interface Row {
   readonly id: string;
@@ -117,7 +117,9 @@ function finding({
 
   render(<Choosing />, { wrapper: themed });
   return {
-    box: screen.getByRole<HTMLInputElement>("searchbox", { name: "Find" }),
+    get box() {
+      return screen.getByRole<HTMLInputElement>("searchbox", { name: "Find" });
+    },
     searches,
     picks,
     async answer(found: Found<Row>) {
@@ -281,7 +283,7 @@ describe("FindOne", () => {
     await answer({ items: [AVO], more: false });
 
     expect(searches.map((each) => each.typed)).toEqual(["av", "av"]);
-    expect(whileAskedAgain).toBe("Still reading…");
+    expect(whileAskedAgain).toBe("Loading…");
     expect(refusalWhileAskedAgain).toBeNull();
     expect(status()).toBe("1 found");
   });
@@ -335,7 +337,7 @@ describe("FindOne", () => {
     type(box, "av");
     wait(QUIET_MS);
 
-    expect(status()).toBe("Still reading…");
+    expect(status()).toBe("Loading…");
     expect(screen.queryByRole("radiogroup")).toBeNull();
   });
 
@@ -574,8 +576,12 @@ describe("FindOne", () => {
   it.each([
     ["takes focus as it appears where it is asked to", true, "searchbox"],
     ["leaves focus where it was otherwise", false, "body"],
-  ])("%s", (_case, autoFocus, focused) => {
-    const { box } = finding({ autoFocus });
+  ])("%s", async (_case, autoFocus, focused) => {
+    let search!: ReturnType<typeof finding>;
+    await act(async () => {
+      search = finding({ autoFocus });
+    });
+    const { box } = search;
 
     expect(document.activeElement).toBe(
       focused === "searchbox" ? box : document.body,

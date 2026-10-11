@@ -152,7 +152,9 @@ describe("AddSomebody", () => {
     const { sent } = adding();
     await opened();
 
-    bringIn().focus();
+    await act(async () => {
+      bringIn().focus();
+    });
     await userEvent.keyboard("{Enter}");
 
     expect(bringIn()).toHaveAttribute("aria-disabled", "true");
@@ -237,7 +239,9 @@ describe("AddSomebody", () => {
     await userEvent.click(bringIn());
     const abandon = screen.getByRole("button", { name: "Cancel" });
 
-    abandon.focus();
+    await act(async () => {
+      abandon.focus();
+    });
     await userEvent.keyboard("{Enter}[Space]{Escape}");
     // The dialog's own container, around it and under the shade: a press on it
     // is a press on the shade.
@@ -327,7 +331,9 @@ describe("AddSomebody", () => {
     );
     const add = screen.getByRole("button", { name: "Add somebody" });
 
-    add.focus();
+    await act(async () => {
+      add.focus();
+    });
     await userEvent.keyboard("{Enter}[Space]");
 
     expect(add).toHaveAttribute("aria-disabled", "true");

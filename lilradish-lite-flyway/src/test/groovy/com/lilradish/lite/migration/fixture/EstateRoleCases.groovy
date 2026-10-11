@@ -1,0 +1,49 @@
+package com.lilradish.lite.migration.fixture
+
+import static com.lilradish.lite.migration.fixture.SchemaKeys.*
+import static com.lilradish.lite.migration.fixture.SchemaRows.*
+
+final class EstateRoleCases {
+
+    // DB-SPECIFIC: FIXTURE and CASES input PostgreSQL native estate_role and subject_kind enum labels.
+
+    static final List<String> FIXTURE = [
+        "insert into app.estate_role_grants (estate_role_grant_id, subject_id, role, created_by)" +
+                " values ('${GRANT}', '${MEMBER}', 'watcher', '${STEWARD}')",
+    ]
+
+    static final List<Map<String, String>> CASES = [
+        attack("estate_role_grants_pk", "estate_role_grants",
+                "insert into app.estate_role_grants (estate_role_grant_id, subject_id, role, created_by)" +
+                        " values ('${GRANT}', '${MEMBER}', 'steward', '${STEWARD}')"),
+        attack("estate_role_grants_person_fk", "estate_role_grants",
+                "insert into app.estate_role_grants (subject_id, role, created_by)" +
+                        " values ('${SEEDER}', 'watcher', '${STEWARD}')"),
+        attack("estate_role_grants_is_person", "estate_role_grants",
+                "insert into app.estate_role_grants (subject_id, subject_kind, role, created_by)" +
+                        " values ('${WORKFLOW_RUNNER}', 'system', 'watcher', '${STEWARD}')"),
+        attack("estate_role_grants_author_fk", "estate_role_grants",
+                "insert into app.estate_role_grants (subject_id, role, created_by)" +
+                        " values ('${MEMBER}', 'steward', '${ABSENT}')"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("estate_role_grants_remover_person_fk", "estate_role_grants",
+                "update app.estate_role_grants set removed_at = now(), removed_by = '${SEEDER}'" +
+                        " where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("estate_role_grants_remover_is_person", "estate_role_grants",
+                "update app.estate_role_grants set removed_at = now(), removed_by = '${WORKFLOW_RUNNER}'," +
+                        " removed_by_kind = 'system' where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: now() uses PostgreSQL's syntax and semantics.
+        attack("estate_role_grants_removed_together", "estate_role_grants",
+                "update app.estate_role_grants set removed_at = now() where estate_role_grant_id = '${GRANT}'"),
+        // DB-SPECIFIC: interval literals use PostgreSQL's syntax and semantics.
+        attack("estate_role_grants_removed_after_created", "estate_role_grants",
+                "update app.estate_role_grants set removed_at = created_at - interval '1 day'," +
+                        " removed_by = '${STEWARD}' where estate_role_grant_id = '${GRANT}'"),
+        attack("estate_role_grants_one_current_holding", "estate_role_grants",
+                "insert into app.estate_role_grants (subject_id, role, created_by)" +
+                        " values ('${MEMBER}', 'watcher', '${STEWARD}')"),
+    ]
+
+    private EstateRoleCases() {}
+}

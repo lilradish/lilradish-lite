@@ -19,8 +19,8 @@ import { say } from "../../../i18n/app";
 import { ActButton } from "../../../lib/action/ActButton";
 import { SPACED_ABOVE_SX } from "../../../lib/layout/parts";
 import { Notice } from "../../../lib/notice/Notice";
-import { useAction } from "../../../lib/request/useAction";
 import { STEP_ACT_RULES } from "../actRules";
+import { stepOffers, useStepActValidity, useStepAction } from "./stepActs";
 import { useRunReadAccess } from "../RunReadAccess";
 import { movedOnNotice } from "./movedOn";
 
@@ -31,7 +31,7 @@ function heldAt(step: StepRow): string | null {
   const where = step.where;
   return where === undefined
     ? null
-    : `${where.kind} ${where.since ?? ""} ${step.acts.includes("try_sending")}`;
+    : `${where.kind} ${where.since ?? ""} ${step.stateActs?.has("try_sending") === true}`;
 }
 
 export function TrySendingButton({
@@ -46,17 +46,29 @@ export function TrySendingButton({
   readonly onShown: (answer: StepAnswer) => void;
 }) {
   const noticeId = useId();
-  const reloadStanding = useStandingRead().reload;
+  const standingRead = useStandingRead();
+  const reloadStanding = standingRead.reload;
+  const standing = standingRead.value;
   const access = useRunReadAccess();
   const focusNext = useRef<string | null>(null);
   const [pressedAt, setPressedAt] = useState<string | null>(null);
   const [readAgainAt, setReadAgainAt] = useState<string | null>(null);
   const [answeredWith, setAnsweredWith] = useState<StepRow | null>(null);
   const at = heldAt(step);
+  const validity = useStepActValidity(
+    step,
+    "try_sending",
+    standing,
+    groupId,
+    runId,
+  );
+  const requestVersion = useRef<number | null>(null);
   const stale = at !== pressedAt && at !== readAgainAt;
 
-  const rereading = useAction<StepAnswer>(
+  const rereading = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       focusNext.current = noticeId;
       setPressedAt(null);
       setReadAgainAt(heldAt(answer.step));
@@ -68,12 +80,15 @@ export function TrySendingButton({
   );
 
   // Its answer reads the step as it stood before anything was sent, so the offer of sending in it is not a fresh one.
-  const sending = useAction<StepAnswer>(
+  const sending = useStepAction<StepAnswer>(
+    validity,
     (answer) => {
+      if (!validity.still(requestVersion.current)) return;
       setAnsweredWith(answer.step);
       onShown(answer);
     },
     (problem) => {
+      if (!validity.still(requestVersion.current)) return;
       if (movesTheReader(problem)) {
         reloadStanding();
       }
@@ -113,24 +128,23 @@ export function TrySendingButton({
 
   return (
     <>
-      {!step.acts.includes("try_sending") ? null : (
+      {!stepOffers(step, "try_sending", standing, groupId) ? null : (
         <Box sx={SPACED_ABOVE_SX}>
           <ActButton
-            variant="contained"
+            tier="secondary"
             action={sending}
             waiting={rereading.running || sent}
-            reason={
-              sending.running
-                ? { severity: "info", words: say("step.trySendingOut") }
-                : undefined
-            }
             act={(signal) => {
+              requestVersion.current = validity.begin();
               setPressedAt(at);
               return trySending(groupId, runId, step.stepId, signal);
             }}
           >
             {say("step.trySending")}
           </ActButton>
+          {sending.running ? (
+            <Notice severity="info">{say("step.trySendingOut")}</Notice>
+          ) : null}
         </Box>
       )}
       {/* There before the words, so they are heard; the keyboard stays on the button, which stays drawn. */}

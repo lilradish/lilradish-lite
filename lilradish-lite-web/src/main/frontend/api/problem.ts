@@ -1,7 +1,7 @@
 // Every other module under api/ is one endpoint, at the path its URL names; a vocabulary several
 // endpoints share lives in the one nearest the root.
 
-import type { Unchecked } from "../lib/request/document";
+import { listOf, textFrom, type Unchecked } from "../lib/request/document";
 
 /**
  * The RFC 9457 document the server answers a refusal with, as this side reads
@@ -12,20 +12,16 @@ import type { Unchecked } from "../lib/request/document";
  */
 export interface Problem {
   /**
-   * Absent when no response was reached at all, which makes it the test for
-   * whether a problem was served or minted here: read it first, and compare
-   * `code` only within the branch that has none. Comparing `code` across both
-   * is what lets a served code collide with a local one.
-   *
-   * Taken from the response rather than the document's own `status`: RFC 9457
-   * §3.1.2 makes that member advisory and states that generic HTTP software
-   * goes on using the transport's, which is the judgement every cache and
-   * proxy on the path is already making.
+   * Absent without a response: branch on it before comparing local codes,
+   * which may collide with served ones.
+   * Taken from the response: RFC 9457 §3.1.2 makes the document's status advisory;
+   * generic HTTP software, including caches and proxies, uses the transport's.
    */
   readonly status?: number;
   readonly code: string;
   readonly detail?: string;
   readonly errors?: readonly ProblemError[];
+  readonly names?: readonly string[];
   /**
    * Every member beyond RFC 9457's own and this system's, as it arrived and
    * unchecked: only a reader that knows the refusal reads one, and nothing
@@ -34,7 +30,6 @@ export interface Problem {
   readonly extensions?: Unchecked;
 }
 
-/** RFC 9457's members and this system's two, each read above or deliberately not at all. */
 const READ_HERE: ReadonlySet<string> = new Set([
   "type",
   "title",
@@ -43,6 +38,7 @@ const READ_HERE: ReadonlySet<string> = new Set([
   "instance",
   "code",
   "errors",
+  "names",
 ]);
 
 /**
@@ -56,20 +52,11 @@ export function servedAmong(
   return problem.status !== undefined && codes.has(problem.code);
 }
 
-/**
- * Only bean validation produces these, so a complaint that names the value to
- * fix is the one kind of refusal that can.
- */
 export interface ProblemError {
   readonly detail: string;
   /**
-   * `pointer` is a bare RFC 6901 JSON Pointer (`/items/0/name`), not a URI
-   * fragment: nothing is percent-encoded, so never hand it to
-   * `decodeURIComponent`. Within a member name `/` is `~1` and `~` is `~0`,
-   * and decoding must undo `~1` first or `~01` becomes `/`.
-   *
-   * `parameter` carries path variables too. The three keys are JSON:API's, and
-   * it has no member for a path segment, so there is nowhere else to put one.
+   * A bare RFC 6901 pointer, never percent-decoded: undo `~1` to `/` before `~0` to `~`.
+   * `parameter` also carries path variables: JSON:API has no path-segment source member.
    */
   readonly source?:
     | { readonly pointer: string }
@@ -82,7 +69,6 @@ export const STOPPED_HERE = "stopped_here";
 export const NOT_A_PROBLEM_DOCUMENT = "not_a_problem_document";
 /** An address this side would not send, it naming nothing the server could answer for. */
 export const NOT_AN_ADDRESS = "not_an_address";
-/** A request sent that no response came back to. */
 export const NOT_REACHED = "not_reached";
 /** A fault in this side's own code: reported where every caught error is, and its message shown to nobody. */
 export const BROKEN_HERE = "broken_here";
@@ -129,8 +115,7 @@ export async function requestFailed(
 }
 
 /**
- * Whatever a rejected promise carried, made renderable. An abort is this side's
- * own doing and is reported as a state rather than as a refusal; the signal is
+ * An abort is this side's own doing and is reported as a state rather than as a refusal; the signal is
  * read before the failure because an aborted fetch is refused as one that never
  * came back. Anything but a `RequestFailed` is a fault in this side's code, and
  * its message is for whoever reads the report, not for the reader.
@@ -146,19 +131,11 @@ export function asProblem(failure: unknown, signal: AbortSignal): Problem {
 }
 
 /**
- * The refusal a body carries, or null where it carries none. Shape rather than
- * `Content-Type`: this assumes nothing about who wrote the response, so a
- * proxy's own JSON error body is judged by the same rule as the application's.
- *
- * Only `code` can refuse the document, because it is the one member that
- * becomes a sentence for the reader. `detail` and `errors` are advisory, and a
- * malformed one is dropped rather than taken down with the refusal: a fourth
- * kind of `source` is already expected (see `ProblemError`), and on the day it
- * arrives every refusal carrying one would otherwise read as unreadable.
- *
- * Built rather than spread, so nothing unverified can reach the screen. Which
- * is why the document's own `status` is not among what is read here: the
- * response's is stamped by the caller, for the reason `Problem.status` gives.
+ * Null without a refusal; judged by shape, not Content-Type, so proxy JSON meets the same rule.
+ * Only `code`, which becomes the reader's sentence, can refuse the document.
+ * Malformed detail or errors are dropped so future source kinds cannot hide the refusal.
+ * Build verified members, never spread unchecked ones. The caller stamps response status,
+ * excluding the document's advisory status for the reason `Problem.status` gives.
  */
 function problemFrom(body: unknown): Problem | null {
   if (
@@ -177,6 +154,9 @@ function problemFrom(body: unknown): Problem | null {
     "errors" in body && Array.isArray(body.errors)
       ? body.errors.filter(isComplaint)
       : [];
+  const listedNames = "names" in body ? listOf(body.names, textFrom) : null;
+  const names =
+    listedNames !== null && listedNames.length > 0 ? listedNames : undefined;
   const read: Problem =
     complaints.length === 0
       ? { code: body.code, detail }
@@ -184,7 +164,10 @@ function problemFrom(body: unknown): Problem | null {
   const extensions = Object.fromEntries(
     Object.entries(body).filter(([member]) => !READ_HERE.has(member)),
   );
-  return Object.keys(extensions).length === 0 ? read : { ...read, extensions };
+  const named = names === undefined ? read : { ...read, names };
+  return Object.keys(extensions).length === 0
+    ? named
+    : { ...named, extensions };
 }
 
 function isComplaint(complaint: unknown): complaint is ProblemError {
@@ -197,9 +180,8 @@ function isComplaint(complaint: unknown): complaint is ProblemError {
   );
 }
 
-// Every key a source carries is checked, not the first one found: which key is
-// rendered is decided elsewhere, by its own order, so admitting a source on one
-// key would leave the other free to be anything.
+// Check every source key: rendering chooses its own order elsewhere,
+// so checking only the first could admit an unchecked value for display.
 function isSource(source: unknown): boolean {
   if (typeof source !== "object" || source === null) {
     return false;

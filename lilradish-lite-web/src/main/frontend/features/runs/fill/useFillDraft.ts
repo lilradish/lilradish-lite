@@ -16,7 +16,6 @@ import { draftReader, placedAt, type LevelDraft } from "./fillDrafts";
 
 /** What the server named of what was last sent, until anything is changed after it arrives. */
 interface Served {
-  /** Each place listed, marked where it stands. */
   readonly marked: readonly FillProblem[];
   /** How many more it found than it listed, which are marked nowhere. */
   readonly unmarked: number;
@@ -32,7 +31,7 @@ interface Filling {
   readonly left: ReadonlySet<string>;
   /** Each place holding what the browser could not read, which is not nothing. */
   readonly unreadable: ReadonlySet<string>;
-  /** How often sending has been asked for; after the first, every place says why what is in it does not fit. */
+  /** After the first sending attempt, every place says why what is in it does not fit. */
   readonly attempts: number;
   /** Nothing marked where the fill changed while it was out; none once anything is changed after it arrives. */
   readonly served: Served | null;
@@ -44,7 +43,6 @@ interface Sent {
   readonly fill: LevelDraft;
 }
 
-/** One form's fields as they are being filled, whatever is sent with them. */
 export interface FillDraft {
   readonly formId: string;
   readonly fill: LevelDraft;
@@ -225,7 +223,7 @@ function fillingFor(key: string, fill: LevelDraft): Filling {
   };
 }
 
-/** The place changed and every place holding it, so fields or one of many holding nothing say they lack it. */
+/** Marks every holder too, so empty nested values can report what they lack. */
 function withEveryHolder(
   touched: ReadonlySet<string>,
   path: FillPath,

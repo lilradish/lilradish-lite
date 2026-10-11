@@ -7,16 +7,10 @@ import { ruleOf } from "./actRules";
 import { useStandingRead } from "./StandingContext";
 
 /**
- * A screen, shown only to a reader who may be on it.
+ * Refuses in place: a silent redirect leaves the reader guessing what happened
+ * to their address. A withheld screen must not pretend to be missing.
  *
- * Refused where it stands rather than redirected: moving someone elsewhere
- * without a word leaves them to work out what became of the address they
- * followed. Not answered as missing either — a screen that exists and is
- * withheld is a different thing from one that is not there, and saying the
- * second is a lie the reader has no way to catch.
- *
- * The frame and its destinations are left standing underneath, so the way out
- * is the way the reader came in.
+ * The frame and destinations remain, preserving the way out.
  */
 export function RequireStanding({
   act,

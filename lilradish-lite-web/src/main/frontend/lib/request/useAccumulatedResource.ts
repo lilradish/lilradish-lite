@@ -47,7 +47,7 @@ export interface AccumulatedResource<T> {
 }
 
 /**
- * Keeps accepted pages under one source. A new source takes its rows away in
+ * A new source takes its rows away in
  * render, before an effect could leave them under another reader's heading.
  */
 export function useAccumulatedResource<T>(

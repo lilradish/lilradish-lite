@@ -108,6 +108,27 @@ const QUESTION: ReadContent = {
   terms: [],
 };
 
+describe("instruction reference problems", () => {
+  it("shows the full unknown braces as text, without interpreting their contents as markup", () => {
+    render(
+      <ContentProblems
+        problems={[
+          {
+            code: "instruction_names_unknown",
+            part: "instruction",
+            name: "<img>",
+          },
+        ]}
+        content={QUESTION}
+      />,
+    );
+    expect(screen.getByRole("listitem")).toHaveTextContent(
+      "{{<img>}} isn't an input of this question.",
+    );
+    expect(document.querySelector("img")).toBeNull();
+  });
+});
+
 describe("content problem totals", () => {
   it("names one omitted problem after the visible places", () => {
     render(
@@ -185,7 +206,8 @@ describe("contentOf", () => {
         revision: 1,
         takes: [COMPLAINT],
         gives: [SUMMARY],
-        lists: [],
+        searchWays: [],
+        searchShapeNeedsRefresh: false,
       }),
     ).toEqual({
       kind: "question",
@@ -214,9 +236,6 @@ describe("contentOf", () => {
       problems: [],
       sendsPast: [],
       offered: {
-        lists: [],
-        questions: [],
-        workflows: [],
         codeSteps: [],
         searchWays: [],
         models: [],
@@ -229,6 +248,65 @@ describe("contentOf", () => {
 });
 
 describe("ContentProblems", () => {
+  it("locates a stored collision by its display name and names the other display independently", () => {
+    const content = {
+      ...WORKFLOW,
+      steps: WORKFLOW.steps.map((step) =>
+        step.stepId === "s1" ? { ...step, label: "確認する" } : step,
+      ),
+    };
+    const words = placesOf(
+      [
+        {
+          code: "step_label_repeated",
+          part: "steps",
+          stepId: "s1",
+          name: "Review 元\u202e",
+        },
+      ],
+      content,
+    );
+
+    expect(words).toEqual([
+      `The steps, ${isolatedInText("確認する")}: Another step in this version is already shown as "${isolatedInText("Review 元\u202e")}".`,
+    ]);
+    expect(
+      within(screen.getByRole("listitem")).getByText("Review 元\u202e").tagName,
+    ).toBe("BDI");
+    expect(screen.getByRole("listitem")).not.toHaveTextContent("triage");
+    expect(content.steps[0]!.name).toBe("triage");
+  });
+
+  it("says a step with no label by its name as the author wrote it, underscores and all, where a problem is at the step and where it is at what the step is chosen by", () => {
+    const content = {
+      ...WORKFLOW,
+      steps: WORKFLOW.steps.map((step) => ({
+        ...step,
+        name: step.stepId === "s1" ? "check_the_claim" : "route_the_claim",
+      })),
+    };
+
+    const words = placesOf(
+      [
+        {
+          code: "step_label_repeated",
+          part: "steps",
+          stepId: "s1",
+          name: "Review",
+        },
+        { code: "source_unknown", part: "steps", bindingId: "b2" },
+      ],
+      content,
+    );
+
+    expect(words).toHaveLength(2);
+    expect(words[0]).toContain(isolatedInText("check_the_claim"));
+    expect(words[1]).toContain(isolatedInText("route_the_claim"));
+    for (const said of words) {
+      expect(said).not.toContain(" the claim");
+    }
+    expect(screen.getByRole("list")).not.toHaveTextContent(/\w the claim/);
+  });
   it("keeps data names separate from inherited warning notes through binding and case locators", () => {
     render(
       <ThemeProvider theme={theme}>
@@ -326,7 +404,7 @@ describe("ContentProblems", () => {
       getComputedStyle(within(item).getByText("(field 2 there)")).fontStyle,
     ).toBe("italic");
   });
-  it("places a searching read problem at its part key, not merely its step", () => {
+  it("places a searching input problem at its binding and target, not merely its step", () => {
     const content: ReadContent = {
       ...WORKFLOW,
       steps: [
@@ -334,16 +412,19 @@ describe("ContentProblems", () => {
         {
           stepId: "s4",
           name: "find",
-          bindings: [],
-          runs: {
-            kind: "search",
-            searchWay: "web",
-            question: [
-              { partId: "p1", from: { input: "complaint" } },
-              { partId: "p2", from: { step: 0, path: "summary" } },
-            ],
-            standings: {},
-          },
+          bindings: [
+            {
+              bindingId: "p1",
+              target: "complaint",
+              source: { input: "complaint" },
+            },
+            {
+              bindingId: "p2",
+              target: "summary",
+              source: { step: 0, path: "summary" },
+            },
+          ],
+          runs: { kind: "search", searchWay: "web", standings: {} },
         },
       ],
     };
@@ -352,10 +433,105 @@ describe("ContentProblems", () => {
       content,
     )[0]!;
 
-    expect(atPart).toContain("Part 2");
+    expect(atPart).toContain("summary");
     expect(atPart).toContain("find");
-    expect(atPart).not.toContain("Part 1");
+    expect(atPart).not.toContain("complaint");
     expect(atPart).not.toContain("triage");
+  });
+
+  it.each([
+    [true, null],
+    [false, null],
+    [true, "مراجعة 📦"],
+  ] as const)(
+    "names a shape mismatch from the read search and its readable question: %s/%s",
+    (named, versionName) => {
+      const content: ReadContent = {
+        ...WORKFLOW,
+        steps: [
+          {
+            stepId: "s4",
+            name: "find",
+            bindings: [],
+            runs: {
+              kind: "search",
+              searchWay: "web",
+              standings: {},
+              ...(named
+                ? {
+                    version: {
+                      versionName,
+                      name: "Invented evidence finder",
+                      number: 3,
+                      versionId: "pin-private-id",
+                      standing: "in_service",
+                    },
+                  }
+                : {}),
+            },
+          },
+        ],
+      };
+      const places = placesOf(
+        [
+          {
+            code: "search_question_no_longer_matches",
+            part: "steps",
+            stepId: "s4",
+          },
+        ],
+        content,
+      );
+      expect(places).toEqual([
+        named
+          ? `The steps, ${isolatedInText("find")}: Its question, ${isolatedInText("Invented evidence finder")} · Version 3${versionName === null ? "" : ` · ${isolatedInText(versionName)}`}, no longer matches what ${isolatedInText("web")} gives back. Make a new version of that question, then pick it for this step.`
+          : `The steps, ${isolatedInText("find")}: Its question no longer matches what ${isolatedInText("web")} gives back. Make a new version of that question, then pick it for this step.`,
+      ]);
+      expect(places.join(" ")).not.toContain("pin-private-id");
+      if (versionName !== null) {
+        expect(screen.getByText(versionName).tagName).toBe("BDI");
+        expect(screen.getByText(versionName)).toHaveAttribute("dir", "auto");
+        const place = places[0];
+        if (place === null || place === undefined) {
+          throw new Error("the named search refusal must have a place");
+        }
+        expect(screen.getByRole("listitem")).toHaveAccessibleName(place);
+      }
+    },
+  );
+
+  it("keeps a shape mismatch general when its search or step was not read", () => {
+    const content: ReadContent = {
+      ...WORKFLOW,
+      steps: [
+        {
+          stepId: "s4",
+          name: "find",
+          bindings: [],
+          runs: { kind: "search", standings: {} },
+        },
+      ],
+    };
+    expect(
+      placesOf(
+        [
+          {
+            code: "search_question_no_longer_matches",
+            part: "steps",
+            stepId: "s4",
+          },
+          {
+            code: "search_question_no_longer_matches",
+            part: "steps",
+            stepId: "gone",
+          },
+        ],
+        content,
+      ),
+    ).toEqual([
+      `The steps, ${isolatedInText("find")}: Something here does not hold.`,
+      "The steps: Something here does not hold.",
+    ]);
   });
 
   it("uses separate counted and uncounted words for a search's review and the asking it makes", () => {
@@ -366,7 +542,7 @@ describe("ContentProblems", () => {
           stepId: "s4",
           name: "find",
           bindings: [],
-          runs: { kind: "search", question: [], standings: {} },
+          runs: { kind: "search", standings: {} },
         },
       ],
     };
@@ -454,6 +630,51 @@ describe("ContentProblems", () => {
     ]);
   });
 
+  it.each([undefined, "", "first_name"])(
+    "keeps unlabelled author output paths raw and isolated with label %s",
+    (label) => {
+      const routeStep = WORKFLOW.steps[1]!;
+      const content: ReadContent = {
+        ...WORKFLOW,
+        steps: [
+          {
+            ...routeStep,
+            runs: {
+              ...routeStep.runs!,
+              cases: [
+                {
+                  caseId: "c1",
+                  term: "urgent",
+                  gives: [
+                    { ...SUMMARY, fieldId: "raw", name: "first_name", label },
+                  ],
+                  bindings: [],
+                },
+              ],
+            },
+          },
+        ],
+      };
+      const places = placesOf(
+        [
+          {
+            code: "case_gives_past_limit",
+            part: "steps",
+            stepId: "s2",
+            caseId: "c1",
+            fieldId: "raw",
+          },
+        ],
+        content,
+      );
+      expect(places).toEqual([
+        `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("first_name")}: It could be longer, or hold more, than the route allows.`,
+      ]);
+      expect(screen.getByRole("listitem").querySelector("code")).toBeNull();
+      expect(screen.getByRole("listitem")).not.toHaveTextContent("first name");
+    },
+  );
+
   it("names a case output by its labels, preferring the target before the route, and a missing required output by the route", () => {
     const caseOutput: DeclaredField = {
       ...SUMMARY,
@@ -526,8 +747,8 @@ describe("ContentProblems", () => {
     );
 
     expect(places).toEqual([
-      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case details")} › ${isolatedInText("Case note")}: It could be longer, or hold more, than the route allows.`,
-      `The steps, ${ROUTE}, the fallback, what it gives back as ${isolatedInText("Required answer")}: The route says it must be given, and the workflow it leads to need not give it.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case details · case_details")} › ${isolatedInText("Case note · case_note")}: It could be longer, or hold more, than the route allows.`,
+      `The steps, ${ROUTE}, the fallback, what it gives back as ${isolatedInText("Required answer · summary")}: The route says it must be given, and the workflow it leads to need not give it.`,
       `The steps, ${ROUTE}, the case on ${URGENT}: The route declares it as another kind.`,
     ]);
     expect(places.join(" ")).not.toContain("input complaint");
@@ -588,10 +809,10 @@ describe("ContentProblems", () => {
     ];
 
     expect(placesOf(problems, content)).toEqual([
-      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route declares nothing by this name.`,
-      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route declares it as another kind.`,
-      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: It could be longer, or hold more, than the route allows.`,
-      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer")}: The route says it must be given, and the workflow it leads to need not give it.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer · summary")}: The route declares nothing by this name.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer · summary")}: The route declares it as another kind.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer · summary")}: It could be longer, or hold more, than the route allows.`,
+      `The steps, ${ROUTE}, the case on ${URGENT}, what it gives back as ${isolatedInText("Case answer · summary")}: The route says it must be given, and the workflow it leads to need not give it.`,
     ]);
   });
 
@@ -742,7 +963,7 @@ describe("ContentProblems", () => {
         WORKFLOW,
       ),
     ).toEqual([
-      `What it gives back, ${isolatedInText("summary")}: A field of files takes at most 64 types.`,
+      `What it gives back, ${isolatedInText("summary")}: A file field can accept at most 64 extensions.`,
     ]);
   });
 
@@ -905,7 +1126,11 @@ describe("ContentProblems", () => {
       [
         { code: "search_tool_not_offered", part: "steps", stepId: "s1" },
         { code: "search_way_not_held", part: "steps", stepId: "s1" },
-        { code: "search_question_may_be_empty", part: "steps", stepId: "s1" },
+        {
+          code: "search_question_no_longer_matches",
+          part: "steps",
+          stepId: "s1",
+        },
         {
           code: "search_standing_missing",
           part: "steps",
@@ -932,7 +1157,7 @@ describe("ContentProblems", () => {
     expect(places).toEqual([
       `The steps, ${TRIAGE}: It searches with a model that does not offer the tool this way to search needs.`,
       `The steps, ${TRIAGE}: It runs a way to search this release does not offer.`,
-      `The steps, ${TRIAGE}: It searches with a question that could hold nothing: write something into it, or put in a value that must be given.`,
+      `The steps, ${TRIAGE}: Something here does not hold.`,
       `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("other")} stands always or waits on a review.`,
       `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("references")} and ${isolatedInText("other")} stand always or wait on a review.`,
       `The steps, ${TRIAGE}: It does not yet say whether ${isolatedInText("seen at")}, ${isolatedInText("references")}, and ${isolatedInText("other")} stand always or wait on a review.`,

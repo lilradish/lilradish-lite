@@ -31,8 +31,8 @@ export function trySending(
 }
 
 /**
- * Whether the step no longer offered sending since it was read: somebody acted on it first, it no longer holds a
- * try a model could not be sent, or the run or what it runs was stopped.
+ * Sending stopped being offered since the read: somebody acted first, no model
+ * try awaits sending, or the run or its entry stopped.
  */
 export function refusedAsChanged(problem: Problem): boolean {
   return servedAmong(problem, CHANGED);

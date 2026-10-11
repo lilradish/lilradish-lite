@@ -26,6 +26,7 @@ import {
   isolatedName,
   opening,
   picking,
+  inputting,
   rows,
   runOpened,
   runsAsked,
@@ -60,11 +61,12 @@ describe("WorkPage across pages", () => {
       await userEvent.click(tab("New run"));
       await picking("Handle a claim");
       await userEvent.type(
-        screen.getByRole("textbox", { name: "Complaint" }),
+        screen.getByRole("textbox", { name: "Complaint · complaint" }),
         "Kettle leaks",
       );
 
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await inputting();
+      await userEvent.click(screen.getByRole("button", { name: "Start run" }));
 
       const opened = await runOpened(/Claim from Avo/);
       await waitFor(() => expect(opened).toHaveFocus());
@@ -93,7 +95,7 @@ describe("WorkPage across pages", () => {
                 name: "attachment",
                 label: "Attachment",
                 kind: "file",
-                types: ["text/plain"],
+                types: [".txt"],
                 maximumBytes: 20,
                 mustBeGiven: true,
               },
@@ -115,7 +117,8 @@ describe("WorkPage across pages", () => {
         target: { files: [chosen] },
       });
 
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await inputting();
+      await userEvent.click(screen.getByRole("button", { name: "Start run" }));
       await screen.findByRole("heading", { level: 1, name: /Claim from Avo/ });
 
       const posted = sent.mock.calls.find(
@@ -137,7 +140,8 @@ describe("WorkPage across pages", () => {
     it("takes the keyboard to the run's name as its page opens, begun here or opened again from History", async () => {
       opening(PAGE, { routes: { [`POST ${RUNS}`]: [BEGUN] } });
       await picking("Pay a refund");
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await inputting();
+      await userEvent.click(screen.getByRole("button", { name: "Start run" }));
 
       const begun = await runOpened(/Claim from Avo/);
       await waitFor(() => expect(begun).toHaveFocus());
@@ -162,11 +166,10 @@ describe("WorkPage across pages", () => {
               JSON.stringify({
                 items: [AVON],
                 nextCursor: "next-claim",
-                reading: "own",
               }),
               200,
             ],
-            [JSON.stringify({ items: [AVO], reading: "own" }), 200],
+            [JSON.stringify({ items: [AVO] }), 200],
           ],
         },
       });
@@ -209,8 +212,8 @@ describe("WorkPage across pages", () => {
           routes: {
             [`GET ${RUNS}`]: [
               LISTED,
-              [JSON.stringify({ items: ascending, reading: "own" }), 200],
-              [JSON.stringify({ items: descending, reading: "own" }), 200],
+              [JSON.stringify({ items: ascending }), 200],
+              [JSON.stringify({ items: descending }), 200],
             ],
           },
         });
@@ -249,15 +252,21 @@ describe("WorkPage across pages", () => {
     );
 
     it("opens a row's run as its own page in place of Work's tabs and table, its address keeping the list's filter and order", async () => {
-      const { sent, at } = opening(`${HISTORY}&sort=startedBy&filter=claim`);
-      await rows();
-
-      await userEvent.click(
-        within(table()).getByRole("link", { name: "SUPPORT-1" }),
+      const { sent, at, router } = opening(
+        `${HISTORY}&sort=startedBy&filter=claim`,
       );
+      await rows();
+      const row = within(table()).getByRole("link", { name: "SUPPORT-1" });
+      expect(row).toHaveAttribute(
+        "href",
+        `${PAGE}/${AVO.runId}?sort=startedBy&filter=claim`,
+      );
+
+      await userEvent.click(row);
 
       expect(await runOpened(/Claim from Avo/)).toBeInTheDocument();
       expect(at()).toBe(`${PAGE}/${AVO.runId}?sort=startedBy&filter=claim`);
+      expect(router.state.historyAction).toBe("PUSH");
       expect(
         screen.queryByRole("table", { name: "What is running" }),
       ).toBeNull();
@@ -295,7 +304,8 @@ describe("WorkPage across pages", () => {
     it("goes back to History from a run begun on New run, though this device keeps New run", async () => {
       const { at } = opening(PAGE, { routes: { [`POST ${RUNS}`]: [BEGUN] } });
       await picking("Pay a refund");
-      await userEvent.click(screen.getByRole("button", { name: "Start" }));
+      await inputting();
+      await userEvent.click(screen.getByRole("button", { name: "Start run" }));
       await runOpened(/Claim from Avo/);
 
       await userEvent.click(screen.getByRole("link", { name: "History" }));
@@ -338,23 +348,24 @@ describe("OpenedRun", () => {
     expect(at()).toBe(`${PAGE}/${AVO.runId}?filter=claim`);
 
     const switching = screen.getByRole("button", {
-      name: "Show in full detail",
+      name: "Full detail",
     });
     await userEvent.click(switching);
-    await screen.findByRole("table", { name: "The steps" });
-    await userEvent.click(switching);
+    await screen.findByRole("table", { name: "Steps" });
+    const conversation = screen.getByRole("button", { name: "Conversation" });
+    await userEvent.click(conversation);
 
     const drawnAgain = await screen.findByRole("list", {
       name: "The conversation",
     });
     expect(drawnAgain).not.toBe(arrivedAt);
-    expect(document.activeElement).toBe(switching);
+    expect(document.activeElement).toBe(conversation);
   });
 
   it("opens a step in the run's place, with no tab or list, and a way back to the run keeping the list's address", async () => {
     localStorage.setItem(RUN_DRAWING_KEPT_AS, "fullDetail");
     const { sent, at } = opening(`${PAGE}/${AVO.runId}?sort=startedBy`);
-    const steps = await screen.findByRole("table", { name: "The steps" });
+    const steps = await screen.findByRole("table", { name: "Steps" });
 
     await userEvent.click(
       within(steps).getByRole("link", { name: "summarise" }),
@@ -364,7 +375,7 @@ describe("OpenedRun", () => {
       await screen.findByRole("heading", { level: 1, name: /summarise/ }),
     ).toBeInTheDocument();
     expect(at()).toBe(`${PAGE}/${AVO.runId}/steps/${SUMMARISE}?sort=startedBy`);
-    expect(screen.queryByRole("table", { name: "The steps" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "Steps" })).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.queryByRole("heading", { name: /^Work/ })).toBeNull();
@@ -424,7 +435,7 @@ describe("OpenedRun", () => {
     expect(document.activeElement).toBe(arrivedAt);
 
     const switching = screen.getByRole("button", {
-      name: "Show as a conversation",
+      name: "Conversation",
     });
     await userEvent.click(switching);
 

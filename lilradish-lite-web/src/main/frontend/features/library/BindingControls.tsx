@@ -1,23 +1,35 @@
 import Box from "@mui/material/Box";
-import FormControlLabel from "@mui/material/FormControlLabel";
+import { FieldName } from "../../lib/form/FieldName";
 import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useId, useState, type ReactElement } from "react";
+import {
+  memo,
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import { say, type MessageId } from "../../i18n/app";
 import { visible } from "../../i18n/visible";
-import { isolatedInText } from "../../lib/direction/isolated";
-import { DEPTH_SX, HEADING_SX, INSET_SX } from "../../lib/layout/parts";
+import { decimalSaid } from "../../i18n/intl";
+import { DEPTH_SX, HEADING_SX } from "../../lib/layout/parts";
+import { useNarrowerThan } from "../../lib/layout/useNarrowerThan";
+import { NATIVE_TABLE_SX, TABLE_GEOMETRY } from "../../lib/collection/table";
+import { KeyTag } from "../../lib/text/KeyTag";
 import { Notice } from "../../lib/notice/Notice";
+import { TOKENS } from "../../lib/theme/tokens";
 import { hasLineBreak } from "../../lib/filling/writing";
 import {
   constantKindOf,
   constantHasLineBreak,
   constantRead,
   WRITTEN_LIMITS,
-  type ConstantKind,
 } from "./constantDrafts";
 import {
   pointerFits,
@@ -29,53 +41,144 @@ import {
   type TargetRow,
 } from "./workflowDrafts";
 
-const ROW_SX = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 2,
-  alignItems: "center",
-  mb: 1,
+const QUIET_SX = { color: "text.secondary" };
+const LABEL_SX = {
+  typography: "controlLabel",
+  color: "text.secondary",
+  mb: "4px",
+};
+const TABLE_SX = {
+  ...NATIVE_TABLE_SX,
+  maxWidth: 860,
+  "& td:not([colspan]):first-of-type": { pr: "8px" },
+  "& td:not([colspan]):last-of-type": { pl: "8px" },
+};
+const NARROW_GAP_SX = {
+  "& td:not([colspan]):first-of-type": { pr: "4px" },
+  "& td:not([colspan]):last-of-type": { pl: "4px" },
+};
+const NARROW_TABLE_SX = {
+  display: "block",
+  "& tbody": { display: "block" },
+  "& tr": {
+    display: "grid",
+    gridTemplateColumns: "repeat(2,minmax(0,1fr))",
+    borderBottomWidth: TABLE_GEOMETRY.bodyRule,
+    borderBottomStyle: "solid",
+    borderBottomColor: "surface.rule",
+  },
+  "& td": { display: "block", height: "auto", borderBottomStyle: "none" },
+  '& td[colspan="2"]': { gridColumn: "1 / -1" },
+  "& tr:first-of-type td": { pb: 0 },
+  "& tr:not(:first-of-type) td": { pt: "6px" },
 };
 
-const EDITED_ROW_SX = { ...ROW_SX, alignItems: "flex-start" };
+interface BindingProps {
+  readonly label: string;
+  readonly target: Shape;
+  readonly binding: BindingDraft | undefined;
+  readonly sources: readonly SourceOffered[];
+  readonly constant: boolean;
+  readonly editable: boolean;
+  readonly flags: readonly MessageId[];
+  readonly onChange: (source: SourceDraft) => void;
+}
 
-const QUIET_SX = { color: "text.secondary" };
+interface SourceCatalog {
+  readonly sources: readonly SourceOffered[];
+  readonly entries: readonly {
+    readonly value: string;
+    readonly reached: ReturnType<typeof pointers>;
+    readonly fieldsByPath: ReadonlyMap<string, Shape>;
+  }[];
+}
 
-const NOTE_SX = { display: "block" };
+function catalogOf(sources: readonly SourceOffered[]): SourceCatalog {
+  return {
+    sources,
+    entries: sources.map((source) => {
+      const reached =
+        source.fields === undefined ? [] : pointers(source.fields);
+      const fieldsByPath = new Map<string, Shape>();
+      for (const pointer of reached) {
+        if (!fieldsByPath.has(pointer.path)) {
+          fieldsByPath.set(pointer.path, pointer.field);
+        }
+      }
+      return { value: source.value, reached, fieldsByPath };
+    }),
+  };
+}
 
-const CONSTANT_WORDS = {
-  text: "workflow.constant",
-  number: "workflow.constantNumber",
-  written: "workflow.constantWritten",
-} as const satisfies Record<Exclude<ConstantKind, "yes_no">, MessageId>;
+function useSourceCatalog(sources: readonly SourceOffered[]): SourceCatalog {
+  // Owners rebuild the bounded declaration shapes on every edit; identity alone would expand every source again.
+  const key = JSON.stringify(sources);
+  const [held, hold] = useState(() => ({ key, catalog: catalogOf(sources) }));
+  if (held.key !== key) {
+    const next = { key, catalog: catalogOf(sources) };
+    hold(next);
+    return next.catalog;
+  }
+  return held.catalog;
+}
 
 /**
  * What fills one input or output: where it comes from, then what within it or the constant, offering only fields that
- * fit and keeping one chosen in sight. What does not hold is said under the last text box or list drawn.
+ * fit and keeping one chosen in sight. A row's problems describe both controls beneath them.
  */
-export function BindingControls({
+export function BindingControls(props: BindingProps) {
+  const container = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(
+    container,
+    Number.parseFloat(TOKENS.table.rowsBelow),
+  );
+  const catalog = useSourceCatalog(props.sources);
+  return (
+    <Box ref={container}>
+      <Box
+        component="table"
+        sx={[TABLE_SX, NARROW_TABLE_SX, narrow ? NARROW_GAP_SX : {}]}
+      >
+        <BindingRow
+          {...props}
+          catalog={catalog}
+          name={props.label}
+          narrow={narrow}
+          labels
+        />
+      </Box>
+    </Box>
+  );
+}
+
+function BindingRow({
   label,
   target,
   binding,
-  sources,
+  catalog,
   constant,
   editable,
   flags,
   onChange,
-}: {
-  /** What is filled, as a reader reads it. */
-  readonly label: string;
-  readonly target: Shape;
-  readonly binding: BindingDraft | undefined;
-  /** Where it may come from, in the order offered: what the workflow takes first, then each step. */
-  readonly sources: readonly SourceOffered[];
-  readonly constant: boolean;
-  readonly editable: boolean;
-  /** What does not hold here, each said against it. */
-  readonly flags: readonly MessageId[];
-  readonly onChange: (source: SourceDraft) => void;
+  name,
+  fieldLabel,
+  depth = 0,
+  narrow,
+  labels = false,
+  path: rowPath,
+}: Omit<BindingProps, "sources"> & {
+  readonly catalog: SourceCatalog;
+  readonly name: string;
+  readonly fieldLabel?: string;
+  readonly depth?: number;
+  readonly narrow: boolean;
+  readonly labels?: boolean;
+  /** The field it fills, which a reader taken to the row by its change finds it by. */
+  readonly path?: string;
 }) {
-  const fromId = useId();
+  const sources = catalog.sources;
+  const noteId = useId();
+  const writtenHintId = useId();
   const [rejected, setRejected] = useState<{
     readonly typed: string;
     readonly lines: Shape["lines"];
@@ -94,9 +197,10 @@ export function BindingControls({
   const offered = sources.find((each) => each.value === picked);
   const path =
     source.from === "input" || source.from === "step" ? source.path : "";
-  const fitting = (
-    offered?.fields === undefined ? [] : pointers(offered.fields)
-  )
+  const entry = catalog.entries.find((each) => each.value === picked);
+  const reached = entry?.reached ?? [];
+  const fieldsByPath = entry?.fieldsByPath;
+  const fitting = reached
     .filter((pointer) => pointerFits(pointer, target))
     .map((pointer) => pointer.path);
   const choices =
@@ -124,196 +228,335 @@ export function BindingControls({
         : []),
     ]),
   ];
-  if (!editable) {
-    return (
-      <Box sx={ROW_SX}>
-        <Typography variant="body2">
-          <bdi>{label}</bdi>
-          {": "}
-          <span aria-label={sourceSaid(source, sources, kind)}>
-            {sourceVisible(source, sources, kind)}
-          </span>
-        </Typography>
-        {notes.map((note) => (
-          <Notice key={note} severity="warning">
-            {say(note, WRITTEN_LIMITS)}
-          </Notice>
-        ))}
+  const valueName = say("workflow.valueFor", { field: label });
+  const described = notes.length === 0 ? undefined : noteId;
+  const valueDescription =
+    [kind === "written" ? writtenHintId : undefined, described]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const layout = (from: ReactNode, which: ReactNode) => {
+    const title = (
+      <Box
+        sx={{ typography: "fieldName", pl: `${depth * (narrow ? 16 : 24)}px` }}
+      >
+        <FieldName name={name} label={fieldLabel} context="author" />
       </Box>
     );
-  }
-  const noted =
-    notes.length === 0
-      ? {}
-      : {
-          error: true,
-          helperText: notes.map((note) => (
-            <Box key={note} component="span" sx={NOTE_SX}>
-              {say(note, WRITTEN_LIMITS)}
-            </Box>
-          )),
-        };
-  const second =
-    source.from === "input" || source.from === "step"
-      ? (said: typeof noted) => (
-          <TextField
-            select
-            size="small"
-            label={say("workflow.pointer")}
-            value={path}
-            {...said}
-            onChange={(edit) =>
-              onChange({ ...source, path: edit.target.value })
-            }
-          >
-            <MenuItem value="">{say("workflow.pointerNone")}</MenuItem>
-            {choices.map((choice) => (
-              <MenuItem key={choice} value={choice}>
-                {choice}
-              </MenuItem>
-            ))}
-          </TextField>
-        )
-      : source.from === "constant" && kind !== "yes_no"
-        ? (said: typeof noted) => (
-            <TextField
-              size="small"
-              label={say(CONSTANT_WORDS[kind])}
-              value={source.typed}
-              {...said}
-              multiline={target.kind === "text" && !oneLineText}
-              minRows={target.kind === "text" && !oneLineText ? 3 : undefined}
-              onChange={(edit) => {
-                setRejected(null);
-                onChange({ from: "constant", typed: edit.target.value });
-              }}
-              onPaste={(event) => {
-                if (
-                  oneLineText &&
-                  hasLineBreak(event.clipboardData.getData("text"))
-                ) {
-                  event.preventDefault();
-                  setRejected({ typed: source.typed, lines: target.lines });
-                }
-              }}
-              onBeforeInput={(event) => {
-                const typed = (event as typeof event & { data?: string | null })
-                  .data;
-                if (
-                  oneLineText &&
-                  typeof typed === "string" &&
-                  hasLineBreak(typed)
-                ) {
-                  event.preventDefault();
-                  setRejected({ typed: source.typed, lines: target.lines });
-                }
-              }}
-              onDrop={(event) => {
-                if (
-                  oneLineText &&
-                  hasLineBreak(event.dataTransfer.getData("text/plain"))
-                ) {
-                  event.preventDefault();
-                  setRejected({ typed: source.typed, lines: target.lines });
-                }
-              }}
-              slotProps={{
-                htmlInput:
-                  kind === "number"
-                    ? { inputMode: "decimal" }
-                    : { dir: "auto" },
-              }}
-            />
-          )
-        : null;
-  return (
-    <Box role="group" aria-labelledby={fromId} sx={{ mb: 2 }}>
-      <Typography id={fromId} variant="subtitle2">
-        <bdi>{label}</bdi>
-      </Typography>
-      <Box sx={EDITED_ROW_SX}>
-        <TextField
-          select
-          size="small"
-          label={say("workflow.from")}
-          value={picked}
-          {...(second === null &&
-          !(
-            source.from === "constant" &&
-            kind === "yes_no" &&
-            !target.mustBeGiven
-          )
-            ? noted
-            : {})}
-          onChange={(edit) => {
-            setRejected(null);
-            const chosen = edit.target.value;
-            onChange(
-              chosen === "none"
-                ? { from: "none" }
-                : chosen === "constant"
-                  ? {
-                      from: "constant",
-                      typed:
-                        kind === "yes_no"
-                          ? target.mustBeGiven
-                            ? "false"
-                            : "null"
-                          : "",
-                    }
-                  : chosen === "input"
-                    ? { from: "input", path: "" }
-                    : { from: "step", stepKey: chosen, path: "" },
-            );
+    const fromCell = (
+      <>
+        {narrow || labels ? (
+          <Box sx={LABEL_SX}>{say("workflow.from")}</Box>
+        ) : null}
+        {from}
+      </>
+    );
+    const whichCell =
+      which === null ? null : (
+        <>
+          {narrow || labels ? (
+            <Box sx={LABEL_SX}>{say("workflow.pointer")}</Box>
+          ) : null}
+          {which}
+        </>
+      );
+    const problems =
+      notes.length === 0 ? null : (
+        <Box
+          id={noteId}
+          sx={{
+            color: editable ? "error.main" : undefined,
+            typography: "supportingProse",
+            mt: labels ? "6px" : undefined,
           }}
         >
-          <MenuItem value="none">{say("workflow.fromNothing")}</MenuItem>
-          {sources.map((each) => (
-            <MenuItem key={each.value} value={each.value}>
-              {sourceVisibleOf(each)}
-            </MenuItem>
-          ))}
-          {constant ? (
-            <MenuItem value="constant">{say("workflow.fromConstant")}</MenuItem>
-          ) : null}
-        </TextField>
-        {source.from === "constant" &&
-        kind === "yes_no" &&
-        !target.mustBeGiven ? (
-          <TextField
-            select
-            size="small"
-            label={say("workflow.constant")}
-            value={source.typed}
-            {...noted}
-            onChange={(edit) =>
-              onChange({ from: "constant", typed: edit.target.value })
-            }
-          >
-            <MenuItem value="null">{say("workflow.constantNothing")}</MenuItem>
-            <MenuItem value="true">{say("workflow.yes")}</MenuItem>
-            <MenuItem value="false">{say("workflow.no")}</MenuItem>
-          </TextField>
-        ) : source.from === "constant" && kind === "yes_no" ? (
-          <FormControlLabel
-            control={
-              <Switch
-                checked={source.typed === "true"}
-                onChange={(_event, checked) =>
-                  onChange({ from: "constant", typed: String(checked) })
-                }
-              />
-            }
-            label={say("workflow.yes")}
-          />
-        ) : null}
-        {second?.(noted)}
+          {notes.map((note) =>
+            editable ? (
+              <div key={note}>{say(note, WRITTEN_LIMITS)}</div>
+            ) : (
+              <Notice key={note} severity="warning">
+                {say(note, WRITTEN_LIMITS)}
+              </Notice>
+            ),
+          )}
+        </Box>
+      );
+    return (
+      <tbody aria-label={label}>
+        <tr>
+          <td colSpan={2}>{title}</td>
+        </tr>
+        {labels ? (
+          <tr data-path={rowPath}>
+            <td colSpan={2}>
+              <Box
+                role="group"
+                aria-label={label}
+                sx={{ pl: narrow ? `${depth * 16}px` : 0 }}
+              >
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2,minmax(0,1fr))",
+                    gap: narrow ? 1 : 2,
+                  }}
+                >
+                  <div>{fromCell}</div>
+                  {whichCell === null ? null : <div>{whichCell}</div>}
+                </Box>
+                {problems}
+              </Box>
+            </td>
+          </tr>
+        ) : (
+          <>
+            <Box
+              component="tr"
+              data-path={rowPath}
+              sx={{ pl: narrow ? `${depth * 16}px` : 0 }}
+            >
+              <td>{fromCell}</td>
+              <td>{whichCell}</td>
+            </Box>
+            {problems === null ? null : (
+              <tr>
+                <td colSpan={2}>{problems}</td>
+              </tr>
+            )}
+          </>
+        )}
+      </tbody>
+    );
+  };
+  const pointerVisible = (choice: string) => {
+    const field = fieldsByPath?.get(choice);
+    return field?.label && field.label !== choice ? (
+      <Box component="span" sx={{ overflowWrap: "anywhere" }}>
+        <bdi>{field.label}</bdi> <KeyTag>{choice}</KeyTag>
       </Box>
-    </Box>
+    ) : (
+      <bdi>{choice}</bdi>
+    );
+  };
+  if (!editable) {
+    return layout(
+      source.from === "input" || source.from === "step"
+        ? sourceVisibleOf(
+            sources.find(
+              (each) =>
+                each.value ===
+                (source.from === "input" ? "input" : source.stepKey),
+            ) ?? {
+              value: "",
+              words: say("workflow.fromNothing"),
+              fields: [],
+            },
+            false,
+          )
+        : source.from === "constant"
+          ? say("workflow.fromConstant")
+          : say("workflow.fromNothing"),
+      source.from === "input" || source.from === "step" ? (
+        pointerVisible(source.path)
+      ) : source.from === "constant" ? (
+        kind === "yes_no" ? (
+          say(
+            source.typed === "null"
+              ? "workflow.constantNothing"
+              : source.typed === "true"
+                ? "workflow.yes"
+                : "workflow.no",
+          )
+        ) : (
+          <bdi>
+            {kind === "number" &&
+            source.typed !== "null" &&
+            "written" in constantRead(source.typed, target)
+              ? decimalSaid(source.typed)
+              : source.typed}
+          </bdi>
+        )
+      ) : null,
+    );
+  }
+  const noted = { error: notes.length > 0 };
+  const second =
+    source.from === "input" || source.from === "step" ? (
+      <TextField
+        data-binding-control="which"
+        select
+        size="small"
+        fullWidth
+        value={path}
+        {...noted}
+        slotProps={{
+          select: {
+            "aria-label": say("workflow.pointerFor", { field: label }),
+            "aria-describedby": described,
+          },
+        }}
+        onChange={(edit) => onChange({ ...source, path: edit.target.value })}
+      >
+        <MenuItem value="">{say("workflow.pointerNone")}</MenuItem>
+        {choices.map((choice) => (
+          <MenuItem key={choice} value={choice}>
+            {pointerVisible(choice)}
+          </MenuItem>
+        ))}
+      </TextField>
+    ) : source.from === "constant" && kind !== "yes_no" ? (
+      <>
+        {kind === "written" ? (
+          <Box
+            id={writtenHintId}
+            sx={{
+              typography: "supportingProse",
+              color: "text.secondary",
+              mb: "4px",
+            }}
+          >
+            {say("workflow.constantWrittenHint")}
+          </Box>
+        ) : null}
+        <TextField
+          data-binding-control="typed"
+          size="small"
+          fullWidth
+          value={source.typed}
+          {...noted}
+          multiline={target.kind === "text" && !oneLineText}
+          minRows={target.kind === "text" && !oneLineText ? 3 : undefined}
+          onChange={(edit) => {
+            setRejected(null);
+            onChange({ from: "constant", typed: edit.target.value });
+          }}
+          onPaste={(event) => {
+            if (
+              oneLineText &&
+              hasLineBreak(event.clipboardData.getData("text"))
+            ) {
+              event.preventDefault();
+              setRejected({ typed: source.typed, lines: target.lines });
+            }
+          }}
+          onBeforeInput={(event) => {
+            const typed = (event as typeof event & { data?: string | null })
+              .data;
+            if (
+              oneLineText &&
+              typeof typed === "string" &&
+              hasLineBreak(typed)
+            ) {
+              event.preventDefault();
+              setRejected({ typed: source.typed, lines: target.lines });
+            }
+          }}
+          onDrop={(event) => {
+            if (
+              oneLineText &&
+              hasLineBreak(event.dataTransfer.getData("text/plain"))
+            ) {
+              event.preventDefault();
+              setRejected({ typed: source.typed, lines: target.lines });
+            }
+          }}
+          slotProps={{
+            htmlInput: {
+              "aria-label": valueName,
+              "aria-describedby": valueDescription,
+              ...(kind === "number"
+                ? { inputMode: "decimal" }
+                : { dir: "auto" }),
+            },
+          }}
+        />
+      </>
+    ) : null;
+  return layout(
+    <TextField
+      data-binding-control="from"
+      select
+      size="small"
+      fullWidth
+      slotProps={{
+        select: {
+          "aria-label": say("workflow.fromFor", { field: label }),
+          "aria-describedby": described,
+        },
+      }}
+      value={picked}
+      {...noted}
+      onChange={(edit) => {
+        setRejected(null);
+        const chosen = edit.target.value;
+        onChange(
+          chosen === "none"
+            ? { from: "none" }
+            : chosen === "constant"
+              ? {
+                  from: "constant",
+                  typed:
+                    kind === "yes_no"
+                      ? target.mustBeGiven
+                        ? "false"
+                        : "null"
+                      : "",
+                }
+              : chosen === "input"
+                ? { from: "input", path: "" }
+                : { from: "step", stepKey: chosen, path: "" },
+        );
+      }}
+    >
+      <MenuItem value="none">{say("workflow.fromNothing")}</MenuItem>
+      {sources.map((each) => (
+        <MenuItem key={each.value} value={each.value}>
+          {sourceVisibleOf(each)}
+        </MenuItem>
+      ))}
+      {constant ? (
+        <MenuItem value="constant">{say("workflow.fromConstant")}</MenuItem>
+      ) : null}
+    </TextField>,
+    source.from === "constant" && kind === "yes_no" && !target.mustBeGiven ? (
+      <TextField
+        data-binding-control="typed"
+        select
+        size="small"
+        fullWidth
+        slotProps={{
+          select: { "aria-label": valueName, "aria-describedby": described },
+        }}
+        value={source.typed}
+        {...noted}
+        onChange={(edit) =>
+          onChange({ from: "constant", typed: edit.target.value })
+        }
+      >
+        <MenuItem value="null">{say("workflow.constantNothing")}</MenuItem>
+        <MenuItem value="true">{say("workflow.yes")}</MenuItem>
+        <MenuItem value="false">{say("workflow.no")}</MenuItem>
+      </TextField>
+    ) : source.from === "constant" && kind === "yes_no" ? (
+      <Switch
+        data-binding-control="typed"
+        slotProps={{
+          input: { "aria-label": valueName, "aria-describedby": described },
+        }}
+        checked={source.typed === "true"}
+        onChange={(_event, checked) =>
+          onChange({ from: "constant", typed: String(checked) })
+        }
+      />
+    ) : (
+      second
+    ),
   );
 }
 
-export function sourceVisibleOf(source: SourceOffered): ReactElement {
+export function sourceVisibleOf(
+  source: SourceOffered,
+  binding = true,
+): ReactElement {
   const step = source.step;
   if (step === undefined) return <bdi>{source.words}</bdi>;
   return (
@@ -321,7 +564,13 @@ export function sourceVisibleOf(source: SourceOffered): ReactElement {
       {visible("workflow.fromStep", {
         position: step.position,
         name:
-          step.name === "" ? (
+          step.label !== "" ? (
+            binding ? (
+              <FieldName name={step.name} label={step.label} context="author" />
+            ) : (
+              <bdi>{step.label}</bdi>
+            )
+          ) : step.name === "" ? (
             <>
               {visible("workflow.unnamedVisible", {
                 name: (
@@ -345,71 +594,6 @@ export function sourceVisibleOf(source: SourceOffered): ReactElement {
       })}
     </>
   );
-}
-
-function sourceVisible(
-  source: SourceDraft,
-  sources: readonly SourceOffered[],
-  kind: ConstantKind,
-): ReactElement {
-  if (source.from === "input" || source.from === "step") {
-    const place = sources.find(
-      (each) =>
-        each.value === (source.from === "input" ? "input" : source.stepKey),
-    );
-    const called =
-      place === undefined ? (
-        <>{say("workflow.fromNothing")}</>
-      ) : (
-        sourceVisibleOf(place)
-      );
-    return source.path === "" ? (
-      called
-    ) : (
-      <>
-        {visible("workflow.readAt", {
-          place: called,
-          path: <bdi>{source.path}</bdi>,
-        })}
-      </>
-    );
-  }
-  return <>{sourceSaid(source, sources, kind)}</>;
-}
-
-function sourceSaid(
-  source: SourceDraft,
-  sources: readonly SourceOffered[],
-  kind: ConstantKind,
-): string {
-  switch (source.from) {
-    case "none":
-      return say("workflow.fromNothing");
-    case "constant":
-      return say("workflow.constantSaid", {
-        typed:
-          kind === "yes_no"
-            ? say(
-                source.typed === "null"
-                  ? "workflow.constantNothing"
-                  : source.typed === "true"
-                    ? "workflow.yes"
-                    : "workflow.no",
-              )
-            : isolatedInText(source.typed),
-      });
-    case "input":
-    case "step": {
-      const place =
-        sources.find(
-          (each) =>
-            each.value === (source.from === "input" ? "input" : source.stepKey),
-        )?.words ?? say("workflow.fromNothing");
-      return source.path === ""
-        ? place
-        : say("workflow.readAt", { place, path: source.path });
-    }
-  }
 }
 
 /**
@@ -464,6 +648,53 @@ export function Inputs({
   );
 }
 
+interface BoundRowProps {
+  readonly row: TargetRow;
+  readonly rowKey: string;
+  readonly catalog: SourceCatalog;
+  readonly narrow: boolean;
+  readonly constant: boolean;
+  readonly editable: boolean;
+  readonly change: (target: string, source: SourceDraft) => void;
+}
+
+const BoundRow = memo(
+  function BoundRow({
+    row,
+    catalog,
+    narrow,
+    constant,
+    editable,
+    change,
+  }: BoundRowProps) {
+    const name = row.path.split(".").at(-1)!;
+    return (
+      <BindingRow
+        path={row.path}
+        label={row.label || name}
+        name={name}
+        fieldLabel={row.label}
+        depth={row.depth}
+        narrow={narrow}
+        target={row.target}
+        binding={row.binding}
+        catalog={catalog}
+        constant={constant}
+        editable={editable}
+        flags={row.flags}
+        onChange={(source) => change(row.path, source)}
+      />
+    );
+  },
+  (before, after) =>
+    before.rowKey === after.rowKey &&
+    before.catalog === after.catalog &&
+    before.narrow === after.narrow &&
+    before.constant === after.constant &&
+    before.editable === after.editable &&
+    before.change === after.change,
+);
+
 export function BoundRows({
   rows,
   sources,
@@ -477,25 +708,57 @@ export function BoundRows({
   readonly editable: boolean;
   readonly change: (target: string, source: SourceDraft) => void;
 }) {
-  return rows.map((row) => (
-    <Box
-      key={row.path}
-      sx={
-        row.depth === 0
-          ? undefined
-          : { ...INSET_SX, ml: (row.depth - 1) * INSET_SX.pl }
-      }
-    >
-      <BindingControls
-        label={row.path}
-        target={row.target}
-        binding={row.binding}
-        sources={sources}
-        constant={constant}
-        editable={editable}
-        flags={row.flags}
-        onChange={(source) => change(row.path, source)}
-      />
+  const container = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(
+    container,
+    Number.parseFloat(TOKENS.table.rowsBelow),
+  );
+  const catalog = useSourceCatalog(sources);
+  const receiver = useRef(change);
+  useLayoutEffect(() => {
+    receiver.current = change;
+  }, [change]);
+  const changeBinding = useCallback(
+    (target: string, source: SourceDraft) => receiver.current(target, source),
+    [],
+  );
+  return (
+    <Box ref={container}>
+      <Box
+        component="table"
+        sx={[
+          TABLE_SX,
+          narrow ? NARROW_TABLE_SX : {},
+          narrow ? NARROW_GAP_SX : {},
+        ]}
+      >
+        {narrow ? null : (
+          <>
+            <colgroup>
+              <col style={{ width: "50%" }} />
+              <col style={{ width: "50%" }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">{say("workflow.from")}</th>
+                <th scope="col">{say("workflow.pointer")}</th>
+              </tr>
+            </thead>
+          </>
+        )}
+        {rows.map((row) => (
+          <BoundRow
+            key={row.path}
+            row={row}
+            rowKey={JSON.stringify(row)}
+            catalog={catalog}
+            narrow={narrow}
+            constant={constant}
+            editable={editable}
+            change={changeBinding}
+          />
+        ))}
+      </Box>
     </Box>
-  ));
+  );
 }

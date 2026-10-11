@@ -4,22 +4,20 @@ import { get, putDocument } from "../../../lib/request/http";
 import { GROUPS } from "../../groups";
 
 /**
- * The currency a group reads its costs in, and, only to a reader who may
- * change it, the currencies it may be changed to. Once chosen it is only ever
+ * The currency a group reads its costs in, and the catalog shown to every membership reader. Once chosen it is only ever
  * changed, and it stays chosen after no model is priced in it any longer.
  */
 export interface CurrencyChoice {
   /** Absent where none has been chosen. */
   readonly chosen?: string;
-  /** In order of code; absent where the reader may not change it, and empty where no model is priced in any. */
-  readonly offered?: readonly string[];
+  /** The catalog in order of code, empty where no model is priced in any. */
+  readonly offered: readonly string[];
 }
 
 // Three capitals, as the server holds a code: anything else names no currency,
 // and asking the reader's language for its name is refused as malformed.
 const CODE = /^[A-Z]{3}$/;
 
-/** The group's currency's address handed to `ask`, made as `atSegment` makes one. */
 function atCurrency<T>(
   groupId: string,
   ask: (address: string) => Promise<T>,
@@ -34,7 +32,7 @@ export function readCurrency(
   return atCurrency(groupId, (address) => get(address, signal, choiceFrom));
 }
 
-/** Chosen, or changed to; answered as a read is. Whether any model is priced in it is the server's to say. */
+/** Whether any model is priced in it is the server's to say. */
 export function chooseCurrency(
   groupId: string,
   code: string,
@@ -45,21 +43,19 @@ export function chooseCurrency(
   );
 }
 
-/** Built member by member; a code that is none fails the whole answer. */
+/** One invalid currency code fails the whole answer. */
 function choiceFrom(body: unknown): CurrencyChoice | null {
   if (!isUnchecked(body)) {
     return null;
   }
   const chosen = optional(body, "chosen", codeFrom);
-  const offered = optional(body, "offered", (listed) =>
-    listOf(listed, codeFrom),
-  );
+  const offered = listOf(body.offered, codeFrom);
   if (chosen === null || offered === null) {
     return null;
   }
   return {
     ...(chosen === undefined ? {} : { chosen }),
-    ...(offered === undefined ? {} : { offered }),
+    offered,
   };
 }
 

@@ -1,7 +1,8 @@
+import type { Spend } from "../../api/runFacts";
 import Typography from "@mui/material/Typography";
+import type { ReactNode } from "react";
 
-import type { Spend } from "../../api/groups/{groupId}/runs/{runId}";
-import type { Cost } from "../../api/groups/{groupId}/runs/{runId}/steps";
+import type { Cost } from "../../api/stepTries";
 import { say } from "../../i18n/app";
 import { readersIntl } from "../../i18n/intl";
 import { QUIET_SX } from "../../lib/layout/parts";
@@ -22,6 +23,14 @@ export function Spent({ spend }: { readonly spend: Spend }) {
         sent: countSaid(spend.sent),
         cameBack: countSaid(spend.cameBack),
       })}
+      {spendNotes(spend)}
+    </>
+  );
+}
+
+export function spendNotes(spend: Spend): ReactNode {
+  return (
+    <>
       {spend.measuredHere === undefined ? null : (
         <Typography variant="body2" sx={QUIET_SX}>
           {say(

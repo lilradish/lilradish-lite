@@ -11,8 +11,7 @@ const NO_CONTENT = 204;
 
 /**
  * How this side asks the server for something, so a refusal becomes a problem
- * document in one place instead of at every call site. One function per method,
- * each answered through the reader its caller hands in.
+ * document in one place instead of at every call site.
  *
  * No header naming who is asking is written here: the credential reaches the
  * server without this code writing it, and a header written here would be a
@@ -33,7 +32,6 @@ export function get<T>(
   return exchange(path, { signal }, read);
 }
 
-/** A document sent to be taken in. */
 export function post<T>(
   path: string,
   sent: unknown,
@@ -43,7 +41,7 @@ export function post<T>(
   return exchange(path, withDocument("POST", sent, signal), read);
 }
 
-/** A form sent to be taken in, with the body's media type left to the browser. */
+/** The body's media type is left to the browser. */
 export function postForm<T>(
   path: string,
   body: FormData,
@@ -109,7 +107,6 @@ export function remove<T>(
   return exchange(path, { method: "DELETE", signal }, read);
 }
 
-/** The only requests here that carry a body. */
 function withDocument(
   method: string,
   sent: unknown,
@@ -126,17 +123,14 @@ function withDocument(
 }
 
 /**
- * What a request answers with is this caller's and is decided per call, so none
- * of it may be held: `no-store` keeps the answer out of the browser's own store
- * as the server's matching directive keeps it out of every cache between. A
- * grant withdrawn has to take hold on the next read, and a stored answer is the
- * one thing that would stand between the two.
+ * Answers are caller-specific: `no-store` bypasses the browser's cache, and the
+ * server's matching directive excludes intervening caches. A withdrawn grant
+ * must take hold on the next read.
  *
- * An answer of no content is handed to the reader as `undefined`, so the
- * endpoint that promises one is where it is expected and every other refuses it.
+ * No content reaches the reader as `undefined`; only an endpoint promising it
+ * should accept it.
  *
- * Every way the transport fails ends in a `RequestFailed`, so a failure that is
- * not one is known to be a fault in this side's code and is reported as one.
+ * Transport failures become `RequestFailed`; other failures are reported as code faults.
  */
 async function exchange<T>(
   path: string,

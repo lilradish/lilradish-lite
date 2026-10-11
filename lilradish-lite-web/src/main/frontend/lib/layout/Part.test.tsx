@@ -4,12 +4,12 @@ import { createRef, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { drawnAtDepth, drawnOf } from "../../testutil/depths";
-import { NO_GROUND, resolved } from "../../testutil/grounds";
+import { NO_GROUND } from "../../testutil/grounds";
 import { theme } from "../theme/theme";
 import { Part } from "./Part";
 
 /** `theme.palette.text.secondary`, as a resolved colour is reported back. */
-const SUPPORTING_TEXT_COLOUR = "rgb(89, 89, 89)";
+const SUPPORTING_TEXT_COLOUR = "rgb(88, 102, 108)";
 
 function themed({ children }: { readonly children: ReactNode }) {
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
@@ -55,13 +55,73 @@ describe("Part", () => {
     const heading = within(part).getByRole("heading", { name: "Version 2" });
     const action = within(part).getByRole("button", { name: "Retire" });
 
-    expect(heading.parentElement).toBe(action.parentElement);
+    expect(heading.parentElement).toBe(action.parentElement!.parentElement);
     expect(heading.contains(action)).toBe(false);
     expect(getComputedStyle(heading.parentElement!).flexWrap).toBe("wrap");
-    expect(getComputedStyle(heading.parentElement!).justifyContent).toBe(
-      "flex-end",
-    );
+    expect(getComputedStyle(action.parentElement!).marginLeft).toBe("auto");
+    expect(getComputedStyle(heading).flexGrow).toBe("0");
   });
+
+  it("keeps title additions outside the heading and puts markers and unsaved before trailing actions", () => {
+    render(
+      <Part
+        title="Version 2"
+        level="h2"
+        depth={1}
+        afterTitle={
+          <form>
+            <input aria-label="Version name" />
+          </form>
+        }
+        marker={<button>About the version</button>}
+        unsaved
+        actions={<button>Submit</button>}
+      >
+        Held
+      </Part>,
+      { wrapper: themed },
+    );
+    const region = screen.getByRole("region", { name: "Version 2" });
+    const heading = within(region).getByRole("heading");
+    const row = heading.parentElement!;
+    expect([...row.children].map((child) => child.tagName)).toEqual([
+      "H2",
+      "FORM",
+      "BUTTON",
+      "SPAN",
+      "DIV",
+    ]);
+    expect(heading.querySelector("form, button, input")).toBeNull();
+    expect(row.children[2]).toHaveTextContent("About the version");
+    expect(row.children[3]).toHaveTextContent("Unsaved");
+    expect(row.lastElementChild).toHaveTextContent("Submit");
+  });
+
+  it.each(["marker", "unsaved", "afterTitle"] as const)(
+    "uses a title row with only %s and no actions",
+    (slot) => {
+      render(
+        <Part
+          title="Output"
+          level="h3"
+          depth={2}
+          marker={slot === "marker" ? <button>About output</button> : undefined}
+          unsaved={slot === "unsaved"}
+          afterTitle={
+            slot === "afterTitle" ? <span>Night side</span> : undefined
+          }
+        >
+          Held
+        </Part>,
+        { wrapper: themed },
+      );
+      const region = screen.getByRole("region", { name: "Output" });
+      const heading = within(region).getByRole("heading");
+      expect(heading.parentElement).not.toBe(region);
+      expect(heading.parentElement!.children).toHaveLength(2);
+      expect(region).toHaveAccessibleName("Output");
+    },
+  );
 
   /** A table or a list within the part takes its name from the same heading. */
   it("names its heading by the id given, for what within it is named by the heading too", () => {
@@ -136,6 +196,30 @@ describe("Part", () => {
     expect(document.activeElement).toBe(drawn);
   });
 
+  it("keeps a held heading, and the keyboard on it, while the part turns unsaved and saved again", () => {
+    const heading = createRef<HTMLHeadingElement>();
+    const drawn = (unsaved: boolean) => (
+      <Part
+        title="Roles"
+        level="h3"
+        depth={3}
+        headingRef={heading}
+        unsaved={unsaved}
+      >
+        held
+      </Part>
+    );
+    const { rerender } = render(drawn(true), { wrapper: themed });
+    const held = heading.current!;
+    held.focus();
+
+    rerender(drawn(false));
+
+    expect(heading.current).toBe(held);
+    expect(document.activeElement).toBe(held);
+    expect(within(held.parentElement!).queryByText("Unsaved")).toBeNull();
+  });
+
   it("hands the section itself to whoever holds it", () => {
     const section = createRef<HTMLElement>();
     render(
@@ -170,8 +254,8 @@ describe("Part", () => {
     const group = getComputedStyle(screen.getByRole("heading", { level: 5 }));
     const inner = getComputedStyle(screen.getByRole("heading", { level: 6 }));
 
-    expect(page.fontSize).toBe("22px");
-    expect(group.fontSize).toBe("17px");
+    expect(page.fontSize).toBe("20px");
+    expect(group.fontSize).toBe("16px");
     expect(inner.color).toBe(SUPPORTING_TEXT_COLOUR);
     expect(group.color).not.toBe(SUPPORTING_TEXT_COLOUR);
   });
@@ -181,11 +265,11 @@ describe("Part", () => {
       "a first-rank white card",
       1 as const,
       {
-        topEdge: "0px",
-        leadingEdge: "0px none",
-        leadingEdgeColour: "rgb(0, 0, 0)",
-        ground: resolved(theme.palette.background.paper),
-        padding: "30px 30px",
+        topEdge: "1px",
+        leadingEdge: "1px solid",
+        leadingEdgeColour: "rgb(214, 224, 228)",
+        ground: "rgb(255, 255, 255)",
+        padding: "22px 28px",
         below: "30px",
       },
     ],
@@ -225,8 +309,8 @@ describe("Part", () => {
     expect(drawnAt(region)).toEqual(expected);
     const drawn = getComputedStyle(region);
     if (depth === 1) {
-      expect(drawn.borderRadius).toBe("8px");
-      expect(drawn.boxShadow).not.toBe("none");
+      expect(drawn.borderRadius).toBe("10px");
+      expect(drawn.boxShadow).toBe("");
     } else {
       expect(drawn.borderRadius).toBe("");
       expect(drawn.boxShadow).toBe("");

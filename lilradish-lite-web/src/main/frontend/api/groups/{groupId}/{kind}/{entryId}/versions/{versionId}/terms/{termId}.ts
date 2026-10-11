@@ -7,7 +7,7 @@ import {
 } from "../../{versionId}";
 import type { Worded } from "../terms";
 
-/** One term's address in a list's version handed to `ask`, each identifier escaped as `atSegment` escapes one. */
+/** Each identifier is escaped as `atSegment` escapes one. */
 export function atTerm<T>(
   groupId: string,
   entryId: string,
@@ -21,8 +21,8 @@ export function atTerm<T>(
 }
 
 /**
- * A term and what it means, both written in place of what it held, over the
- * revision the page read; answered with the list as it then reads.
+ * Replaces both term and meaning, guarded by the revision read.
+ * Returns the list as it then reads.
  */
 export function rewordTerm(
   groupId: string,

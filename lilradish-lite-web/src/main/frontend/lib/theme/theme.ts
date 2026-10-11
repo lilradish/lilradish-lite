@@ -1,203 +1,330 @@
 import { dialogContentClasses } from "@mui/material/DialogContent";
 import { dialogTitleClasses } from "@mui/material/DialogTitle";
-import { createTheme } from "@mui/material/styles";
+import { createTheme, type Shadows } from "@mui/material/styles";
+import type { TableCellProps } from "@mui/material/TableCell";
 import type { CSSProperties } from "react";
 
-/**
- * Identifiers are read character by character, so they are set in a fixed
- * pitch. `ui-monospace` alone is not enough: an engine that does not know that
- * generic falls back to the inherited proportional face.
- */
-export const IDENTIFIER_FONT = "ui-monospace, monospace";
+import { TABLE_GEOMETRY } from "../collection/table";
+import { TOKENS } from "./tokens";
+import { typeRolesInRem } from "./typeRoles";
 
-const HEADING = { fontWeight: 600, lineHeight: 1.3 };
+const TYPE_ROLES = typeRolesInRem(TOKENS.type.roles);
 
-/** A page's own parts are headed at the second level, and the product's name is set as large. */
-const PART_HEADING_SIZE = "1.375rem";
-
-const FAILURE = "#8c1d18";
-
-const SUCCESS = "#1b5e20";
-
-const WARNING = "#9a4f00";
-
-const SUPPORTING_TEXT = "#595959";
-
-const ACTION = {
-  ground: "#eaf1fb",
-  border: "#356da8",
-  hover: "#dbeafa",
-  pressed: "#c8def5",
-  warningGround: "#fff1dc",
-  warningHover: "#ffe4ba",
-  warningPressed: "#ffdcaa",
-  navigationGround: "#f0f3f6",
-  navigationBorder: "#526579",
-  navigationHover: "#e2e9f0",
-  navigationPressed: "#d8e3ee",
+const HELD = {
+  color: TOKENS.held.text,
+  backgroundColor: TOKENS.held.ground,
+  borderColor: TOKENS.held.edge,
 } as const;
 
-type StepKindColours = Record<
-  "question" | "workflow" | "code_step" | "route" | "search",
-  { main: string; ground: string }
->;
+// Material lowers opacity on these; a held control is said by colour alone.
+const HELD_WORDS = { opacity: 1, color: TOKENS.held.text } as const;
 
-type StepStateColours = Record<
-  "not_started" | "running" | "held_back" | "waiting" | "failed" | "done",
-  string
+const FOCUS_RING = {
+  outlineStyle: "solid",
+  outlineWidth: 2,
+  outlineColor: TOKENS.act.main,
+  outlineOffset: 2,
+} as const;
+
+const ON_SELECTOR = "&[aria-pressed='true'], &[aria-checked='true']";
+
+// Inside the cell, not its border, which in the collapsed border model takes
+// its width out of the cell and moves the text.
+export const PICKED_EDGE = `inset 3px 0 0 ${TOKENS.act.main}`;
+
+function cellPadding({
+  ownerState,
+}: {
+  readonly ownerState: Pick<TableCellProps, "padding" | "variant">;
+}) {
+  const { inset, headPadding, bodyPadding } = TABLE_GEOMETRY;
+  return ownerState.padding === "normal"
+    ? {
+        padding: `${ownerState.variant === "head" ? headPadding : bodyPadding}px ${inset}px`,
+      }
+    : {};
+}
+
+type TokenStrings<T> = {
+  [K in keyof T]: T[K] extends string ? string : TokenStrings<T[K]>;
+};
+type TypographyRoles = Record<
+  Exclude<keyof typeof TOKENS.type.roles, "button">,
+  CSSProperties
 >;
 
 declare module "@mui/material/styles" {
+  interface PaletteColor {
+    noteGround?: string;
+    noteText?: string;
+  }
+  interface SimplePaletteColorOptions {
+    noteGround?: string;
+    noteText?: string;
+  }
   interface Palette {
-    // createPalette augments the keys it knows and deep-merges the rest
-    // verbatim, so PaletteColor would promise shades that nothing computes.
-    generated: { main: string };
-    part: { mine: string };
-    stepKind: StepKindColours;
-    stepState: StepStateColours;
+    surface: TokenStrings<typeof TOKENS.surface>;
+    ink: TokenStrings<typeof TOKENS.ink>;
+    act: TokenStrings<typeof TOKENS.act>;
+    quiet: TokenStrings<typeof TOKENS.quiet>;
+    state: TokenStrings<typeof TOKENS.state>;
+    model: TokenStrings<typeof TOKENS.model>;
+    kind: TokenStrings<typeof TOKENS.kind>;
+    keyTag: TokenStrings<typeof TOKENS.keyTag>;
+    factTag: TokenStrings<typeof TOKENS.factTag>;
+    held: TokenStrings<typeof TOKENS.held>;
+    code: TokenStrings<typeof TOKENS.code>;
+    elevation: TokenStrings<typeof TOKENS.elevation>;
   }
 
   interface PaletteOptions {
-    generated?: { main: string };
-    part?: { mine: string };
-    stepKind?: StepKindColours;
-    stepState?: StepStateColours;
+    surface?: TokenStrings<typeof TOKENS.surface>;
+    ink?: TokenStrings<typeof TOKENS.ink>;
+    act?: TokenStrings<typeof TOKENS.act>;
+    quiet?: TokenStrings<typeof TOKENS.quiet>;
+    state?: TokenStrings<typeof TOKENS.state>;
+    model?: TokenStrings<typeof TOKENS.model>;
+    kind?: TokenStrings<typeof TOKENS.kind>;
+    keyTag?: TokenStrings<typeof TOKENS.keyTag>;
+    factTag?: TokenStrings<typeof TOKENS.factTag>;
+    held?: TokenStrings<typeof TOKENS.held>;
+    code?: TokenStrings<typeof TOKENS.code>;
+    elevation?: TokenStrings<typeof TOKENS.elevation>;
   }
 
-  interface TypographyVariants {
+  interface TypographyVariants extends TypographyRoles {
     brand: CSSProperties;
+    messageHeading: CSSProperties;
+    proseHeading: CSSProperties;
+    proseCode: CSSProperties;
     term: CSSProperties;
     identifier: CSSProperties;
     tag: CSSProperties;
     figure: CSSProperties;
     systemHint: CSSProperties;
+    unsaved: CSSProperties;
+    keyTag: CSSProperties;
+    valueLabel: CSSProperties;
+    stepListName: CSSProperties;
+    stepListUnstartedName: CSSProperties;
+    stepListState: CSSProperties;
+    controlLabel: CSSProperties;
+    supportingProse: CSSProperties;
+    fieldName: CSSProperties;
+    versionName: CSSProperties;
+    versionNameEmpty: CSSProperties;
   }
 
-  interface TypographyVariantsOptions {
+  interface TypographyVariantsOptions extends Partial<TypographyRoles> {
     brand?: CSSProperties;
+    messageHeading?: CSSProperties;
+    proseHeading?: CSSProperties;
+    proseCode?: CSSProperties;
     term?: CSSProperties;
     identifier?: CSSProperties;
     tag?: CSSProperties;
     figure?: CSSProperties;
     systemHint?: CSSProperties;
+    unsaved?: CSSProperties;
+    keyTag?: CSSProperties;
+    valueLabel?: CSSProperties;
+    stepListName?: CSSProperties;
+    stepListUnstartedName?: CSSProperties;
+    stepListState?: CSSProperties;
+    controlLabel?: CSSProperties;
+    supportingProse?: CSSProperties;
+    fieldName?: CSSProperties;
+    versionName?: CSSProperties;
+    versionNameEmpty?: CSSProperties;
   }
 }
 
 declare module "@mui/material/Typography" {
   interface TypographyPropsVariantOverrides {
     brand: true;
+    messageHeading: true;
   }
 }
 
 /** Contrast tests guard these colours on every surface that reads them. */
 export const theme = createTheme({
   spacing: 10,
+  cssVariables: false,
+  // Material's own transitions keep their motion unless told to follow the
+  // reader's setting for less.
+  motion: { reducedMotion: "system" },
+  shadows: Array.from({ length: 25 }, (_, level) =>
+    level === 0 ? "none" : TOKENS.elevation.popup,
+  ) as Shadows,
   // Material's own ring. Not a duplicate of the global rule below: a component
   // an overflow container would clip draws this one inset, which no outline can.
-  focusVisible: true,
+  focusVisible: FOCUS_RING,
   palette: {
-    background: { default: "#f5f7fa", paper: "#ffffff" },
-    primary: { main: "#0b57d0" },
-    error: { main: FAILURE },
-    success: { main: SUCCESS },
-    // Material's own orange draws a notice's icon under 3:1 on its ground,
-    // and its own blue barely over, once the icon's opacity is counted.
-    warning: { main: WARNING },
-    info: { main: "#0277bd" },
+    background: { default: TOKENS.surface.ground, paper: TOKENS.surface.card },
+    divider: TOKENS.surface.rule,
+    primary: { main: TOKENS.act.main },
+    error: { main: TOKENS.state.failed.text },
+    success: { main: TOKENS.state.done.text },
+    warning: TOKENS.warning,
+    info: { main: TOKENS.state.running.text },
     text: {
-      primary: "#1a1a1a",
-      // Material's default is translucent — rgba(0, 0, 0, 0.6) — so its ratio
-      // is a property of whatever it lands on rather than of the colour.
-      secondary: SUPPORTING_TEXT,
+      primary: TOKENS.ink.primary,
+      secondary: TOKENS.ink.secondary,
+      disabled: TOKENS.held.text,
     },
-    generated: { main: "#5b3fa8" },
-    part: { mine: "#eaf1fb" },
-    stepKind: {
-      question: { main: "#00695c", ground: "#e0f2f1" },
-      workflow: { main: "#283593", ground: "#e8eaf6" },
-      code_step: { main: "#37474f", ground: "#eceff1" },
-      route: { main: "#5d4037", ground: "#efebe9" },
-      search: { main: "#6a1b9a", ground: "#f3e5f5" },
+    action: {
+      active: TOKENS.ink.strong,
+      hover: TOKENS.surface.rowHover,
+      selected: TOKENS.act.current,
+      disabled: TOKENS.held.text,
+      disabledBackground: TOKENS.held.ground,
+      focus: TOKENS.act.hover,
     },
-    stepState: {
-      not_started: SUPPORTING_TEXT,
-      running: "#01579b",
-      held_back: SUPPORTING_TEXT,
-      waiting: WARNING,
-      failed: FAILURE,
-      done: SUCCESS,
-    },
+    surface: TOKENS.surface,
+    ink: TOKENS.ink,
+    act: TOKENS.act,
+    quiet: TOKENS.quiet,
+    state: TOKENS.state,
+    model: TOKENS.model,
+    kind: TOKENS.kind,
+    keyTag: TOKENS.keyTag,
+    factTag: TOKENS.factTag,
+    held: TOKENS.held,
+    code: TOKENS.code,
+    elevation: TOKENS.elevation,
   },
   /**
-   * Every face, size and weight a screen sets, by the role it plays. A
-   * component names the role — a variant, or `typography` in `sx` — and never
+   * A component names the role — a variant, or `typography` in `sx` — and never
    * the values, so the type is decided here and only here.
    */
   typography: {
-    /**
-     * The reader's own system face. Material names Roboto first, which nothing
-     * here loads, so the face would be whichever one each machine falls back on.
-     */
-    fontFamily: 'system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    /** One weight, and no heading smaller than body text. */
-    h1: { ...HEADING, fontSize: "1.75rem" },
-    h2: { ...HEADING, fontSize: PART_HEADING_SIZE },
-    h3: { ...HEADING, fontSize: "1.25rem" },
-    h4: { ...HEADING, fontSize: "1.125rem" },
-    h5: { ...HEADING, fontSize: "1.0625rem" },
-    h6: { ...HEADING, fontSize: "1rem", color: SUPPORTING_TEXT },
-    /** The product's name where it stands for the product, set as large as a page's part and no heading. */
-    brand: { fontSize: PART_HEADING_SIZE, fontWeight: HEADING.fontWeight },
-    body1: { lineHeight: 1.65 },
-    body2: { lineHeight: 1.6 },
-    caption: { lineHeight: 1.5 },
-    subtitle1: { fontSize: "1.0625rem", fontWeight: 600, lineHeight: 1.5 },
-    subtitle2: { fontWeight: 600, lineHeight: 1.5 },
-    /** Material sets a button in capitals, which no other words here are. */
-    button: { textTransform: "none" },
-    /** What a value is called, beside the value: a term, a current place. */
-    term: { fontWeight: 700 },
-    /** Read character by character, so in a fixed pitch, at the size around it. */
-    identifier: { fontFamily: IDENTIFIER_FONT },
-    /**
-     * A short word set apart from what it labels. Not `overline`, which is set
-     * in the regular weight at 2.66 line heights: a tag is set apart by weight.
-     */
-    tag: { fontWeight: 700, fontSize: "0.75rem" },
-    /** A figure read against those above and below it, in digits of one width, at the size around it. */
+    fontFamily: TOKENS.type.family,
+    ...TYPE_ROLES,
+    h1: TYPE_ROLES.pageTitle,
+    h2: TYPE_ROLES.partTitle,
+    h3: TYPE_ROLES.sectionTitle,
+    h4: TYPE_ROLES.sectionTitle,
+    h5: TYPE_ROLES.sectionTitle,
+    h6: { ...TYPE_ROLES.sectionTitle, color: TOKENS.ink.secondary },
+    brand: TYPE_ROLES.partTitle,
+    messageHeading: TYPE_ROLES.sectionTitle,
+    proseHeading: TYPE_ROLES.sectionTitle,
+    proseCode: { fontFamily: TOKENS.type.identifier, fontSize: "inherit" },
+    body1: TYPE_ROLES.body,
+    body2: TYPE_ROLES.bodyCompact,
+    caption: TYPE_ROLES.label,
+    subtitle1: TYPE_ROLES.subtitle,
+    subtitle2: TYPE_ROLES.subtitleCompact,
+    button: { ...TYPE_ROLES.button, textTransform: "none" },
+    term: TYPE_ROLES.term,
+    identifier: { fontFamily: TOKENS.type.identifier },
+    tag: TYPE_ROLES.kindBadge,
     figure: { fontVariantNumeric: "tabular-nums" },
-    systemHint: { fontSize: "inherit", fontWeight: 400, fontStyle: "italic" },
+    systemHint: { ...TYPE_ROLES.systemHint, fontStyle: "italic" },
+    unsaved: TYPE_ROLES.label,
+    keyTag: { ...TYPE_ROLES.keyTag, fontFamily: TOKENS.type.identifier },
+    valueLabel: TYPE_ROLES.valueLabel,
+    stepListName: TYPE_ROLES.stepListName,
+    stepListUnstartedName: TYPE_ROLES.stepListUnstartedName,
+    stepListState: TYPE_ROLES.stepListState,
+    controlLabel: TYPE_ROLES.label,
+    supportingProse: TYPE_ROLES.helper,
+    fieldName: TYPE_ROLES.fieldFactKind,
+    versionName: TYPE_ROLES.versionName,
+    versionNameEmpty: TYPE_ROLES.versionNameEmpty,
   },
   components: {
     MuiContainer: { defaultProps: { maxWidth: "xl" } },
     MuiButton: {
-      defaultProps: { variant: "outlined", size: "medium" },
+      defaultProps: {
+        variant: "outlined",
+        size: "medium",
+        disableElevation: true,
+      },
       styleOverrides: {
-        root: ({ theme: given }) => ({
-          borderRadius: 10,
-          minHeight: 40,
-          fontWeight: 500,
+        root: ({ theme }) => ({
+          borderRadius: TOKENS.shape.controlRadius,
+          minHeight: TOKENS.size.control,
+          minWidth: 88,
+          ...theme.typography.button,
+          ...theme.typography.control,
           variants: [
+            {
+              props: { size: "small" },
+              style: {
+                minWidth: 64,
+                minHeight: TOKENS.size.controlSmall,
+                ...theme.typography.controlSmall,
+              },
+            },
+            {
+              props: { variant: "contained", color: "primary" },
+              style: {
+                "@media (hover: hover)": {
+                  "&:hover": { "--variant-containedBg": TOKENS.act.pressed },
+                },
+                "&:active": { "--variant-containedBg": TOKENS.act.pressed },
+              },
+            },
+            {
+              props: { variant: "text", color: "inherit", size: "small" },
+              style: {
+                minHeight: TOKENS.size.quiet,
+                padding: "0 12px",
+                borderRadius: TOKENS.shape.chipRadius,
+                ...theme.typography.quietControl,
+                color: TOKENS.quiet.text,
+                backgroundColor: TOKENS.quiet.ground,
+                border: "1px solid transparent",
+                "@media (hover: hover)": {
+                  "&:hover": {
+                    "--variant-textBg": TOKENS.quiet.hover,
+                    backgroundColor: TOKENS.quiet.hover,
+                  },
+                },
+                "&:active": {
+                  "--variant-textBg": TOKENS.quiet.hover,
+                  backgroundColor: TOKENS.quiet.hover,
+                },
+                "&[aria-pressed='true']": {
+                  "--variant-textBg": TOKENS.quiet.pressed,
+                  backgroundColor: TOKENS.quiet.pressed,
+                  boxShadow: `inset 0 0 0 1px ${TOKENS.act.main}`,
+                },
+                "&.Mui-disabled": HELD,
+              },
+            },
             {
               props: { color: "primary", variant: "outlined" },
               style: {
-                "--variant-outlinedBorder": ACTION.border,
-                "--variant-outlinedBg": ACTION.ground,
+                "--variant-outlinedBorder": TOKENS.act.main,
+                "--variant-outlinedBg": TOKENS.surface.card,
                 "@media (hover: hover)": {
-                  "&:hover": { "--variant-outlinedBg": ACTION.hover },
+                  "&:hover": { "--variant-outlinedBg": TOKENS.act.hover },
                 },
-                "&:active": { "--variant-outlinedBg": ACTION.pressed },
+                "&:active": { "--variant-outlinedBg": TOKENS.act.hover },
+                [ON_SELECTOR]: {
+                  "--variant-outlinedBg": TOKENS.act.current,
+                  "@media (hover: hover)": {
+                    "&:hover": { "--variant-outlinedBg": TOKENS.act.current },
+                  },
+                  "&:active": { "--variant-outlinedBg": TOKENS.act.current },
+                },
               },
             },
             {
               props: { color: "warning", variant: "outlined" },
               style: {
-                "--variant-outlinedBorder": WARNING,
-                "--variant-outlinedBg": ACTION.warningGround,
+                "--variant-outlinedBorder": TOKENS.warning.main,
+                "--variant-outlinedBg": TOKENS.surface.card,
                 "@media (hover: hover)": {
-                  "&:hover": { "--variant-outlinedBg": ACTION.warningHover },
+                  "&:hover": {
+                    "--variant-outlinedBg": TOKENS.warning.noteGround,
+                  },
                 },
-                "&:active": { "--variant-outlinedBg": ACTION.warningPressed },
+                "&:active": {
+                  "--variant-outlinedBg": TOKENS.warning.noteGround,
+                },
               },
             },
             {
@@ -207,90 +334,82 @@ export const theme = createTheme({
                 variant: "outlined",
               },
               style: {
-                color: ACTION.navigationBorder,
-                borderColor: ACTION.navigationBorder,
-                "--variant-outlinedBg": ACTION.navigationGround,
+                color: TOKENS.ink.strong,
+                borderColor: TOKENS.ink.controlEdge,
+                "--variant-outlinedBg": TOKENS.surface.card,
                 "@media (hover: hover)": {
                   "&:hover": {
-                    "--variant-outlinedBg": ACTION.navigationHover,
+                    "--variant-outlinedBg": TOKENS.act.hover,
+                    borderColor: TOKENS.ink.secondary,
                   },
                 },
                 "&:active": {
-                  "--variant-outlinedBg": ACTION.navigationPressed,
-                },
-              },
-            },
-            {
-              props: {
-                color: "inherit",
-                size: "small",
-                variant: "outlined",
-              },
-              style: {
-                minHeight: 32,
-                fontWeight: 600,
-                color: ACTION.navigationBorder,
-                borderColor: ACTION.navigationBorder,
-                "--variant-outlinedBg": ACTION.navigationGround,
-                "@media (hover: hover)": {
-                  "&:hover": {
-                    "--variant-outlinedBg": ACTION.navigationHover,
-                  },
-                },
-                "&:active": {
-                  "--variant-outlinedBg": ACTION.navigationPressed,
+                  "--variant-outlinedBg": TOKENS.act.hover,
+                  borderColor: TOKENS.ink.secondary,
                 },
               },
             },
           ],
-          [`&.Mui-disabled`]: {
-            backgroundColor: given.palette.action.disabledBackground,
-          },
+          [`&.Mui-disabled.MuiButton-contained, &.Mui-disabled.MuiButton-outlined`]:
+            HELD,
         }),
       },
     },
     MuiIconButton: {
       styleOverrides: {
-        root: ({ theme: given }) => ({
-          border: `1px solid ${ACTION.border}`,
-          backgroundColor: ACTION.ground,
-          color: given.palette.primary.main,
+        root: {
+          border: 0,
+          backgroundColor: "transparent",
+          color: TOKENS.ink.secondary,
+          width: 32,
+          height: 32,
+          padding: 0,
+          borderRadius: 8,
+          "& .MuiSvgIcon-root": { width: 16, height: 16 },
+          "&[aria-expanded] .MuiSvgIcon-root": { width: 18, height: 18 },
           "@media (hover: hover)": {
-            "&:hover": { backgroundColor: ACTION.hover },
+            "&:hover": {
+              backgroundColor: TOKENS.quiet.ground,
+              color: TOKENS.ink.primary,
+            },
           },
-          "&:active": { backgroundColor: ACTION.pressed },
+          "&:active": { backgroundColor: TOKENS.quiet.hover },
           variants: [
-            {
-              props: { color: "warning" },
-              style: {
-                borderColor: WARNING,
-                backgroundColor: ACTION.warningGround,
-                color: WARNING,
-                "@media (hover: hover)": {
-                  "&:hover": { backgroundColor: ACTION.warningHover },
-                },
-                "&:active": { backgroundColor: ACTION.warningPressed },
-              },
-            },
-            {
-              props: { color: "inherit" },
-              style: {
-                borderColor: ACTION.navigationBorder,
-                backgroundColor: ACTION.navigationGround,
-                color: ACTION.navigationBorder,
-                "@media (hover: hover)": {
-                  "&:hover": { backgroundColor: ACTION.navigationHover },
-                },
-                "&:active": {
-                  backgroundColor: ACTION.navigationPressed,
-                },
-              },
-            },
+            { props: { color: "inherit" }, style: { color: "inherit" } },
           ],
           "&.Mui-disabled": {
-            backgroundColor: given.palette.action.disabledBackground,
+            backgroundColor: "transparent",
+            color: TOKENS.held.text,
           },
-        }),
+        },
+      },
+    },
+    MuiToggleButtonGroup: {
+      styleOverrides: {
+        root: {
+          display: "inline-grid",
+          gridAutoFlow: "column",
+          gridAutoColumns: "minmax(0, 1fr)",
+          borderRadius: TOKENS.shape.controlRadius,
+        },
+      },
+    },
+    MuiToggleButton: {
+      styleOverrides: {
+        root: {
+          minWidth: 120,
+          minHeight: TOKENS.size.controlSmall,
+          padding: "0 14px",
+          ...TYPE_ROLES.link,
+          borderColor: TOKENS.ink.controlEdge,
+          color: TOKENS.ink.secondary,
+          "&.Mui-selected": {
+            backgroundColor: TOKENS.act.current,
+            color: TOKENS.act.main,
+            "&:hover": { backgroundColor: TOKENS.act.current },
+          },
+          "&.Mui-disabled": HELD,
+        },
       },
     },
     MuiLink: {
@@ -299,7 +418,7 @@ export const theme = createTheme({
         root: {
           textUnderlineOffset: "0.18em",
           borderRadius: 2,
-          "&.MuiLink-root": { fontWeight: 600 },
+          "&.MuiLink-root": TYPE_ROLES.link,
         },
       },
     },
@@ -308,36 +427,106 @@ export const theme = createTheme({
         root: ({ ownerState }) => ({
           paddingTop: ownerState.dense ? 4 : 10,
           paddingBottom: ownerState.dense ? 4 : 10,
+          "&.Mui-disabled": HELD_WORDS,
         }),
+      },
+    },
+    MuiMenuItem: { styleOverrides: { root: { "&.Mui-disabled": HELD_WORDS } } },
+    MuiTab: { styleOverrides: { root: { "&.Mui-disabled": HELD_WORDS } } },
+    MuiChip: {
+      styleOverrides: { root: { "&.Mui-disabled": { opacity: 1, ...HELD } } },
+    },
+    MuiSwitch: {
+      styleOverrides: {
+        switchBase: {
+          "&.Mui-disabled, &.Mui-checked.Mui-disabled": {
+            color: TOKENS.surface.card,
+          },
+          "&.Mui-disabled .MuiSwitch-thumb": {
+            boxShadow: `0 0 0 1px ${TOKENS.held.edge}`,
+          },
+          "&.Mui-disabled + .MuiSwitch-track, &.Mui-checked.Mui-disabled + .MuiSwitch-track":
+            {
+              opacity: 1,
+              backgroundColor: TOKENS.held.ground,
+              boxShadow: `inset 0 0 0 1px ${TOKENS.held.edge}`,
+            },
+        },
+      },
+    },
+    MuiFormHelperText: {
+      styleOverrides: {
+        root: { "&.Mui-disabled": { color: TOKENS.ink.secondary } },
+      },
+    },
+    MuiTableRow: {
+      styleOverrides: {
+        root: {
+          "&.Mui-selected, &.Mui-selected:hover": {
+            backgroundColor: TOKENS.act.current,
+          },
+          "&.Mui-selected > :not(style):not(:not(style) ~ *)": {
+            boxShadow: PICKED_EDGE,
+          },
+        },
       },
     },
     MuiTableCell: {
       styleOverrides: {
-        root: ({ theme: given }) => ({
+        root: ({ theme }) => ({
+          boxSizing: "border-box",
           verticalAlign: "top",
-          fontFamily: given.typography.fontFamily,
-          fontSize: given.typography.body2.fontSize,
-          lineHeight: given.typography.body2.lineHeight,
+          "&[data-compact='true']": { width: "1%", whiteSpace: "nowrap" },
+          borderBottomWidth: TABLE_GEOMETRY.bodyRule,
+          borderBottomColor: theme.palette.surface.rule,
+          ...theme.typography.tableCell,
+          height: TABLE_GEOMETRY.rowHeight,
           "& .MuiButton-root": {
-            minHeight: 32,
-            fontSize: given.typography.pxToRem(13),
+            minHeight: TOKENS.size.controlSmall,
+            ...theme.typography.controlSmall,
             padding: "4px 10px",
           },
+          "& .MuiButton-text.MuiButton-colorInherit.MuiButton-sizeSmall": {
+            minHeight: TOKENS.size.quiet,
+            ...theme.typography.quietControl,
+            padding: "0 12px",
+          },
         }),
-        sizeMedium: ({ ownerState }) =>
-          ownerState.padding === "normal" ? { padding: "16px 18px" } : {},
-        sizeSmall: ({ ownerState }) =>
-          ownerState.padding === "normal" ? { padding: "12px 16px" } : {},
+        head: ({ theme }) => ({
+          ...theme.typography.tableHead,
+          whiteSpace: "nowrap",
+          color: theme.palette.ink.secondary,
+          height: TABLE_GEOMETRY.headHeight,
+          borderBottomWidth: TABLE_GEOMETRY.headRule,
+          borderBottomColor: theme.palette.surface.cardEdge,
+        }),
+        // Material resolves the size after the variant, so a padding set on
+        // the head alone is always overridden; the head's is set here instead.
+        sizeMedium: cellPadding,
+        sizeSmall: cellPadding,
       },
     },
     MuiOutlinedInput: {
-      styleOverrides: { root: { borderRadius: 10 } },
+      styleOverrides: {
+        root: {
+          borderRadius: TOKENS.shape.controlRadius,
+          "&.Mui-disabled": { backgroundColor: TOKENS.held.ground },
+          "&.Mui-disabled .MuiOutlinedInput-notchedOutline": {
+            borderColor: TOKENS.held.edge,
+          },
+        },
+      },
     },
     // Material draws a subtitle as an h6 and a variant of the theme's own as a span. This
     // replaces Material's whole mapping, which it still falls back on for the rest.
     MuiTypography: {
       defaultProps: {
-        variantMapping: { brand: "p", subtitle1: "p", subtitle2: "p" },
+        variantMapping: {
+          brand: "p",
+          messageHeading: "h2",
+          subtitle1: "p",
+          subtitle2: "p",
+        },
       },
     },
     // Material draws the title, an h2, in the h6 variant.
@@ -349,17 +538,16 @@ export const theme = createTheme({
     },
     MuiDialogContent: {
       styleOverrides: {
-        // The content scrolls, and under a title Material takes its top padding
-        // away; a shrunk outlined label rises above its field and is clipped.
-        // Content with dividers keeps Material's own, which it never took away.
-        root: ({ theme: given }) => ({
+        // Material drops top padding under a title, clipping shrunk labels in
+        // scrolling content. Dividers content retains it, so is excluded.
+        root: ({ theme }) => ({
           [`.${dialogTitleClasses.root} + &:not(.${dialogContentClasses.dividers})`]:
-            { paddingTop: given.spacing(1.5) },
+            { paddingTop: theme.spacing(1.5) },
         }),
       },
     },
     MuiCssBaseline: {
-      styleOverrides: (given) => ({
+      styleOverrides: (theme) => ({
         "@keyframes mui-auto-fill": {
           from: { animationName: "mui-auto-fill" },
         },
@@ -367,24 +555,19 @@ export const theme = createTheme({
           from: { animationName: "mui-auto-fill-cancel" },
         },
         // All a keyboard has to go on, so never removed without a replacement.
-        // Holds off ButtonBase only — a Link rings itself and matches this too,
-        // in the same colour, so whichever paints says the same thing.
-        ":focus-visible:not(.MuiButtonBase-root)": {
-          outlineStyle: "solid",
-          outlineWidth: 3,
-          outlineColor: given.palette.primary.main,
-          outlineOffset: 2,
-        },
+        // Skips ButtonBase only: a Link rings itself in the same colour,
+        // so either paints the same cue.
+        ":focus-visible:not(.MuiButtonBase-root)": FOCUS_RING,
         "a[href]:not(.MuiButtonBase-root):not(.MuiLink-root)": {
-          color: given.palette.primary.main,
-          fontWeight: 600,
+          color: theme.palette.primary.main,
+          ...TYPE_ROLES.link,
           textDecoration: "none",
           textUnderlineOffset: "0.18em",
           borderRadius: 2,
           "&:hover": { textDecoration: "underline" },
         },
         // Otherwise in the user agent's own monospace face and size.
-        code: { ...given.typography.identifier, fontSize: "inherit" },
+        code: { ...theme.typography.identifier, fontSize: "inherit" },
       }),
     },
     MuiInputBase: {

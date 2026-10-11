@@ -17,7 +17,6 @@ const MOST_IN_A_NOTE = 2048;
 // Level with the server's bound on a reason, held to it by the same table; the note's figure, not its rule.
 const MOST_IN_A_REASON = 2048;
 
-// What cannot be prose: every control but a tab and a line feed, and what else breaks a line.
 const NOT_PROSE = /[^\t\n\P{Cc}]|[\p{Zl}\p{Zp}\p{Cs}]/u;
 
 // Level with the server's ConcealingCharacter: a direction control captured, the tag block not.
@@ -32,27 +31,20 @@ const INVISIBLE = [
   0xffa0, 0xfff0, 0xfff8, 0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0fff,
 ];
 
-// One to 63 lowercase English letters, digits and underscores, starting with a letter.
 const IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 
-// What cannot be one line of text.
 const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]/u;
 
-// Any space but U+0020, which a name admits only singly between words.
+// U+0020 is the only space a name admits, and only singly between words.
 const ANOTHER_SPACE = /(?! )\p{Zs}/u;
 
 // Level with the server's CharacterStanding: anything but a space, a format character or the tag block,
 // which draw as nothing; a tab and a line feed show in a line, which refuses them for what they are.
 const SHOWS = /[^\p{Zs}\p{Cf}\u{E0000}-\u{E007F}]/u;
 
-// As SHOWS, a tab and a line feed drawing nothing either, as prose holds them.
 const SHOWS_IN_PROSE = /[^\t\n\p{Zs}\p{Cf}\u{E0000}-\u{E007F}]/u;
 
-/**
- * A name as the server holds one: one line of one to 128 characters, U+0020
- * the only space and never at an end or doubled, and something in it that
- * shows. A format character is kept. Counted in code points, as the server counts.
- */
+/** A name as the server holds one, counted in code points; format characters are kept. */
 export function nameFits(typed: string): boolean {
   return (
     fitsOnOneLine(typed, MOST_IN_A_NAME) &&
@@ -63,26 +55,13 @@ export function nameFits(typed: string): boolean {
   );
 }
 
-/**
- * A line as the server holds one, such as what an entry is for: one to 512
- * characters on one line with something in it that shows, its spacing left
- * as typed. Counted in code points, as the server counts.
- */
+/** Its spacing is left as typed. Counted in code points, as the server counts. */
 export function lineFits(typed: string): boolean {
   return fitsOnOneLine(typed, MOST_IN_A_LINE);
 }
 
-/** A label as the server holds one: a line as `lineFits` judges one, of at most 128 characters. */
 export function labelFits(typed: string): boolean {
   return fitsOnOneLine(typed, MOST_IN_A_LABEL);
-}
-
-/**
- * Prose as the server holds it: 1 to 8192 characters, lines ending in a line feed, a tab the only other
- * control, no direction control or tag character, and something that shows.
- */
-export function proseFits(typed: string): boolean {
-  return proseRefused(typed) === null;
 }
 
 /**
@@ -102,12 +81,10 @@ export function proseRefused(typed: string): ProseRefusal | null {
   return refusedAsProse(typed, MOST_IN_PROSE);
 }
 
-/** What the server would refuse a list's note as: prose, of at most 2048 characters. */
 export function noteRefused(typed: string): ProseRefusal | null {
   return refusedAsProse(typed, MOST_IN_A_NOTE);
 }
 
-/** What the server would refuse a list's term as: a name as `nameFits` judges one, concealing nothing and showing all. */
 export function termRefused(typed: string): TermRefusal | null {
   if (holdsInvisible(typed)) {
     return concealingIn(typed) ?? "invisible";
@@ -115,14 +92,13 @@ export function termRefused(typed: string): TermRefusal | null {
   return concealingIn(typed) ?? (nameFits(typed) ? null : "unusable");
 }
 
-/** What the server would refuse what a term means as: a line as `lineFits` judges one, concealing nothing. */
 export function meaningRefused(typed: string): LineRefusal | null {
   return concealingIn(typed) ?? (lineFits(typed) ? null : "unusable");
 }
 
 /**
- * What the server would refuse a person's reason as, in the order it looks: a CRLF or what conceals first, then
- * none given where nothing in it shows, then prose past 2048 characters or holding what prose cannot.
+ * Refuses CRLF or concealing characters before missing text, then prose's other refusals.
+ * Text is missing when nothing in it shows.
  */
 export function reasonRefused(typed: string): "missing" | ProseRefusal | null {
   const refused = refusedAsProse(typed, MOST_IN_A_REASON);
@@ -142,7 +118,7 @@ export function concealingIn(text: string): "direction_control" | "tag" | null {
       : "direction_control";
 }
 
-/** One well-formed line of one to `most` characters, whether or not anything in it shows. */
+/** Whether anything in it shows is not checked. */
 export function oneLineWithin(typed: string, most: number): boolean {
   return (
     typed !== "" && countedWithin(typed, most) && !NOT_ONE_LINE.test(typed)
@@ -167,7 +143,14 @@ export function proseCharactersRefused(typed: string): ProseRefusal | null {
 
 /** Whether anything in prose shows, where a tab and a line feed draw nothing, as the server judges it. */
 export function showsInProse(typed: string): boolean {
-  return SHOWS_IN_PROSE.test(typed);
+  return shows(typed, SHOWS_IN_PROSE);
+}
+
+function shows(typed: string, visible: RegExp): boolean {
+  for (const character of typed) {
+    if (visible.test(character) && !holdsInvisible(character)) return true;
+  }
+  return false;
 }
 
 function refusedAsProse(typed: string, most: number): ProseRefusal | null {
@@ -212,5 +195,5 @@ function countedWithin(typed: string, most: number): boolean {
 }
 
 function fitsOnOneLine(typed: string, most: number): boolean {
-  return oneLineWithin(typed, most) && SHOWS.test(typed);
+  return oneLineWithin(typed, most) && shows(typed, SHOWS);
 }

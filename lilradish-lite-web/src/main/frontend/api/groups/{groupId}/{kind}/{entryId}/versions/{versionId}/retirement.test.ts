@@ -16,7 +16,7 @@ describe("retire", () => {
         entryId: ENTRY,
         kind: "question",
         name: "Triage",
-        acts: [],
+        stateActs: [],
         versions: [],
       }),
       200,
@@ -37,7 +37,7 @@ describe("retire", () => {
       entryId: ENTRY,
       kind: "question",
       name: "Triage",
-      acts: new Set(),
+      stateActs: new Set(),
       versions: [],
     });
   });

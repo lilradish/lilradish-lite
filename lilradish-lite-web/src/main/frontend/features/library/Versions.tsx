@@ -1,22 +1,19 @@
 import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { useId, useMemo, useState, type ReactNode, type Ref } from "react";
+import type { SxProps, Theme } from "@mui/material/styles";
+import { useId, type ReactNode, type Ref } from "react";
+import { Link as RouterLink } from "react-router";
 
-import type { Version } from "../../api/groups/{groupId}/{kind}";
+import type {
+  Version,
+  VersionStanding as Standing,
+} from "../../api/groups/{groupId}/{kind}";
 import { say } from "../../i18n/app";
-import { visible } from "../../i18n/visible";
-import { Disclosure } from "../../lib/action/Disclosure";
-import type { Ordering } from "../../lib/collection/ordering";
-import { WholeTable } from "../../lib/collection/SortableTable";
-import { isolatedInText } from "../../lib/direction/isolated";
-import { DEPTH_SX, HEADING_SX, TITLE_LINE_SX } from "../../lib/layout/parts";
+import { HEADING_SX, TITLE_LINE_SX } from "../../lib/layout/parts";
+import { StatePill } from "../../lib/text/StatePill";
+import type { StateToneName } from "../../lib/theme/tokens";
 import { standingSaid } from "./libraryKinds";
-import {
-  NEWEST_FIRST,
-  versionColumns,
-  versionsInOrder,
-  type VersionColumn,
-} from "./versionColumns";
 
 // Where the actions wrap onto a line of their own, they end it still.
 const HEADING_LINE_SX = {
@@ -26,18 +23,23 @@ const HEADING_LINE_SX = {
 };
 
 const HEADING_TEXT_SX = { flexGrow: 1 };
-
-/**
- * The caller remounts this per entry, so a new entry gets its own default open state.
- */
+const STANDING_TONES = {
+  draft: "draft",
+  submitted: "submitted",
+  in_service: "inService",
+  retired: "retired",
+} as const satisfies Record<Standing, StateToneName>;
 export function Versions({
   versions,
   open,
   hrefOf,
   headingRef,
   actions,
+  sx,
   children,
 }: {
+  /** A card of its own on the page; a part of the side panel's card there. */
+  readonly sx: SxProps<Theme>;
   readonly versions: readonly Version[];
   readonly open: Version | undefined;
   readonly hrefOf: (version: Version) => string;
@@ -45,17 +47,13 @@ export function Versions({
   readonly headingRef: Ref<HTMLHeadingElement>;
   /** Level with the heading, on the trailing side. */
   readonly actions: ReactNode;
-  /** Said under the heading, above the table. */
+  /** Refusals stay beside the action that asked. */
   readonly children: ReactNode;
 }) {
   const headingId = useId();
-  const tableId = useId();
-  const [shown, setShown] = useState(versions.length !== 1);
-  const [order, setOrder] = useState<Ordering<VersionColumn>>(NEWEST_FIRST);
-  const columns = useMemo(() => versionColumns(), []);
 
   return (
-    <Box component="section" aria-labelledby={headingId} sx={DEPTH_SX[1]}>
+    <Box component="section" aria-labelledby={headingId} sx={sx}>
       <Box sx={HEADING_LINE_SX}>
         <Typography
           id={headingId}
@@ -64,57 +62,84 @@ export function Versions({
           variant="h2"
           sx={HEADING_TEXT_SX}
         >
-          <Disclosure
-            open={shown}
-            controls={tableId}
-            onToggle={() => setShown((was) => !was)}
-          >
-            {say("versions.label")}
-          </Disclosure>
+          {say("versions.label")}
         </Typography>
         {actions}
       </Box>
       {children}
-      <div id={tableId}>
-        {shown ? (
-          <WholeTable
-            label={say("versions.label")}
-            columns={columns}
-            order={order}
-            onOrder={setOrder}
-            rows={versionsInOrder(versions, order)}
-            keyOf={versionIdOf}
-            empty={say("versions.none")}
-            picked={open?.versionId ?? null}
-            hrefOf={hrefOf}
-          />
-        ) : null}
-      </div>
-      {shown || open === undefined ? null : (
-        <Typography
-          variant="body2"
-          aria-label={say("versions.shut", {
-            number: open.number,
-            standing: isolatedInText(standingSaid(open.standing)),
-          })}
+      {versions.length === 0 ? (
+        <Typography>{say("versions.none")}</Typography>
+      ) : (
+        <Box
+          component="ol"
+          aria-labelledby={headingId}
+          sx={{
+            listStyle: "none",
+            m: 0,
+            p: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+            typography: "body2",
+          }}
         >
-          {visible("versions.shut", {
-            number: <span>{open.number}</span>,
-            standing: (
-              <Box
-                component="span"
-                sx={{ typography: "systemHint", color: "text.secondary" }}
-              >
-                <bdi>{standingSaid(open.standing)}</bdi>
+          {[...versions]
+            .sort((a, b) => b.number - a.number)
+            .map((version) => (
+              <Box component="li" key={version.versionId}>
+                <Link
+                  component={RouterLink}
+                  to={hrefOf(version)}
+                  aria-current={
+                    open?.versionId === version.versionId ? "true" : undefined
+                  }
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                    alignItems: "center",
+                    gap: "2px 12px",
+                    p: "10px 12px",
+                    borderRadius: "8px",
+                    color: "text.primary",
+                    bgcolor:
+                      open?.versionId === version.versionId
+                        ? "act.current"
+                        : undefined,
+                  }}
+                >
+                  <span>
+                    {say("version.number", { number: version.number })}
+                  </span>{" "}
+                  <VersionStanding version={version} />
+                  {version.versionName === null ? null : (
+                    <Box
+                      component="bdi"
+                      dir="auto"
+                      sx={{
+                        gridColumn: "1 / -1",
+                        typography: "supportingProse",
+                        color: "text.secondary",
+                      }}
+                    >
+                      {version.versionName}
+                    </Box>
+                  )}
+                </Link>
               </Box>
-            ),
-          })}
-        </Typography>
+            ))}
+        </Box>
       )}
     </Box>
   );
 }
 
-function versionIdOf(version: Version): string {
-  return version.versionId;
+export function VersionStanding({ version }: { readonly version: Version }) {
+  const tone = Object.hasOwn(STANDING_TONES, version.standing)
+    ? STANDING_TONES[version.standing as Standing]
+    : undefined;
+  return tone === undefined ? (
+    <span>{standingSaid(version.standing)}</span>
+  ) : (
+    <StatePill tone={tone} label={standingSaid(version.standing)} />
+  );
 }

@@ -17,13 +17,19 @@
     "@emotion/styled": "11.14.1",
     "@mui/icons-material": "9.4.0",
     "@mui/material": "9.4.0",
+    "hast-util-to-jsx-runtime": "2.3.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-intl": "12.1.1",
     "react-markdown": "10.1.0",
-    "react-router": "8.4.0"
+    "react-router": "8.4.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "unified": "11.0.5"
   },
   "devDependencies": {
+    "@csstools/css-tokenizer": "4.0.1",
     "@eslint/js": "10.0.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "6.9.1",
@@ -36,6 +42,7 @@
     "eslint": "10.10.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "30.1.0",
+    "postcss": "8.5.28",
     "prettier": "3.9.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.0",

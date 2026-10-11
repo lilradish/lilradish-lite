@@ -7,8 +7,7 @@ import type { FocusEventHandler, ReactNode } from "react";
 const DISCLOSURE_SX = { font: "inherit", p: 0, minWidth: 0 };
 
 /**
- * Words that open and shut what they head, drawn as themselves with a mark saying which a press does. The caller
- * holds whether it is open, and draws what it controls under `controls`.
+ * The caller holds whether it is open, and draws what it controls under `controls`.
  */
 export function Disclosure({
   open,
@@ -20,7 +19,6 @@ export function Disclosure({
   children,
 }: {
   readonly open: boolean;
-  /** The id of what it opens and shuts. */
   readonly controls: string;
   readonly onToggle: () => void;
   readonly describedBy?: string;
@@ -32,6 +30,7 @@ export function Disclosure({
     <Button
       variant="text"
       color="inherit"
+      size="medium"
       aria-expanded={open}
       aria-controls={controls}
       aria-describedby={describedBy}

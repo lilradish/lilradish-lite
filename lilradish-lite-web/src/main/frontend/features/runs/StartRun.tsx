@@ -1,10 +1,18 @@
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
-import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { useRef, useState, type RefObject } from "react";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+  type ReactNode,
+} from "react";
 
 import type { FillReason } from "../../api/filling";
 import type {
@@ -22,9 +30,11 @@ import { ProblemView } from "../../app/ProblemView";
 import { say } from "../../i18n/app";
 import { readersIntl } from "../../i18n/intl";
 import { ActButton } from "../../lib/action/ActButton";
+import { ActGroup } from "../../lib/action/ActGroup";
 import { Press } from "../../lib/action/Press";
 import { codePointsIn } from "../../lib/filling/writing";
-import { ACTS_SX, QUIET_SX } from "../../lib/layout/parts";
+import { isolatedInText } from "../../lib/direction/isolated";
+import { QUIET_SX } from "../../lib/layout/parts";
 import { Notice } from "../../lib/notice/Notice";
 import { useAction, type Action } from "../../lib/request/useAction";
 import {
@@ -36,6 +46,8 @@ import {
 import { draftOf, type LevelDraft } from "./fill/fillDrafts";
 import { useFillDraft } from "./fill/useFillDraft";
 import { MOST_IN_A_RUN_NAME, runNameFits } from "./runName";
+import { VersionPicker } from "../library/VersionPicker";
+import { VersionLabel, versionLabelText } from "../../lib/text/VersionLabel";
 
 const START_RULE = { inGroup: "start_run" } as const;
 
@@ -44,7 +56,6 @@ const SAID_SX = { mt: 2 };
 // A name may carry a bidirectional control, so its box takes its direction from it.
 const NAME_INPUT = { htmlInput: { dir: "auto" } };
 
-/** What was said of a start, each where the reader looks for it: a run begun, or refused. */
 export interface StartSettled {
   readonly onStarted: (started: StartedRun) => void;
   /** The version is no longer one to start, so what is offered is read again. */
@@ -53,7 +64,6 @@ export interface StartSettled {
   readonly onProblem: (problem: Problem) => void;
 }
 
-/** The name as the reader left it. */
 interface Naming {
   /** None until the reader changes the name, which is suggested until then. */
   readonly typed: string | null;
@@ -63,7 +73,6 @@ interface Naming {
 
 const NOTHING_NAMED: Naming = { typed: null, refused: null };
 
-/** One run as it is being started. */
 interface StartDraft {
   readonly version: OfferedVersion | undefined;
   readonly onVersion: (versionId: string) => void;
@@ -77,7 +86,6 @@ interface StartDraft {
   readonly onLeave: Left;
   readonly onUnread: Unread;
   readonly marks: ReadonlyMap<string, FillReason>;
-  /** What the page finds wrong in what is filled, which asking for a start takes the keyboard to. */
   readonly unfit: string | undefined;
   /** The last refusal, while what it was said of is still what is asked. */
   readonly refusal: Problem | null;
@@ -87,129 +95,216 @@ interface StartDraft {
   readonly action: Action<StartedRun>;
 }
 
-/**
- * Starting a run beneath the workflow picked from the cards: the newest version in service, which another is
- * chosen only once asked for, a name already suggested, and what that version takes. Nothing here starts the
- * name or what is filled again for another workflow, so it is drawn anew for each.
- */
+/** Nothing here starts the name or what is filled again for another workflow, so it is drawn anew for each. */
 export function StartHere({
   groupId,
   workflow,
   settled,
   nameRef,
   onAbandon,
+  verification,
 }: {
   readonly groupId: string;
   readonly workflow: OfferedWorkflow;
   readonly settled: StartSettled;
   readonly nameRef: RefObject<HTMLInputElement | null>;
   readonly onAbandon: () => void;
+  readonly verification?: ReactNode;
 }) {
-  const start = useStartDraft(groupId, workflow, settled, nameRef);
+  const [inputs, setInputs] = useState(false);
+  const start = useStartDraft(groupId, workflow, settled, nameRef, () =>
+    setInputs(false),
+  );
+  const hasInputs = (start.version?.takes.length ?? 0) > 0;
+  const showingInputs = inputs && hasInputs;
   return (
-    <div>
-      <StartFields start={start} workflow={workflow} />
-      <Box sx={SAID_SX}>
-        <StartSaid start={start} />
-      </Box>
-      <Box sx={ACTS_SX}>
-        <ActButton variant="contained" action={start.action} act={start.act}>
-          {say("work.start")}
-        </ActButton>
-        <Press
-          variant="neutral"
-          reason={
-            start.action.running
-              ? { severity: "warning", words: say("work.startUnderway") }
-              : undefined
-          }
-          onPress={onAbandon}
-        >
-          {say("work.abandon")}
-        </Press>
-      </Box>
-    </div>
+    <Dialog
+      open
+      disableRestoreFocus
+      fullWidth
+      maxWidth="md"
+      onClose={start.action.running ? undefined : onAbandon}
+    >
+      <DialogTitle>
+        {say("work.startDialog", { workflow: isolatedInText(workflow.name) })}
+      </DialogTitle>
+      <DialogContent>
+        <Typography variant="h2" sx={{ mb: 2 }}>
+          {say(showingInputs ? "work.inputs" : "work.versionAndName")}
+        </Typography>
+        <StartFields
+          groupId={groupId}
+          start={start}
+          workflow={workflow}
+          inputs={showingInputs}
+        />
+        <Box sx={SAID_SX}>
+          <StartSaid start={start} showFill={showingInputs || !hasInputs} />
+          {verification}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <ActGroup>
+          {!showingInputs ? null : (
+            <Press tier="neutral" fill onPress={() => setInputs(false)}>
+              {say("work.back")}
+            </Press>
+          )}
+          <Press
+            tier="neutral"
+            fill
+            reason={
+              start.action.running
+                ? { severity: "warning", words: say("work.startUnderway") }
+                : undefined
+            }
+            onPress={onAbandon}
+          >
+            {say("work.cancel")}
+          </Press>
+          {hasInputs && !showingInputs ? (
+            <Press
+              tier="primary"
+              fill
+              onPress={() => {
+                if (runNameFits(start.name)) setInputs(true);
+                else nameRef.current?.focus();
+              }}
+            >
+              {say("work.next")}
+            </Press>
+          ) : (
+            <ActButton
+              tier="primary"
+              fill
+              action={start.action}
+              act={start.act}
+            >
+              {say("work.startRun")}
+            </ActButton>
+          )}
+        </ActGroup>
+      </DialogActions>
+    </Dialog>
   );
 }
 
-/** The name, the version where it is asked for or offered to be, and a control to each field the version takes. */
 function StartFields({
+  groupId,
   start,
   workflow,
+  inputs,
 }: {
+  readonly groupId: string;
   readonly start: StartDraft;
   readonly workflow: OfferedWorkflow;
+  readonly inputs: boolean;
 }) {
   const [asked, setAsked] = useState(false);
+  const inputFields = useRef<HTMLDivElement>(null);
   const { version, name } = start;
   const fits = runNameFits(name);
   const another = workflow.versions.length > 1;
+  useLayoutEffect(() => {
+    if (inputs)
+      inputFields.current
+        ?.querySelector<HTMLElement>(
+          '[role="combobox"]:not([aria-disabled="true"]), input:not([type="hidden"]):not([aria-hidden="true"]):not([tabindex="-1"]):not(:disabled), textarea:not(:disabled), button:not(:disabled)',
+        )
+        ?.focus();
+    else start.nameRef.current?.focus();
+  }, [inputs, start.nameRef]);
   return (
-    <Stack spacing={2}>
-      <TextField
-        label={say("work.nameThisRun")}
-        value={name}
-        onChange={(edit) => start.onName(edit.target.value)}
-        inputRef={start.nameRef}
-        error={!fits || start.nameRefused}
-        helperText={
-          start.nameRefused
-            ? say("refusal.RUN_NAME_UNUSABLE")
-            : fits
-              ? undefined
-              : say("runName.limit")
-        }
-        slotProps={NAME_INPUT}
-        required
-        fullWidth
-      />
-      {asked ? (
-        <TextField
-          select
-          label={say("work.version")}
-          value={version?.versionId ?? ""}
-          onChange={(edit) => start.onVersion(edit.target.value)}
-          // Drawn in place of the control that asked for it, which takes the keyboard with it.
-          autoFocus
-        >
-          {workflow.versions.map((each) => (
-            <MenuItem key={each.versionId} value={each.versionId}>
-              {say("work.versionNumbered", { number: each.number })}
-            </MenuItem>
-          ))}
-        </TextField>
-      ) : another ? (
-        <div>
-          <Button size="small" onClick={() => setAsked(true)}>
-            {say("fill.chooseVersion")}
-          </Button>
-        </div>
-      ) : null}
-      {version === undefined ? null : version.takes.length === 0 ? (
-        <Typography variant="body2" sx={QUIET_SX}>
-          {say("work.nothingTaken")}
-        </Typography>
-      ) : (
-        <FillForm
-          key={version.versionId}
-          formId={start.formId}
-          fields={version.takes}
-          draft={start.fill}
-          onDraft={start.onFill}
-          onLeave={start.onLeave}
-          onUnread={start.onUnread}
-          marks={start.marks}
-        />
-      )}
-    </Stack>
+    <>
+      <Box hidden={inputs}>
+        <Stack spacing={2}>
+          <TextField
+            label={say("work.nameThisRun")}
+            value={name}
+            onChange={(edit) => start.onName(edit.target.value)}
+            inputRef={start.nameRef}
+            autoFocus
+            error={!fits || start.nameRefused}
+            helperText={
+              start.nameRefused
+                ? say("refusal.RUN_NAME_UNUSABLE")
+                : fits
+                  ? undefined
+                  : say("runName.limit")
+            }
+            slotProps={NAME_INPUT}
+            required
+            fullWidth
+          />
+          {asked ? (
+            <VersionPicker
+              groupId={groupId}
+              kind="workflow"
+              label={say("work.version")}
+              value={version?.versionId ?? ""}
+              onChange={start.onVersion}
+              readOnly={start.action.running}
+              choices={workflow.versions.map((each) => ({
+                versionId: each.versionId,
+                label: versionLabelText({
+                  number: each.number,
+                  name: each.versionName,
+                  numberLabel: say("work.versionNumbered", {
+                    number: each.number,
+                  }),
+                }),
+                shown: (
+                  <VersionLabel
+                    number={each.number}
+                    name={each.versionName}
+                    numberLabel={say("work.versionNumbered", {
+                      number: each.number,
+                    })}
+                  />
+                ),
+              }))}
+              // Drawn in place of the control that asked for it, which takes the keyboard with it.
+              autoFocus
+            />
+          ) : another ? (
+            <div>
+              <Press tier="secondary" onPress={() => setAsked(true)}>
+                {say("fill.chooseVersion")}
+              </Press>
+            </div>
+          ) : null}
+          {version === undefined || version.takes.length !== 0 ? null : (
+            <Typography variant="body2" sx={QUIET_SX}>
+              {say("work.nothingTaken")}
+            </Typography>
+          )}
+        </Stack>
+      </Box>
+      <Box ref={inputFields} hidden={!inputs}>
+        {version === undefined ? null : (
+          <FillForm
+            key={version.versionId}
+            formId={start.formId}
+            fields={version.takes}
+            draft={start.fill}
+            onDraft={start.onFill}
+            onLeave={start.onLeave}
+            onUnread={start.onUnread}
+            marks={start.marks}
+          />
+        )}
+      </Box>
+    </>
   );
 }
 
-/**
- * What is said beside Start: a refusal where nothing else says it, as a name refused is said on the name and a
- * version gone by the page, with how many places it found and marked nowhere; and what the page finds wrong.
- */
-function StartSaid({ start }: { readonly start: StartDraft }) {
+function StartSaid({
+  start,
+  showFill,
+}: {
+  readonly start: StartDraft;
+  readonly showFill: boolean;
+}) {
   const { refusal, unmarked, unfit } = start;
   return (
     <>
@@ -225,7 +320,9 @@ function StartSaid({ start }: { readonly start: StartDraft }) {
           </Notice>
         ) : null}
       </div>
-      {unfit === undefined ? null : <Notice severity="info">{unfit}</Notice>}
+      {!showFill || unfit === undefined ? null : (
+        <Notice severity="info">{unfit}</Notice>
+      )}
     </>
   );
 }
@@ -235,6 +332,7 @@ function useStartDraft(
   workflow: OfferedWorkflow,
   settled: StartSettled,
   nameRef: RefObject<HTMLInputElement | null>,
+  onNameRefused: () => void,
 ): StartDraft {
   const newest = workflow.versions[0];
   const nameSent = useRef<string | null>(null);
@@ -244,7 +342,6 @@ function useStartDraft(
   const version =
     workflow.versions.find((each) => each.versionId === chosen) ?? newest;
   const versionId = version?.versionId ?? "";
-  // The version gone from what was read again: start again on the newest.
   if (versionId !== chosen) {
     setChosen(versionId);
   }
@@ -256,6 +353,7 @@ function useStartDraft(
     settled.onProblem(problem);
     draft.refusedWith(problem);
     if (refusedForTheName(problem)) {
+      onNameRefused();
       setNaming((prior) => ({ ...prior, refused: nameSent.current }));
       nameRef.current?.focus();
     }
@@ -314,7 +412,6 @@ function useStartDraft(
   };
 }
 
-/** The workflow's name and when the form was drawn, the name cut short where the two would not fit in a name. */
 function nameOfTheMoment(workflow: string, at: Date): string {
   const time = readersIntl.formatDate(at, {
     day: "numeric",

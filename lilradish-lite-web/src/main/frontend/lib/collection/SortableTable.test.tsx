@@ -1,6 +1,7 @@
+import { expectConsoleErrors } from "../../testutil/consoleErrors";
 import { ThemeProvider } from "@mui/material/styles";
 import { tableCellClasses } from "@mui/material/TableCell";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, RouterProvider, createMemoryRouter } from "react-router";
@@ -12,11 +13,8 @@ import type { PagedResource } from "../request/usePagedResource";
 import { theme } from "../theme/theme";
 import { SortableTable, WholeTable } from "./SortableTable";
 
-/**
- * A four-pixel bar in `theme.palette.primary.main`, as this environment
- * reports a shadow back: verbatim, the colour not resolved.
- */
-const PICKED_BAR = "inset 4px 0 0 #0b57d0";
+/** A 3px bar in act.main, as this environment reports a shadow back: verbatim, the colour not resolved. */
+const PICKED_BAR = "inset 3px 0 0 #1c5b81";
 
 interface Item {
   readonly id: string;
@@ -28,7 +26,7 @@ const AVO: Item = { id: "p1", name: "Avo Lumerace", count: 3 };
 const GLINN: Item = { id: "p2", name: "Glinn Havven", count: 1 };
 const HAVO: Item = { id: "p3", name: "Havo Lunnet", count: 2 };
 
-type ItemOrder = "name" | "count";
+type ItemColumn = "name" | "count";
 
 /**
  * Out of order by every column, whichever way: a table that sorted the rows
@@ -100,7 +98,7 @@ function tableOf(
     <SortableTable
       label="Records"
       columns={columns()}
-      order={{ column: "name" as ItemOrder, descending }}
+      order={{ column: "name" as ItemColumn, descending }}
       onOrder={onOrder}
       page={page}
       keyOf={(row) => row.id}
@@ -124,7 +122,7 @@ function routed({
   const common = {
     label: "Records",
     columns: columns(control),
-    order: { column: "name" as ItemOrder, descending: false },
+    order: { column: "name" as ItemColumn, descending: false },
     onOrder: vi.fn(),
     page: paged({}),
     keyOf: (row: Item) => row.id,
@@ -193,6 +191,51 @@ function offTheLink(): HTMLElement {
 }
 
 describe("SortableTable", () => {
+  it("keeps compact linked keys and all headings on one line while sentences take the remaining width", () => {
+    render(
+      <SortableTable
+        label="Invented cases"
+        columns={[
+          {
+            label: "Run",
+            cell: (row: Item) => `SUPPORT-${row.count}`,
+            compact: true,
+          },
+          { label: "A sentence", cell: (row: Item) => row.name },
+        ]}
+        order={{ column: "name", descending: false }}
+        onOrder={vi.fn()}
+        page={paged({})}
+        keyOf={(row) => row.id}
+        hrefOf={(row: Item) => `/records/${row.id}`}
+        picked={null}
+        empty="Nothing here"
+      />,
+      { wrapper: themed },
+    );
+    const table = screen.getByRole("table");
+    const rows = [...table.querySelectorAll("tr")];
+    expect(rows).toHaveLength(4);
+    expect(
+      [...table.querySelectorAll("thead th")].map(
+        (cell) => getComputedStyle(cell).whiteSpace,
+      ),
+    ).toEqual(["nowrap", "nowrap"]);
+    for (const row of rows) {
+      expect(row.children[0]).toHaveStyle({
+        width: "1%",
+        whiteSpace: "nowrap",
+        verticalAlign: "top",
+      });
+      expect(getComputedStyle(row.children[1]!).width).not.toBe("1%");
+    }
+    expect(screen.getAllByRole("link")).toHaveLength(3);
+    expect(
+      [...table.querySelectorAll("tbody td:nth-child(2)")].map(
+        (cell) => getComputedStyle(cell).whiteSpace,
+      ),
+    ).toEqual(["", "", ""]);
+  });
   it("names the table for what it lists", () => {
     render(tableOf(paged({})), { wrapper: themed });
 
@@ -244,6 +287,35 @@ describe("SortableTable", () => {
     const cells = [...screen.getByRole("table").querySelectorAll("th, td")];
 
     expect(cells).toHaveLength(4 * 3);
+    for (const cell of cells) {
+      const style = getComputedStyle(cell);
+      expect({
+        height: style.height,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        lineHeight: style.lineHeight,
+        verticalAlign: style.verticalAlign,
+        borderColor: style.borderBottomColor,
+        borderWidth: style.borderBottomWidth,
+        padding: style.padding,
+      }).toEqual({
+        height: cell.tagName === "TH" ? "36px" : "44px",
+        fontSize: cell.tagName === "TH" ? "12px" : "14px",
+        fontWeight: cell.tagName === "TH" ? "650" : "400",
+        lineHeight: "22px",
+        verticalAlign: "top",
+        borderColor:
+          cell.tagName === "TH" ? "rgb(214, 224, 228)" : "rgb(228, 235, 238)",
+        borderWidth: cell.tagName === "TH" ? "2px" : "1px",
+        padding: cell.tagName === "TH" ? "7px 12px" : "11px 12px",
+      });
+      expect(getComputedStyle(cell).overflow).not.toBe("hidden");
+      expect(getComputedStyle(cell).whiteSpace).toBe(
+        cell.tagName === "TH" || (cell as HTMLTableCellElement).cellIndex === 1
+          ? "nowrap"
+          : "",
+      );
+    }
     expect(
       cells.filter(
         (cell) => !cell.classList.contains(tableCellClasses.sizeSmall),
@@ -325,7 +397,6 @@ describe("SortableTable", () => {
   it.each([false, true])(
     "keeps columns apart that share a heading, across a new page, rows opening %s",
     (opening) => {
-      const complaints = vi.spyOn(console, "error");
       const common = {
         label: "Records",
         columns: [
@@ -356,7 +427,7 @@ describe("SortableTable", () => {
       expect([...bodyRows()[0]!.cells].map((cell) => cell.textContent)).toEqual(
         ["Glinn Havven", "p2", "1"],
       );
-      expect(complaints).not.toHaveBeenCalled();
+      expectConsoleErrors();
     },
   );
 
@@ -382,7 +453,7 @@ describe("SortableTable", () => {
    * the collection.
    */
   it.each([
-    ["being read", paged({ items: [], loading: true }), "Still reading…"],
+    ["being read", paged({ items: [], loading: true }), "Loading…"],
     ["found empty", paged({ items: [] }), EMPTY],
     [
       "found empty past the first page",
@@ -405,7 +476,7 @@ describe("SortableTable", () => {
 
     render(tableOf(page), { wrapper: themed });
 
-    expect(screen.getByRole("status").textContent).toBe("Still reading…");
+    expect(screen.getByRole("status").textContent).toBe("Loading…");
     expect(bodyRows()).toHaveLength(ITEMS.length);
   });
 
@@ -495,7 +566,7 @@ describe("SortableTable", () => {
             ),
           },
         ]}
-        order={{ column: "name" as ItemOrder, descending: false }}
+        order={{ column: "name" as ItemColumn, descending: false }}
         onOrder={vi.fn()}
         page={paged({ items: [AVO] })}
         keyOf={(row) => row.id}
@@ -516,16 +587,47 @@ describe("SortableTable", () => {
     ).toBeNull();
   });
 
-  /**
-   * A link may hold phrasing content only and nothing interactive. The DOM
-   * takes anything, so only the parser of a served page would ever object.
-   */
   it("keeps the first cell's link to words", () => {
     routed({ picked: null });
 
     for (const link of screen.getAllByRole("link")) {
       expect(link.querySelector("div, p, a, button")).toBeNull();
     }
+  });
+
+  it("keeps another cell's editing separate from the link, without turning editing into navigation", async () => {
+    const acted = vi.fn();
+    const moves = routed({
+      picked: null,
+      control: (row) => (
+        <>
+          <button onClick={() => acted(row.id)}>Edit {row.name}</button>
+          <input aria-label={`Name for ${row.name}`} />
+        </>
+      ),
+    });
+    const link = screen.getByRole("link", { name: AVO.name });
+    const button = screen.getByRole("button", { name: `Edit ${AVO.name}` });
+    const input = screen.getByRole("textbox", { name: `Name for ${AVO.name}` });
+    expect(link.querySelector("button, input")).toBeNull();
+    expect(button.closest("tr")).toBe(link.closest("tr"));
+    expect(input.closest("td")).toBe(button.closest("td"));
+    expect(button.closest("td")).not.toBe(link.closest("td"));
+    await userEvent.click(button);
+    await userEvent.click(input);
+    await userEvent.type(input, " revised");
+    expect(acted).toHaveBeenCalledExactlyOnceWith(AVO.id);
+    expect(moves).toEqual([]);
+    await act(async () => {
+      link.focus();
+    });
+    await userEvent.keyboard("{Enter}");
+    expect(moves).toEqual([`PUSH ${HERE}?picked=p1`]);
+    await userEvent.click(offTheLink());
+    expect(moves).toEqual([
+      `PUSH ${HERE}?picked=p1`,
+      `REPLACE ${HERE}?picked=p1`,
+    ]);
   });
 
   it("marks the picked row current on its link and leaves the attribute off every other", () => {
@@ -544,16 +646,25 @@ describe("SortableTable", () => {
   });
 
   /** A shape as well as a colour: a tint says nothing to a reader who cannot tell it from the rest. */
-  it("draws a bar inside the picked row's first cell in the primary colour and in no other", () => {
+  it("draws a bar inside the picked row's first cell in the primary colour, on the picked ground, and neither on another row", () => {
     routed({ picked: "p1" });
 
     const picked = getComputedStyle(firstCellOf("Avo Lumerace")).boxShadow;
     const others = ["Glinn Havven", "Havo Lunnet"].map(
       (name) => getComputedStyle(firstCellOf(name)).boxShadow,
     );
+    const groundOf = (name: string) =>
+      getComputedStyle(firstCellOf(name).parentElement!).backgroundColor;
 
     expect(picked).toBe(PICKED_BAR);
     expect(others.filter((shadow) => shadow.includes("inset"))).toEqual([]);
+    expect(groundOf("Avo Lumerace")).toBe("rgb(218, 235, 247)");
+    expect(["Glinn Havven", "Havo Lunnet"].map(groundOf)).not.toContain(
+      "rgb(218, 235, 247)",
+    );
+    expect(
+      bodyRows().filter((row) => row.classList.contains("Mui-selected")),
+    ).toEqual([firstCellOf("Avo Lumerace").parentElement]);
   });
 
   /** The address can name a row on a page other than this one; nothing here goes looking for it. */
@@ -767,7 +878,7 @@ describe("WholeTable", () => {
       <WholeTable
         label="Records"
         columns={columns()}
-        order={{ column: "count" as ItemOrder, descending }}
+        order={{ column: "count" as ItemColumn, descending }}
         onOrder={onOrder}
         rows={rows}
         keyOf={(row) => row.id}
@@ -792,6 +903,14 @@ describe("WholeTable", () => {
     const cells = [...screen.getByRole("table").querySelectorAll("th, td")];
 
     expect(cells).toHaveLength(4 * 3);
+    for (const cell of cells) {
+      expect(cell).toHaveStyle({
+        height: cell.tagName === "TH" ? "36px" : "44px",
+        fontSize: cell.tagName === "TH" ? "12px" : "14px",
+        lineHeight: "22px",
+        verticalAlign: "top",
+      });
+    }
     expect(
       cells.filter(
         (cell) => !cell.classList.contains(tableCellClasses.sizeSmall),
@@ -858,7 +977,7 @@ describe("WholeTable", () => {
       <WholeTable
         label="Records"
         columns={columns()}
-        order={{ column: "count" as ItemOrder, descending: false }}
+        order={{ column: "count" as ItemColumn, descending: false }}
         onOrder={vi.fn()}
         rows={ITEMS}
         keyOf={(row) => row.id}

@@ -27,11 +27,9 @@ const SMALL_Z = 0x7a;
 const BYTE_ORDER_MARK = 0xfeff;
 
 /**
- * How deep a drawing's lists and quotes could nest, as the server's
- * `DrawingDepth` estimates it: line by line, never shallower than Markdown
- * nests them. Each line counts the quote and list markers it opens with, and
- * half of every run of spaces and tabs before and between them, a tab as four
- * and a run straight after a marker first giving one column back to it.
+ * Mirrors the server's `DrawingDepth`, never estimating shallower than Markdown.
+ * Counts leading quote/list markers and half the whitespace columns around them;
+ * a run straight after a marker gives one column back to it.
  */
 export function drawingDepth(drawing: string): number {
   const length = drawing.length;
@@ -113,7 +111,6 @@ export function emphasisDepth(drawing: string): number {
   return Math.max(deepest, Math.floor(delimiters / 2));
 }
 
-/** A drawing the server refuses as nesting too deep. */
 export function drawingTooDeep(drawing: string): boolean {
   return (
     drawingDepth(drawing) > DEEPEST_DRAWING ||

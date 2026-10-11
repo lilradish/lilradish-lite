@@ -1,26 +1,25 @@
-import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import { Link as RouterLink, useLocation } from "react-router";
 
 import type { ReadField } from "../../../api/filling";
 import type { Run } from "../../../api/groups/{groupId}/runs/{runId}";
-import type {
-  Declared,
-  From,
-} from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { Declared } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { GroupStanding } from "../../../api/standing";
+import type { From } from "../../../api/stepSources";
 import { say } from "../../../i18n/app";
 import { isolatedInText } from "../../../lib/direction/isolated";
+import { Field, Fields } from "../../../lib/form/Fields";
 import { listQuery, runHref, stepHref, WITHIN_THE_RUN } from "../runAddress";
 import { fieldAt, fromSaid, labelAt } from "./declared";
 
 export function StartedWithSources({
-  groupId,
+  group,
   run,
   takes,
   declarations,
   versionId,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly run: Run;
   readonly takes: readonly ReadField[] | undefined;
   readonly declarations: ReadonlyMap<string, Declared>;
@@ -54,45 +53,45 @@ export function StartedWithSources({
       from.runId === undefined
         ? undefined
         : from.stepId === undefined
-          ? runHref(groupId, from.runId)
-          : stepHref(groupId, from.runId, from.stepId);
-    const words = say("step.takes", { input, from: source });
-    return address === undefined ? (
-      words
-    ) : (
-      <Link
-        component={RouterLink}
-        to={`${address}${listQuery(search)}`}
-        state={from.stepId === undefined ? undefined : WITHIN_THE_RUN}
-      >
-        {words}
-      </Link>
+          ? runHref(group, from.runId)
+          : stepHref(group, from.runId, from.stepId);
+    return (
+      <Field key={input} label={input}>
+        {address === undefined ? (
+          source
+        ) : (
+          <Link
+            component={RouterLink}
+            to={`${address}${listQuery(search)}`}
+            state={from.stepId === undefined ? undefined : WITHIN_THE_RUN}
+          >
+            {source}
+          </Link>
+        )}
+      </Field>
     );
   };
   return (
-    <Box component="ul">
-      {run.startedWithFrom.map((each) => (
-        <li key={each.input}>
-          {each.sources === undefined ? (
-            sourceLine(labelAt(takes, each.input), each.from)
-          ) : (
+    <Fields>
+      {run.startedWithFrom.map((each) =>
+        each.sources === undefined ? (
+          sourceLine(labelAt(takes, each.input), each.from)
+        ) : (
+          <Field key={each.input} label={labelAt(takes, each.input)}>
             <>
-              {labelAt(takes, each.input)}
-              <Box component="div">{say("step.putTogetherFromThese")}</Box>
-              <Box component="ul">
-                {each.sources.map(({ targetPath, from }) => (
-                  <li key={targetPath}>
-                    {sourceLine(
-                      labelAt(fieldAt(takes, each.input)?.fields, targetPath),
-                      from,
-                    )}
-                  </li>
-                ))}
-              </Box>
+              <div>{say("step.putTogetherFromThese")}</div>
+              <Fields>
+                {each.sources.map(({ targetPath, from }) =>
+                  sourceLine(
+                    labelAt(fieldAt(takes, each.input)?.fields, targetPath),
+                    from,
+                  ),
+                )}
+              </Fields>
             </>
-          )}
-        </li>
-      ))}
-    </Box>
+          </Field>
+        ),
+      )}
+    </Fields>
   );
 }

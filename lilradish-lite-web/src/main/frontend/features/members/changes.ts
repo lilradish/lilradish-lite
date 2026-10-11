@@ -1,6 +1,5 @@
 import type { MemberPanel } from "../../api/groups/{groupId}/members";
 
-/** What a change to a group's membership settled as. */
 export type Outcome =
   | { readonly changed: MemberPanel }
   | { readonly removed: MemberPanel }

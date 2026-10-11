@@ -3,7 +3,13 @@ import { createContext, useContext, useMemo, type ReactNode } from "react";
 
 import type { LIB_EN } from "../../i18n/en";
 import { say } from "../../i18n/lib";
-import { drawingOf, type Drawing, type Unseen } from "./hidden";
+import {
+  drawingOf,
+  withoutMarkedIn,
+  type Drawing,
+  type Piece,
+  type Unseen,
+} from "./hidden";
 
 const SAID = {
   shows_nothing: "text.showsNothing",
@@ -31,16 +37,31 @@ const LeftOut = styled("span")(({ theme }) => ({
 const DrawnAcross = createContext<Drawing | null>(null);
 
 /**
- * Text as it came, every character in it that would show nothing or turn the order the rest is shown in drawn
- * where it stands as its code point, a run of one as one; or, past the most markers drawn, left out and counted
- * above it. The character itself is never put on the page: left there, it would still act. Within
- * `HiddenShownAcross`, the text is drawn as the value around it is, and nothing is said of it here.
+ * Characters selected by the hidden text rules become code-point markers, one
+ * per same-character run. Past the budget they are omitted and counted above.
+ * Never render marked characters themselves: they would still act.
+ * Within `HiddenShownAcross`, use the enclosing value's drawing and notice.
  */
-export function HiddenShown({ text }: { readonly text: string }) {
+export function HiddenShown({
+  text,
+  ending,
+  part,
+}: {
+  readonly text: string;
+  readonly ending?: string;
+  readonly part?: "before-ending" | "ending";
+}) {
   const across = useContext(DrawnAcross);
   const drawing = useMemo(() => across ?? drawingOf([text]), [across, text]);
   if ("kept" in drawing) {
-    const kept = judged(drawing.kept, text);
+    const whole = judged(drawing.kept, text);
+    const tail = ending === undefined ? "" : withoutMarkedIn(ending).kept;
+    const kept =
+      part === "ending"
+        ? whole.slice(whole.length - tail.length)
+        : part === "before-ending"
+          ? whole.slice(0, whole.length - tail.length)
+          : whole;
     return across === null ? (
       <>
         <LeftOutSaid count={drawing.leftOut} />
@@ -50,7 +71,31 @@ export function HiddenShown({ text }: { readonly text: string }) {
       kept
     );
   }
-  return judged(drawing.pieces, text).map((piece, at) => {
+  const whole = judged(drawing.pieces, text);
+  const split =
+    ending === undefined ? text.length : text.length - ending.length;
+  let position = 0;
+  const pieces: Piece[] = [];
+  for (const piece of whole) {
+    const length =
+      "text" in piece
+        ? piece.text.length
+        : String.fromCodePoint(piece.codePoint).length * piece.count;
+    if (part === undefined) pieces.push(piece);
+    else if ("text" in piece) {
+      const drawn =
+        part === "ending"
+          ? piece.text.slice(Math.max(0, split - position))
+          : piece.text.slice(0, Math.max(0, split - position));
+      if (drawn !== "") pieces.push({ text: drawn });
+    } else if (
+      (part === "ending" && position >= split) ||
+      (part === "before-ending" && position < split)
+    )
+      pieces.push(piece);
+    position += length;
+  }
+  return pieces.map((piece, at) => {
     if ("text" in piece) {
       return piece.text;
     }
@@ -71,28 +116,34 @@ export function HiddenShown({ text }: { readonly text: string }) {
 }
 
 /**
- * `children`, which draw `value`, every text in it as JSON holds them drawn by `HiddenShown` as one: past the most
- * markers across them all, none is marked, and how many characters were left out of them all is said above. Within
- * another, it is drawn as that one is.
+ * Shares one marker budget across `value`'s JSON texts drawn by `children`.
+ * Past it, none is marked and all omitted characters are counted above.
+ * Nested values use the enclosing drawing.
  */
 export function HiddenShownAcross({
   value,
   children,
+  suppressNotice = false,
+  asDrawing,
 }: {
   readonly value: unknown;
   readonly children: ReactNode;
+  readonly suppressNotice?: boolean;
+  readonly asDrawing?: Drawing;
 }) {
   const within = useContext(DrawnAcross);
   const drawing = useMemo(
-    () => (within === null ? drawingOf(textsIn(value)) : null),
-    [within, value],
+    () => asDrawing ?? (within === null ? drawingOf(textsIn(value)) : null),
+    [asDrawing, within, value],
   );
   if (drawing === null) {
     return children;
   }
   return (
     <DrawnAcross.Provider value={drawing}>
-      {"kept" in drawing ? <LeftOutSaid count={drawing.leftOut} /> : null}
+      {"kept" in drawing && !suppressNotice ? (
+        <LeftOutSaid count={drawing.leftOut} />
+      ) : null}
       {children}
     </DrawnAcross.Provider>
   );
@@ -113,7 +164,7 @@ function judged<Drawn>(each: ReadonlyMap<string, Drawn>, text: string): Drawn {
   return drawn;
 }
 
-function textsIn(value: unknown): readonly string[] {
+export function textsIn(value: unknown): readonly string[] {
   const texts: string[] = [];
   const gather = (each: unknown): void => {
     if (typeof each === "string") {

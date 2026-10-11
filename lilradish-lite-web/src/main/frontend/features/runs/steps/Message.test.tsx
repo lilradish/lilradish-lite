@@ -7,18 +7,19 @@ import { describe, expect, it } from "vitest";
 import { BLOCK_SX, HEADING_SX } from "../../../lib/layout/parts";
 import { theme } from "../../../lib/theme/theme";
 import { drawnOf } from "../../../testutil/depths";
-import { NO_GROUND, resolved } from "../../../testutil/grounds";
+import { resolved } from "../../../testutil/grounds";
 import { Message } from "./Message";
 
 /** The room under a heading as `parts.ts` writes it, in pixels as a style reports it back. */
 const UNDER_A_HEADING = theme.spacing(HEADING_SX.mb);
 
-/** Each kind's colour as `theme.ts` writes it, copied by hand so a path nothing resolves shows. */
+/** Each kind's edge and words' colour as `theme.ts` writes them, copied by hand so a path nothing resolves shows. */
 const KIND_COLOURS = [
-  ["question", "#00695c"],
-  ["workflow", "#283593"],
-  ["code_step", "#37474f"],
-  ["route", "#5d4037"],
+  ["question", "#8f8c62", "#5c5721"],
+  ["workflow", "#8e8a87", "#403c39"],
+  ["code_step", "#7a8d98", "#324b5a"],
+  ["route", "#9e867a", "#614232"],
+  ["search", "#ba7890", "#8a2c55"],
 ] as const;
 
 function themed({ children }: { readonly children: ReactNode }) {
@@ -86,30 +87,19 @@ describe("Message", () => {
     expect(head).not.toHaveTextContent("Running");
   });
 
-  it("says what a step cost on the trailing side of its head, after the kind and no part of the title", () => {
+  it("keeps the step's title line to its identity while its details belong below", () => {
     const item = drawn(
-      <Message
-        title="Summarise"
-        kind="question"
-        cost={{
-          spend: {
-            sent: "1200",
-            cameBack: "300",
-            spent: "1500",
-            cameBackUnknown: false,
-          },
-        }}
-      >
+      <Message title="Summarise" kind="question">
         <p>Running</p>
       </Message>,
     );
 
     const title = within(item).getByRole("heading", { level: 2 });
-    const cost = title.parentElement!.lastElementChild!;
+    const head = title.parentElement!;
 
-    expect(cost.textContent).toBe("1,500 in all: 1,200 sent, 300 came back");
-    expect(cost.previousElementSibling?.textContent).toBe("Question");
-    expect(getComputedStyle(cost).marginLeft).toBe("auto");
+    expect(head.lastElementChild?.textContent).toBe("Question");
+    expect(head.children).toHaveLength(2);
+    expect(head).not.toHaveTextContent("1,500");
     expect(title).toHaveAccessibleName("Summarise");
     expect(item).toHaveAccessibleName("Summarise");
     expect(title.parentElement!.nextElementSibling?.textContent).toBe(
@@ -145,7 +135,7 @@ describe("Message", () => {
     expect(within(item).queryByRole("heading", { level: 3 })).toBeNull();
   });
 
-  it("sets a message the reader made apart on the trailing side, narrower than the rest and on its own ground, its frame and edge as any other's", () => {
+  it("sets a message the reader made apart on the trailing side with the shared width limit and its own ground, its frame and edge as any other's", () => {
     const item = drawn(
       <Message title="What it was started with" byTheReader={true}>
         <p>Avo Lumerace started it, running the workflow Handle a claim.</p>
@@ -155,17 +145,73 @@ describe("Message", () => {
     const drawnAs = getComputedStyle(item);
 
     expect(drawnAs.marginInlineStart).toBe("auto");
-    expect(drawnAs.maxWidth).toBe("85%");
-    expect(drawnAs.backgroundColor).toBe(resolved(theme.palette.part.mine));
-    expect({ ...drawnOf(item), ground: NO_GROUND }).toEqual(drawnAsBlock());
+    expect(drawnAs.maxWidth).toBe("960px");
+    expect(drawnAs.backgroundColor).toBe(
+      resolved(theme.palette.background.paper),
+    );
+    expect(drawnOf(item)).toEqual(drawnAsBlock());
+    expect([
+      drawnOf(item).padding,
+      drawnAs.paddingRight,
+      drawnAs.getPropertyValue("--card-side-padding"),
+    ]).toEqual(["16px 20px", "20px", "20px"]);
     expect(item).toHaveAccessibleName("What it was started with");
   });
+
+  it.each([true, false, undefined])(
+    "keeps the same conversation width limit in every declared viewport rule when reader identity is %s",
+    (byTheReader) => {
+      const item = drawn(
+        <Message title="Summarise" byTheReader={byTheReader}>
+          <p>One short value.</p>
+        </Message>,
+      );
+      const limits: string[] = [];
+      const widths: string[] = [];
+      const responsiveWidths: string[] = [];
+      const visit = (rules: CSSRuleList, condition = "") => {
+        for (const rule of rules) {
+          if (rule instanceof CSSStyleRule) {
+            const limit = rule.style.getPropertyValue("max-width");
+            if (limit !== "" && item.matches(rule.selectorText))
+              limits.push(limit);
+            const width = rule.style.getPropertyValue("width");
+            if (width !== "" && item.matches(rule.selectorText)) {
+              widths.push(width);
+              responsiveWidths.push(
+                `${condition.replaceAll(" ", "")}:${width}`,
+              );
+            }
+          }
+          if (rule instanceof CSSMediaRule)
+            visit(rule.cssRules, rule.conditionText);
+          else if ("cssRules" in rule)
+            visit(rule.cssRules as CSSRuleList, condition);
+        }
+      };
+      for (const sheet of document.styleSheets) visit(sheet.cssRules);
+
+      expect(new Set(limits)).toEqual(new Set(["960px"]));
+      expect(new Set(widths)).toEqual(new Set(["95%", "90%", "85%"]));
+      expect(new Set(responsiveWidths)).toEqual(
+        new Set([
+          "(min-width:0px):95%",
+          "(min-width:600px):90%",
+          "(min-width:900px):85%",
+        ]),
+      );
+      const drawnAs = getComputedStyle(item);
+      expect(drawnAs.maxWidth).toBe("960px");
+      expect(drawnAs.marginInlineStart === "auto").toBe(byTheReader === true);
+      expect(drawnAs.marginInlineEnd === "auto").toBe(byTheReader !== true);
+    },
+  );
 
   it.each([
     ["no reader is said to have made it", undefined],
     ["the reader did not make it", false],
   ] as const)(
-    "leaves a message on the leading side, as wide as the conversation and on no ground of its own, where %s",
+    "leaves a message on the leading side with the shared width limit and leading side's light ground, where %s",
     (_case, byTheReader) => {
       const item = drawn(
         <Message title="What it was started with" byTheReader={byTheReader}>
@@ -176,19 +222,22 @@ describe("Message", () => {
       const drawnAs = getComputedStyle(item);
 
       expect(drawnAs.marginInlineStart).not.toBe("auto");
-      expect(drawnAs.maxWidth).not.toBe("85%");
-      expect(drawnAs.backgroundColor).not.toBe(
-        resolved(theme.palette.part.mine),
+      expect(drawnAs.maxWidth).toBe("960px");
+      expect(drawnAs.backgroundColor).toBe(
+        resolved(theme.palette.surface.given),
       );
-      expect(drawnOf(item)).toEqual(drawnAsBlock());
+      expect(drawnOf(item)).toEqual({
+        ...drawnAsBlock(),
+        ground: resolved(theme.palette.surface.given),
+      });
     },
   );
 
   /** Colours as `theme.ts` writes them, copied by hand so a path nothing resolves shows. */
   it.each([
-    ["done", "#1b5e20"],
-    ["failed", "#8c1d18"],
-    ["stopped", "#595959"],
+    ["done", "#24683a"],
+    ["failed", "#a1261f"],
+    ["stopped", "#5a656b"],
   ] as const)(
     "edges the run's last message, ended %s, all round and thicker than any other, in that ending's colour",
     (ending, colour) => {
@@ -221,12 +270,15 @@ describe("Message", () => {
       </Message>,
     );
 
-    expect(drawnOf(item)).toEqual(drawnAsBlock());
+    expect(drawnOf(item)).toEqual({
+      ...drawnAsBlock(),
+      ground: resolved(theme.palette.surface.given),
+    });
   });
 
   it.each(KIND_COLOURS)(
-    "rules a message of a step that runs %s down its leading edge in that kind's colour and in no other's, framed otherwise as a block",
-    (kind, colour) => {
+    "rules a message of a step that runs %s down its leading edge in that kind's edge, not its words' colour nor another kind's, framed otherwise as a block",
+    (kind, colour, words) => {
       const item = drawn(
         <Message title="Summarise" kind={kind}>
           <p>Running</p>
@@ -239,10 +291,12 @@ describe("Message", () => {
 
       expect(drawnOf(item)).toEqual({
         ...drawnAsBlock(),
+        ground: resolved(theme.palette.surface.given),
         leadingEdge: "3px solid",
         leadingEdgeColour: resolved(colour),
       });
       expect(others).not.toContain(drawnOf(item).leadingEdgeColour);
+      expect(drawnOf(item).leadingEdgeColour).not.toBe(resolved(words));
     },
   );
 
@@ -256,9 +310,12 @@ describe("Message", () => {
 
     const title = within(item).getByRole("heading", { level: 2 });
 
-    expect(drawnOf(item)).toEqual(drawnAsBlock());
+    expect(drawnOf(item)).toEqual({
+      ...drawnAsBlock(),
+      ground: resolved(theme.palette.surface.given),
+    });
     expect(title.nextSibling?.textContent).toBe(
-      "Not something this page can say yet.",
+      "This page can't show this yet.",
     );
     expect(item).not.toHaveTextContent(/unmapped_kind/i);
   });

@@ -1,9 +1,11 @@
-import Button from "@mui/material/Button";
+import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
 import Container from "@mui/material/Container";
 import { Link as RouterLink } from "react-router";
 
 import { say, type MessageId } from "../i18n/app";
 import { Part } from "../lib/layout/Part";
+import { Press } from "../lib/action/Press";
 import { Notice } from "../lib/notice/Notice";
 
 /**
@@ -40,9 +42,13 @@ export function NoSuchScreen() {
       <Notice severity="error" alert>
         {say("routeError.missingDetail")}
       </Notice>
-      <Button component={RouterLink} to="/" sx={{ mt: 2 }}>
+      <Link
+        component={RouterLink}
+        to="/"
+        sx={{ display: "inline-block", mt: 2 }}
+      >
         {say("routeError.missingWayBack")}
-      </Button>
+      </Link>
     </Part>
   );
 }
@@ -61,9 +67,11 @@ function WentWrong({
       <Notice severity="error" alert>
         {say(detail)}
       </Notice>
-      <Button onClick={() => window.location.reload()} sx={{ mt: 2 }}>
-        {say(reload)}
-      </Button>
+      <Box sx={{ mt: 2 }}>
+        <Press tier="secondary" onPress={() => window.location.reload()}>
+          {say(reload)}
+        </Press>
+      </Box>
     </Part>
   );
 }

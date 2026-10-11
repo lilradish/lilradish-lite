@@ -23,10 +23,16 @@ const CALLS = {
   turnedAway: 5,
 };
 
+const OTHER_MODEL = { ...AS_IT_IS, model: "reader", productions: 8 };
+const OTHER_CALLS = { ...CALLS, model: "reader", wentWrong: 1 };
+
 describe("readMeasurements", () => {
   it("asks for the measurements, and reads every row of both tables as it came", async () => {
     const sent = answering([
-      JSON.stringify({ models: [AS_IT_IS, IN_A_MODE], system: [CALLS] }),
+      JSON.stringify({
+        models: [AS_IT_IS, IN_A_MODE, OTHER_MODEL],
+        system: [CALLS, OTHER_CALLS],
+      }),
       200,
     ]);
 
@@ -36,8 +42,8 @@ describe("readMeasurements", () => {
       "/api/measurements",
     ]);
     expect(measured).toEqual({
-      models: [AS_IT_IS, IN_A_MODE],
-      system: [CALLS],
+      models: [AS_IT_IS, IN_A_MODE, OTHER_MODEL],
+      system: [CALLS, OTHER_CALLS],
     });
   });
 

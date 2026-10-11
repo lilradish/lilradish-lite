@@ -10,12 +10,13 @@ import {
   readMember,
   refusedForWhatMoved,
 } from "../../api/groups/{groupId}/members/{subjectId}";
-import { mayIn } from "../../api/standing";
+import { mayIn, type GroupStanding } from "../../api/standing";
 import { Async } from "../../app/Async";
 import { groupPage, MEMBERS_ITEM } from "../../app/destinations";
 import { ProblemView } from "../../app/ProblemView";
 import { movesTheReader, refusalSentence } from "../../app/refusal";
 import type { Rule } from "../../app/standing/actRules";
+import { useGroup } from "../../app/standing/RequireGroup";
 import { useStandingRead } from "../../app/standing/StandingContext";
 import { say, type MessageId } from "../../i18n/app";
 import { FilterField } from "../../lib/collection/FilterField";
@@ -44,7 +45,6 @@ const MEMBERS = MEMBERS_ITEM.segment;
 
 const SAID_SX = { mb: 1 };
 
-/** What reading the members takes. */
 const READS: Rule = { inGroup: "read_membership" };
 
 /** What the page says it has done, or what was refused once its member was out of view. */
@@ -75,20 +75,17 @@ const NOT_DONE = {
  * control is left offering what was just refused.
  */
 export function MembersPage() {
-  const { groupId = "" } = useParams();
-  return <MembersInGroup key={groupId} />;
+  const group = useGroup();
+  return <MembersInGroup key={group.groupId} group={group} />;
 }
 
-function MembersInGroup() {
-  const standingRead = useStandingRead();
-  const reloadStanding = standingRead.reload;
-  const { groupId = "", subjectId } = useParams();
+function MembersInGroup({ group }: { readonly group: GroupStanding }) {
+  const reloadStanding = useStandingRead().reload;
+  const { groupId } = group;
+  const { subjectId } = useParams();
   const { search } = useLocation();
   const navigate = useNavigate();
-  const group = standingRead.value.groups.find(
-    (each) => each.groupId === groupId,
-  );
-  const mayChange = group !== undefined && mayIn(group, "change_membership");
+  const mayChange = mayIn(group, "change_membership");
   const { filter, order, sort, onFilter, onOrder } = useListAddress(
     MEMBER_SORTABLE,
     BY_USER_NUMBER,
@@ -114,7 +111,7 @@ function MembersInGroup() {
   const [answeredByPanel, setAnsweredByPanel] = useState<Said | null>(null);
   const [asked, setAsked] = useState<Asked | null>(null);
 
-  const listHref = groupPage(groupId, MEMBERS) + search;
+  const listHref = groupPage(group, MEMBERS) + search;
 
   useEffect(() => {
     for (const problem of [page.problem, member.read.problem]) {
@@ -156,7 +153,7 @@ function MembersInGroup() {
         setAnsweredByPanel(line);
         setSaid(line);
         if (outcome.broughtIn.subjectId !== subjectId) {
-          navigate(memberHref(groupId, outcome.broughtIn.subjectId, search));
+          navigate(memberHref(group, outcome.broughtIn.subjectId, search));
         }
       }
     },
@@ -199,11 +196,7 @@ function MembersInGroup() {
   return (
     <>
       <PageHeading
-        title={
-          group === undefined
-            ? say(MEMBERS_ITEM.label)
-            : say("members.heading", { group: isolatedInText(group.name) })
-        }
+        title={say("members.heading", { group: isolatedInText(group.name) })}
         actions={
           mayChange ? (
             <BringSomebodyIn
@@ -217,7 +210,7 @@ function MembersInGroup() {
         }
       />
       <CurrencyPicker
-        // Read again as the right to change it moves, which is what the currencies offered follow.
+        // Read again as the right to change it moves, so the picker uses the current standing.
         key={`${groupId}:${String(mayChange)}`}
         groupId={groupId}
         mayChange={mayChange}
@@ -257,7 +250,7 @@ function MembersInGroup() {
               page={page}
               keyOf={subjectIdOf}
               picked={subjectId ?? null}
-              hrefOf={(row) => memberHref(groupId, row.subjectId, search)}
+              hrefOf={(row) => memberHref(group, row.subjectId, search)}
               empty={say(filter === "" ? "members.empty" : "members.noMatch")}
             />
           </>
@@ -293,11 +286,11 @@ function titleOf(member: MemberPanel | null): string {
 }
 
 function memberHref(
-  groupId: string,
+  group: GroupStanding,
   subjectId: string,
   search: string,
 ): string {
-  return `${groupPage(groupId, MEMBERS)}/${encodeURIComponent(subjectId)}${search}`;
+  return `${groupPage(group, MEMBERS)}/${encodeURIComponent(subjectId)}${search}`;
 }
 
 function subjectIdOf(member: Member): string {

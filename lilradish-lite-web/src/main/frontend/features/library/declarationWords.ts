@@ -1,18 +1,6 @@
 import type { FieldKind, FieldStanding } from "../../api/declaration";
-import { say, type MessageId } from "../../i18n/app";
-import { fileSizeOf, type FileSizeUnit } from "./declarationDrafts";
-import { intl } from "../../i18n/intl";
-
-// In the catalogue's language, not the reader's, for the reason `joinedInCell` gives.
-const PARTS = new Intl.ListFormat(intl.defaultLocale, {
-  type: "unit",
-  style: "short",
-});
-
-/** What a field is and asks, each part already said, run together as one line is scanned. */
-export function partsSaid(parts: readonly string[]): string {
-  return PARTS.format(parts);
-}
+import type { MessageId } from "../../i18n/app";
+import type { FileSizeUnit } from "./declarationDrafts";
 
 /** The words each kind of field is said in, closed over the kinds in both directions, in the order they are offered. */
 export const FIELD_KIND_WORDS = {
@@ -39,8 +27,3 @@ export const FILE_SIZE_UNIT_WORDS = {
   MB: "declaration.sizeUnit.MB",
   GB: "declaration.sizeUnit.GB",
 } as const satisfies Record<FileSizeUnit, MessageId>;
-
-export function fileSizeSaid(bytes: number): string {
-  const { fileSize, fileSizeUnit } = fileSizeOf(bytes);
-  return `${fileSize} ${say(FILE_SIZE_UNIT_WORDS[fileSizeUnit])}`;
-}

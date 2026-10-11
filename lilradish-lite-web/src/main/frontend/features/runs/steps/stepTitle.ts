@@ -5,5 +5,5 @@ export function spokenName(name: string): string {
 }
 
 export function stepTitle(step: StepRow): string {
-  return step.runs.name ?? spokenName(step.name);
+  return step.label ?? step.runs.name ?? spokenName(step.name);
 }

@@ -4,7 +4,6 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { Notice, type Severity } from "./Notice";
 
-/** What a screen says in its own line. */
 export interface Line {
   readonly severity: Severity;
   /** Shown as given, so a name in it arrives isolated by `isolatedInText`. */
@@ -12,13 +11,12 @@ export interface Line {
 }
 
 /**
- * A screen's own line: a region that stands before its first word, and puts
- * each new line in only once nothing above it is aria-hidden, and has not been
- * for a frame — words written under a modal are never heard, and words that
- * arrive with their region are not reliably heard either.
+ * Mounts the region before its words, then waits until all ancestors have been
+ * free of aria-hidden for a frame: words beneath a modal or arriving with their region
+ * are not reliably announced.
  *
- * A line already said stays, and is not said again for being uncovered. One
- * that arrives while hidden takes the last one down and waits.
+ * Uncovering never repeats an announced line. A new line arriving while hidden
+ * clears the last and waits.
  */
 export function StatusLine({
   said,

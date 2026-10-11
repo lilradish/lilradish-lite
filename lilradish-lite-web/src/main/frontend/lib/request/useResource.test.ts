@@ -425,5 +425,7 @@ describe("useResource", () => {
     expect(unchanged).toBe(settled);
     expect(result.current).not.toBe(settled);
     expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.value).toEqual(["a row"]);
   });
 });

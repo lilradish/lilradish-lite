@@ -13,7 +13,7 @@ const READ = {
   entryId: ENTRY,
   kind: "workflow",
   name: "Handle",
-  acts: [],
+  stateActs: [],
   versions: [],
 };
 
@@ -35,6 +35,6 @@ describe.each([
     expect(init?.method).toBe(method);
     expect(init?.signal).toBe(signal);
     expect(init?.body).toBeUndefined();
-    expect(read).toEqual({ ...READ, acts: new Set() });
+    expect(read).toEqual({ ...READ, stateActs: new Set() });
   });
 });

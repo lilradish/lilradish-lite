@@ -16,7 +16,7 @@ describe("approve", () => {
         entryId: ENTRY,
         kind: "reference_list",
         name: "Regions",
-        acts: [],
+        stateActs: [],
         versions: [],
       }),
       200,
@@ -37,7 +37,7 @@ describe("approve", () => {
       entryId: ENTRY,
       kind: "reference_list",
       name: "Regions",
-      acts: new Set(),
+      stateActs: new Set(),
       versions: [],
     });
   });

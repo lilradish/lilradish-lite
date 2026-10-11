@@ -1,7 +1,6 @@
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type group_role as enum ('operator', 'overseer', 'owner');
 
--- ---------------------------------------------------------------- groups
 
 -- DB-SPECIFIC: length(), text, ~, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now() and uuid use PostgreSQL's syntax and semantics.
 create table groups (
@@ -36,13 +35,11 @@ create table groups (
     constraint groups_name_bounded check (length(name) <= 128)
 );
 
--- ---------------------------------------------------------------- membership
 
 -- DB-SPECIFIC: as enum uses PostgreSQL's syntax and semantics.
 create type group_member_removal as enum ('role_taken', 'removed_from_group');
 
 -- A foreign key cannot target pool_members' partial index of current stays.
--- This foreign key targets subjects instead.
 -- DB-SPECIFIC: timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table group_members (
     group_member_id uuid         not null default uuidv7(),
@@ -53,6 +50,7 @@ create table group_members (
     created_at      timestamptz  not null default now(),
     created_by      uuid         not null,
     removed_at      timestamptz,
+    removed_position bigint,
     removed_by      uuid,
     -- Unchecked while removed_by is null, for the reason pool_members gives.
     removed_by_kind subject_kind not null default 'person',
@@ -68,7 +66,9 @@ create table group_members (
         references subjects (subject_id, kind),
     constraint group_members_remover_is_person check (removed_by_kind = 'person'),
     constraint group_members_removed_together check (
-        (removed_at is null) = (removed_by is null) and (removed_at is null) = (removal is null)),
+        (removed_at is null) = (removed_by is null) and (removed_at is null) = (removal is null)
+            and (removed_at is null) = (removed_position is null)),
+    constraint group_members_removed_position_positive check (removed_position > 0),
     constraint group_members_removed_after_created
         check (removed_at is null or removed_at >= created_at)
 );
@@ -77,7 +77,15 @@ create table group_members (
 create unique index group_members_one_current_holding
     on group_members (group_id, subject_id, role) where removed_at is null;
 
--- A member holds a row per role, so how many groups they are in is count(distinct group_id) over
--- this index and never count(*).
+-- A member holds a row per role, so count their groups with count(distinct group_id), never count(*).
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index group_members_by_subject on group_members (subject_id) where removed_at is null;
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index group_members_by_ending on group_members (group_id, removed_position desc)
+    where removed_position is not null;
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create index group_members_by_subject_ending
+    on group_members (group_id, subject_id, removed_position desc, removal desc)
+    where removed_at is not null;

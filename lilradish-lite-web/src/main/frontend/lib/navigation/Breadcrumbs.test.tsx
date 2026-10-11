@@ -8,14 +8,14 @@ import { theme } from "../theme/theme";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 
 /** `theme.palette.text.primary`, as a resolved colour is reported back. */
-const CURRENT_COLOUR = "rgb(26, 26, 26)";
+const CURRENT_COLOUR = "rgb(25, 32, 36)";
 
 /**
  * `theme.palette.text.secondary`, which the trail's own root imposes on
  * anything that resolves no colour of its own — the colour a regression here
  * produces, not merely a colour this one is not.
  */
-const TRAIL_COLOUR = "rgb(89, 89, 89)";
+const TRAIL_COLOUR = "rgb(88, 102, 108)";
 
 const TRAIL: readonly Crumb[] = [
   { label: "Groups", path: "/system/groups", search: "" },

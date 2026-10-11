@@ -32,8 +32,8 @@ const REASON_REFUSED: ReadonlySet<string> = new Set([
 ] satisfies readonly WordedRefusal[]);
 
 /**
- * A person's answer filling try `number`: a value for every field it gives, in the words a start sends them, and
- * why. Answered with the step as it stands once the run has gone on as far as it goes by itself.
+ * A person's answer: every field try `number` gives, encoded as a start's values, and why.
+ * Returns the step once the run has advanced as far as it goes by itself.
  */
 export function answerTry(
   groupId: string,
@@ -72,12 +72,11 @@ export function refusedAsChanged(problem: Problem): boolean {
   return servedAmong(problem, CHANGED);
 }
 
-/** Whether somebody acted on that try first, as an answer to it is refused by. */
 export function refusedAsMovedOn(problem: Problem): boolean {
   return servedAmong(problem, MOVED_ON);
 }
 
-/** Whether the reason sent was refused; the refusal names no value, only why. */
+/** The refusal names no value, only why. */
 export function refusedForTheReason(problem: Problem): boolean {
   return servedAmong(problem, REASON_REFUSED);
 }

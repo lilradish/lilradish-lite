@@ -3,7 +3,7 @@ import Typography from "@mui/material/Typography";
 import type { ReadField } from "../../../api/filling";
 import type { Run } from "../../../api/groups/{groupId}/runs/{runId}";
 import type { Declared } from "../../../api/groups/{groupId}/runs/{runId}/steps";
-import { isTheReader } from "../../../api/standing";
+import { isTheReader, type GroupStanding } from "../../../api/standing";
 import { useStanding } from "../../../app/standing/StandingContext";
 import { say } from "../../../i18n/app";
 import { isolatedInText } from "../../../lib/direction/isolated";
@@ -14,13 +14,13 @@ import { Message } from "./Message";
 import { StartedWithSources } from "./StartedWithSources";
 
 export function StartedWithMessage({
-  groupId,
+  group,
   run,
   takes,
   declarations,
   versionId,
 }: {
-  readonly groupId: string;
+  readonly group: GroupStanding;
   readonly run: Run;
   readonly takes: readonly ReadField[] | undefined;
   readonly declarations: ReadonlyMap<string, Declared>;
@@ -46,7 +46,9 @@ export function StartedWithMessage({
               })
           : say("step.startedAboveWith", {
               workflow,
-              step: isolatedInText(spokenName(run.from!.stepName)),
+              step: isolatedInText(
+                run.from!.label ?? spokenName(run.from!.stepName),
+              ),
               number: run.from!.number,
             })}
       </Typography>
@@ -56,10 +58,10 @@ export function StartedWithMessage({
           {say("step.startedWithNothing")}
         </Typography>
       ) : (
-        <FilledFields fields={declared} values={values} shut={true} />
+        <FilledFields fields={declared} values={values} shut={true} cards />
       )}
       <StartedWithSources
-        groupId={groupId}
+        group={group}
         run={run}
         takes={takes}
         declarations={declarations}

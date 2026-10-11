@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 
+import type { GroupStanding } from "../../api/standing";
 import { groupPage, WORK_ITEM } from "../../app/destinations";
 
 /** Work's two tabs, as an address names them; New run first, as Work opens on a device that has kept no tab. */
@@ -17,9 +18,8 @@ export function tabNamed(search: string): WorkTab | undefined {
   return WORK_TABS.find((each) => each === named);
 }
 
-/** A run's own page, under what the group has running. The identifier is escaped all the same. */
-export function runHref(groupId: string, runId: string): string {
-  return `${groupPage(groupId, WORK_ITEM.segment)}/${encodeURIComponent(runId)}`;
+export function runHref(group: GroupStanding, runId: string): string {
+  return `${groupPage(group, WORK_ITEM.segment)}/${encodeURIComponent(runId)}`;
 }
 
 /** What a step's page picked, held in its address beside the list's own: the value whose tries it lists, and the try open. */
@@ -76,13 +76,12 @@ function arrivedWithinTheRun(state: unknown): boolean {
   );
 }
 
-/** One step's page, in the run's place under what the group has running. */
 export function stepHref(
-  groupId: string,
+  group: GroupStanding,
   runId: string,
   stepId: string,
 ): string {
-  return `${runHref(groupId, runId)}/steps/${encodeURIComponent(stepId)}`;
+  return `${runHref(group, runId)}/steps/${encodeURIComponent(stepId)}`;
 }
 
 /** What a step's message is found by within its run's conversation, as an address's fragment names it. */

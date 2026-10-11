@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { requestsTo, serving } from "../../../../../../testutil/answering";
+import { candidatesFrom } from "../../versions";
 import {
   questionFrom,
   readQuestion,
@@ -22,6 +23,8 @@ const DIGITS_38 = "12345678901234567890123456789012345678";
 
 const QUESTION = {
   revision: 4,
+  searchWays: [],
+  searchShapeNeedsRefresh: false,
   instruction: "Say which category.",
   takes: [
     {
@@ -44,7 +47,6 @@ const QUESTION = {
     },
   ],
   added: 'Answer with one JSON object.\nJSON Schema:\n{"type":"object"}\n',
-  lists: [{ name: "Categories", versionId: "v1", number: 1 }],
 };
 
 const LIST = {
@@ -168,7 +170,7 @@ describe("questionFrom", () => {
       "what is added that cannot be read",
       { ...QUESTION, added: [{ name: "summary" }] },
     ],
-    ["no lists", { ...QUESTION, lists: undefined }],
+    ["an unexpected lists member", { ...QUESTION, lists: [] }],
     ["no document at all", "question"],
   ])("reads nothing out of %s", (_case, body) => {
     expect(questionFrom(body)).toBeNull();
@@ -176,6 +178,7 @@ describe("questionFrom", () => {
 });
 
 const PINNED = {
+  versionName: null,
   name: "Triage",
   versionId: "v2",
   number: 2,
@@ -246,17 +249,6 @@ const WORKFLOW = {
     { stepId: "s1", role: "reviewing", model: "small", past: 1 },
   ],
   offered: {
-    lists: [{ name: "Categories", versionId: "v1", number: 1 }],
-    questions: [
-      {
-        name: "Triage",
-        versionId: "v2",
-        number: 2,
-        takes: [QUESTION.takes[0]],
-        gives: [],
-      },
-    ],
-    workflows: [],
     codeSteps: [
       {
         name: "tidy_up",
@@ -265,7 +257,10 @@ const WORKFLOW = {
       },
     ],
     searchWays: [],
-    models: [{ name: "general", modes: ["research"], tools: [] }],
+    models: [
+      { name: "general", modes: ["research", "deep_research"], tools: [] },
+      { name: "small", modes: [], tools: [] },
+    ],
   },
   terms: { v1: ["urgent", "later"], v3: [] },
 };
@@ -279,6 +274,19 @@ const READ = {
 };
 
 describe("readWorkflow", () => {
+  it("reads a version's exact optional display name and refuses malformed metadata", () => {
+    const steps = [{ ...ASKING, label: "確認する\u202e" }, ROUTING];
+    const read = workflowFrom({ ...WORKFLOW, steps });
+
+    expect(read?.steps[0]).toEqual({ ...ASKING, label: "確認する\u202e" });
+    expect(read?.steps[1]).toEqual(ROUTING);
+    expect(read?.steps[0]?.name).toBe(ASKING.name);
+    for (const label of [null, 3, true, {}, []]) {
+      expect(
+        workflowFrom({ ...WORKFLOW, steps: [{ ...ASKING, label }] }),
+      ).toBeNull();
+    }
+  });
   it("reads a workflow's version at the address the workflow kind's versions are at", async () => {
     const sent = serving({
       [`GET /api/groups/${GROUP}/workflows/${ENTRY}/versions/${VERSION}`]: [
@@ -306,20 +314,28 @@ describe("workflow problem totals", () => {
 });
 
 describe("workflowFrom", () => {
-  it("reads an ordered searching question, its way, standings and offered tools", () => {
+  it("reads a pinned searching question, ordered input bindings, its way, standings and offered tools", () => {
     const search = {
       stepId: "s4",
       name: "find",
-      bindings: [],
+      bindings: [
+        {
+          bindingId: "p1",
+          target: "complaint",
+          source: { input: "complaint" },
+        },
+        {
+          bindingId: "p2",
+          target: "summary",
+          source: { step: 0, path: "summary" },
+        },
+      ],
       runs: {
         kind: "search",
         searchWay: "web",
+        version: PINNED,
+        takes: [QUESTION.takes[0]],
         gives: [QUESTION.gives[0]],
-        question: [
-          { text: "Find " },
-          { partId: "p1", from: { input: "complaint" } },
-          { partId: "p2", from: { step: 0, path: "summary" } },
-        ],
         standings: { title: "always", body: "never" },
       },
       producer: { kind: "model", model: "general" },
@@ -335,7 +351,14 @@ describe("workflowFrom", () => {
     const offered = {
       ...WORKFLOW.offered,
       searchWays: [{ name: "web", tool: "web_search", gives: searchFields }],
-      models: [{ name: "general", modes: ["research"], tools: ["web_search"] }],
+      models: [
+        {
+          name: "general",
+          modes: ["research", "deep_research"],
+          tools: ["web_search"],
+        },
+        { name: "small", modes: [], tools: [] },
+      ],
     };
 
     const read = workflowFrom({
@@ -346,9 +369,10 @@ describe("workflowFrom", () => {
 
     expect(read.steps[1]!.runs).toEqual(search.runs);
     expect(read.offered.searchWays).toEqual(offered.searchWays);
+    expect(read.offered.models).toEqual(offered.models);
     expect(read.offered.models[0]!.tools).toEqual(["web_search"]);
-    expect(read.steps[1]!.runs?.question).toHaveLength(3);
-    expect(read.steps[1]!.bindings).toEqual([]);
+    expect(read.steps[1]!.runs?.version).toEqual(PINNED);
+    expect(read.steps[1]!.bindings).toEqual(search.bindings);
   });
 
   it.each([
@@ -382,6 +406,77 @@ describe("workflowFrom", () => {
     };
     expect(workflowFrom({ ...WORKFLOW, steps: [step] })).toBeNull();
   });
+
+  it("retains matched and mismatching question offers and leaves workflow offers separate", () => {
+    const base = {
+      versionName: null,
+      name: "Triage",
+      versionId: "v2",
+      number: 2,
+    };
+    const questions = [
+      { ...base, versionId: "matched", searchWay: "web", searchMatches: true },
+      {
+        ...base,
+        versionId: "mismatch",
+        searchWay: "web",
+        searchMatches: false,
+      },
+      { ...base, versionId: "ordinary", searchMatches: false },
+      {
+        ...base,
+        versionId: "missing-way",
+        searchWay: "unheld",
+        searchMatches: false,
+      },
+    ];
+    const workflows = [
+      {
+        versionName: null,
+        name: "Fictional escalation",
+        versionId: "workflow",
+        number: 1,
+      },
+    ];
+    const read = candidatesFrom({ items: questions, more: false }, "question")!;
+    expect(read.items).toEqual(questions);
+    expect(read.items).toHaveLength(4);
+    const selectedWorkflows = candidatesFrom(
+      { items: workflows, more: false },
+      "workflow",
+    )!;
+    expect(selectedWorkflows.items).toEqual(workflows);
+    expect(selectedWorkflows.items[0]).not.toHaveProperty("searchMatches");
+    expect(
+      workflowFrom({
+        ...WORKFLOW,
+        offered: { ...WORKFLOW.offered, questions, workflows },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([undefined, null, 0, "false"])(
+    "refuses a question offer with an invalid matching flag %s",
+    (searchMatches) => {
+      expect(
+        candidatesFrom(
+          {
+            items: [
+              {
+                name: "Triage",
+                versionId: "v2",
+                number: 2,
+                versionName: null,
+                searchMatches,
+              },
+            ],
+            more: false,
+          },
+          "question",
+        ),
+      ).toBeNull();
+    },
+  );
 
   it("refuses an offered model with no tools and a way with an unusable tool list", () => {
     const noTools = {

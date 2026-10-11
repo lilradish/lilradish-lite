@@ -21,7 +21,7 @@ plugins {
 // whatever datasource is there — and would bring a second application.yaml and a second
 // @SpringBootApplication with it. Declared as a task input, so a changed migration still re-runs
 // what is held level with it.
-val migrations = Attribute.of("org.lilradish.lite.migrations", String::class.java)
+val migrations = Attribute.of("com.lilradish.lite.migrations", String::class.java)
 
 val baseline = configurations.dependencyScope("baseline")
 val baselineFiles = configurations.resolvable("baselineFiles") {
@@ -36,6 +36,7 @@ val developmentSeedFiles = configurations.resolvable("developmentSeedFiles") {
 }
 
 dependencies {
+    testImplementation(project(":lilradish-lite-test-support"))
     attributesSchema { attribute(migrations) }
     baseline(project(":lilradish-lite-migration"))
     developmentSeed(project(":lilradish-lite-migration"))
@@ -183,9 +184,10 @@ tasks.named<Test>("test") {
         outputs.file(excludedClassesFile).withPropertyName("excludedDatabaseClasses")
         onlyIf { task ->
             val testTask = task as Test
-            val compiled = CompiledClasses.under(testTask.testClassesDirs.elements.get())
+            val marks = listOf("com/lilradish/lite/testsupport/TestPostgres")
+            val compiled = CompiledClasses.under(testTask.testClassesDirs.elements.get(), marks)
             val excluded = CompiledClasses.closedOver(
-                compiled, CompiledClasses.naming(compiled, listOf("io/zonky/test/db/postgres/embedded/EmbeddedPostgres")))
+                compiled, CompiledClasses.naming(compiled, marks))
             testTask.exclude(CompiledClasses.globsFor(excluded).map { it.replace('.', '/') + ".class" })
             excludedClassNames.set(excluded.map { it.replace('/', '.') }.sorted())
             task.logger.lifecycle(
@@ -214,18 +216,45 @@ tasks.named<Test>("test") {
     })
 }
 
-// The test tree as a whole outgrew the forked Groovy compiler's default 512m heap.
-tasks.withType<GroovyCompile>().configureEach { groovyOptions.forkOptions.memoryMaximumSize = "1g" }
+// The whole test tree does not compile within the forked Groovy compiler's default heap.
+tasks.withType<GroovyCompile>().configureEach { groovyOptions.forkOptions.memoryMaximumSize = "2g" }
 
 /** An object rather than script functions: what the configuration cache stores may not hold the script. */
 object CompiledClasses {
 
+    private class NameIndex(names: Set<String>, spelling: (String) -> String) {
+        private class Node {
+            val children = mutableMapOf<Char, Node>()
+            val names = mutableSetOf<String>()
+        }
+
+        private val root = Node()
+
+        init {
+            names.forEach { name ->
+                var node = root
+                spelling(name).forEach { character -> node = node.children.getOrPut(character) { Node() } }
+                node.names.add(name)
+            }
+        }
+
+        fun addMatches(text: String, start: Int, found: MutableSet<String>, acceptsEnd: (Int) -> Boolean) {
+            var node = root
+            var end = start
+            while (true) {
+                if (node.names.isNotEmpty() && acceptsEnd(end)) found.addAll(node.names)
+                if (end == text.length) return
+                node = node.children[text[end++]] ?: return
+            }
+        }
+    }
+
     /**
-     * Every top-level class compiled under [roots], by its internal name, with the text constants of its
-     * own bytecode and of everything nested in it — the names it refers to among them.
+     * Every top-level class compiled under [roots], by its internal name, with references from its
+     * own bytecode and everything nested in it to compiled classes and external [marks].
      */
-    fun under(roots: Set<FileSystemLocation>): Map<String, Set<String>> =
-        roots.map { it.asFile }.flatMap { root ->
+    fun under(roots: Set<FileSystemLocation>, marks: List<String>): Map<String, Set<String>> {
+        val constants = roots.map { it.asFile }.flatMap { root ->
             root.walk()
                 .filter { it.isFile && it.name.endsWith(".class") }
                 .map { compiled ->
@@ -235,21 +264,33 @@ object CompiledClasses {
                 }
                 .toList()
         }.groupBy({ it.first }, { it.second }).mapValues { entry -> entry.value.flatten().toSet() }
+        val names = constants.keys + marks
+        val internalNames = NameIndex(names) { it }
+        val binaryNames = NameIndex(names) { it.replace('/', '.') }
+        return constants.mapValues { references(it.value, internalNames, binaryNames) }
+    }
 
-    /** Whether any of [constants] names [internalName] itself, rather than a class whose name begins with it. */
-    private fun namesClass(constants: Set<String>, internalName: String): Boolean {
-        val binaryName = internalName.replace('/', '.')
-        return constants.any {
-            it == internalName || it.startsWith(internalName + "\$") ||
-                it.contains("L$internalName;") || it.contains("L$internalName\$") ||
-                it.contains(binaryName) && it.split('=', ',').any { reference ->
-                    reference == binaryName ||
-                        reference.startsWith(binaryName + "\$") && reference.length > binaryName.length + 1 &&
-                        reference.substring(binaryName.length + 1).codePoints().allMatch {
+    private fun references(constants: Set<String>, internalNames: NameIndex, binaryNames: NameIndex): Set<String> {
+        val found = mutableSetOf<String>()
+        constants.forEach { constant ->
+            internalNames.addMatches(constant, 0, found) { it == constant.length || constant[it] == '$' }
+            // Descriptor matching is textual: every L may start a reference, even outside a descriptor.
+            constant.forEachIndexed { start, character ->
+                if (character == 'L') internalNames.addMatches(constant, start + 1, found) {
+                    it < constant.length && (constant[it] == ';' || constant[it] == '$')
+                }
+            }
+            constant.split('=', ',').forEach { reference ->
+                binaryNames.addMatches(reference, 0, found) { end ->
+                    end == reference.length ||
+                        reference[end] == '$' && end + 1 < reference.length &&
+                        reference.substring(end + 1).codePoints().allMatch {
                             Character.isJavaIdentifierPart(it) && !Character.isIdentifierIgnorable(it)
                         }
                 }
+            }
         }
+        return found
     }
 
     /**
@@ -257,17 +298,24 @@ object CompiledClasses {
      * is an exclusion that reads as holding while it keeps nothing out.
      */
     fun naming(compiled: Map<String, Set<String>>, marks: List<String>): Set<String> = marks.flatMap { mark ->
-        compiled.filterValues { namesClass(it, mark) }.keys.ifEmpty {
+        compiled.filterValues { mark in it }.keys.ifEmpty {
             throw GradleException("no compiled class names $mark, so what it marks is no longer kept from mutation testing")
         }
     }.toSet()
 
     /** [found] and every class in [compiled] naming one of it, until nothing more is added. */
     fun closedOver(compiled: Map<String, Set<String>>, found: Set<String>): Set<String> {
-        val grown = found + compiled.filter { (name, constants) ->
-            name !in found && found.any { namesClass(constants, it) }
-        }.keys
-        return if (grown == found) found else closedOver(compiled, grown)
+        val referrers = mutableMapOf<String, MutableSet<String>>()
+        compiled.forEach { (name, references) ->
+            references.forEach { referrers.getOrPut(it) { mutableSetOf() }.add(name) }
+        }
+        val reached = found.toMutableSet()
+        val pending = ArrayDeque(found)
+        while (pending.isNotEmpty()) {
+            val name = pending.removeFirst()
+            referrers[name].orEmpty().forEach { if (reached.add(it)) pending.addLast(it) }
+        }
+        return reached
     }
 
     fun globsFor(internalNames: Set<String>): Set<String> =
@@ -287,30 +335,31 @@ tasks.named<JavaExec>("pitest") {
     finalizedBy(stopPitestPostgres)
 }
 
-// A spec starting a PostgreSQL server is left out, with every spec reaching one through another: a minion
-// is killed rather than shut down, and the server it started outlives it.
+// Database specs and every spec reaching their helpers remain excluded: PIT minions are not ordinary
+// Gradle Test workers and do not participate in the managed build-owner/scope lifecycle.
 pitest {
     jvmArgs.add("-Djava.io.tmpdir=${pitestPostgresDirectory.absolutePath}")
-    threads.set(4)
     jvmArgs.add(baselineLocation)
     jvmArgs.add(frontendLocation)
     jvmArgs.add("-Xmx2g")
     jvmArgs.add("-XX:ActiveProcessorCount=2")
     excludedTestClasses.set(sourceSets["test"].output.classesDirs.elements.map { roots ->
-        val compiled = CompiledClasses.under(roots)
+        val databaseMarks = listOf("com/lilradish/lite/testsupport/TestPostgres")
+        val webMarks = listOf("org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest")
+        val compiled = CompiledClasses.under(roots, databaseMarks + webMarks)
         // Repeated Spring context startup is traded for less mutation coverage.
         // These exclusions do not remove any spec from the ordinary test task.
         CompiledClasses.globsFor(
             CompiledClasses.closedOver(
-                compiled, CompiledClasses.naming(compiled, listOf("io/zonky/test/db/postgres/embedded/EmbeddedPostgres"))) +
-                CompiledClasses.naming(
-                    compiled, listOf("org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest")))
+                compiled, CompiledClasses.naming(compiled, databaseMarks)) +
+                CompiledClasses.naming(compiled, webMarks))
     })
-    // Assumes a class naming JdbcClient is exercised only by specs starting a server. Its pure logic goes
-    // unmutated for now, accepted until a server shared from the Gradle process lets those specs run here.
+    // Assumes a class naming JdbcClient is exercised only by database specs. Its pure logic remains
+    // excluded: PIT minions do not participate in the ordinary Test tasks' shared build service.
     excludedClasses.set(sourceSets["main"].output.classesDirs.elements.map { roots ->
+        val marks = listOf("org/springframework/jdbc/core/simple/JdbcClient")
         CompiledClasses.globsFor(
-            CompiledClasses.naming(CompiledClasses.under(roots), listOf("org/springframework/jdbc/core/simple/JdbcClient")))
+            CompiledClasses.naming(CompiledClasses.under(roots, marks), marks))
     })
 }
 
@@ -331,7 +380,7 @@ prunus {
     // class that declares which classes get method logging / toString rewriting.
     aot {
         enabled = true
-        logRegistryClass = "org.lilradish.lite.AppLoggingConvention"
+        logRegistryClass = "com.lilradish.lite.AppLoggingConvention"
     }
 }
 
@@ -340,7 +389,7 @@ prunus {
 // come to depend on it, and it is in no output a deployment is built from. That is still a setting,
 // and a setting is precisely what gets edited back for local convenience — so what the build holds
 // to is the archives, read after they were written.
-val developmentSources = sourceSets.create("dev") {
+val developmentSources = sourceSets.create("local") {
     compileClasspath += sourceSets["main"].output + configurations["compileClasspath"]
     runtimeClasspath += sourceSets["main"].output + configurations["runtimeClasspath"]
 }
@@ -366,10 +415,10 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
     val plainJarArchive = files(tasks.named<Jar>("jar").flatMap { it.archiveFile })
     val developmentOutput: FileCollection = developmentSources.output
     val standIns = listOf(
-        "org/lilradish/lite/app/identification/UserIdentification",
-        "org/lilradish/lite/domain/inference/ModelCalls",
-        "org/lilradish/lite/domain/codestep/CodeStep")
-    val marker = "org/lilradish/lite/development/DevelopmentOnly"
+        "com/lilradish/lite/app/identification/UserIdentification",
+        "com/lilradish/lite/domain/inference/ModelCalls",
+        "com/lilradish/lite/domain/codestep/CodeStep")
+    val marker = "com/lilradish/lite/development/DevelopmentOnly"
     inputs.files(bootJarArchive).withPropertyName("bootJar")
     inputs.files(plainJarArchive).withPropertyName("plainJar")
     inputs.files(developmentOutput).withPropertyName("developmentOutput")
@@ -377,12 +426,13 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
     doLast {
         // Archive isolation does not establish the provenance of main sources.
         // Both spellings: bytecode and entries carry the slashed one; scan directives, YAML and AOT metadata the dotted.
-        val developmentPackage = Regex("org[/.]lilradish[/.]lite[/.](?:\\w+[/.])*development[/.]")
+        val developmentPackage = Regex("com[/.]lilradish[/.]lite[/.](?:\\w+[/.])*development[/.]")
         val seedName = Regex("R__dev_.*\\.sql")
         val nestedJarEntry = Regex("[^!]+!/BOOT-INF/lib/[^/]+\\.jar!/.+")
         fun isDevelopment(path: String): Boolean {
             val name = path.substringAfterLast('/')
-            return developmentPackage.containsMatchIn(path) || path.contains("db/migration/dev/") ||
+            return developmentPackage.containsMatchIn(path) || path.contains("db/migration/local/") ||
+                path.contains("db/migration/dev/") || name.startsWith("application-local.") ||
                 name.startsWith("application-dev.") || seedName.matches(name)
         }
 
@@ -393,7 +443,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
         val misplaced = developmentFiles.map { it.first }.filterNot { isDevelopment("BOOT-INF/classes/$it") }
         if (misplaced.isNotEmpty()) {
             throw GradleException(
-                "built from src/dev where the archive scan would not refuse it: ${misplaced.joinToString()}")
+                "built from src/local where the archive scan would not refuse it: ${misplaced.joinToString()}")
         }
         // Asserted of a compiled class implementing each interface, not of a directory holding files: a
         // package-info alone would satisfy that, and with nothing real to keep out every archive passes.
@@ -403,7 +453,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
             }
             if (!implemented) {
                 throw GradleException(
-                    "no class compiled from src/dev implements $standIn, " +
+                    "no class compiled from src/local implements $standIn, " +
                         "so this check proves nothing — and one moved into src/main would ship")
             }
         }
@@ -416,7 +466,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
             }
             .map { it.first.removeSuffix(".class").replace('/', '.') }
         if (unmarked.isNotEmpty()) {
-            throw GradleException("compiled from src/dev without @DevelopmentOnly: ${unmarked.joinToString()}")
+            throw GradleException("compiled from src/local without @DevelopmentOnly: ${unmarked.joinToString()}")
         }
 
         // Every entry, nested archives included, and whether its own bytes name a development package.
@@ -442,7 +492,7 @@ val developmentCodeIsUnshipped = tasks.register("developmentCodeIsUnshipped") {
         val bootEntries = entriesWithin(bootJar.name, bootJar.readBytes())
         val plainEntries = entriesWithin(plainJar.name, plainJar.readBytes())
         // A walk that stopped early finds nothing to refuse, so it has to be seen reaching what every archive holds.
-        val application = "org/lilradish/lite/BackendApplication.class"
+        val application = "com/lilradish/lite/BackendApplication.class"
         val reachedEverything = bootEntries.any { it.first == "${bootJar.name}!/BOOT-INF/classes/$application" } &&
             bootEntries.any { nestedJarEntry.matches(it.first) } &&
             plainEntries.any { it.first == "${plainJar.name}!/$application" }
@@ -511,6 +561,7 @@ val frontendLint = tasks.register<NpmTask>("frontendLint") {
     dependsOn(tasks.named("npmInstall"))
     args = listOf("run", "lint")
     dependsOnEveryFrontendSource()
+    inputs.files("eslint-suppressions.json").withPropertyName("eslintSuppressions")
     outputs.upToDateWhen { true }
 }
 

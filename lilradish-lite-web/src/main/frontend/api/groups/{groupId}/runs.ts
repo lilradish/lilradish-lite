@@ -4,18 +4,15 @@ import {
   isUnchecked,
   optional,
   textFrom,
-  type Unchecked,
 } from "../../../lib/request/document";
 import { post, postForm } from "../../../lib/request/http";
 import type { Page } from "../../../lib/request/page";
-import {
-  pagedLoaderSaying,
-  type ListQuery,
-} from "../../../lib/request/pagedLoader";
+import { pagedLoader, type ListQuery } from "../../../lib/request/pagedLoader";
 import { multipartOf, type FillSubmission } from "../../filling";
 import { GROUPS } from "../../groups";
 import { personFrom, type Person } from "../../person";
 import { servedAmong, type Problem } from "../../problem";
+import { isVersionName } from "./{kind}";
 
 /** The columns a group's runs can be sorted by, spelt as the server takes them; where a run is, is none of them. */
 export type RunSortColumn =
@@ -26,13 +23,8 @@ export type RunOrder = RunSortColumn | `-${RunSortColumn}`;
 
 export type RunQuery = ListQuery<RunOrder>;
 
-/** Which of the group's runs the server read for the reader: all of them, the ones they started, or none. */
-export type RunReading = "all" | "own" | "none";
-
-/** A page of runs, saying which runs the server read them from. */
-export interface RunsPage extends Page<RunRow> {
-  readonly reading: RunReading;
-}
+/** A page of runs already limited to what its reader may read. */
+export type RunsPage = Page<RunRow>;
 
 /** One run at the top of a group. `runId` addresses the row and is never shown. */
 export interface RunRow {
@@ -40,39 +32,33 @@ export interface RunRow {
   readonly number: number;
   /** Shown isolated wherever it is shown: a name may carry a directional control. */
   readonly name: string;
-  readonly workflow: { readonly name: string; readonly version: number };
+  readonly workflow: {
+    readonly name: string;
+    readonly version: number;
+    readonly versionName: string | null;
+  };
   readonly startedBy: Person;
   /** ISO 8601. */
   readonly startedAt: string;
   readonly state: string;
   /** What its workflow calls the step it is on; only while it is running. */
   readonly at?: string;
+  readonly atLabel?: string;
 }
-
-const READINGS: Readonly<Record<RunReading, true>> = {
-  all: true,
-  own: true,
-  none: true,
-};
 
 const NOT_OFFERED: ReadonlySet<string> = new Set(["WORKFLOW_NOT_OFFERED"]);
 
 const NAME_UNUSABLE: ReadonlySet<string> = new Set(["RUN_NAME_UNUSABLE"]);
 
-/** A run to start: what it is called, the version it runs, and every field that version takes. */
 interface RunStart extends FillSubmission {
   readonly name: string;
   readonly versionId: string;
 }
 
-/**
- * A run begun, the number it took, and whether the reader may read it, as the server judges. Nothing more is
- * answered, since whoever may start a run need not be one who may read it.
- */
+/** Read permission is held in the reader's standing. */
 export interface StartedRun {
   readonly runId: string;
   readonly number: number;
-  readonly readable: boolean;
 }
 
 export function startRun(
@@ -97,12 +83,11 @@ export function startRun(
   });
 }
 
-/** Whether the version asked for is not one this group may start any more, if it ever was. */
+/** Whether the problem says the version asked for is not one this group may start. */
 export function refusedAsNotOffered(problem: Problem): boolean {
   return servedAmong(problem, NOT_OFFERED);
 }
 
-/** Whether the name asked for is none a run may be called. */
 export function refusedForTheName(problem: Problem): boolean {
   return servedAmong(problem, NAME_UNUSABLE);
 }
@@ -113,21 +98,8 @@ export function runsLoader(
 ): (cursor: string | null, signal: AbortSignal) => Promise<RunsPage> {
   return (cursor, signal) =>
     atSegment(GROUPS, groupId, (group) =>
-      pagedLoaderSaying(
-        `${group}/runs`,
-        runRowFrom,
-        query,
-        readingFrom,
-      )(cursor, signal),
+      pagedLoader(`${group}/runs`, runRowFrom, query)(cursor, signal),
     );
-}
-
-/** A reading this build has never heard of is not one it can say anything true about. */
-function readingFrom(body: Unchecked): { reading: RunReading } | null {
-  const { reading } = body;
-  return typeof reading === "string" && Object.hasOwn(READINGS, reading)
-    ? { reading: reading as RunReading }
-    : null;
 }
 
 function runRowFrom(body: unknown): RunRow | null {
@@ -138,6 +110,7 @@ function runRowFrom(body: unknown): RunRow | null {
   const workflow = workflowFrom(body.workflow);
   const startedBy = personFrom(body.startedBy);
   const at = optional(body, "at", textFrom);
+  const atLabel = optional(body, "atLabel", textFrom);
   if (
     typeof runId !== "string" ||
     !Number.isSafeInteger(number) ||
@@ -145,6 +118,8 @@ function runRowFrom(body: unknown): RunRow | null {
     typeof startedAt !== "string" ||
     typeof state !== "string" ||
     at === null ||
+    atLabel === null ||
+    (atLabel !== undefined && at === undefined) ||
     workflow === null ||
     startedBy === null
   ) {
@@ -159,6 +134,7 @@ function runRowFrom(body: unknown): RunRow | null {
     startedAt,
     state,
     ...(at === undefined ? {} : { at }),
+    ...(atLabel === undefined ? {} : { atLabel }),
   };
 }
 
@@ -166,12 +142,10 @@ function startedFrom(body: unknown): StartedRun | null {
   if (!isUnchecked(body)) {
     return null;
   }
-  const { runId, readable } = body;
+  const { runId } = body;
   const number = countFrom(body.number);
-  return typeof runId === "string" &&
-    number !== null &&
-    typeof readable === "boolean"
-    ? { runId, number, readable }
+  return typeof runId === "string" && number !== null
+    ? { runId, number }
     : null;
 }
 
@@ -180,7 +154,9 @@ function workflowFrom(body: unknown): RunRow["workflow"] | null {
     return null;
   }
   const { name, version } = body;
-  return typeof name === "string" && Number.isSafeInteger(version)
-    ? { name, version: version as number }
+  return typeof name === "string" &&
+    Number.isSafeInteger(version) &&
+    isVersionName(body.versionName)
+    ? { name, version: version as number, versionName: body.versionName }
     : null;
 }

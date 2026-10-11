@@ -1,13 +1,73 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import Markdown from "react-markdown";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
+import { expectConsoleErrors } from "../../../testutil/consoleErrors";
 import type { ReadField } from "../../../api/filling";
-import type { WentIn } from "../../../api/groups/{groupId}/runs/{runId}/steps";
+import type { WentIn } from "../../../api/stepSources";
 import { theme } from "../../../lib/theme/theme";
+import { ProseScope } from "../../../lib/text/ModelProse";
 import type { Declaring } from "./declared";
 import { DrawnInputs, type Heading } from "./DrawnInputs";
+
+const { readFileSync } = await vi.importActual<{
+  readFileSync(path: string, encoding: "utf8"): string;
+}>("node:fs");
+const { dirname, join } = await vi.importActual<{
+  dirname(path: string): string;
+  join(...paths: string[]): string;
+}>("node:path");
+const { fileURLToPath } = await vi.importActual<{
+  fileURLToPath(url: string): string;
+}>("node:url");
+const drawingCss = readFileSync(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../lib/text/modelProseMarkdown.css",
+  ),
+  "utf8",
+);
+const tokenCss = readFileSync(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../lib/theme/tokens.generated.css",
+  ),
+  "utf8",
+);
+let drawingStyle: HTMLStyleElement;
+beforeEach(() => {
+  drawingStyle = document.createElement("style");
+  expect(drawingCss).toContain('@import "../theme/tokens.generated.css";');
+  // jsdom does not follow a relative import in an inline stylesheet.
+  drawingStyle.textContent =
+    tokenCss +
+    drawingCss.replace('@import "../theme/tokens.generated.css";', "");
+  document.head.append(drawingStyle);
+});
+afterEach(() => drawingStyle.remove());
+
+function roleStyle(element: Element, property: string): string {
+  const value = getComputedStyle(element).getPropertyValue(property);
+  const reference = /^var\((--[\w-]+)\)$/.exec(value);
+  if (reference === null) return value;
+  const defined = getComputedStyle(document.documentElement)
+    .getPropertyValue(reference[1])
+    .trim();
+  expect(
+    defined,
+    `${reference[1]} must be present in the emitted stylesheet`,
+  ).not.toBe("");
+  return defined;
+}
 
 vi.mock("react-markdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-markdown")>();
@@ -52,7 +112,12 @@ const TAKES: readonly ReadField[] = [
     label: "Priority",
     kind: "term",
     mustBeGiven: true,
-    terms: { terms: [{ term: "P1", meaning: "Drop everything" }] },
+    terms: {
+      terms: [
+        { term: "P1", meaning: "Drop everything" },
+        { term: "P2", meaning: "Plan the next review" },
+      ],
+    },
   },
 ];
 
@@ -84,14 +149,14 @@ const ELEMENTS_A_VALUE_COULD_MAKE =
   "a, img, strong, em, h1, h2, ul, ol, li, b, code, pre, blockquote";
 
 const TURNS_ORDER =
-  "A character that would turn the order text is shown in is here, drawn instead of obeyed: U+202E.";
+  "A text-direction character is here, shown instead of applied: U+202E.";
 
-const WHAT_ELSE = "What else went in";
+const WHAT_ELSE = "Other inputs";
 
 const NEW_TAB = "opens in a new tab";
 
 const NOT_LAID_OUT =
-  "How this question is drawn could not be laid out here, so what it takes is listed field by field.";
+  "This question's layout couldn't be shown, so its inputs are listed one by one.";
 
 const BLOCKS_IN_A_LINE =
   "h1 :is(p, div, ul, dl), h2 :is(p, div, ul, dl), h3 :is(p, div, ul, dl), h4 :is(p, div, ul, dl), h5 :is(p, div, ul, dl), h6 :is(p, div, ul, dl), a :is(p, div, ul, dl), strong :is(p, div, ul, dl), code :is(p, div, ul, dl), p :is(p, div, ul, dl)";
@@ -135,11 +200,20 @@ function laidOutText(container: HTMLElement): string | null {
 
 /** Laying out a drawing that opens with `Unlaid` throws, as one too deep for the stack would. */
 async function unlaidThrowing(): Promise<void> {
+  const broken = new RangeError("Maximum call stack size exceeded");
+  onTestFinished(() =>
+    expectConsoleErrors([
+      "%o\n\n%s\n\n%s\n",
+      broken,
+      "The above error occurred in the <Mock> component.",
+      "React will try to recreate this component tree from scratch using the error boundary you provided, LaidOutOrListed.",
+    ]),
+  );
   const { default: laidOut } =
     await vi.importActual<typeof import("react-markdown")>("react-markdown");
   vi.mocked(Markdown).mockImplementation((options) => {
     if (String(options.children).startsWith("Unlaid")) {
-      throw new RangeError("Maximum call stack size exceeded");
+      throw broken;
     }
     return laidOut(options);
   });
@@ -148,6 +222,350 @@ async function unlaidThrowing(): Promise<void> {
 describe("DrawnInputs", () => {
   beforeEach(() => {
     vi.mocked(Markdown).mockReset();
+  });
+
+  const SEVERAL: readonly ReadField[] = [
+    {
+      name: "body",
+      label: "Body",
+      kind: "text",
+      lines: "several",
+      mustBeGiven: true,
+    },
+    {
+      name: "notes",
+      label: "Notes",
+      kind: "text",
+      lines: "several",
+      mustBeGiven: true,
+    },
+  ];
+
+  it.each([
+    ["alone", "{{body}}", [], []],
+    ["surrounded by spaces", "  {{body}}  ", [], []],
+    ["before a soft line break", "{{body}}\nAfter", [], ["After"]],
+    ["after a soft line break", "Before\n{{body}}", ["Before"], []],
+    [
+      "between soft line breaks",
+      "Before\n{{body}}\nAfter",
+      ["Before"],
+      ["After"],
+    ],
+    [
+      "between blank lines",
+      "Before\n\n{{body}}\n\nAfter",
+      ["Before"],
+      ["After"],
+    ],
+    [
+      "between carriage returns",
+      "Before\r{{body}}\rAfter",
+      ["Before"],
+      ["After"],
+    ],
+    [
+      "between paired line endings",
+      "Before\r\n{{body}}\r\nAfter",
+      ["Before"],
+      ["After"],
+    ],
+    [
+      "after an opening byte order mark",
+      `${String.fromCharCode(0xfeff)}{{body}}`,
+      [],
+      [],
+    ],
+    ["on a list continuation line", "- Before\n  {{body}}", ["Before"], []],
+  ])(
+    "formats a several-line field named %s on its source line",
+    (_case, source, before, after) => {
+      const container = drawn(
+        source,
+        [{ input: "body", from: FROM, value: "**Urgent**" }],
+        "h3",
+        SEVERAL,
+      );
+
+      expect(container.querySelector("strong")?.textContent).toBe("Urgent");
+      expect(
+        screen.getAllByRole("button", { name: "Show as written" }),
+      ).toHaveLength(1);
+      expect(container.querySelector("p div, p p, li p div")).toBeNull();
+      expect(container).not.toHaveTextContent("**Urgent**");
+      expect(container).not.toHaveTextContent(NOT_LAID_OUT);
+      expect(container).not.toHaveTextContent(WHAT_ELSE);
+      const frame = container.querySelector("strong")!.closest("p")!
+        .parentElement!.parentElement!;
+      for (const value of ["Urgent", "**Urgent**"]) {
+        if (value === "**Urgent**")
+          fireEvent.click(
+            screen.getByRole("button", { name: "Show as written" }),
+          );
+        const text = laidOutText(container)!;
+        const expected = [...before, value, ...after];
+        const positions = expected.map((words) => text.indexOf(words));
+        expect(positions.every((at) => at >= 0)).toBe(true);
+        expect(positions).toEqual(
+          [...positions].sort((left, right) => left - right),
+        );
+        for (const words of expected) expect(text.split(words)).toHaveLength(2);
+        expect(frame.isConnected).toBe(true);
+        expect(frame).toHaveTextContent(value);
+      }
+      expect(container.querySelector("strong")).toBeNull();
+    },
+  );
+
+  it.each([
+    ["beside words", "Body: {{body}}"],
+    ["beside another placeholder", "{{body}} {{notes}}"],
+    ["in a heading", "# {{body}}"],
+    ["in a setext heading", "{{body}}\n---"],
+    ["in emphasis", "**{{body}}**"],
+    ["in link words", "[{{body}}](https://e.example)"],
+    ["in inline code", "`{{body}}`"],
+    ["in fenced code", "```\n{{body}}\n```"],
+    ["in indented code", "    {{body}}"],
+    ["beside a list marker", "- {{body}}"],
+    ["beside a quote marker", "> {{body}}"],
+    [
+      "beside an internal byte order mark",
+      `Before\n${String.fromCharCode(0xfeff)}{{body}}`,
+    ],
+  ])("keeps a several-line value %s as text", (_case, source) => {
+    const container = drawn(
+      source,
+      [{ input: "body", from: FROM, value: "*Urgent*" }],
+      "h3",
+      SEVERAL,
+    );
+
+    expect(container).toHaveTextContent("*Urgent*");
+    expect(container.querySelector("em")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      container.querySelector("h4 div, a div, strong div, code div, p div"),
+    ).toBeNull();
+  });
+
+  it.each([false, true])(
+    "uses one switch for the drawing when an outer scope is %s",
+    (outer) => {
+      const source =
+        "# Report\n\n{{body}}\n{{notes}}\n\n[Policy](https://e.example/policy)";
+      const inputs: readonly WentIn[] = [
+        { input: "body", from: FROM, value: "**Urgent**" },
+        { input: "notes", from: FROM, value: "*Next*" },
+      ];
+      const reading = element(source, inputs, "h3", SEVERAL);
+      const container = render(
+        outer ? <ProseScope>{reading}</ProseScope> : reading,
+      ).container;
+      const heading = screen.getByRole("heading", { name: "Report" });
+      const link = screen.getByRole("link");
+
+      expect(
+        screen.getAllByRole("button", { name: "Show as written" }),
+      ).toHaveLength(1);
+      expect(container.querySelector("strong")?.textContent).toBe("Urgent");
+      expect(container.querySelector("em")?.textContent).toBe("Next");
+      fireEvent.click(screen.getByRole("button", { name: "Show as written" }));
+      expect(container.querySelector("strong, em")).toBeNull();
+      expect(container).toHaveTextContent("**Urgent**");
+      expect(container).toHaveTextContent("*Next*");
+      expect(screen.getByRole("heading", { name: "Report" })).toBe(heading);
+      expect(screen.getByRole("link")).toBe(link);
+      fireEvent.click(screen.getByRole("button", { name: "Show formatted" }));
+      expect(container.querySelector("strong")?.textContent).toBe("Urgent");
+      expect(container.querySelector("em")?.textContent).toBe("Next");
+      expect(container).not.toHaveTextContent("**Urgent**");
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+    },
+  );
+
+  it("keeps a formatted value's links, images, HTML and definitions within that value", () => {
+    const request = vi.fn();
+    vi.stubGlobal("fetch", request);
+    const value =
+      "# Value\n[Words](https://value.example)\n![Picture](https://value.example/p.png)\n<b>Raw</b>\n\n[policy]: https://value.example/override";
+    const container = drawn(
+      "# Drawing\n\n{{body}}\n\n[Group policy](https://group.example/policy)",
+      [{ input: "body", from: FROM, value }],
+      "h3",
+      SEVERAL,
+    );
+
+    expect(screen.getByRole("heading", { name: "Value" })).toBeInTheDocument();
+    expect(container).toHaveTextContent("Words");
+    expect(container).toHaveTextContent("https://value.example");
+    expect(container).toHaveTextContent("Picture");
+    expect(container).toHaveTextContent("https://value.example/p.png");
+    expect(container).toHaveTextContent("<b>Raw</b>");
+    expect(container).toHaveTextContent(
+      "[policy]: https://value.example/override",
+    );
+    expect(
+      screen.getAllByRole("link").map((link) => link.getAttribute("href")),
+    ).toEqual(["https://group.example/policy"]);
+    expect(container.querySelector("img, b, script")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps a one-line field and the children of a composed placeholder as text", () => {
+    const takes: readonly ReadField[] = [
+      { name: "title", kind: "text", lines: "one", mustBeGiven: true },
+      { name: "report", kind: "fields", mustBeGiven: true, fields: SEVERAL },
+    ];
+    const container = drawn(
+      "{{title}}\n\n{{report}}",
+      [
+        { input: "title", from: FROM, value: "**Title**" },
+        {
+          input: "report",
+          from: FROM,
+          value: { body: "*Body*", notes: "**Notes**" },
+        },
+      ],
+      "h3",
+      takes,
+    );
+
+    expect(container).toHaveTextContent("**Title**");
+    expect(container).toHaveTextContent("*Body*");
+    expect(container).toHaveTextContent("**Notes**");
+    expect(container.querySelector("dl:not(aside *)")).not.toBeNull();
+    expect(container.querySelector("strong, em")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container).not.toHaveTextContent(WHAT_ELSE);
+  });
+
+  it("keeps separately bound several-line children as labelled text at their composed placeholder", () => {
+    const takes: readonly ReadField[] = [
+      {
+        name: "report",
+        label: "Report",
+        kind: "fields",
+        mustBeGiven: true,
+        fields: SEVERAL,
+      },
+    ];
+    const container = drawn(
+      "{{report}}",
+      [
+        { input: "report.body", from: FROM, value: "**Urgent**" },
+        { input: "report.notes", from: FROM, value: "*Next*" },
+      ],
+      "h3",
+      takes,
+    );
+
+    expect(
+      [
+        ...container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((label) => label.textContent),
+    ).toEqual([
+      `${isolated("Report")} › ${isolated("Body")}`,
+      `${isolated("Report")} › ${isolated("Notes")}`,
+    ]);
+    expect(
+      [...container.querySelectorAll("dd:not(aside *) bdi")].map(
+        (value) => value.textContent,
+      ),
+    ).toEqual(["**Urgent**", "*Next*"]);
+    expect(container.querySelectorAll("dl:not(aside *)")).toHaveLength(1);
+    expect(container.querySelector("strong, em")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container).not.toHaveTextContent(WHAT_ELSE);
+    expect(container.textContent).not.toContain("{{");
+  });
+
+  it("formats a many-valued several-line field only at a source line it occupies alone", () => {
+    const takes = [{ ...SEVERAL[0]!, most: 3 }];
+    const container = drawn(
+      "Inline: {{body}}\n\n{{body}}",
+      [{ input: "body", from: FROM, value: ["**First**", "*Second*"] }],
+      "h3",
+      takes,
+    );
+
+    expect(
+      [...container.querySelectorAll("li")].map((item) => item.textContent),
+    ).toEqual(["**First**", "*Second*", "First", "Second"]);
+    expect(container.querySelectorAll("strong")).toHaveLength(1);
+    expect(container.querySelectorAll("em")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: "Show as written" }),
+    ).toHaveLength(1);
+    expect(container.querySelector("p ul, p div")).toBeNull();
+    expect(container).not.toHaveTextContent("shown above");
+  });
+
+  it("keeps long formatted repeats above and lists only the undrawn inputs", () => {
+    const body = `**${"Urgent ".repeat(40)}now**`;
+    const container = drawn(
+      "# Drawing\n\n{{body}}\n\n{{body}}",
+      [
+        { input: "body", from: FROM, value: body },
+        { input: "notes", from: FROM, value: "*Other*" },
+      ],
+      "h3",
+      SEVERAL,
+    );
+
+    expect(container.querySelectorAll("strong")).toHaveLength(1);
+    expect(container).toHaveTextContent(`${isolated("Body")}, shown above`);
+    expect(
+      [
+        ...container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((term) => term.textContent),
+    ).toEqual([`${isolated("Notes")} · notes`]);
+    expect(container.querySelector('[role="definition"] em')?.textContent).toBe(
+      "Other",
+    );
+    const written = screen.getAllByRole("button", { name: "Show as written" });
+    expect(written).toHaveLength(2);
+    fireEvent.click(written[0]!);
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.querySelector("em")?.textContent).toBe("Other");
+    fireEvent.click(written[1]!);
+    expect(container.querySelector("strong, em")).toBeNull();
+    expect(container).toHaveTextContent(body);
+    expect(container).toHaveTextContent("*Other*");
+    expect(
+      screen.getByRole("heading", { name: "Drawing" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a value too deep as text while formatting another and preserving the drawing", () => {
+    const deep = `${">".repeat(33)}Too deep`;
+    const container = drawn(
+      "# Drawing\n\n{{body}}\n\n{{notes}}",
+      [
+        { input: "body", from: FROM, value: deep },
+        {
+          input: "notes",
+          from: FROM,
+          value: `**Next**${String.fromCodePoint(0x202e)}`,
+        },
+      ],
+      "h3",
+      SEVERAL,
+    );
+
+    expect(container).toHaveTextContent(deep);
+    expect(container).toHaveTextContent(
+      "Shown as written: its lists, quotes or emphasis are nested more than 32 levels deep, too deep to format.",
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("Next");
+    expect(container).toHaveTextContent("U+202E");
+    expect(container.innerHTML).not.toContain(String.fromCodePoint(0x202e));
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container).not.toHaveTextContent(NOT_LAID_OUT);
   });
 
   it("lays out what went in as the drawing writes it, each value where its name stands, and lists nothing field by field", () => {
@@ -162,11 +580,9 @@ describe("DrawnInputs", () => {
     expect(laidOutText(container)).toBe(
       `Report\nTitle: ${TITLE}\nIt smokes.\nIt beeps.\nhttps://evil.example/x`,
     );
-    expect(container.querySelector("dl")).toBeNull();
+    expect(container.querySelector("dl:not(aside *)")).toBeNull();
     const sources = container.querySelector("aside")!;
-    expect(
-      sources.textContent?.match(/which the run was started with/g),
-    ).toHaveLength(3);
+    expect(sources.textContent?.match(/\(run input\)/g)).toHaveLength(3);
     expect(sources).toHaveTextContent(isolated("Title"));
     expect(sources).toHaveTextContent(isolated("Body"));
     expect(sources).toHaveTextContent(isolated("Address"));
@@ -442,8 +858,12 @@ describe("DrawnInputs", () => {
     expect(container.querySelector("p")?.textContent).toBe("Notes: None");
     expect(container.textContent).not.toContain("{{");
     expect(
-      [...container.querySelectorAll("dt")].map((each) => each.textContent),
-    ).toEqual([isolated("Title")]);
+      [
+        ...container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((each) => each.textContent),
+    ).toEqual([`${isolated("Title")} · title`]);
   });
 
   it("draws a value written in code as text within the code", () => {
@@ -458,7 +878,7 @@ describe("DrawnInputs", () => {
 
     const code = container.querySelector("pre code")!;
     expect(code.textContent).toBe("q\n");
-    expect(code).not.toHaveAttribute("class");
+    expect(code).toHaveAttribute("class", "drawn-markdown-code");
   });
 
   it.each([
@@ -479,9 +899,11 @@ describe("DrawnInputs", () => {
       { input: "title", from: FROM, withheld: true },
     ]);
 
-    expect(container).toHaveTextContent("Title: Withheld from you.");
+    expect(container).toHaveTextContent(
+      "Title: You don't have permission to see this.",
+    );
     expect(container.querySelector("p")).toHaveTextContent(
-      "Title: Withheld from you.",
+      "Title: You don't have permission to see this.",
     );
     expect(container.querySelector("p p, p div, p ul")).toBeNull();
   });
@@ -492,7 +914,7 @@ describe("DrawnInputs", () => {
     ]);
 
     expect(screen.getByRole("heading", { level: 4 })).toHaveTextContent(
-      "Withheld from you.",
+      "You don't have permission to see this.",
     );
     expect(container.querySelector(BLOCKS_IN_A_LINE)).toBeNull();
   });
@@ -558,20 +980,28 @@ describe("DrawnInputs", () => {
       "Street: 1 High St and City: Leeds",
     );
     expect(container.querySelector(BLOCKS_IN_A_LINE)).toBeNull();
-    expect(container.querySelector("dl, dt")).toBeNull();
+    expect(
+      container.querySelector("dl:not(aside *), dt:not(aside *)"),
+    ).toBeNull();
   });
 
   it("draws a value bound field by field where the name holding them stands, each under its label, and lists none of them again", () => {
     const container = drawn("Ship to: {{ship_to}}", SHIPPED_TO);
 
     expect(
-      [...container.querySelectorAll("dt")].map((each) => each.textContent),
+      [
+        ...container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((each) => each.textContent),
     ).toEqual([
       `${isolated("Ship to")} › ${isolated("Street")}`,
       `${isolated("Ship to")} › ${isolated("City")}`,
     ]);
     expect(
-      [...container.querySelectorAll("dd")].map((each) => each.textContent),
+      [...container.querySelectorAll("dd:not(aside *)")].map(
+        (each) => each.textContent,
+      ),
     ).toEqual(["1 High St", "Leeds"]);
     expect(container.querySelector("div > dl")).not.toBeNull();
     expect(container.querySelector("p")).toBeNull();
@@ -585,7 +1015,7 @@ describe("DrawnInputs", () => {
     expect(screen.getByRole("heading", { level: 5 }).textContent).toBe(
       `${isolated("Ship to")} › ${isolated("Street")}: 1 High St and ${isolated("Ship to")} › ${isolated("City")}: Leeds`,
     );
-    expect(container.querySelector("dl")).toBeNull();
+    expect(container.querySelector("dl:not(aside *)")).toBeNull();
   });
 
   it.each([
@@ -606,7 +1036,7 @@ describe("DrawnInputs", () => {
       expect(days[0]!.textContent).toBe("Mar 1, 2026");
       expect(container.textContent).toContain("2026-03-01 Post");
       expect(container).not.toHaveTextContent(
-        "Written in a way this page cannot read.",
+        "This page can't read this value.",
       );
     },
   );
@@ -625,16 +1055,13 @@ describe("DrawnInputs", () => {
     const container = drawn("# {{ship_to}}\n\n{{ship_to}}", wentIn);
 
     expect(container.querySelector("h4")).toHaveTextContent("1 High St");
-    expect(container).toHaveTextContent("It was put together from these:");
+    expect(container).toHaveTextContent("Combined from:");
+    expect(container.textContent?.match(/Combined from:/g)).toHaveLength(1);
     expect(
-      container.textContent?.match(/It was put together from these:/g),
-    ).toHaveLength(1);
-    expect(
-      [...container.querySelectorAll("li")].map((item) => item.textContent),
-    ).toEqual([
-      expect.stringContaining("Street"),
-      expect.stringContaining("City"),
-    ]);
+      [...container.querySelectorAll("aside dl dl dt")].map(
+        (item) => item.textContent,
+      ),
+    ).toEqual([isolated("Street"), isolated("City")]);
     expect(container.querySelector("h4 :is(ul, dl), p :is(ul, dl)")).toBeNull();
     expect(container).not.toHaveTextContent(WHAT_ELSE);
   });
@@ -649,9 +1076,7 @@ describe("DrawnInputs", () => {
     ]);
 
     expect(container).toHaveTextContent(NOT_LAID_OUT);
-    expect(
-      container.textContent?.match(/It was put together from these:/g),
-    ).toHaveLength(1);
+    expect(container.textContent?.match(/Combined from:/g)).toHaveLength(1);
     expect(container).toHaveTextContent("1 High St");
     expect(container).not.toHaveTextContent(WHAT_ELSE);
   });
@@ -667,9 +1092,7 @@ describe("DrawnInputs", () => {
 
     expect(container).toHaveTextContent("Demo Sample");
     expect(container).toHaveTextContent(WHAT_ELSE);
-    expect(
-      container.textContent?.match(/It was put together from these:/g),
-    ).toHaveLength(1);
+    expect(container.textContent?.match(/Combined from:/g)).toHaveLength(1);
     expect(
       [...container.querySelectorAll("a")].map((link) =>
         link.getAttribute("href"),
@@ -683,11 +1106,11 @@ describe("DrawnInputs", () => {
     expect(container.querySelector("p")?.textContent).toBe("Ship: {{ship}}");
     expect(screen.getByRole("heading", { name: WHAT_ELSE }).tagName).toBe("H4");
     expect(
-      [...container.querySelectorAll("dd")].map((each) => each.textContent),
-    ).toEqual([
-      `${isolated("ticket")}, which the run was started with1 High St`,
-      `${isolated("ticket")}, which the run was started withLeeds`,
-    ]);
+      [...container.querySelectorAll('[role="definition"]')].map(
+        (each) => each.textContent,
+      ),
+    ).toEqual(["1 High St", "Leeds"]);
+    expect(container).toHaveTextContent(`${isolated("ticket")} (run input)`);
   });
 
   it("draws a date as its kind is read, and a term with what it means", () => {
@@ -703,9 +1126,7 @@ describe("DrawnInputs", () => {
       `Due Mar 1, 2026, ${isolated("P1")}: ${isolated("Drop everything")}`,
     );
     expect(container.textContent).not.toContain("2026-03-01");
-    expect(container).not.toHaveTextContent(
-      "Written in a way this page cannot read.",
-    );
+    expect(container).not.toHaveTextContent("This page can't read this value.");
   });
 
   it.each([
@@ -728,10 +1149,11 @@ describe("DrawnInputs", () => {
   );
 
   it.each([
-    ["# R", "h4", "MuiTypography-h4"],
-    ["## R", "h5", "MuiTypography-h5"],
+    ["# R", "h4", "drawn-markdown-h1"],
+    ["## R", "h5", "drawn-markdown-h2"],
+    ["###### R", "h6", "drawn-markdown-h6"],
   ])(
-    "draws a heading the drawing writes as %s at the size the pages draw their own at its level",
+    "keeps %s at its semantic level while styling the level the author wrote",
     (drawing, tag, variant) => {
       const container = drawn(drawing, []);
 
@@ -741,9 +1163,85 @@ describe("DrawnInputs", () => {
         [...heading.classList].filter((name) =>
           /^MuiTypography-(h[1-6]|subtitle[12]|body[12])$/.test(name),
         ),
-      ).toEqual([variant]);
+      ).toEqual([]);
     },
   );
+
+  it("styles the drawing's nodes without giving its styles to inserted field heads or their controls", async () => {
+    const container = drawn(
+      "# Report\n\n> Drawing quote\n\n- Drawing list\n\n`drawing code`\n\n---\n\n{{body}}",
+      [
+        {
+          input: "body",
+          from: FROM,
+          value: "# Value heading\n\n> Value quote",
+        },
+      ],
+      "h3",
+      SEVERAL,
+    );
+
+    expect(container.querySelector(".drawn-inputs-markdown")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { level: 4, name: "Report" }),
+    ).toHaveClass("drawn-markdown-h1");
+    expect(
+      container.querySelector("blockquote.drawn-markdown-blockquote"),
+    ).toHaveTextContent("Drawing quote");
+    expect(container.querySelector("ul.drawn-markdown-ul")).toHaveTextContent(
+      "Drawing list",
+    );
+    expect(
+      container.querySelector("code.drawn-markdown-code"),
+    ).toHaveTextContent("drawing code");
+    expect(container.querySelector("hr.drawn-markdown-hr")).not.toBeNull();
+    const valueHeading = await screen.findByRole("heading", {
+      name: "Value heading",
+    });
+    expect(valueHeading).not.toHaveClass("drawn-markdown-h1");
+    expect(
+      container.querySelector(".model-prose-markdown blockquote"),
+    ).not.toHaveClass("drawn-markdown-blockquote");
+    expect(
+      screen.getByRole("button", { name: "Show as written" }),
+    ).not.toHaveClass("drawn-markdown-button");
+  });
+
+  it("uses all six written Markdown sizes even when their semantic headings share the deepest page level", () => {
+    const container = drawn(
+      "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six",
+      [],
+      "h3",
+    );
+    const headings = screen.getAllByRole("heading");
+
+    expect(headings.map((heading) => heading.tagName)).toEqual([
+      "H4",
+      "H5",
+      "H6",
+      "H6",
+      "H6",
+      "H6",
+    ]);
+    expect(headings.map((heading) => roleStyle(heading, "font-size"))).toEqual([
+      "1.75rem",
+      "1.3125rem",
+      "1.09375rem",
+      "0.875rem",
+      "0.875rem",
+      "0.875rem",
+    ]);
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "One",
+      "Two",
+      "Three",
+      "Four",
+      "Five",
+      "Six",
+    ]);
+    expect(roleStyle(headings[5]!, "color")).toBe("#58666c");
+    expect(container.querySelector("button, a, img")).toBeNull();
+  });
 
   it("draws a value named again in full where it is short enough to be drawn twice, written out with its quotes", () => {
     const short = "x".repeat(254);
@@ -842,7 +1340,9 @@ describe("DrawnInputs", () => {
             ],
       );
 
-      expect(container.querySelectorAll("dl")).toHaveLength(drawnFully);
+      expect(container.querySelectorAll("dl:not(aside *)")).toHaveLength(
+        drawnFully,
+      );
       expect(container.textContent?.includes("shown above")).toBe(
         drawnFully === 1,
       );
@@ -873,9 +1373,9 @@ describe("DrawnInputs", () => {
     );
 
     expect(container.querySelectorAll("ul")).toHaveLength(2);
-    expect(container.textContent?.match(/Withheld from you\./g)).toHaveLength(
-      40,
-    );
+    expect(
+      container.textContent?.match(/You don't have permission to see this\./g),
+    ).toHaveLength(40);
     expect(container).not.toHaveTextContent("shown above");
     expect(container).not.toHaveTextContent("None");
   });
@@ -906,8 +1406,10 @@ describe("DrawnInputs", () => {
     );
 
     expect(container).toHaveTextContent("shown above");
-    expect(container.querySelectorAll("dl")).toHaveLength(1);
-    expect(container).not.toHaveTextContent("Withheld from you.");
+    expect(container.querySelectorAll("dl:not(aside *)")).toHaveLength(1);
+    expect(container).not.toHaveTextContent(
+      "You don't have permission to see this.",
+    );
   });
 
   it("counts a value kept in a shape the step had before by the text it was kept as, written out with its quotes", () => {
@@ -927,13 +1429,14 @@ describe("DrawnInputs", () => {
 
     const heading = screen.getByRole("heading", { name: WHAT_ELSE });
     expect(heading.tagName).toBe("H4");
-    const list = container.querySelector("dl")!;
+    const list = container.querySelector("section[aria-labelledby]")!
+      .parentElement!.parentElement!;
     expect(
-      [...list.querySelectorAll("dt")].map((each) => each.textContent),
-    ).toEqual([isolated("Body"), isolated("Address")]);
-    expect(
-      within(list).getAllByText(/which the run was started with/),
-    ).toHaveLength(2);
+      [
+        ...list.querySelectorAll("dt:not(aside *),[role=term]:not(aside *)"),
+      ].map((each) => each.textContent),
+    ).toEqual([`${isolated("Body")} · body`, `${isolated("Address")} · url`]);
+    expect(within(list).getAllByText(/\(run input\)/)).toHaveLength(2);
     expect(list).not.toHaveTextContent(TITLE);
     expect(container.querySelector("p")?.textContent).toBe(TITLE);
   });
@@ -949,10 +1452,13 @@ describe("DrawnInputs", () => {
     (_case, drawing) => {
       const container = drawn(drawing, [given()[0]!, given()[2]!]);
 
-      const list = container.querySelector("dl")!;
+      const list = container.querySelector("section[aria-labelledby]")!
+        .parentElement!.parentElement!;
       expect(
-        [...list.querySelectorAll("dt")].map((each) => each.textContent),
-      ).toEqual([isolated("Address")]);
+        [
+          ...list.querySelectorAll("dt:not(aside *),[role=term]:not(aside *)"),
+        ].map((each) => each.textContent),
+      ).toEqual([`${isolated("Address")} · url`]);
       expect(list).toHaveTextContent("https://evil.example/x");
       expect(container.innerHTML.split("evil.example")).toHaveLength(2);
       expect(list).not.toHaveTextContent(TITLE);
@@ -1012,12 +1518,22 @@ describe("DrawnInputs", () => {
       const said = container.querySelector("p")!;
       expect(said.textContent).toBe(NOT_LAID_OUT);
       expect(
-        said.compareDocumentPosition(container.querySelector("dl")!) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
+        said.compareDocumentPosition(
+          container.querySelector("section[aria-labelledby]")!.parentElement!
+            .parentElement!,
+        ) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
       expect(
-        [...container.querySelectorAll("dt")].map((each) => each.textContent),
-      ).toEqual([isolated("Title"), isolated("Body"), isolated("Address")]);
+        [
+          ...container.querySelectorAll(
+            "dt:not(aside *),[role=term]:not(aside *)",
+          ),
+        ].map((each) => each.textContent),
+      ).toEqual([
+        `${isolated("Title")} · title`,
+        `${isolated("Body")} · body`,
+        `${isolated("Address")} · url`,
+      ]);
       expect(container).toHaveTextContent(TITLE);
       expect(container.querySelectorAll("blockquote, ol, li")).toHaveLength(0);
       expect(container).not.toHaveTextContent(WHAT_ELSE);
@@ -1046,14 +1562,17 @@ describe("DrawnInputs", () => {
       expect(vi.mocked(Markdown)).toHaveBeenCalled();
       expect(container).not.toHaveTextContent(NOT_LAID_OUT);
       expect(
-        [...container.querySelectorAll("dt")].map((each) => each.textContent),
-      ).toEqual([isolated("Body"), isolated("Address")]);
+        [
+          ...container.querySelectorAll(
+            "dt:not(aside *),[role=term]:not(aside *)",
+          ),
+        ].map((each) => each.textContent),
+      ).toEqual([`${isolated("Body")} · body`, `${isolated("Address")} · url`]);
     },
   );
 
   it("lists every input field by field, saying the drawing could not be laid out, where laying it out throws", async () => {
     await unlaidThrowing();
-    vi.spyOn(console, "error").mockImplementation(() => {});
 
     const container = drawn("Unlaid {{title}}");
 
@@ -1061,12 +1580,22 @@ describe("DrawnInputs", () => {
     const said = container.querySelector("p")!;
     expect(said.textContent).toBe(NOT_LAID_OUT);
     expect(
-      said.compareDocumentPosition(container.querySelector("dl")!) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      said.compareDocumentPosition(
+        container.querySelector("section[aria-labelledby]")!.parentElement!
+          .parentElement!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      [...container.querySelectorAll("dt")].map((each) => each.textContent),
-    ).toEqual([isolated("Title"), isolated("Body"), isolated("Address")]);
+      [
+        ...container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((each) => each.textContent),
+    ).toEqual([
+      `${isolated("Title")} · title`,
+      `${isolated("Body")} · body`,
+      `${isolated("Address")} · url`,
+    ]);
     expect(container).toHaveTextContent(TITLE);
     expect(container).not.toHaveTextContent("Unlaid");
     expect(container).not.toHaveTextContent(WHAT_ELSE);
@@ -1075,7 +1604,6 @@ describe("DrawnInputs", () => {
 
   it("lays out a drawing that can be laid out where the one before it could not", async () => {
     await unlaidThrowing();
-    vi.spyOn(console, "error").mockImplementation(() => {});
     const rendered = render(element("Unlaid {{title}}", given(), "h3"));
     expect(rendered.container).toHaveTextContent(NOT_LAID_OUT);
 
@@ -1086,9 +1614,11 @@ describe("DrawnInputs", () => {
     );
     expect(rendered.container).not.toHaveTextContent(NOT_LAID_OUT);
     expect(
-      [...rendered.container.querySelectorAll("dt")].map(
-        (each) => each.textContent,
-      ),
-    ).toEqual([isolated("Body"), isolated("Address")]);
+      [
+        ...rendered.container.querySelectorAll(
+          "dt:not(aside *),[role=term]:not(aside *)",
+        ),
+      ].map((each) => each.textContent),
+    ).toEqual([`${isolated("Body")} · body`, `${isolated("Address")} · url`]);
   });
 });

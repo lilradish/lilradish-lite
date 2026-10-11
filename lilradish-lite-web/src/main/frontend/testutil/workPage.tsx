@@ -1,13 +1,17 @@
 import { ThemeProvider } from "@mui/material/styles";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router";
-import { afterEach, vi } from "vitest";
+import { afterEach, aroundEach, vi } from "vitest";
 
+import { WORK_ITEM } from "../app/destinations";
+import { RequireGroup } from "../app/standing/RequireGroup";
 import { StandingProvider } from "../app/standing/StandingContext";
 import { theme } from "../lib/theme/theme";
 import { OpenedRun, WorkPage } from "../features/runs/WorkPage";
 import { requestsTo, serving, type Reply } from "./answering";
+import { namingGroupsByKeyAlone } from "./groupAddresses";
+import { pageLaidOutAt } from "./layout";
 import { answered, inGroup } from "./standingRead";
 
 const STARTS_AND_READS_OWN = ["read_membership", "start_run", "read_own_runs"];
@@ -26,23 +30,40 @@ export function openWorkPage(
 ) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-09-18T13:00:00Z"));
+  pageLaidOutAt(1400, 1600);
   const sent = serving(routes);
   const router = createMemoryRouter(
     [
-      { path: "/groups/:groupId/work", element: <WorkPage /> },
-      { path: "/groups/:groupId/work/:runId", element: <OpenedRun /> },
       {
-        path: "/groups/:groupId/work/:runId/steps/:stepId",
-        element: <OpenedRun />,
+        path: "/groups/:group/work",
+        element: (
+          <RequireGroup reachedBy={WORK_ITEM.reachedBy}>
+            <WorkPage />
+          </RequireGroup>
+        ),
+      },
+      {
+        path: "/groups/:group/work/:runId",
+        element: (
+          <RequireGroup reachedBy={WORK_ITEM.reachedBy}>
+            <OpenedRun />
+          </RequireGroup>
+        ),
+      },
+      {
+        path: "/groups/:group/work/:runId/steps/:stepId",
+        element: (
+          <RequireGroup reachedBy={WORK_ITEM.reachedBy}>
+            <OpenedRun />
+          </RequireGroup>
+        ),
       },
     ],
     { initialEntries: [address] },
   );
+  namingGroupsByKeyAlone(router, [groupId]);
   const readAgain = vi.fn();
-  const standing = answered(
-    [],
-    [inGroup(groupId, "SUPPORT", "Claims", permissions)],
-  );
+  const standing = answered([], [inGroup(groupId, KEY, "Claims", permissions)]);
   const draw = (read: typeof standing) => (
     <ThemeProvider theme={theme}>
       <StandingProvider read={{ ...read, reload: readAgain }}>
@@ -55,6 +76,10 @@ export function openWorkPage(
     sent,
     readAgain,
     router,
+    changePermissions: (permissions: readonly string[]) =>
+      mounted.rerender(
+        draw(answered([], [inGroup(groupId, KEY, "Claims", permissions)])),
+      ),
     changeReader: (userId: string) =>
       mounted.rerender(
         draw({ ...standing, value: { ...standing.value, userId } }),
@@ -66,7 +91,9 @@ export function openWorkPage(
 
 export const GROUP = "00000003-0000-4000-8000-000000000c61";
 
-export const PAGE = `/groups/${GROUP}/work`;
+const KEY = "SUPPORT";
+
+export const PAGE = `/groups/${KEY}/work`;
 
 export const NEW_RUN = `${PAGE}?tab=newRun`;
 
@@ -84,7 +111,7 @@ export const AVON = {
   runId: "00000008-0000-4000-8000-000000000c63",
   number: 3,
   name: "Claim from Avonel",
-  workflow: { name: "Handle a claim", version: 1 },
+  workflow: { versionName: null, name: "Handle a claim", version: 1 },
   startedBy: { userId: "000c63", displayName: "Cat Example" },
   startedAt: "2026-09-18T12:00:00Z",
   state: "stopped",
@@ -94,7 +121,7 @@ export const GLINN = {
   runId: "00000008-0000-4000-8000-000000000c62",
   number: 2,
   name: "Refund for Glinn",
-  workflow: { name: "Pay a refund", version: 2 },
+  workflow: { versionName: null, name: "Pay a refund", version: 2 },
   startedBy: { userId: "000c62" },
   startedAt: "2026-09-17T09:00:00Z",
   state: "running",
@@ -105,14 +132,14 @@ export const AVO = {
   runId: "00000008-0000-4000-8000-000000000c61",
   number: 1,
   name: "Claim from Avo",
-  workflow: { name: "Handle a claim", version: 1 },
+  workflow: { versionName: null, name: "Handle a claim", version: 1 },
   startedBy: { userId: "000c63", displayName: "Cat Example" },
   startedAt: "2026-09-11T08:00:00Z",
   state: "failed",
 };
 
 export const LISTED: Reply = [
-  JSON.stringify({ items: [AVON, GLINN, AVO], reading: "own" }),
+  JSON.stringify({ items: [AVON, GLINN, AVO] }),
   200,
 ];
 
@@ -122,6 +149,7 @@ export const HANDLE = {
   purpose: "Sorts a claim out.",
   versions: [
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c62",
       number: 2,
       takes: [
@@ -135,6 +163,7 @@ export const HANDLE = {
       ],
     },
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c61",
       number: 1,
       takes: [],
@@ -147,6 +176,7 @@ export const REFUND = {
   name: "Pay a refund",
   versions: [
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c63",
       number: 4,
       takes: [],
@@ -155,17 +185,17 @@ export const REFUND = {
 };
 
 export const BEGUN: Reply = [
-  JSON.stringify({ runId: AVO.runId, number: 7, readable: true }),
+  JSON.stringify({ runId: AVO.runId, number: 7 }),
   201,
 ];
 
 export const BEGUN_UNREADABLE: Reply = [
-  JSON.stringify({ runId: AVO.runId, number: 7, readable: false }),
+  JSON.stringify({ runId: AVO.runId, number: 7 }),
   201,
 ];
 
 export const STARTED_UNREADABLE =
-  "SUPPORT-7 has begun. Reading it is a permission this group has not given you, so it cannot be opened here.";
+  "SUPPORT-7 has started. Your roles in this group don't let you see runs, so you can't open it here.";
 
 export const doesNotFit = (
   problems: readonly { path: (string | number)[]; reason: string }[],
@@ -179,7 +209,8 @@ export const doesNotFit = (
   400,
 ];
 
-export const VALUES_REFUSED = "Each value is written as its field takes it.";
+export const VALUES_REFUSED =
+  "Some values aren't in the format their field expects.";
 
 export const OPENED_AT = "Sep 18, 03:00 PM";
 
@@ -193,6 +224,7 @@ export const ORDER = {
   name: "Take an order",
   versions: [
     {
+      versionName: null,
       versionId: "00000007-0000-4000-8000-000000000c65",
       number: 1,
       takes: [
@@ -233,6 +265,7 @@ export const AVOS_RUN_READ = {
   number: 1,
   name: "Claim from Avo",
   workflow: {
+    versionName: null,
     entryId: "00000006-0000-4000-8000-000000000c61",
     name: "Handle a claim",
     version: 1,
@@ -252,34 +285,37 @@ export const AVOS_RUN_READ = {
   state: "running",
   spend: { sent: "0", cameBack: "0", spent: "0", cameBackUnknown: false },
   ceiling: { raiseNeedsApproval: false },
-  acts: [],
+  stateActs: [],
 };
 
 export const AVOS_RUN: Reply = [JSON.stringify(AVOS_RUN_READ), 200];
 
 export const AVOS_RUN_HEADER = {
+  versionName: null,
   runId: AVO.runId,
   number: 1,
   versionId: HANDLE.versions[1].versionId,
   state: "running",
   at: { stepId: SUMMARISE, name: "summarise" },
-  acts: [],
+  stateActs: [],
   progress: { done: 0, of: 1 },
 };
 
 export const AVOS_STEP_ROW = {
+  producedByUserId: null,
+  producedByKind: null,
   stepId: SUMMARISE,
   order: 1,
   name: "summarise",
-  runs: { kind: "code_step", codeStep: "summarise" },
+  runs: { versionName: null, kind: "code_step", codeStep: "summarise" },
   producer: { kind: "code" },
   state: "running",
   where: { kind: "running", on: "next_try" },
   takesFrom: [],
   tries: { current: 0, declared: 1, beyond: false },
   cost: { callsAModel: false },
-  acts: [],
-  withheld: [],
+  stateActs: [],
+  stateRefusals: [],
 };
 
 export const AVOS_STEPS: Reply = [
@@ -303,11 +339,10 @@ export const AVOS_STEP: Reply = [
 ];
 
 export const NAME_REFUSED =
-  "A run's name is one to 128 characters on one line, with something in it that shows.";
+  "Use 1 to 128 characters on one line, with at least one visible character.";
 
-/** What is said where starting is refused for the act itself: the rule of who may start one. */
 export const ACT_REFUSED =
-  "A group's runs are started, renamed, stopped, opened again and given a ceiling, and a raise asked withdrawn, and what was held back sent again, only by a role in it that may start one.";
+  "Only someone in this group who can start runs can start, rename, stop or resume a run, set its usage limit, withdraw a limit change they asked for, or try sending a request that could not be sent.";
 
 export const NO_LONGER_OFFERED =
   "That version can no longer be started here, so what may be started has been read again.";
@@ -320,7 +355,7 @@ export interface Opening {
   readonly routes?: Readonly<Record<string, readonly Reply[]>>;
 }
 
-/** Keep the real router and standing; replace only HTTP replies and the clock. */
+/** The real router and standing keep these requests on the page's production path. */
 export function opening(
   address: string,
   { permissions, routes = {} }: Opening = {},
@@ -344,11 +379,29 @@ afterEach(() => {
   localStorage.clear();
 });
 
+const { AsyncLocalStorage } = await vi.importActual<{
+  AsyncLocalStorage: new () => {
+    run<Result>(signal: AbortSignal, body: () => Result): Result;
+    getStore(): AbortSignal | undefined;
+  };
+}>("node:async_hooks");
+const callingTest = new AsyncLocalStorage();
+
+// A timed-out test's body runs on into the next test, where `screen` is that test's
+// page. Async context, not the current test, tells whose body is calling.
+aroundEach((runTest, { signal }) => callingTest.run(signal, runTest));
+
+function stillRunning(): void {
+  callingTest.getStore()?.throwIfAborted();
+}
+
 export function tab(name: string): HTMLElement {
+  stillRunning();
   return screen.getByRole("tab", { name });
 }
 
 export function panel(name: string): HTMLElement {
+  stillRunning();
   return screen.getByRole("tabpanel", { name });
 }
 
@@ -357,6 +410,7 @@ export async function inHistory() {
 }
 
 export function table(): HTMLElement {
+  stillRunning();
   return screen.getByRole("table", { name: "What is running" });
 }
 
@@ -384,16 +438,83 @@ export function startsAsked(sent: Parameters<typeof requestsTo>[0]): unknown[] {
     .map(([, init]) => JSON.parse(String(init?.body)) as unknown);
 }
 
-export async function picking(workflow: string): Promise<HTMLElement> {
-  await userEvent.click(
-    await screen.findByRole("button", { name: new RegExp(workflow) }),
-  );
-  return screen.getByRole("heading", {
-    level: 2,
-    name: isolatedName(workflow),
+export async function picking(
+  workflow: string,
+  inputs = true,
+): Promise<HTMLElement> {
+  stillRunning();
+  const opened = screen.queryByRole("dialog");
+  if (opened !== null)
+    await userEvent.click(
+      within(opened).getByRole("button", { name: "Cancel" }),
+    );
+  stillRunning();
+  const card = await screen.findByRole("button", {
+    name: new RegExp(workflow),
   });
+  stillRunning();
+  await userEvent.click(card);
+  stillRunning();
+  const dialog = screen.getByRole("dialog", {
+    name: `Start a run of ${isolatedName(workflow)}`,
+  });
+  if (inputs) await inputting();
+  return dialog;
 }
 
-export function runOpened(name: RegExp): Promise<HTMLElement> {
-  return screen.findByRole("heading", { level: 1, name });
+export async function inputting(): Promise<void> {
+  stillRunning();
+  const next = screen.queryByRole("button", { name: "Next" });
+  if (next !== null) await userEvent.click(next);
+}
+
+export async function naming(): Promise<HTMLElement> {
+  stillRunning();
+  const back = screen.queryByRole("button", { name: "Back" });
+  if (back !== null) await userEvent.click(back);
+  stillRunning();
+  return screen.getByRole("textbox", { name: "Name of this run" });
+}
+
+export async function renaming(
+  name: HTMLElement,
+  words: string,
+): Promise<void> {
+  stillRunning();
+  await userEvent.clear(name);
+  stillRunning();
+  await userEvent.type(name, words);
+  stillRunning();
+}
+
+export async function cancelling(): Promise<void> {
+  stillRunning();
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  stillRunning();
+}
+
+export async function loadingMore(): Promise<void> {
+  stillRunning();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Load more workflows" }),
+  );
+  stillRunning();
+}
+
+/** Types into the offer's filter at once and waits out its typing pause, on a fake clock. */
+export async function filtering(words: string): Promise<void> {
+  stillRunning();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Part of a name" }), {
+    target: { value: words },
+  });
+  await act(() => vi.advanceTimersByTimeAsync(350));
+  stillRunning();
+}
+
+export async function runOpened(name: RegExp): Promise<HTMLElement> {
+  stillRunning();
+  const heading = await screen.findByRole("heading", { level: 1, name });
+  stillRunning();
+  return heading;
 }

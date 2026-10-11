@@ -2,11 +2,12 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 
 import { say } from "../../i18n/app";
+import { visible } from "../../i18n/visible";
 import { Press } from "../../lib/action/Press";
-import { isolatedInText } from "../../lib/direction/isolated";
 import type { Named } from "./workflowDrafts";
+import { VersionLabel, versionLabelText } from "../../lib/text/VersionLabel";
 
-const QUIET_SX = { color: "text.secondary" };
+const QUIET_SX = { color: "text.secondary", overflowWrap: "anywhere" };
 
 export function PinNote({
   pinned,
@@ -25,11 +26,33 @@ export function PinNote({
     return null;
   }
   return (
-    <Box>
-      <Typography variant="body2" sx={QUIET_SX}>
+    <Box
+      sx={{
+        minWidth: 0,
+        "& button": {
+          maxWidth: "100%",
+          whiteSpace: "normal",
+          overflowWrap: "anywhere",
+          textAlign: "start",
+        },
+        "& button > span": { minWidth: 0 },
+      }}
+    >
+      <Typography
+        component="p"
+        sx={{ ...QUIET_SX, typography: "supportingProse" }}
+      >
         {retired
           ? say("workflow.pinRetired")
-          : say("workflow.newerInService", { number: newer!.number })}
+          : visible("workflow.newerInService", {
+              label: (
+                <VersionLabel
+                  entry={pinned.name}
+                  number={newer!.number}
+                  name={newer!.versionName}
+                />
+              ),
+            })}
       </Typography>
       {newer === undefined || take === undefined ? null : (
         <Press
@@ -37,13 +60,20 @@ export function PinNote({
             called === undefined
               ? undefined
               : say("workflow.takeNewerFor", {
-                  number: newer.number,
+                  label: versionLabelText({
+                    number: newer.number,
+                    name: newer.versionName,
+                  }),
                   name: called,
                 })
           }
           onPress={() => take(newer.versionId)}
         >
-          {say("workflow.takeNewer", { number: newer.number })}
+          {visible("workflow.takeNewer", {
+            label: (
+              <VersionLabel number={newer.number} name={newer.versionName} />
+            ),
+          })}
         </Press>
       )}
     </Box>
@@ -60,7 +90,24 @@ export function versionSaid(
       ? say("workflow.versionNone")
       : versionId
     : say("workflow.runsVersion", {
-        name: isolatedInText(named.name),
-        number: named.number,
+        label: versionLabelText({
+          entry: named.name,
+          number: named.number,
+          name: named.versionName,
+        }),
+      });
+}
+
+export function versionShown(named: Named | undefined, versionId: string) {
+  return named === undefined
+    ? versionSaid(named, versionId)
+    : visible("workflow.runsVersion", {
+        label: (
+          <VersionLabel
+            entry={named.name}
+            number={named.number}
+            name={named.versionName}
+          />
+        ),
       });
 }

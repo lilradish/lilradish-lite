@@ -11,7 +11,6 @@ create type code_error_reason as enum ('gave_nothing', 'not_declared', 'nothing_
     'file_name_unusable', 'file_too_large', 'file_total_too_large', 'takes_a_list_not_here', 'gives_a_list_not_here',
     'takes_otherwise', 'gives_otherwise', 'failed_on_this_side', 'said_nothing');
 
--- ---------------------------------------------------------------- calls
 
 -- DB-SPECIFIC: length(), text, ~, !~, four-digit Unicode escapes in regular expressions, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table model_calls (
@@ -39,12 +38,11 @@ create table model_calls (
     -- 'ordinary' where the model runs as it is, for the reason workflow_versions.helper_mode gives.
     mode                     text               not null,
     envelope_version         integer            not null,
-    -- The sent count is model-counted only when counted_by_model is true; otherwise it is system-measured.
     sent_count               bigint             not null,
     -- Null where nothing says how much came back, which is never a claim that nothing did.
     came_back_count          bigint,
     outcome                  model_call_outcome,
-    -- Raw answer text has a size bound and no control-character constraint.
+    -- Raw answer text has no control-character constraint.
     answer                   text,
     -- Set where what is kept of the answer is not as it came back.
     answer_altered           boolean            not null default false,
@@ -55,6 +53,8 @@ create table model_calls (
     unreadable_response           text,
     unreadable_response_altered   boolean       not null default false,
     unreadable_response_truncated boolean       not null default false,
+    -- True where the response ended here because it could not be read, before its actual end was reached.
+    unreadable_response_stopped   boolean       not null default false,
     error_detail             text,
     -- Set where error_detail was cut to its bound; the part cut off is kept nowhere.
     error_detail_truncated   boolean            not null default false,
@@ -62,7 +62,8 @@ create table model_calls (
     created_at               timestamptz        not null default now(),
     created_by               uuid               not null,
     created_by_kind          subject_kind       not null default 'system',
-
+    -- True when both counts came from the model. Otherwise sent_count and any came_back_count are system-measured.
+    counted_by_model         boolean            not null default false,
     constraint model_calls_pk primary key (model_call_id),
     constraint model_calls_run_fk foreign key (run_id, root_run_id) references runs (run_id, root_run_id),
     constraint model_calls_attempt_fk
@@ -115,6 +116,8 @@ create table model_calls (
         check (not unreadable_response_altered or unreadable_response is not null),
     constraint model_calls_unreadable_response_truncated_only_for_altered
         check (not unreadable_response_truncated or unreadable_response_altered),
+    constraint model_calls_unreadable_response_stopped_only_for_response
+        check (not unreadable_response_stopped or unreadable_response is not null),
     constraint model_calls_error_detail_exactly_for_errored
         check (coalesce(outcome = 'errored', false) = (error_detail is not null)),
     -- Prose, for the reason reference_list_versions_note_visible gives.
@@ -133,7 +136,9 @@ create table model_calls (
     constraint model_calls_production_outcome_unique
         unique (model_call_id, run_step_id, purpose, outcome, production_id, answer_altered),
     constraint model_calls_run_purpose_unique unique (model_call_id, run_id, purpose),
-    constraint model_calls_outcome_unique unique (model_call_id, outcome)
+    constraint model_calls_outcome_unique unique (model_call_id, outcome),
+    constraint model_calls_counted_by_model_only_for_came_back
+        check (not counted_by_model or coalesce(outcome = 'came_back', false))
 );
 
 create index model_calls_by_run on model_calls (run_id, created_at);
@@ -161,7 +166,11 @@ create table model_call_turnaways (
     resent_at              timestamptz,
     created_by             uuid         not null,
     created_by_kind        subject_kind not null default 'system',
-
+    -- Set where the model turned the call away as what may be spent with it is used up; written in the transaction
+    -- ending the call, after it is ended turned_away, or model_call_turnaways_model_call_outcome_fk refuses it.
+    spent_up               boolean      not null default false,
+    -- Carried only where spent_up, so that the call it names ended turned away, and stays so.
+    model_call_outcome     model_call_outcome,
     constraint model_call_turnaways_pk primary key (model_call_turnaway_id),
     constraint model_call_turnaways_call_fk foreign key (model_call_id) references model_calls (model_call_id),
     constraint model_call_turnaways_author_system_fk foreign key (created_by, created_by_kind)
@@ -172,8 +181,18 @@ create table model_call_turnaways (
         said is null or (length(said) > 0 and said !~ '[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')),
     constraint model_call_turnaways_said_bounded check (length(said) <= 2048),
     constraint model_call_turnaways_truncated_only_for_said check (not said_truncated or said is not null),
-    constraint model_call_turnaways_resent_after_turned_away check (resent_at >= created_at)
+    constraint model_call_turnaways_resent_after_turned_away check (resent_at >= created_at),
+    constraint model_call_turnaways_model_call_outcome_fk foreign key (model_call_id, model_call_outcome)
+        references model_calls (model_call_id, outcome),
+    constraint model_call_turnaways_model_call_outcome_exactly_for_spent_up
+        check ((model_call_outcome is not null) = spent_up),
+    constraint model_call_turnaways_model_call_outcome_is_turned_away check (model_call_outcome = 'turned_away'),
+    constraint model_call_turnaways_resent_only_unspent check (not (spent_up and resent_at is not null))
 );
+
+-- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
+create unique index model_call_turnaways_one_spent_up_per_call on model_call_turnaways (model_call_id) where spent_up;
+
 
 create index model_call_turnaways_by_call on model_call_turnaways (model_call_id, created_at);
 
@@ -257,7 +276,6 @@ create table model_call_searches (
 );
 
 
--- ---------------------------------------------------------------- help
 
 -- Only a question that was sent: one too long for the helper's model, or asked at a ceiling, never was.
 -- DB-SPECIFIC: length(), text, !~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now(),
@@ -305,7 +323,6 @@ create table run_help_exchanges (
 
 create index run_help_exchanges_by_run on run_help_exchanges (run_id, created_at);
 
--- ---------------------------------------------------------------- tries
 
 -- One try, written when it is asked for, whoever produces it, and ended when its production is in or lost.
 -- DB-SPECIFIC: length(), text, !~, ~, four-digit Unicode escapes in regular expressions, generated always, timestamptz, now(),
@@ -341,13 +358,11 @@ create table productions (
     help_exchange_answered boolean            not null default true,
     explanation            text,
     lost_reason            try_lost_reason,
-    -- A model answer's reason for not fitting, separate from code error reasons.
     did_not_fit_reason     did_not_fit_reason,
     -- A system reason for code gone wrong, distinct from the code's own words.
     code_error_reason      code_error_reason,
     -- The field that reason is about, its names from the first level joined by dots, which no name holds.
     code_error_path        text,
-    -- The member name is limited to one line and 64 characters.
     code_error_member      text,
     -- Set where code_error_member was cut to its bound; the part cut off is kept nowhere.
     code_error_member_truncated boolean       not null default false,
@@ -370,7 +385,6 @@ create table productions (
     ended_by_kind          subject_kind       not null default 'system',
     yielded                boolean            generated always as (
         ended_at is not null and lost_reason is null) stored,
-
     constraint productions_pk primary key (production_id),
     constraint productions_step_fk
         foreign key (run_id, run_step_id, run_step_kind, step_producer, reviewed_by_model, tries)
@@ -378,9 +392,6 @@ create table productions (
     constraint productions_run_fk foreign key (run_id, root_run_id) references runs (run_id, root_run_id),
     constraint productions_pinned_fk foreign key (run_step_id, pinned_version_id)
         references run_steps (run_step_id, pinned_version_id),
-    -- For the reason workflow_steps_pinned_together gives: it keeps productions_pinned_fk awake.
-    constraint productions_pinned_exactly_for_question
-        check ((run_step_kind = 'question') = (pinned_version_id is not null)),
     constraint productions_try_number_unique unique (run_step_id, try_number),
     constraint productions_try_number_positive check (try_number >= 1),
     constraint productions_try_number_absent_only_for_open_model
@@ -502,7 +513,9 @@ create table productions (
         unique (production_id, run_step_id, reviewed_by_model, yielded),
     constraint productions_ender_yielded_unique
         unique (production_id, run_step_id, root_run_id, ended_by, reviewed_by_model, yielded),
-    constraint productions_root_unique unique (production_id, root_run_id)
+    constraint productions_root_unique unique (production_id, root_run_id),
+    constraint productions_pinned_exactly_for_question_or_search
+        check ((run_step_kind in ('question', 'search')) = (pinned_version_id is not null))
 );
 
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
@@ -541,7 +554,7 @@ alter table run_step_failures add constraint run_step_failures_reviewed_fk
 create index run_step_failures_by_reviewed_production
     on run_step_failures (reviewed_production_id) where reviewed_production_id is not null;
 
--- Field names and standing are held without a foreign key to a declaration's fields.
+-- Code-step and search values retain field names and standing without declaration-field foreign keys.
 -- DB-SPECIFIC: ::, jsonb, jsonb_typeof(), length(), text, ~, generated always, uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table production_values (
     production_value_id  uuid           not null default uuidv7(),
@@ -616,9 +629,8 @@ create index production_values_by_field
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
 create index production_values_needing_review_by_production on production_values (production_id) where needs_review;
 
--- ---------------------------------------------------------------- what went in
 
--- A binding or search question read used a value in a try, or a run a route started by it used the value.
+-- A binding used a value in a try, or a run a route started by it used the value.
 -- DB-SPECIFIC: num_nonnulls(), generated always, timestamptz, now(), uuid and uuidv7() use PostgreSQL's syntax and semantics.
 create table production_inputs (
     production_input_id        uuid          not null default uuidv7(),
@@ -631,9 +643,7 @@ create table production_inputs (
     run_step_id                uuid          not null,
     run_step_kind              run_step_kind not null,
     workflow_step_id           uuid          not null,
-    binding_id                 uuid,
-    -- What a search's question read, where no binding did.
-    search_question_part_id    uuid,
+    binding_id                 uuid not null,
     -- Generated, so that only a run a route started records a discriminator, and a binding reading a step
     -- cannot be recorded without naming it; a binding reading a constant names no value.
     binding_discriminates      boolean       generated always as (branch_run_id is not null) stored,
@@ -651,14 +661,8 @@ create table production_inputs (
     -- stood when the owner was written: a value refused and made again is traced afresh, and this row stays.
     source_production_value_id uuid,
     created_at                 timestamptz   not null default now(),
-
     constraint production_inputs_pk primary key (production_input_id),
     constraint production_inputs_exactly_one_owner check (num_nonnulls(production_id, branch_run_id) = 1),
-    constraint production_inputs_exactly_one_binding_or_search_part
-        check (num_nonnulls(binding_id, search_question_part_id) = 1),
-    constraint production_inputs_search_part_only_for_search_try
-        check (search_question_part_id is null
-            or (production_id is not null and run_step_kind = 'search' and not binding_reads_a_constant)),
     constraint production_inputs_try_fk foreign key (production_id, run_id, run_step_id, run_step_kind)
         references productions (production_id, run_id, run_step_id, run_step_kind),
     constraint production_inputs_branch_run_fk
@@ -671,9 +675,6 @@ create table production_inputs (
         (binding_id, workflow_step_id, binding_discriminates, binding_reads_a_step, binding_reads_a_constant)
         references bindings (binding_id, workflow_step_id, discriminates, reads_a_step, reads_a_constant),
     constraint production_inputs_try_binding_unique unique (production_id, binding_id),
-    constraint production_inputs_search_part_fk foreign key (search_question_part_id, workflow_step_id)
-        references search_question_parts (search_question_part_id, workflow_step_id),
-    constraint production_inputs_try_search_part_unique unique (production_id, search_question_part_id),
     constraint production_inputs_branch_binding_unique unique (branch_run_id, binding_id),
     constraint production_inputs_root_unique unique (production_input_id, root_run_id),
     constraint production_inputs_source_step_fk foreign key (binding_id, source_workflow_step_id)
@@ -710,10 +711,6 @@ create table production_inputs (
 -- Editing a draft's binding updates the keys production_inputs_binding_fk and production_inputs_source_step_fk
 -- name, which then look up the rows naming it here.
 create index production_inputs_by_binding on production_inputs (binding_id);
-
--- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
-create index production_inputs_by_search_part
-    on production_inputs (search_question_part_id) where search_question_part_id is not null;
 
 -- Whether something has been made from a value is read from here.
 -- DB-SPECIFIC: where predicates on indexes use PostgreSQL's syntax and semantics.
@@ -755,6 +752,7 @@ create index production_input_parts_by_source_production
     where source_production_id is not null;
 
 -- DB-SPECIFIC: language plpgsql and raise exception use PostgreSQL's syntax and semantics.
+-- DB-SPECIFIC: PostgreSQL dollar quoting delimits this PL/pgSQL function body.
 create function reject_recorded_input_change() returns trigger
     language plpgsql as $$
 begin
@@ -773,7 +771,6 @@ create trigger production_input_parts_immutable
     before update or delete on production_input_parts
     for each row execute function reject_recorded_input_change();
 
--- ---------------------------------------------------------------- reviews
 
 -- One act deciding a production's values on review; or, naming the hold on length that prompted it,
 -- refusing values that had stood already.
@@ -886,6 +883,8 @@ create table review_decisions (
     value_needs_review   boolean        not null,
     outcome              review_outcome not null,
     explanation          text,
+    length_units         bigint,
+    excess_units         bigint,
     -- A value refused for length stood, so where it needed a review this names the one that assured it.
     assured_in_review_id uuid,
     -- Always 'assured', only to match review_decisions.outcome through review_decisions_assurance_fk; unchecked
@@ -900,6 +899,12 @@ create table review_decisions (
         references production_values (production_value_id, production_id, needs_review),
     constraint review_decisions_on_review_only_for_needing_review check (for_length or value_needs_review),
     constraint review_decisions_for_length_only_for_refused check (not for_length or outcome = 'refused'),
+    constraint review_decisions_length_quantities_together
+        check ((length_units is null) = (excess_units is null)),
+    constraint review_decisions_length_quantities_exactly_for_length
+        check (for_length = (length_units is not null)),
+    constraint review_decisions_length_nonnegative check (length_units >= 0),
+    constraint review_decisions_excess_positive check (excess_units > 0),
     constraint review_decisions_explanation_exactly_for_refused
         check ((outcome = 'refused') = (explanation is not null)),
     -- Prose, for the reason reference_list_versions_note_visible gives.

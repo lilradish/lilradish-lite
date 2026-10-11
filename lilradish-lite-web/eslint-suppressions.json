@@ -1,0 +1,382 @@
+{
+  "src/main/frontend/api/conversationEvents.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/declaration.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/offered-workflows.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/runs.test.ts": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/runs/{runId}.test.ts": {
+    "no-restricted-syntax": {
+      "count": 6
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/runs/{runId}/steps.test.ts": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/runs/{runId}/steps/{stepId}.test.ts": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/versions/{versionId}.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/{kind}/versions.test.ts": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/{kind}/{entryId}/versions.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/groups/{groupId}/{kind}/{entryId}/versions/{versionId}.test.ts": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/api/runFacts.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/api/stepWhereabouts.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/app/Async.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 7
+    }
+  },
+  "src/main/frontend/app/routes.loading.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/app/routes.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/app/standing/RequireGroup.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/app/standing/RequireStanding.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/features/library/BindingControls.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/main/frontend/features/library/ContentProblems.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 16
+    }
+  },
+  "src/main/frontend/features/library/DeclarationBuilder.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/library/EntryPage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 6
+    }
+  },
+  "src/main/frontend/features/library/QuestionContent.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/features/library/ReferenceListContent.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/library/SendsPast.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/features/library/StepEditor.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/main/frontend/features/library/StepRow.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/library/VersionName.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/features/library/VersionPicker.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/main/frontend/features/library/WhatIsAdded.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/library/WorkflowContent.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 9
+    }
+  },
+  "src/main/frontend/features/library/WorkflowSettings.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/features/library/workflowDrafts.test.ts": {
+    "no-restricted-syntax": {
+      "count": 28
+    }
+  },
+  "src/main/frontend/features/measurements/MeasurementsPage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/members/CurrencyPicker.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 52
+    }
+  },
+  "src/main/frontend/features/members/MembersPage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 8
+    }
+  },
+  "src/main/frontend/features/people/PeoplePage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/runs/RunPage.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 28
+    }
+  },
+  "src/main/frontend/features/runs/RunPage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "src/main/frontend/features/runs/RunStateBadge.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 7
+    }
+  },
+  "src/main/frontend/features/runs/WorkPage.history.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/features/runs/WorkPage.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/runs/WorkPage.newRunForm.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 12
+    }
+  },
+  "src/main/frontend/features/runs/WorkPage.newRunOffer.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 8
+    }
+  },
+  "src/main/frontend/features/runs/WorkPage.newRunStart.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 19
+    }
+  },
+  "src/main/frontend/features/runs/fill/FillForm.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 53
+    }
+  },
+  "src/main/frontend/features/runs/fill/FilledValue.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 24
+    }
+  },
+  "src/main/frontend/features/runs/fill/ValueCard.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/features/runs/steps/ActMessage.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/features/runs/steps/AnswerHere.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 31
+    }
+  },
+  "src/main/frontend/features/runs/steps/DrawnInputs.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 21
+    }
+  },
+  "src/main/frontend/features/runs/steps/LengthPanel.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 6
+    }
+  },
+  "src/main/frontend/features/runs/steps/ReviewControls.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/runs/steps/StepPage.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 9
+    }
+  },
+  "src/main/frontend/features/runs/steps/StepsSoFar.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/main/frontend/features/runs/steps/StepsTable.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "src/main/frontend/features/runs/steps/TryPanel.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/runs/steps/TrySendingButton.integration.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/features/runs/steps/WentInValues.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/features/runs/steps/declared.test.ts": {
+    "no-restricted-syntax": {
+      "count": 6
+    }
+  },
+  "src/main/frontend/features/runs/steps/stepTries.test.ts": {
+    "no-restricted-syntax": {
+      "count": 8
+    }
+  },
+  "src/main/frontend/features/runs/steps/stepWhereabouts.test.ts": {
+    "no-restricted-syntax": {
+      "count": 8
+    }
+  },
+  "src/main/frontend/i18n/visible.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/lib/collection/RowPanel.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/lib/collection/SortableTable.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/lib/form/FieldName.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/lib/search/FindOne.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/main/frontend/lib/search/useTypingPause.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/main/frontend/lib/text/HiddenShown.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "src/main/frontend/lib/text/HiddenShownIn.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/lib/text/InstructionText.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 7
+    }
+  },
+  "src/main/frontend/lib/text/ModelProse.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 10
+    }
+  },
+  "src/main/frontend/lib/text/VersionLabel.test.tsx": {
+    "no-restricted-syntax": {
+      "count": 10
+    }
+  },
+  "src/main/frontend/lib/text/drawingDepth.test.ts": {
+    "no-restricted-syntax": {
+      "count": 8
+    }
+  },
+  "src/main/frontend/lib/text/placeholders.test.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/main/frontend/testutil/stepWording.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  }
+}

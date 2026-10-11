@@ -14,8 +14,6 @@ export interface Crumb {
 }
 
 /**
- * Where you are, and how to get back to where you were.
- *
  * The screen you are on is its own prop rather than the last entry of the
  * trail: it is the one step with nowhere to link to, and a trail of optional
  * destinations would let that be expressed two ways. It is left out while the
